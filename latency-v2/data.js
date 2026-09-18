@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789696491864,
+  "lastUpdate": 1789706758324,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13398,6 +13398,72 @@ window.BENCHMARK_DATA = {
             "range": "855.86",
             "unit": "us",
             "extra": "trials: 5\nmedian: 768.00\nmean: 1207.80\nstdev: 855.86\ncv: 70.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "96f71ad3fc0f964d337afc7b402b685f1a0bbbab",
+          "message": "perf(storage): release a commit turn to one publisher, not all of them (#511)\n\nReleasing a turn called `Notify::notify_waiters()`, which wakes every\npublisher parked behind it. Only one can proceed; the rest take the lock,\nfind it is still not their turn, and park again. So a single commit costs\nN wake-ups when N publishers are in flight, and the work per commit grows\nwith load.\n\nWaiters now register a `oneshot` keyed by the offset they are waiting for,\nand a release wakes exactly the one whose turn it now is — a lookup, not a\nscan. At most one waiter can become eligible per release, because `next`\nonly advances past a range once that range's own waiter has finished with\nit.\n\nReset still wakes everybody, and has to: it moves `next` somewhere\nunrelated, so waiters parked on offsets it discarded are not next in any\norder and would otherwise wait forever.\n\nEnd-to-end durable publishes/sec, same machine and harness, varying only\nthe wake-up:\n\n  publishers    wake all    wake one     gain\n           1     662,086     664,694    1.00x\n           4     255,725     474,678    1.86x\n          16     156,565     476,683    3.04x\n          64      40,320     465,560    11.5x\n\nWaking all decays without a floor — at 64 publishers it retains 6% of its\nsingle-publisher rate, so adding publishers made the broker slower in\nabsolute terms. Waking one holds flat at ~0.72x from four on.\n\nThe two new tests hold offset 0 while the crowd parks, which is what makes\nthem bite: left alone the tasks run in spawn order, each finds its turn\nalready current, and nothing parks at all.",
+          "timestamp": "2026-09-17T21:43:17-07:00",
+          "tree_id": "5c3954387cf90b024d26c268fe04eac65edc95ae",
+          "url": "https://github.com/gabloe/felix/commit/96f71ad3fc0f964d337afc7b402b685f1a0bbbab"
+        },
+        "date": 1789706755928,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.40\nstdev: 1.14\ncv: 0.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 206,
+            "range": "1.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 205.80\nstdev: 1.79\ncv: 0.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 248,
+            "range": "7.02",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 248.00\nmean: 244.60\nstdev: 7.02\ncv: 2.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 199.80\nstdev: 1.30\ncv: 0.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 405,
+            "range": "5.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 405.00\nmean: 406.40\nstdev: 5.27\ncv: 1.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 560,
+            "range": "253.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 560.00\nmean: 680.40\nstdev: 253.76\ncv: 37.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
