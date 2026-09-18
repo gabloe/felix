@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789761222186,
+  "lastUpdate": 1789763338910,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11440,6 +11440,58 @@ window.BENCHMARK_DATA = {
             "range": "58511.22",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 561577.20\nmean: 532976.03\nstdev: 58511.22\ncv: 10.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7396b976191125f19548fe09abf46961fe0941cc",
+          "message": "fix(broker): let concurrent publishes share a device flush (#540)\n\n* fix(broker): let concurrent publishes share a device flush (#535)\n\nGroup commit exists to make one fsync serve many waiters, and it works: driven\nconcurrently the storage layer coalesces at 7.25x. It was never given the\nchance. Publishes for a shard queued to one worker, and that worker awaited\neach publish to completion -- including the flush -- before taking the next.\nOne publish was ever at the sync point, so the fan-in was 1 by construction\nand every publish paid a full flush alone:\n\n  1 flush / ~300 us = ~3,300 publishes/s per shard\n  x 256 KB          = ~850 MB/s\n\nwhich is the ~1000 MB/s per-broker wall measured on Azure, at ~50% CPU with\nhalf the cores idle -- waiting on the disk, not computing.\n\nThe claim and the completion are now separate, because the first must be\nordered and the second must not:\n\n  claim_publish     consumes offsets and reserves the commit turn. The\n                    transport calls it serially, in queue order, so the order\n                    records land on disk is unchanged. Microseconds.\n  complete_publish  awaits the flush, then appends in-memory and fans out\n                    under the turn. Spawned, so several are in ensure_durable\n                    together and group commit has something to coalesce.\n\npublish_batch_with_outcome is the two back to back, so every other caller is\nuntouched.\n\nCommitTurn had to grow an owned form. It borrowed the sequencer, which cannot\noutlive the frame that claimed it -- and the claim must exist from the moment\noffsets are consumed, because its Drop releases the range. reserve_owned\nreturns a CommitTurn<'static> backed by an Arc, sharing the same wait and Drop\nthrough a Deref shim; StreamState holds the sequencer in an Arc.\n\nOnly durable locally-resolved publishes take the split path. Forwards,\nidempotent sequences and the single-node local target stay inline: none of them\nis waiting on a flush this worker could be sharing.\n\nBounded on purpose. FELIX_BROKER_PUB_FLUSH_CONCURRENCY (default 32) caps the\nflushes one worker may have outstanding, because the reason this pool is\nprocess-wide at all is that unbounded concurrent callers contended on shared\nbroker state. It doubles as the revert switch, which is how the regression test\nwas proven: at 1 the fan-in is 1.000 and the test fails; at the default it is\n9.354 and it passes.\n\nOrdering checked rather than assumed: commit_order's 11 unit tests, and\ndurable_streams including disk_order_cursor_order_and_delivery_order_agree_\nunder_concurrency. Offsets are still claimed serially, so a client pipelining\nunder AckMode::None keeps its send order -- the constraint that ruled out\nsimply spawning the jobs.\n\nMeasured on the transport-level reproduction: fan-in 1.000 -> 9.354, above the\n>= 8 that docs/storage-performance.md budgets and never gated. Full workspace\nsuite green.\n\n* test(cluster): assert the structural claim, not the rig's budget\n\nCI caught this and it was my mistake: the fan-in assertion was set to the\n`>= 8` from docs/storage-performance.md, which is a property of the perf rig --\nNVMe, ~300us flushes, publishes arriving fast enough to stack up behind one.\n\nA shared GitHub runner is several times slower end to end (7.4 MB/s against\n46 on a laptop), so fewer publishes are waiting at any given flush and the\nhonest fan-in there is lower. The run measured 4.324: healthy, clearly\ncoalescing, and under the threshold. The budget was never a claim CI could\nmake.\n\nWhat the test is actually for is the structural property, and that does not\nvary: publishes must reach the flush *together at all*. The regression it\nguards collapses to exactly 1.0, so `>= 2.0` separates the two with room to\nspare, and still fails the moment the serialisation returns -- verified with\nFELIX_BROKER_PUB_FLUSH_CONCURRENCY=1, which measures 1.000 and fails.\n\nGating the production budget belongs on the rig, where the number means\nsomething.\n\n* docs: document the flush-concurrency knob, and correct its neighbour\n\nCI caught the first half and it was mine to catch: `docs:evidence` fails on an\nenv var the code reads and the reference does not document, and\nFELIX_BROKER_PUB_FLUSH_CONCURRENCY was exactly that. The tests passed; this\nstep did not. Running it before pushing is the ritual and I skipped it.\n\nAdds the variable to the registry and the reference, including what `1` means\n-- the pre-0.4.1 behaviour of one flush at a time -- since that is also the\nrevert switch.\n\nAlso corrects FELIX_BROKER_PUB_WORKERS_PER_CONN, which is documented as\n\"Publish workers per QUIC connection\". It is not: the pool is built once,\nbefore the accept loop, and is process-wide. That description cost real time\nduring the #535 investigation -- it is the reason more connections looked like\nthey should have produced more concurrency. The entry now says what the code\ndoes, including that raising it spreads different shards across workers and\ncannot give one shard more than one, and points at the rename tracked in #535.",
+          "timestamp": "2026-09-18T13:26:06-07:00",
+          "tree_id": "ce4229e7feac7706637caffaf0af1ac73d6d3bf3",
+          "url": "https://github.com/gabloe/felix/commit/7396b976191125f19548fe09abf46961fe0941cc"
+        },
+        "date": 1789763337539,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 222923.87,
+            "range": "3525.68",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 222923.87\nmean: 224603.80\nstdev: 3525.68\ncv: 1.57%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 222923.87,
+            "range": "3525.68",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 222923.87\nmean: 224603.80\nstdev: 3525.68\ncv: 1.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54608.77,
+            "range": "1434.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54608.77\nmean: 53821.77\nstdev: 1434.34\ncv: 2.66%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 546087.66,
+            "range": "14343.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 546087.66\nmean: 538217.74\nstdev: 14343.44\ncv: 2.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
