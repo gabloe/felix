@@ -459,6 +459,25 @@ volumeClaimTemplates:
 
 ## Networking
 
+:::danger[The internal port is unauthenticated]
+`FELIX_INTERNAL_BIND` is the port brokers use to forward publishes and ship
+replication to each other. **It has no peer authentication yet** — mTLS is
+[#125](https://github.com/gabloe/felix/issues/125) — so anything that can reach
+it is treated as a broker. A caller on that port can append to any stream this
+broker owns, for any tenant, with no credential.
+
+Until that lands, reachability *is* the security boundary. Restrict it to the
+brokers themselves — a `NetworkPolicy` selecting the broker pods, a private
+subnet, or both — and never expose it through a `LoadBalancer` or `Ingress`.
+The client port (`FELIX_QUIC_BIND`) is the one clients use, and it does
+authenticate.
+
+Startup refuses a configuration where the two share a port, so they cannot be
+confused by accident; this is about not exposing the internal one on purpose.
+[`docs/threat-model-internal.md`](https://github.com/gabloe/felix/blob/main/docs/threat-model-internal.md)
+sets out what is and is not defended.
+:::
+
 ### Service for External Access
 
 Expose broker externally:
