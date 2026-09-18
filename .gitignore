@@ -60,3 +60,6 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv-python/
+
+# TLC's checkpoints, if a run is ever started by hand without -metadir.
+docs/formal/states/
