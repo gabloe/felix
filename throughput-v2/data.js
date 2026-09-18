@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789758400880,
+  "lastUpdate": 1789761222186,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11388,6 +11388,58 @@ window.BENCHMARK_DATA = {
             "range": "15493.01",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 542170.36\nmean: 541035.47\nstdev: 15493.01\ncv: 2.86%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d009130d1d75945239badaa646785bcc6a80dd58",
+          "message": "fix(ci): install the Python binding a way that works, and run it before the tag (#541)\n\nv0.4.0 shipped with no wheels and nothing on PyPI. The release job failed at\n\"Install the binding\", which took the wheel, sdist, attach and publish jobs\nwith it -- and the Python client is one of that release's headline features.\n\n`maturin develop` installs into an *active* virtualenv and refuses to run\nwithout one. `actions/setup-python` puts an interpreter on PATH; it creates no\nvenv. The step could never have succeeded as written. `pip install\n./crates/felix-python` builds through maturin as the PEP 517 backend and\ninstalls into the interpreter that is actually there, which is also what a user\ndoes. Verified locally in a clean venv, including the import.\n\nThe reason it went unnoticed is the part worth fixing properly: this job\nexisted only in release.yml. ci.yml had no Python job at all, the client merged\nafter v0.3.1, and every prior release predates it -- so the job's first\nexecution in its life was the v0.4.0 tag build, which is the worst possible\nmoment to discover it does not work.\n\nIt now runs in CI too, using the same installation steps so the two cannot\ndrift. Unconditional rather than path-filtered: a job that does not run is a\njob that breaks silently, and filtering on crates/felix-python would have\nmissed it anyway, since the binding wraps the Rust client.\n\nCloses #534. The wheels for v0.4.0 can be built against the existing tag\nthrough release.yml's workflow_dispatch input, with no re-tag.",
+          "timestamp": "2026-09-18T12:50:14-07:00",
+          "tree_id": "f7d49c1a115ba71a9fab90ea5b35cb52f795d1a6",
+          "url": "https://github.com/gabloe/felix/commit/d009130d1d75945239badaa646785bcc6a80dd58"
+        },
+        "date": 1789761219495,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233911.9,
+            "range": "4850.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233911.90\nmean: 233990.29\nstdev: 4850.29\ncv: 2.07%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233911.9,
+            "range": "4850.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233911.90\nmean: 233990.29\nstdev: 4850.29\ncv: 2.07%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56157.72,
+            "range": "5851.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56157.72\nmean: 53297.60\nstdev: 5851.12\ncv: 10.98%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 561577.2,
+            "range": "58511.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 561577.20\nmean: 532976.03\nstdev: 58511.22\ncv: 10.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
