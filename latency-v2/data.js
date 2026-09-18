@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789746219810,
+  "lastUpdate": 1789746397261,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14124,6 +14124,72 @@ window.BENCHMARK_DATA = {
             "range": "454.49",
             "unit": "us",
             "extra": "trials: 5\nmedian: 879.00\nmean: 1021.80\nstdev: 454.49\ncv: 44.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "69507aa2b352141a206e6e82bcde07dd4e208d76",
+          "message": "perf(azure): seed Quorum streams, so RF=3 can be measured (#526)\n\nEvery published throughput and latency figure is RF=1 `Leader`, which is not\nthe configuration the docs recommend. The seed hardcoded `\"consistency\":\n\"Leader\"` for both streams and left a comment saying the Leader vs Quorum\ncomparison \"registers its own streams per run\" -- nothing does, so #425 had\nno stream to run against.\n\nSeeds the two durability settings crossed with the two consistency levels:\nperf, perf-durable, perf-quorum, perf-durable-quorum. One seed covers every\ncombination a run wants to price, and the loadgen already takes --stream, so\nnothing else needs to change.\n\nAt REPLICATION_FACTOR=1 a quorum of one is the leader and the -quorum streams\nmeasure the same path as their siblings. Seeded anyway so the names are stable\nacross tiers and a run script does not need to know the replication factor to\nknow what to ask for.\n\nChecked with `dash -n` and the case arms expanded under dash, since this runs\non the loadgen under dash via run-command.\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>",
+          "timestamp": "2026-09-18T08:43:24-07:00",
+          "tree_id": "0f70c39f33ffea8efb80c3ef1a6965b475c7c291",
+          "url": "https://github.com/gabloe/felix/commit/69507aa2b352141a206e6e82bcde07dd4e208d76"
+        },
+        "date": 1789746394551,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 164.60\nstdev: 1.14\ncv: 0.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 213,
+            "range": "5.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 213.00\nstdev: 5.10\ncv: 2.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 267,
+            "range": "275.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 267.00\nmean: 387.60\nstdev: 275.35\ncv: 71.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 202,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 201.80\nstdev: 1.10\ncv: 0.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 409,
+            "range": "4.51",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 409.00\nmean: 408.60\nstdev: 4.51\ncv: 1.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 676,
+            "range": "321.96",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 676.00\nmean: 825.00\nstdev: 321.96\ncv: 39.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
