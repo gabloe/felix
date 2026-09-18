@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789733819759,
+  "lastUpdate": 1789735478301,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13992,6 +13992,72 @@ window.BENCHMARK_DATA = {
             "range": "3201.47",
             "unit": "us",
             "extra": "trials: 5\nmedian: 385.00\nmean: 2647.80\nstdev: 3201.47\ncv: 120.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d757dbb72030dbb763ff5fdcad8c5115359330e",
+          "message": "feat(publish): idempotent producers, so an ambiguous outcome is safely re-sent (#522)\n\nA Quorum publish that times out reports failure for a record that may be\ndurable. The client cannot tell, so re-sending duplicates it and not\nre-sending loses it. With a producer id and a sequence the broker can tell\nthe copies apart.\n\nA client asks the broker for a producer id (producer_init) and sends its\nbatches as publish_idempotent with a per-shard sequence. The shard's\nleader appends the sequence it expects, answers a re-send of one it\nalready holds with the original outcome and no second append, and\nrefuses a gap, an unknown producer, or a sequence older than it\nremembers with a typed publish_refused. A batch for a shard led\nelsewhere is refused with the leader's address rather than forwarded,\nsince only the leader holds the sequences. Negotiated as\nFEATURE_IDEMPOTENT_PRODUCER.\n\nClusterClient::idempotent_producer and Client::idempotent_producer\nre-send under the same sequence after an ambiguous outcome, follow a\nnot-leader refusal, and end on any other. A typed refusal no longer\nfails the client's publish worker: it answers one request on a stream\nthe broker keeps serving.\n\nThe sequences live in the leader's memory. A new leader answers\nunknown_producer, so a batch in flight across a failover is reported\nrather than silently landed or dropped; persisting them through\nreplication is the follow-up.\n\nCloses #422.",
+          "timestamp": "2026-09-18T05:42:00-07:00",
+          "tree_id": "b286a45c693341cf39e0fae62895bcb9f9555ea5",
+          "url": "https://github.com/gabloe/felix/commit/6d757dbb72030dbb763ff5fdcad8c5115359330e"
+        },
+        "date": 1789735476739,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "1.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 164.00\nstdev: 1.87\ncv: 1.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 212,
+            "range": "4.04",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 212.00\nmean: 213.40\nstdev: 4.04\ncv: 1.89%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 258,
+            "range": "1807.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 258.00\nmean: 1061.20\nstdev: 1807.77\ncv: 170.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 202,
+            "range": "1.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 202.00\nstdev: 1.41\ncv: 0.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 402,
+            "range": "13.31",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 402.00\nmean: 406.20\nstdev: 13.31\ncv: 3.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 576,
+            "range": "162.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 576.00\nmean: 643.40\nstdev: 162.70\ncv: 25.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
