@@ -11,6 +11,89 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-18
+
+A throughput fix. Durable publishes to one shard were processed strictly one at
+a time, so group commit -- the mechanism that lets one device flush serve many
+waiters -- never had more than one waiter and every publish paid a full flush
+alone. Nothing was lost or misordered; the broker simply used about half a
+machine and refused the rest.
+
+Also fixes the release job that shipped 0.4.0 with no Python wheels.
+
+**No wire-protocol change.** `felix-wire` `VERSION` remains `1`,
+`INTERNAL_VERSION` remains `1`, and no feature bit is added.
+
+### Fixed
+
+- **Concurrent publishes share a device flush again** (#535). Publishes for a
+  shard queued to a single worker, and that worker awaited each one to
+  completion -- including the `fsync` -- before taking the next. One publish was
+  ever at the sync point, so the group-commit fan-in was **1 by construction**:
+
+  ```
+  1 flush / ~300 us = ~3,300 publishes/s per shard
+  x 256 KB per batch = ~850 MB/s
+  ```
+
+  which is the per-broker ceiling measured on Azure NVMe, at ~50% CPU with half
+  the cores idle -- waiting on the disk rather than computing. It got *worse*
+  with more publishers, who queued behind each other.
+
+  The publish is now two phases. `claim_publish` consumes the offsets and
+  reserves the commit turn; the transport calls it **serially, in arrival
+  order**, so the order records land on disk is unchanged, and a client
+  pipelining under `AckMode::None` keeps its send order.
+  `complete_publish` awaits the flush and then appends and fans out under that
+  turn, and is spawned -- so several flushes overlap and group commit has
+  something to coalesce. Measured fan-in on the transport-level test:
+  **1.000 -> 9.5**.
+
+  Ordering is unchanged and checked rather than assumed: `commit_order`'s unit
+  tests, which are the deterministic proof that turns are granted in offset
+  order regardless of arrival order, and
+  `disk_order_cursor_order_and_delivery_order_agree_under_concurrency`.
+
+- **The release job could never have built the Python wheels** (#534). It
+  installed the binding with `maturin develop`, which requires an *active*
+  virtualenv; `actions/setup-python` provides an interpreter and no venv. The
+  failure took the wheel, sdist, attach and publish jobs with it, so 0.4.0
+  shipped with no wheels and nothing on PyPI. Installation is now
+  `pip install ./crates/felix-python`, which builds through maturin as the PEP
+  517 backend -- the same thing a user does.
+
+  The job also ran *only* in `release.yml`. The Python client merged after
+  v0.3.1 and every earlier release predates it, so its first execution in its
+  life was the v0.4.0 tag build. It now runs in CI as well, on every change,
+  using the same installation steps so the two cannot drift.
+
+### Added
+
+- **`FELIX_BROKER_PUB_FLUSH_CONCURRENCY`** (default `32`) -- durable publishes
+  one publish worker may have awaiting their device flush at once. Offsets are
+  still claimed serially, so this does not affect the order records land in; it
+  decides how many flushes group commit gets to coalesce. `1` restores the
+  0.4.0 behaviour of one flush at a time, which is also how the fix is tested:
+  at `1` the fan-in is 1.000 and the regression test fails.
+
+### Changed
+
+- `FELIX_BROKER_PUB_WORKERS_PER_CONN` is documented for what it is. The pool is
+  **process-wide**, built once before the accept loop, not per connection as
+  the name and the old description both say. A stream-shard handle maps to one
+  worker, so raising it spreads *different* shards across workers and cannot
+  give one shard more than one. The name is misleading and a rename is tracked
+  in #535.
+
+### Performance notes
+
+The per-broker figures published for 0.4.0 -- **~977 MB/s at ~48% CPU**, and
+the conclusion drawn from them that *"durable throughput scales by adding
+brokers, not by adding cores per broker"* -- describe this defect rather than
+the design. The measurements were accurate; the architectural inference was
+not. Replacement numbers need a rig session against 0.4.1 and are deliberately
+not guessed at here.
+
 ## [0.4.0] - 2026-09-18
 
 The multi-node hardening release. 0.3.0 made a cache into something you can
@@ -581,7 +664,8 @@ isolation, ephemeral cache, tenant/namespace/stream registries, RBAC and Felix
 token authorization, a control plane with a Postgres-backed store, a Rust client
 SDK, and a protocol conformance runner.
 
-[Unreleased]: https://github.com/gabloe/felix/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/gabloe/felix/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/gabloe/felix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/gabloe/felix/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/gabloe/felix/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/gabloe/felix/compare/v0.2.0...v0.3.0
