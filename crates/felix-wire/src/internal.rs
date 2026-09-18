@@ -128,6 +128,9 @@ pub enum Kind {
     AuthorizedForwardPublish = 22,
     /// `ForwardCacheOp` plus the caller's credential, by the same reasoning.
     AuthorizedForwardCacheOp = 23,
+    /// The leader tells a halted follower to discard its copy of a shard's log
+    /// and start again from the leader's oldest record.
+    ReplicateRebuild = 24,
 }
 
 impl Kind {
@@ -158,6 +161,7 @@ impl Kind {
             21 => Ok(Kind::ReplicateCounterBootstrap),
             22 => Ok(Kind::AuthorizedForwardPublish),
             23 => Ok(Kind::AuthorizedForwardCacheOp),
+            24 => Ok(Kind::ReplicateRebuild),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }
@@ -483,6 +487,54 @@ pub struct ReplicateBootstrap {
     pub base_offset: u64,
 }
 
+/// Which of a shard's logs a rebuild is about.
+///
+/// A field rather than five kinds, unlike the records and bootstrap messages:
+/// those share a body with something else and the kind is what tells them
+/// apart, whereas nothing shares this body. The values are this protocol's,
+/// not the broker's own enum, so a renumbering there cannot change the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ReplicaLog {
+    Stream = 1,
+    Cache = 2,
+    GroupCursors = 3,
+    GroupDeadLetters = 4,
+    Counters = 5,
+}
+
+impl ReplicaLog {
+    pub fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(ReplicaLog::Stream),
+            2 => Ok(ReplicaLog::Cache),
+            3 => Ok(ReplicaLog::GroupCursors),
+            4 => Ok(ReplicaLog::GroupDeadLetters),
+            5 => Ok(ReplicaLog::Counters),
+            other => Err(Error::UnknownInternalReplicaLog(other)),
+        }
+    }
+}
+
+/// Discard a follower's copy of one log and start again at `base_offset`.
+///
+/// Sent by the leader to a follower whose replication has halted -- a
+/// diverged copy, or one that refused a bootstrap -- and only under the
+/// leader's rebuild policy. The follower checks it is a replica of the shard
+/// at this generation, discards every record it holds for that log, places
+/// an empty log at `base_offset`, and answers `ReplicateOk` with that offset;
+/// the leader then ships from there as it would to any follower that far
+/// behind. A peer that predates this kind refuses it, and the halt stands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicateRebuild {
+    pub correlation_id: u64,
+    pub shard: ShardRef,
+    pub log: ReplicaLog,
+    /// Offset of the oldest record the leader still holds, where the new copy
+    /// begins.
+    pub base_offset: u64,
+}
+
 /// The follower refused, and where it stands.
 ///
 /// `expected_offset` is what the follower wants next. For `LogGap` it is how
@@ -542,6 +594,7 @@ pub enum InternalMessage {
     /// same name.
     ReplicateCounterRecords(ReplicateRecords),
     ReplicateCounterBootstrap(ReplicateBootstrap),
+    ReplicateRebuild(ReplicateRebuild),
 }
 
 impl InternalMessage {
@@ -572,6 +625,7 @@ impl InternalMessage {
             Self::ReplicateDeadLetterBootstrap(_) => Kind::ReplicateDeadLetterBootstrap,
             Self::ReplicateCounterRecords(_) => Kind::ReplicateCounterRecords,
             Self::ReplicateCounterBootstrap(_) => Kind::ReplicateCounterBootstrap,
+            Self::ReplicateRebuild(_) => Kind::ReplicateRebuild,
         }
     }
 
@@ -603,6 +657,7 @@ impl InternalMessage {
             Self::ReplicateDeadLetterBootstrap(m) => m.correlation_id,
             Self::ReplicateCounterRecords(m) => m.correlation_id,
             Self::ReplicateCounterBootstrap(m) => m.correlation_id,
+            Self::ReplicateRebuild(m) => m.correlation_id,
         }
     }
 
@@ -699,6 +754,16 @@ impl InternalMessage {
                 put_str(&mut body, &m.shard.stream)?;
                 body.put_u32(m.shard.shard);
                 body.put_u64(m.shard.generation);
+                body.put_u64(m.base_offset);
+            }
+            Self::ReplicateRebuild(m) => {
+                body.put_u64(m.correlation_id);
+                put_str(&mut body, &m.shard.tenant_id)?;
+                put_str(&mut body, &m.shard.namespace)?;
+                put_str(&mut body, &m.shard.stream)?;
+                body.put_u32(m.shard.shard);
+                body.put_u64(m.shard.generation);
+                body.put_u8(m.log as u8);
                 body.put_u64(m.base_offset);
             }
             Self::ForwardCacheOp(m) => {
@@ -955,6 +1020,22 @@ impl InternalMessage {
                     Kind::ReplicateCounterBootstrap => Self::ReplicateCounterBootstrap(message),
                     _ => Self::ReplicateBootstrap(message),
                 })
+            }
+            Kind::ReplicateRebuild => {
+                let message = ReplicateRebuild {
+                    correlation_id: take_u64(&mut body)?,
+                    shard: ShardRef {
+                        tenant_id: take_str(&mut body)?,
+                        namespace: take_str(&mut body)?,
+                        stream: take_str(&mut body)?,
+                        shard: take_u32(&mut body)?,
+                        generation: take_u64(&mut body)?,
+                    },
+                    log: ReplicaLog::from_u8(take_u8(&mut body)?)?,
+                    base_offset: take_u64(&mut body)?,
+                };
+                expect_empty(&body)?;
+                Ok(Self::ReplicateRebuild(message))
             }
             kind @ (Kind::ForwardCacheOp | Kind::AuthorizedForwardCacheOp) => {
                 let correlation_id = take_u64(&mut body)?;

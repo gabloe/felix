@@ -42,6 +42,25 @@ pub const OUTCOME_NEEDS_BOOTSTRAP: &str = "needs_bootstrap";
 /// replication resumed. Once per replica per shard.
 pub const OUTCOME_BOOTSTRAPPED: &str = "bootstrapped";
 
+/// The leader told a halted follower to discard its copy and start again.
+pub const OUTCOME_REBUILD_STARTED: &str = "started";
+/// A rebuilt follower reached the leader's tail.
+pub const OUTCOME_REBUILD_COMPLETED: &str = "completed";
+/// The follower would not, or could not, rebuild; the halt stands.
+pub const OUTCOME_REBUILD_REFUSED: &str = "refused";
+
+pub const REBUILDS_TOTAL: &str = "felix_broker_replication_rebuilds_total";
+/// Followers this broker is rebuilding right now, across every shard it leads.
+pub const REBUILDING: &str = "felix_broker_replication_rebuilding";
+
+pub fn record_rebuild(outcome: &'static str) {
+    metrics::counter!(REBUILDS_TOTAL, "outcome" => outcome).increment(1);
+}
+
+pub fn record_rebuilding(count: usize) {
+    metrics::gauge!(REBUILDING).set(count as f64);
+}
+
 pub fn record_shipped(outcome: &'static str) {
     metrics::counter!(SHIPPED_TOTAL, "outcome" => outcome).increment(1);
 }

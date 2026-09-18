@@ -22,7 +22,10 @@ use futures::StreamExt;
 use super::halted::{HaltedReplica, HaltedReplicas};
 use super::quorum::QuorumMarks;
 use super::reporter::Reporter;
-use super::{FollowerCursor, Progress, caught_up, lag_records, metrics, quorum_offset, ship_once};
+use super::{
+    FollowerCursor, Progress, RebuildPolicy, Rebuilds, caught_up, lag_records, metrics,
+    quorum_offset, ship_once,
+};
 use crate::peer::PeerRequester;
 
 /// Cursors for one shard, valid only at `generation`.
@@ -179,6 +182,7 @@ async fn replicate_shard<R: PeerRequester>(
     broker: &Arc<Broker>,
     marks: &QuorumMarks,
     reporter: Option<&Reporter>,
+    rebuilds: &Rebuilds,
     key: ShardKey,
     route: felix_router::Route,
     mut entry: ShardCursors,
@@ -284,6 +288,7 @@ async fn replicate_shard<R: PeerRequester>(
                 log_kind,
                 &mut cursor,
                 MAX_BATCH_BYTES,
+                rebuilds,
             )
             .await
             {}
@@ -415,6 +420,7 @@ async fn replicate_shard<R: PeerRequester>(
             route,
             felix_broker::LogKind::GroupCursors,
             &mut aux.group,
+            rebuilds,
         )
         .await;
         ship_aux_log(
@@ -424,6 +430,7 @@ async fn replicate_shard<R: PeerRequester>(
             route,
             felix_broker::LogKind::GroupDeadLetters,
             &mut aux.dead_letters,
+            rebuilds,
         )
         .await;
     }
@@ -438,6 +445,7 @@ async fn replicate_shard<R: PeerRequester>(
             route,
             felix_broker::LogKind::Counters,
             &mut aux.counters,
+            rebuilds,
         )
         .await;
     }
@@ -495,12 +503,58 @@ pub async fn replicate_once<R: PeerRequester>(
     dead_letter_cursors: &mut HashMap<ShardKey, ShardCursors>,
     counter_cursors: &mut HashMap<ShardKey, ShardCursors>,
 ) -> Pass {
+    replicate_once_with(
+        requester,
+        broker,
+        router,
+        marks,
+        reporter,
+        cursors,
+        group_cursors,
+        dead_letter_cursors,
+        counter_cursors,
+        &Rebuilds::disabled(),
+    )
+    .await
+}
+
+fn rebuilding_count(maps: &[&HashMap<ShardKey, ShardCursors>]) -> usize {
+    maps.iter()
+        .flat_map(|map| map.values())
+        .flat_map(|entry| entry.followers.iter())
+        .filter(|cursor| cursor.rebuilding)
+        .count()
+}
+
+/// [`replicate_once`] with halted followers rebuilt under `rebuilds`.
+#[allow(clippy::too_many_arguments)]
+pub async fn replicate_once_with<R: PeerRequester>(
+    requester: &R,
+    broker: &Arc<Broker>,
+    router: &ShardRouter,
+    marks: &QuorumMarks,
+    reporter: Option<&Reporter>,
+    cursors: &mut HashMap<ShardKey, ShardCursors>,
+    group_cursors: &mut HashMap<ShardKey, ShardCursors>,
+    dead_letter_cursors: &mut HashMap<ShardKey, ShardCursors>,
+    counter_cursors: &mut HashMap<ShardKey, ShardCursors>,
+    rebuilds: &Rebuilds,
+) -> Pass {
     if broker.durable_storage().is_none() {
         // Nothing to replicate from. Without durable storage a broker's streams
         // are ephemeral and its cache is in memory, so no shard it leads has a
         // log to ship.
         return Pass::default();
     }
+    // Slots in use are whatever the cursors still say is rebuilding. A cursor
+    // discarded on a generation change or a lost shard took its slot with it,
+    // and nothing else would give it back.
+    rebuilds.set_in_flight(rebuilding_count(&[
+        cursors,
+        group_cursors,
+        dead_letter_cursors,
+        counter_cursors,
+    ]));
 
     let table = router.snapshot();
     let mut worst_lag: Option<u64> = None;
@@ -549,7 +603,9 @@ pub async fn replicate_once<R: PeerRequester>(
     // thousands of those at once.
     let passes: Vec<ShardPass> =
         futures::stream::iter(work.into_iter().map(|(key, route, entry, aux)| {
-            replicate_shard(requester, broker, marks, reporter, key, route, entry, aux)
+            replicate_shard(
+                requester, broker, marks, reporter, rebuilds, key, route, entry, aux,
+            )
         }))
         .buffer_unordered(SHARD_CONCURRENCY)
         .collect()
@@ -599,6 +655,7 @@ pub async fn replicate_once<R: PeerRequester>(
 /// logged rather than allowed to stall the records. Both logs are small and
 /// written only when group state actually changes, so this is usually a no-op
 /// pass.
+#[allow(clippy::too_many_arguments)]
 async fn ship_aux_log<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
@@ -606,6 +663,7 @@ async fn ship_aux_log<R: PeerRequester>(
     route: &felix_router::Route,
     log_kind: felix_broker::LogKind,
     entry: &mut ShardCursors,
+    rebuilds: &Rebuilds,
 ) {
     let Some(log) = broker
         .shard_log(
@@ -644,6 +702,7 @@ async fn ship_aux_log<R: PeerRequester>(
             log_kind,
             cursor,
             MAX_BATCH_BYTES,
+            rebuilds,
         )
         .await
         {}
@@ -810,6 +869,7 @@ pub struct Published {
     pub halted: Arc<HaltedReplicas>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     requester: Arc<R>,
     broker: Arc<Broker>,
@@ -817,9 +877,11 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     published: Published,
     reporter: Option<Reporter>,
     interval: Duration,
+    rebuild_policy: RebuildPolicy,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let rebuilds = Rebuilds::new(rebuild_policy);
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // Woken by a durable append as well as by the tick. Under `Quorum` the
@@ -844,7 +906,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 _ = ticker.tick() => {}
                 _ = woken => {}
             }
-            let pass = replicate_once(
+            let pass = replicate_once_with(
                 requester.as_ref(),
                 &broker,
                 &router,
@@ -854,6 +916,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 &mut group_cursors,
                 &mut dead_letter_cursors,
                 &mut counter_cursors,
+                &rebuilds,
             )
             .await;
             // Replaced wholesale, so a halt that has since resolved stops being

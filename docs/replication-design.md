@@ -240,8 +240,9 @@ surviving base offset would leave its log with a hole nothing downstream could
 detect. Such a follower is offered a log that *begins* at the leader's oldest surviving
 offset (`ReplicateBootstrap`). A replica holding nothing takes it and replication
 resumes; one holding records of its own refuses, because a log placed over them
-would have a hole nothing downstream could detect, and it is halted for an
-operator to resolve.
+would have a hole nothing downstream could detect, and it is halted. The leader
+then rebuilds it under the policy below, or leaves it to an operator when the
+policy says so.
 
 ### The `Leader` loss window, precisely
 
@@ -343,9 +344,10 @@ Three things this deliberately does not do:
 - **It does not truncate below the high-water mark.** Everything there is on a
   majority. A truncation point computed below it is a bug, not a repair, and
   should refuse rather than proceed.
-- **It does not make a halted follower repair itself automatically.** Truncating
-  a divergent suffix is a decision with a policy attached — how many followers
-  may rebuild at once, and at what bandwidth (#424).
+- **It does not make a halted follower repair itself.** Truncating a divergent
+  suffix is a decision with a policy attached — how many followers may rebuild
+  at once, and at what bandwidth — so the repair is the leader's, under that
+  policy, and described in "Rebuilding a halted follower" below.
 
 ### Who may be promoted
 
@@ -540,12 +542,53 @@ size is the number of halted replicas, normally zero. A healthy broker answers
 `[]` rather than 404 — "nothing is halted" and "this broker does not answer
 that question" are different things to a dashboard.
 
-Read-only, deliberately. Discarding a halted replica's log so the leader's
-bootstrap offer is accepted is the obvious next step from here, and that
-listener has no authentication (#125, #126), so it carries what is worth
-knowing and nothing worth doing. The supervised rebuild is #424.
+Read-only, deliberately. That listener has no authentication of its own, so it
+carries what is worth knowing and nothing worth doing. The rebuild is the
+leader's, below, and an entry here clears once it has begun.
 
 The rule and its refusals are in `docs/internal-protocol.md`.
+
+### Rebuilding a halted follower
+
+A halted follower is out of every quorum, and stays out until its copy of the
+shard is discarded and rebuilt from the leader's. The leader does that itself,
+because it is the only party that can: it knows the follower is halted, holds
+the copy the majority agrees on, and already has the shipping path to send it.
+
+The rebuild is one message. `ReplicateRebuild` names the shard, which of its
+logs, and the leader's oldest surviving offset; a follower of that shard at
+that generation discards the log — records, index, and generation history —
+and answers that its new copy begins at the offset it was given. From there it
+is an ordinary follower that far behind: shipping resumes at the base, and the
+follower is counted as caught up when it reaches the tail, like any other. The
+same fence applies as to storing records: a superseded leader cannot make a
+follower discard anything, which is the most damage a stale leader could do and
+the one thing the check most has to stop.
+
+It happens under a policy, because a rebuild is a full transfer of the shard,
+and every halted follower at once — across every shard a failed broker led — is
+how a recovery becomes an outage:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `FELIX_REPLICATION_REBUILD_MAX_CONCURRENT` | `1` | Rebuilds in flight at once, across every shard this broker leads. `0` rebuilds nothing: every halt is an operator's, as before. |
+| `FELIX_REPLICATION_REBUILD_BYTES_PER_SEC` | `0` | Bytes per second a rebuilding follower is shipped at, per follower. `0` is unlimited. |
+
+The cap is counted per leader rather than per cluster: a broker leading a shard
+can only see its own followers. A slot is held from the follower's acceptance
+until the leader finds it level, and given back if the follower refuses or the
+shard changes generation under it. The rate paces only followers being rebuilt;
+a follower merely behind is shipped at full speed, as before.
+
+Only a `diverged` or `needs_bootstrap` halt is rebuilt. A `fenced` halt says
+this broker is no longer the leader, and nothing it ships is authoritative. A
+follower that predates the message answers with an error, and stays halted
+until it is upgraded or an operator acts.
+
+`felix_broker_replication_rebuilds_total{outcome}` counts rebuilds `started`,
+`completed`, and `refused`; `felix_broker_replication_rebuilding` is how many
+this broker has in flight. The halted listing drops an entry when its rebuild
+begins, since the follower is shipping again.
 
 ## What this does to the other M5 issues
 

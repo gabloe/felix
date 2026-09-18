@@ -138,6 +138,8 @@ pub const OUTCOME_CORRUPT: &str = "corrupt";
 /// This broker placed a shard log to begin where the leader's surviving log
 /// begins. Rare and deliberate: it happens once per replica per shard.
 pub const OUTCOME_BOOTSTRAPPED: &str = "bootstrapped";
+/// This broker discarded its copy of a shard at the leader's request.
+pub const OUTCOME_REBUILT: &str = "rebuilt";
 
 pub fn record_replicated(outcome: &'static str) {
     metrics::counter!(REPLICATED_TOTAL, "outcome" => outcome).increment(1);

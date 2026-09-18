@@ -587,6 +587,27 @@ impl SegmentSet {
     }
 
     /// Reopen a sealed segment as the active one so appends resume inside it.
+    /// Discard every record and start again, empty, at `base_offset`.
+    ///
+    /// For a follower rebuilding a shard whose copy is wrong rather than
+    /// merely short: nothing here is worth keeping, and the leader's oldest
+    /// record is where the new copy begins. Unlike `truncate`, the base may
+    /// move in either direction.
+    pub fn reset_to(&mut self, base_offset: Offset) -> Result<()> {
+        while let Some(entry) = self.sealed.pop() {
+            self.remove_segment_files(entry.descriptor.id)?;
+        }
+        let active_id = self.active.id();
+        self.replace_active(
+            active_id + 1,
+            base_offset,
+            SEGMENT_HEADER_LEN,
+            base_offset,
+            0,
+        )?;
+        self.remove_segment_files(active_id)
+    }
+
     fn adopt_sealed_as_active(&mut self, entry: SealedEntry) -> Result<()> {
         let outcome = scan_segment(
             &self.dir.join(segment_file_name(entry.descriptor.id)),

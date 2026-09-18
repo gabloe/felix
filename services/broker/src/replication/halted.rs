@@ -54,7 +54,9 @@ pub(crate) fn describe(halt: Halt) -> (&'static str, &'static str) {
             "diverged",
             "the follower holds different bytes at an offset this leader also \
              holds, and no generation history bounds the disagreement. Its copy \
-             of this shard has to be discarded and rebuilt.",
+             of this shard has to be discarded and rebuilt; the leader does that \
+             itself when FELIX_REPLICATION_REBUILD_MAX_CONCURRENT allows, and \
+             this entry clears once it has.",
         ),
         Halt::Fenced => (
             "fenced",
@@ -68,7 +70,9 @@ pub(crate) fn describe(halt: Halt) -> (&'static str, &'static str) {
             "the follower wants records retention has already removed from this \
              leader, so shipping cannot reach it, and it holds records of its \
              own so it refused a log placed at the surviving base. Its copy of \
-             this shard has to be discarded and rebuilt.",
+             this shard has to be discarded and rebuilt; the leader does that \
+             itself when FELIX_REPLICATION_REBUILD_MAX_CONCURRENT allows, and \
+             this entry clears once it has.",
         ),
     }
 }

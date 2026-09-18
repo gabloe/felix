@@ -101,6 +101,8 @@ felix_broker_membership_live                # broker: does the cluster still cou
 felix_broker_heartbeat_age_seconds          # alert when this nears the expiry timeout
 felix_broker_replication_lag_records
 felix_broker_replication_halted             # a count; GET /replication/halted says which
+felix_broker_replication_rebuilding         # halted followers the leader is rebuilding right now
+felix_broker_replication_rebuilds_total     # by outcome: started, completed, refused
 felix_broker_replica_reports_per_request    # shards per control-plane report; 1 on a busy broker means batching found nothing
 felix_broker_lease_held
 felix_broker_lease_refusals_total           # writes refused after a lease lapsed
@@ -109,7 +111,9 @@ felix_broker_lease_refusals_total           # writes refused after a lease lapse
 ### Which replica stopped
 
 `felix_broker_replication_halted` is a count, and stays one: a label per shard
-would be a label per stream per tenant. When it goes above zero, ask the broker
+would be a label per stream per tenant. A leader rebuilds a halted follower on
+its own, one at a time by default (`FELIX_REPLICATION_REBUILD_MAX_CONCURRENT`),
+so a brief non-zero is a rebuild queue. When it stays above zero, ask the broker
 which:
 
 ```bash

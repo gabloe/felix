@@ -369,6 +369,7 @@ mod correlation {
             | InternalMessage::ReplicateGroupBootstrap(m)
             | InternalMessage::ReplicateDeadLetterBootstrap(m)
             | InternalMessage::ReplicateCounterBootstrap(m) => m.correlation_id,
+            InternalMessage::ReplicateRebuild(m) => m.correlation_id,
         }
     }
 
@@ -436,6 +437,12 @@ mod correlation {
             InternalMessage::ReplicateBootstrap(ReplicateBootstrap {
                 correlation_id: 7,
                 shard: shard(),
+                base_offset: 5_000,
+            }),
+            InternalMessage::ReplicateRebuild(ReplicateRebuild {
+                correlation_id: 7,
+                shard: shard(),
+                log: ReplicaLog::Stream,
                 base_offset: 5_000,
             }),
         ]

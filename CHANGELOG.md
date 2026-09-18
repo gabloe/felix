@@ -13,6 +13,15 @@ for what the current release actually guarantees.
 
 ### Added
 
+- A leader rebuilds a halted follower itself. A follower whose log diverged
+  from the leader's, or that refused a bootstrap because it held records of
+  its own, is told to discard its copy of the shard (`ReplicateRebuild`,
+  kind 24) and shipped again from the leader's oldest surviving record. It
+  happens under a policy: `FELIX_REPLICATION_REBUILD_MAX_CONCURRENT` caps
+  how many followers a broker rebuilds at once (default `1`; `0` leaves every
+  halt to an operator, as before) and `FELIX_REPLICATION_REBUILD_BYTES_PER_SEC`
+  paces the transfer. A fenced halt is never rebuilt, and a follower that
+  predates the message stays halted until it is upgraded (#424).
 - Broker-to-broker mTLS (#125). With `FELIX_INTERNAL_TLS_CERT`,
   `FELIX_INTERNAL_TLS_KEY` and `FELIX_INTERNAL_TLS_CA` set — all three or
   none — every peer connection is mutually authenticated against the CA, and

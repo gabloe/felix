@@ -437,6 +437,31 @@ pub struct DiskLog {
 }
 
 impl DiskLog {
+    /// Discard every record and start again, empty, at `base_offset`.
+    ///
+    /// The one caller is a follower rebuilding a shard whose copy has
+    /// diverged -- see `docs/replication-design.md`. The log stays open and
+    /// every handle to it stays valid; a read in flight fails rather than
+    /// returning records that no longer exist. The generation history goes
+    /// with the records it described.
+    pub async fn reset_to(&self, base_offset: Offset) -> Result<()> {
+        let inner = Arc::clone(&self.inner);
+        let _flush_guard = inner.durability.lock_flushes().await;
+        let operation = Arc::clone(&inner);
+        tokio::task::spawn_blocking(move || {
+            let mut segments = operation.segments.write();
+            segments.reset_to(base_offset)?;
+            segments.active_mut().sync()?;
+            operation.durability.reset_after_truncate(base_offset);
+            let mut epochs = operation.epochs.lock();
+            *epochs = epochs::EpochMap::default();
+            epochs::store(&operation.dir, &epochs)?;
+            Ok(())
+        })
+        .await
+        .map_err(|err| StorageError::Io(std::io::Error::other(err)))?
+    }
+
     /// Open (and recover) the log rooted at `dir`.
     ///
     /// `label` is the human-readable shard name used in errors and logs.
