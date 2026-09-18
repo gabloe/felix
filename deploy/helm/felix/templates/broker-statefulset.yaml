@@ -1,0 +1,226 @@
+{{- include "felix.validate" . -}}
+{{- if .Values.broker.enabled }}
+{{- $b := .Values.broker }}
+{{- $name := include "felix.broker.fullname" . }}
+{{- $headless := include "felix.broker.headless" . }}
+{{- $image := include "felix.image" (dict "root" . "image" $b.image) }}
+{{- $clientPort := int $b.ports.client }}
+{{- $internalPort := int $b.ports.internal }}
+{{- $metricsPort := int $b.ports.metrics }}
+{{- /*
+A broker's pod name is its node id: the identity it registers with, the name
+its shards are assigned to, and under peer mTLS the DNS name its certificate
+must carry. Replacing the pod keeps all three, and the volume behind it, which
+is what makes a replacement a rejoin rather than a new member.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  serviceName: {{ $headless }}
+  replicas: {{ int $b.replicas }}
+  # One broker at a time, each back in its replica sets before the next goes.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "felix.broker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "felix.broker.selectorLabels" . | nindent 8 }}
+        {{- with $b.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $metricsPort | quote }}
+        prometheus.io/path: /metrics
+        # A config change rolls the brokers.
+        checksum/config: {{ include (print $.Template.BasePath "/broker-configmap.yaml") . | sha256sum }}
+        {{- with $b.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "felix.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- include "felix.podSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: {{ include "felix.broker.terminationGracePeriodSeconds" . }}
+      {{- include "felix.scheduling" (dict "workload" $b "selectorLabels" (include "felix.broker.selectorLabels" .)) | nindent 6 }}
+      containers:
+        - name: broker
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: quic
+              containerPort: {{ $clientPort }}
+              protocol: UDP
+            - name: internal
+              containerPort: {{ $internalPort }}
+              protocol: UDP
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: FELIX_NODE_ID
+              value: "$(POD_NAME)"
+            - name: FELIX_REGION_ID
+              value: {{ $b.region | quote }}
+            - name: FELIX_QUIC_BIND
+              value: "0.0.0.0:{{ $clientPort }}"
+            - name: FELIX_INTERNAL_BIND
+              value: "0.0.0.0:{{ $internalPort }}"
+            # Peers are told an IP: the broker requires one, and a replaced
+            # pod re-registers its new one on its first heartbeat.
+            - name: FELIX_NODE_ADVERTISE_ADDR
+              value: "$(POD_IP):{{ $internalPort }}"
+            # Clients are told a name, which survives the pod being replaced.
+            - name: FELIX_CLIENT_ADVERTISE_ADDR
+              value: {{ include "felix.broker.clientAdvertiseAddr" . | quote }}
+            - name: FELIX_BROKER_METRICS_BIND
+              value: "0.0.0.0:{{ $metricsPort }}"
+            - name: FELIX_CONTROLPLANE_URL
+              value: {{ include "felix.controlplane.url" . | quote }}
+            - name: FELIX_NODE_TOKEN_FILE
+              value: {{ printf "/etc/felix/credential/%s" (ternary "$(POD_NAME)" $b.credential.tokenKey $b.credential.perBroker) | quote }}
+            {{- if $b.credential.refreshTokenKey }}
+            - name: FELIX_NODE_REFRESH_TOKEN_FILE
+              value: {{ printf "/etc/felix/credential/%s" $b.credential.refreshTokenKey | quote }}
+            {{- end }}
+            - name: FELIX_DURABLE_STORAGE_DIR
+              value: /var/lib/felix/data
+            # The broker's client-facing certificate is generated at start;
+            # this is where clients read it from.
+            - name: FELIX_TLS_CERT_EXPORT
+              value: /var/lib/felix/export/broker-cert.pem
+            {{- if $b.peerTls.enabled }}
+            - name: FELIX_INTERNAL_TLS_CERT
+              value: /etc/felix/peer/tls.crt
+            - name: FELIX_INTERNAL_TLS_KEY
+              value: /etc/felix/peer/tls.key
+            - name: FELIX_INTERNAL_TLS_CA
+              value: /etc/felix/peer/ca.crt
+            {{- end }}
+            {{- if $b.config }}
+            - name: FELIX_BROKER_CONFIG
+              value: /etc/felix/config/broker.yml
+            {{- end }}
+            - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
+              value: {{ $b.shutdown.drainTimeoutMs | quote }}
+            - name: RUST_LOG
+              value: {{ $b.logLevel | quote }}
+            {{- with $b.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Ready only once the catalog is seeded from the control plane, so a
+          # broker is not routed traffic for streams it does not know yet. On
+          # SIGTERM readiness turns 503 first, then the drain runs; liveness
+          # holds throughout, so a pod shutting down correctly is not restarted.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Time for the endpoints controller to take this pod out of
+                # rotation before SIGTERM starts the drain.
+                command: ["/bin/sh", "-c", "sleep {{ int $b.shutdown.preStopSeconds }}"]
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          securityContext:
+            {{- include "felix.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/felix/data
+            - name: export
+              mountPath: /var/lib/felix/export
+            - name: credential
+              mountPath: /etc/felix/credential
+              readOnly: true
+            {{- if $b.peerTls.enabled }}
+            - name: peer-tls
+              mountPath: /etc/felix/peer
+              readOnly: true
+            {{- end }}
+            {{- if $b.config }}
+            - name: config
+              mountPath: /etc/felix/config
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: export
+          emptyDir: {}
+        - name: credential
+          secret:
+            secretName: {{ $b.credential.existingSecret }}
+        {{- if $b.peerTls.enabled }}
+        # One certificate per pod, issued to the pod's own name, which is its
+        # node id. cert-manager's CSI driver is what can vary a volume per pod
+        # of one StatefulSet; a Secret cannot.
+        - name: peer-tls
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/issuer-name: {{ $b.peerTls.issuerName }}
+              csi.cert-manager.io/issuer-kind: {{ $b.peerTls.issuerKind }}
+              csi.cert-manager.io/dns-names: "${POD_NAME}"
+              csi.cert-manager.io/duration: {{ $b.peerTls.duration }}
+              csi.cert-manager.io/renew-before: {{ $b.peerTls.renewBefore }}
+              csi.cert-manager.io/fs-group: "65532"
+        {{- end }}
+        {{- if $b.config }}
+        - name: config
+          configMap:
+            name: {{ $name }}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $b.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $b.storage.size }}
+{{- end }}

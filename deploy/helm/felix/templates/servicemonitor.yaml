@@ -1,0 +1,46 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- $sm := .Values.serviceMonitor }}
+{{- if .Values.controlplane.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "felix.controlplane.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "felix.controlplane.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $sm.interval }}
+{{- end }}
+{{- if .Values.broker.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "felix.broker.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "felix.broker.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ $sm.interval }}
+{{- end }}
+{{- end }}

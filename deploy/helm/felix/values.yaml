@@ -1,0 +1,232 @@
+# Default values for the felix chart.
+#
+# Every environment variable named here is real and documented in the
+# environment reference; the chart wires them, it does not invent any. Values
+# that are wrong together (a budget wider than the replica count, a drain that
+# outlives the grace period, a backend without its store) fail at render time
+# rather than at 3am.
+
+# Kubernetes cluster DNS suffix, used to build the addresses brokers advertise.
+clusterDomain: cluster.local
+
+image:
+  # Prepended to every image repository below.
+  registry: ghcr.io
+  pullPolicy: IfNotPresent
+  # Secrets for a private registry, by name only; the chart creates none.
+  pullSecrets: []
+
+# One service account for both workloads. Neither talks to the Kubernetes API,
+# so it carries no RBAC and its token is not mounted.
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+controlplane:
+  enabled: true
+  image:
+    repository: gabloe/felix-controlplane
+    # Defaults to the chart's appVersion.
+    tag: ""
+    # Pin by digest in production: images are signed by digest, and a tag can
+    # be moved. When set, the tag is ignored.
+    digest: ""
+  # Instances. Under the postgres backend this is a Deployment that rolls one
+  # at a time with none unavailable; under raft it is a StatefulSet whose
+  # members must be an odd number, three or more.
+  replicas: 2
+  storage:
+    # memory | postgres | raft
+    #
+    # `memory` keeps nothing across a restart and is for trying the chart out.
+    # `postgres` is stateless instances over one HA database the platform
+    # provides. `raft` keeps the metadata in the instances themselves.
+    backend: postgres
+    postgres:
+      # A Secret holding the connection URL, e.g. created with
+      #   kubectl create secret generic felix-postgres --from-literal=url=postgres://...
+      # The chart never renders the URL into a ConfigMap.
+      existingSecret: ""
+      urlKey: url
+      maxConnections: 10
+    raft:
+      volume:
+        size: 1Gi
+        storageClassName: ""
+      # Tuning; empty means the control plane's own defaults.
+      heartbeatMs: ""
+      electionTimeoutMinMs: ""
+      electionTimeoutMaxMs: ""
+  # The day-0 listener that creates the first tenant and the first cluster
+  # credential. Off by default; turn it on for the initial setup, use it, and
+  # turn it off again. It is reachable only inside the cluster, through its own
+  # Service, and never through the API Service.
+  bootstrap:
+    enabled: false
+    # A Secret holding the bootstrap token under `tokenKey`, and optionally
+    # the previous token under `previousTokenKey` while it is being rotated.
+    existingSecret: ""
+    tokenKey: token
+    previousTokenKey: ""
+    port: 9095
+  service:
+    type: ClusterIP
+    port: 8443
+    annotations: {}
+  metrics:
+    port: 8080
+  # How long a broker heartbeat may go unanswered before the control plane
+  # expires the broker. Keep this above a database failover plus one heartbeat
+  # interval, or a failover alone expires brokers that were serving fine.
+  liveness:
+    nodeExpiryTimeoutMs: ""
+    nodeHeartbeatIntervalMs: ""
+  shutdown:
+    # Readiness fails, then the instance keeps serving this long so load
+    # balancers can act on it, then it drains for at most drainTimeoutMs.
+    predrainMs: 2000
+    drainTimeoutMs: 10000
+    # Defaults to (predrainMs + drainTimeoutMs) / 1000 + 5.
+    terminationGracePeriodSeconds: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  podDisruptionBudget:
+    enabled: true
+    # Voluntary disruption may take instances down to this many.
+    minAvailable: 1
+  # Spread instances across nodes, and zones where the cluster has them.
+  antiAffinity: soft   # soft | hard | none
+  topologySpread:
+    enabled: true
+    topologyKey: topology.kubernetes.io/zone
+    maxSkew: 1
+    whenUnsatisfiable: ScheduleAnyway
+  logLevel: info
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+
+broker:
+  enabled: true
+  image:
+    repository: gabloe/felix-broker
+    tag: ""
+    digest: ""
+  # Brokers. Each is a StatefulSet member with a stable name that is its node
+  # id, and its own volume.
+  replicas: 3
+  # Reported to the control plane; placement keeps a shard's replicas within it.
+  region: local
+  ports:
+    # Clients connect here (QUIC).
+    client: 5000
+    # Brokers forward and replicate to each other here (QUIC). Never exposed
+    # outside the cluster: see networkPolicy and peerTls.
+    internal: 5001
+    metrics: 8080
+  # The credential the broker presents to the control plane. Required: a
+  # broker with a node id refuses to start without one. It must carry
+  # `node.manage:node:<pod name>` (or `node.manage:cluster:*`) and
+  # `node.view:cluster:*`; see the README for minting it out of bootstrap.
+  credential:
+    # A Secret the operator created. Empty is a render error while brokers are
+    # enabled: install with `broker.enabled=false`, bootstrap, then upgrade.
+    existingSecret: ""
+    # One token shared by every broker, under this key ...
+    tokenKey: token
+    # ... or one per broker, under a key named after the pod
+    # (felix-broker-0, felix-broker-1, ...). Per-broker tokens let each carry
+    # `node.manage:node:<its own id>` and nothing wider.
+    perBroker: false
+    # An IdP refresh token for re-minting the Felix token before it expires,
+    # under this key; empty means none.
+    refreshTokenKey: ""
+  # Where the control plane is. Empty means this release's own control plane.
+  controlplaneUrl: ""
+  storage:
+    size: 50Gi
+    storageClassName: ""
+  # Mutual TLS between brokers on the internal port (FELIX_INTERNAL_TLS_*).
+  # Each broker needs a certificate issued to its own node id, which is a
+  # per-pod identity, so this uses cert-manager's CSI driver to issue one into
+  # each pod at start. Requires cert-manager and cert-manager-csi-driver, and
+  # an Issuer for the peer CA in this namespace. Off, the port is encrypted
+  # but unauthenticated and the broker warns at startup.
+  peerTls:
+    enabled: false
+    issuerName: felix-peer-ca
+    issuerKind: Issuer
+    duration: 24h
+    renewBefore: 8h
+  # What discovery hands clients for each broker. Defaults to the pod's
+  # in-cluster DNS name on the client port; set it when clients come from
+  # outside the cluster and reach brokers some other way. `$(POD_NAME)` and
+  # `$(POD_NAMESPACE)` are expanded per pod.
+  clientAdvertiseAddr: ""
+  clientService:
+    # A Service in front of every broker's client port, for the first
+    # connection; the client then follows discovery to the broker that owns a
+    # shard. ClusterIP for in-cluster clients; LoadBalancer needs a provider
+    # that balances UDP.
+    enabled: true
+    type: ClusterIP
+    port: 5000
+    annotations: {}
+  shutdown:
+    # preStop sleep, so the endpoints controller removes the pod before
+    # SIGTERM starts the drain.
+    preStopSeconds: 15
+    drainTimeoutMs: 40000
+    # Defaults to preStopSeconds + drainTimeoutMs / 1000 + 5. Setting it below
+    # what those need is a render error: SIGKILL would arrive mid-drain.
+    terminationGracePeriodSeconds: ""
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      memory: 4Gi
+  podDisruptionBudget:
+    enabled: true
+    # Voluntary disruption may take at most this many brokers at once. One is
+    # what keeps a replication-factor-three shard's quorum through node
+    # maintenance; a larger budget is a render error unless replicas allow it.
+    maxUnavailable: 1
+  antiAffinity: soft   # soft | hard | none
+  topologySpread:
+    enabled: true
+    topologyKey: topology.kubernetes.io/zone
+    maxSkew: 1
+    whenUnsatisfiable: ScheduleAnyway
+  # Restrict the internal port to the brokers themselves, the client port to
+  # the namespaces listed (all, when empty), and metrics to the namespaces
+  # listed (all, when empty). Needs a CNI that enforces NetworkPolicy.
+  networkPolicy:
+    enabled: true
+    clientNamespaceSelectors: []
+    metricsNamespaceSelectors: []
+  # Rendered to a ConfigMap as the broker's config file. Keys are the
+  # broker's YAML settings; values here override the environment, so leave
+  # bind addresses to the chart.
+  config: {}
+  logLevel: info
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+
+# Prometheus Operator objects, when it is installed.
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  labels: {}

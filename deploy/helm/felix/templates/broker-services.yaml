@@ -1,0 +1,58 @@
+{{- if .Values.broker.enabled }}
+{{- $b := .Values.broker }}
+{{- $name := include "felix.broker.fullname" . }}
+# Stable per-broker names: what discovery hands clients, and what a client
+# that followed a redirect connects to.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "felix.broker.headless" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  clusterIP: None
+  ports:
+    - name: quic
+      port: {{ int $b.ports.client }}
+      targetPort: quic
+      protocol: UDP
+    - name: internal
+      port: {{ int $b.ports.internal }}
+      targetPort: internal
+      protocol: UDP
+    - name: metrics
+      port: {{ int $b.ports.metrics }}
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    {{- include "felix.broker.selectorLabels" . | nindent 4 }}
+{{- if $b.clientService.enabled }}
+---
+# A first hop for clients. Any broker answers a first connection with
+# discovery, so which one the Service picks does not matter; the internal
+# port is deliberately not here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+  {{- with $b.clientService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $b.clientService.type }}
+  ports:
+    - name: quic
+      port: {{ int $b.clientService.port }}
+      targetPort: quic
+      protocol: UDP
+  selector:
+    {{- include "felix.broker.selectorLabels" . | nindent 4 }}
+{{- end }}
+{{- end }}

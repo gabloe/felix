@@ -169,6 +169,30 @@ jobs:
       - name: RSA dependency check (non-controlplane crates)
         run: task deny:rsa:default
 
+  # The Helm chart, rendered every way its ci/ value sets describe and checked
+  # against what it promises: budgets that keep a quorum, drains that fit their
+  # grace period, an internal port on no Service, secrets referenced and never
+  # rendered, and the value combinations it is meant to refuse. No cluster:
+  # what a pull request needs to know is that the chart still says what the
+  # docs say it does.
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: PyYAML
+        run: python3 -m pip install --user pyyaml
+
+      - name: Lint, render, and check
+        run: python3 scripts/check_chart.py
+
   # The decoders that parse input from outside the process, on a time budget.
   #
   # Separate from `test` because it needs nightly (libFuzzer links a runtime the

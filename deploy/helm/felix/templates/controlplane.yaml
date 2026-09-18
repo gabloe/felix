@@ -1,0 +1,221 @@
+{{- include "felix.validate" . -}}
+{{- if .Values.controlplane.enabled }}
+{{- $cp := .Values.controlplane }}
+{{- $raft := eq $cp.storage.backend "raft" }}
+{{- $name := include "felix.controlplane.fullname" . }}
+{{- $headless := include "felix.controlplane.headless" . }}
+{{- $apiPort := int $cp.service.port }}
+{{- $metricsPort := int $cp.metrics.port }}
+{{- $image := include "felix.image" (dict "root" . "image" $cp.image) }}
+{{- /*
+The control plane's shape follows its store. Over Postgres the instances are
+stateless and a Deployment rolls them one at a time with none unavailable.
+Under Raft each member has an identity and a volume, so it is a StatefulSet
+whose pod names are the peer names every member is told.
+*/}}
+apiVersion: apps/v1
+kind: {{ if $raft }}StatefulSet{{ else }}Deployment{{ end }}
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controlplane
+spec:
+  replicas: {{ $cp.replicas }}
+  selector:
+    matchLabels:
+      {{- include "felix.controlplane.selectorLabels" . | nindent 6 }}
+  {{- if $raft }}
+  serviceName: {{ $headless }}
+  # Members restart one at a time, each rejoining the group from its volume
+  # before the next goes; a leader restart pauses metadata writes for one
+  # election.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  {{- else }}
+  # Instances roll independently: a new one is ready before an old one goes,
+  # and readiness is what the Service routes on. Migrations are additive and
+  # run under an advisory lock, so mixed versions serve during the roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "felix.controlplane.selectorLabels" . | nindent 8 }}
+        {{- with $cp.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ $metricsPort | quote }}
+        prometheus.io/path: /metrics
+        {{- with $cp.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "felix.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- include "felix.podSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: {{ include "felix.controlplane.terminationGracePeriodSeconds" . }}
+      {{- include "felix.scheduling" (dict "workload" $cp "selectorLabels" (include "felix.controlplane.selectorLabels" .)) | nindent 6 }}
+      containers:
+        - name: controlplane
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if $raft }}
+          # The member id is the pod ordinal plus one, derived here because
+          # the id has to be the one the peers map names for this pod.
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              export FELIX_RAFT_NODE_ID="$(( ${POD_NAME##*-} + 1 ))"
+              exec /usr/bin/tini -- /usr/local/bin/felix-controlplane
+          {{- end }}
+          ports:
+            - name: api
+              containerPort: {{ $apiPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ $metricsPort }}
+              protocol: TCP
+            {{- if $cp.bootstrap.enabled }}
+            - name: bootstrap
+              containerPort: {{ int $cp.bootstrap.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: FELIX_CONTROLPLANE_BIND
+              value: "0.0.0.0:{{ $apiPort }}"
+            - name: FELIX_CONTROLPLANE_METRICS_BIND
+              value: "0.0.0.0:{{ $metricsPort }}"
+            - name: FELIX_CONTROLPLANE_STORAGE_BACKEND
+              value: {{ $cp.storage.backend | quote }}
+            {{- if eq $cp.storage.backend "postgres" }}
+            - name: FELIX_CONTROLPLANE_POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cp.storage.postgres.existingSecret }}
+                  key: {{ $cp.storage.postgres.urlKey }}
+            - name: FELIX_CONTROLPLANE_POSTGRES_MAX_CONNECTIONS
+              value: {{ $cp.storage.postgres.maxConnections | quote }}
+            {{- end }}
+            {{- if $raft }}
+            - name: FELIX_RAFT_DATA_DIR
+              value: /var/lib/felix/raft
+            - name: FELIX_RAFT_PEERS
+              value: {{ include "felix.controlplane.raftPeers" . | quote }}
+            {{- with $cp.storage.raft.heartbeatMs }}
+            - name: FELIX_RAFT_HEARTBEAT_MS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $cp.storage.raft.electionTimeoutMinMs }}
+            - name: FELIX_RAFT_ELECTION_TIMEOUT_MIN_MS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $cp.storage.raft.electionTimeoutMaxMs }}
+            - name: FELIX_RAFT_ELECTION_TIMEOUT_MAX_MS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $cp.bootstrap.enabled }}
+            - name: FELIX_BOOTSTRAP_ENABLED
+              value: "true"
+            - name: FELIX_BOOTSTRAP_BIND_ADDR
+              value: "0.0.0.0:{{ int $cp.bootstrap.port }}"
+            - name: FELIX_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cp.bootstrap.existingSecret }}
+                  key: {{ $cp.bootstrap.tokenKey }}
+            {{- if $cp.bootstrap.previousTokenKey }}
+            - name: FELIX_BOOTSTRAP_TOKEN_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $cp.bootstrap.existingSecret }}
+                  key: {{ $cp.bootstrap.previousTokenKey }}
+            {{- end }}
+            {{- end }}
+            {{- with $cp.liveness.nodeExpiryTimeoutMs }}
+            - name: FELIX_NODE_EXPIRY_TIMEOUT_MS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $cp.liveness.nodeHeartbeatIntervalMs }}
+            - name: FELIX_NODE_HEARTBEAT_INTERVAL_MS
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FELIX_SHUTDOWN_PREDRAIN_MS
+              value: {{ $cp.shutdown.predrainMs | quote }}
+            - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
+              value: {{ $cp.shutdown.drainTimeoutMs | quote }}
+            - name: RUST_LOG
+              value: {{ $cp.logLevel | quote }}
+            {{- with $cp.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Readiness fails on a store that does not answer or is behind the
+          # build's schema; liveness answers from memory, so an outage outside
+          # the process never triggers restarts that cannot fix it.
+          readinessProbe:
+            httpGet:
+              path: /v1/system/ready
+              port: api
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /v1/system/live
+              port: api
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml $cp.resources | nindent 12 }}
+          securityContext:
+            {{- include "felix.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: home
+              mountPath: /var/lib/felix
+            {{- if $raft }}
+            - name: raft
+              mountPath: /var/lib/felix/raft
+            {{- end }}
+      volumes:
+        # The image's working directory, writable because the root
+        # filesystem is not.
+        - name: home
+          emptyDir: {}
+  {{- if $raft }}
+  # The volume is what makes a restart a rejoin; a member whose volume is
+  # lost rejoins empty and is rebuilt by snapshot install.
+  volumeClaimTemplates:
+    - metadata:
+        name: raft
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with $cp.storage.raft.volume.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $cp.storage.raft.volume.size }}
+  {{- end }}
+{{- end }}

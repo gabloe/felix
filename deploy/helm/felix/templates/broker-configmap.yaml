@@ -1,0 +1,15 @@
+{{- if and .Values.broker.enabled .Values.broker.config }}
+# The broker's config file. Its keys override the environment, so the chart
+# leaves bind addresses and identity out of it and wires those as variables.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "felix.broker.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "felix.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+data:
+  broker.yml: |
+    {{- toYaml .Values.broker.config | nindent 4 }}
+{{- end }}

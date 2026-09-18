@@ -1,958 +1,293 @@
 ---
 title: "Kubernetes Deployment"
+description: "Install the control plane and a broker cluster with the Helm chart, mint the first credential, and run the day-2 operations: rolling upgrades, scaling, replacing a volume."
 ---
 
-Running Felix on Kubernetes: StatefulSets for stable broker identity,
-headless services for direct addressing, persistent volumes for durable
-storage, and the probes and drain behavior the broker already ships.
+Felix ships a Helm chart, at
+[`deploy/helm/felix`](https://github.com/gabloe/felix/tree/main/deploy/helm/felix),
+that renders the control plane and a broker cluster with the shape the design
+assumes: StatefulSets for stable broker identity, a volume per broker, the
+probes and drain behaviour the binaries already ship, and the budgets and
+policies that keep a rolling operation from taking a shard's replicas with it.
+Every environment variable it wires is real and in the
+[environment reference](/felix/reference/environment-variables/); the chart
+invents none.
 
 :::caution[The images are not published yet]
-The manifests here name `ghcr.io/gabloe/felix-broker` and
+The chart names `ghcr.io/gabloe/felix-broker` and
 `ghcr.io/gabloe/felix-controlplane`, which is where releases will publish
-them. Publishing is off until Felix is meant to be publicly pullable, so
-those tags do not resolve today — build from `docker/` and push to a registry
-your cluster can reach. See the
-[Docker Compose page](/felix/deployment/docker-compose/) for the build
-commands.
+them. Publishing is off until Felix is meant to be publicly pullable, so those
+tags do not resolve today. Build from `docker/` and push to a registry your
+cluster can reach (the [Docker Compose page](/felix/deployment/docker-compose/)
+has the build commands), then point `image.registry` at it.
 
-When they are published, **pin by digest rather than by tag**. Images are
-signed by digest, and a tag can be moved to point at something else; a
-deployment that names a tag inherits whatever it points at next.
+When they are published, **pin by digest**: images are signed by digest, and a
+tag can be moved. `broker.image.digest` and `controlplane.image.digest` take
+precedence over the tag.
 :::
 
-:::caution[You write the manifests]
-Felix does not ship Kubernetes manifests or a Helm chart yet
-([#131](https://github.com/gabloe/felix/issues/131)). The YAML on this page
-is a working starting point to copy and adapt — every environment variable
-and probe path in it is real — but nothing here is packaged, and none of it
-has run in production.
-:::
+## What the chart decides for you
 
-The control plane's availability story — how many instances to run, what the
-backing Postgres must provide, and what a database failover looks like — is
-its own page: [Control-plane HA](/felix/deployment/control-plane-ha/).
+| Concern | What renders | Why it is that way |
+| --- | --- | --- |
+| Broker identity | A StatefulSet whose pod name is `FELIX_NODE_ID` | The name is what the broker registers as, what shards are assigned to, and under peer mTLS the DNS name its certificate must carry. A replaced pod keeps all three and the volume behind them, so a replacement is a rejoin. |
+| Addresses | Peers get `$(POD_IP):5001`; clients get `<pod>.<headless>.<ns>.svc:5000` | The broker requires an IP for `FELIX_NODE_ADVERTISE_ADDR` and re-registers a new one on its first heartbeat. Clients are told a name, which survives the pod being replaced. |
+| Control plane over Postgres | A Deployment rolling with `maxUnavailable: 0` | Instances are stateless; a new one is ready before an old one goes, and readiness is what the Service routes on. Migrations are additive and run under an advisory lock, so mixed versions serve during the roll. |
+| Control plane under Raft | A StatefulSet with a volume per member | Each member's id is its pod ordinal plus one, and every member is handed the same peers map, derived from the replica count. Odd, and at least three. |
+| Credentials | Secret references only | The Postgres URL, the bootstrap token and the broker credential are read from Secrets you create. The chart never renders one, and never puts one in a ConfigMap. |
+| Shutdown | A preStop sleep, then the drain, inside a derived grace period | The endpoints controller gets a head start before SIGTERM; the drain budget fits before SIGKILL. An explicit grace period that is too short refuses to render. |
+| Disruption | PodDisruptionBudgets | At most one broker at a time, which is what keeps a replication-factor-three shard's quorum through node maintenance. A wider budget refuses to render. |
+| Placement | Anti-affinity by node, spread by zone | `soft` prefers, `hard` refuses to co-locate. |
+| The internal port | On the headless Service only, and a NetworkPolicy admitting it from broker pods | Without peer mTLS, anything that reaches the port is a broker. With it, this is the second fence. |
+| Peer mTLS | A cert-manager CSI volume per pod, off by default | Each broker needs a certificate issued to its own name. See [Peer mTLS](#peer-mtls). |
+
 ## Prerequisites
 
-- **Kubernetes cluster**: 1.24+ (Minikube, kind, GKE, EKS, AKS, etc.)
-- **kubectl**: Configured to access your cluster
-- **Storage provisioner**: For persistent volumes (e.g., `gp3` on AWS, `pd-ssd` on GCP)
-- **4GB RAM per broker pod**: Minimum recommended
+- Kubernetes 1.25 or later and Helm 3.8 or later.
+- A StorageClass for broker volumes. Brokers fsync; a network disk with
+  provisioned IOPS is the usual choice (`gp3`, `pd-ssd`, `Premium_LRS`).
+- **A Postgres** with one writable endpoint and synchronous replication, or
+  the Raft backend. What the database must provide, and what a failover looks
+  like from Felix, is on [Control-plane HA](/felix/deployment/control-plane-ha/).
+  The chart does not deploy a database.
+- A CNI that enforces `NetworkPolicy`, or the policy is inert.
+- For peer mTLS: cert-manager and
+  [cert-manager-csi-driver](https://cert-manager.io/docs/usage/csi-driver/).
 
-### Verify Cluster Access
+## Install
 
-```bash
-kubectl cluster-info
-kubectl get nodes
-```
+Three steps, because a broker refuses to start without a credential and the
+credential comes out of the control plane's day-0 bootstrap.
 
-## Quick Start
-
-### Basic Deployment
-
-Build and push an image first (`docker/broker.Dockerfile`), then save the
-manifest below as `broker.yaml` and:
+### 1. The control plane, with bootstrap on
 
 ```bash
 kubectl create namespace felix
-kubectl apply -f broker.yaml -n felix
-kubectl get pods -n felix
-kubectl logs -f deployment/felix-broker -n felix
+kubectl -n felix create secret generic felix-postgres \
+  --from-literal=url='postgres://felix:...@postgres-rw.db.svc:5432/felix'
+kubectl -n felix create secret generic felix-bootstrap \
+  --from-literal=token="$(openssl rand -hex 32)"
+
+helm install felix deploy/helm/felix -n felix \
+  --set controlplane.storage.postgres.existingSecret=felix-postgres \
+  --set controlplane.bootstrap.enabled=true \
+  --set controlplane.bootstrap.existingSecret=felix-bootstrap \
+  --set broker.enabled=false
+kubectl -n felix rollout status deployment/felix-controlplane
 ```
 
-**Minimal broker deployment** (`broker.yaml`):
-
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: felix
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: felix-broker
-  namespace: felix
-  labels:
-    app: felix-broker
-spec:
-  type: ClusterIP
-  ports:
-    - port: 5000
-      targetPort: 5000
-      protocol: UDP
-      name: quic
-    - port: 8080
-      targetPort: 8080
-      protocol: TCP
-      name: metrics
-  selector:
-    app: felix-broker
-
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: felix-broker
-  namespace: felix
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: felix-broker
-  template:
-    metadata:
-      labels:
-        app: felix-broker
-    spec:
-      containers:
-      - name: broker
-        image: ghcr.io/gabloe/felix-broker:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 5000
-          protocol: UDP
-          name: quic
-        - containerPort: 8080
-          protocol: TCP
-          name: metrics
-        env:
-        - name: FELIX_QUIC_BIND
-          value: "0.0.0.0:5000"
-        - name: FELIX_BROKER_METRICS_BIND
-          value: "0.0.0.0:8080"
-        - name: RUST_LOG
-          value: "info"
-        # preStop sleep (5s) + drain budget (20s) must fit inside
-        # terminationGracePeriodSeconds, or SIGKILL arrives mid-drain.
-        - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
-          value: "20000"
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1000m"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-        livenessProbe:
-          httpGet:
-            path: /live
-            port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-        lifecycle:
-          preStop:
-            exec:
-              # Give the endpoints controller time to remove this pod from rotation
-              # before SIGTERM starts the drain.
-              command: ["/bin/sh", "-c", "sleep 5"]
-      terminationGracePeriodSeconds: 30
-```
-
-On SIGTERM the broker sets `/ready` to `503` before it stops accepting connections,
-then drains in-flight work within `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`. `/live` stays
-healthy throughout, so Kubernetes does not restart a pod that is shutting down
-correctly. See [Graceful Shutdown](/felix/deployment/graceful-shutdown/).
-
-## StatefulSet Deployment
-
-For production, use StatefulSets for stable network identity and persistent storage:
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: felix-broker-headless
-  namespace: felix
-  labels:
-    app: felix-broker
-spec:
-  clusterIP: None
-  ports:
-    - port: 5000
-      protocol: UDP
-      name: quic
-    - port: 8080
-      protocol: TCP
-      name: metrics
-  selector:
-    app: felix-broker
-
----
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: felix-broker
-  namespace: felix
-spec:
-  serviceName: felix-broker-headless
-  replicas: 3
-  selector:
-    matchLabels:
-      app: felix-broker
-  template:
-    metadata:
-      labels:
-        app: felix-broker
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
-        prometheus.io/path: "/metrics"
-    spec:
-      affinity:
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                - key: app
-                  operator: In
-                  values:
-                  - felix-broker
-              topologyKey: kubernetes.io/hostname
-      containers:
-      - name: broker
-        image: ghcr.io/gabloe/felix-broker:latest
-        imagePullPolicy: IfNotPresent
-        ports:
-        - containerPort: 5000
-          protocol: UDP
-          name: quic
-        - containerPort: 8080
-          protocol: TCP
-          name: metrics
-        env:
-        - name: FELIX_QUIC_BIND
-          value: "0.0.0.0:5000"
-        - name: FELIX_BROKER_METRICS_BIND
-          value: "0.0.0.0:8080"
-        - name: FELIX_EVENT_BATCH_MAX_EVENTS
-          value: "64"
-        - name: FELIX_EVENT_BATCH_MAX_DELAY_US
-          value: "250"
-        - name: FELIX_CACHE_CONN_POOL
-          value: "8"
-        - name: FELIX_CACHE_STREAMS_PER_CONN
-          value: "4"
-        - name: FELIX_DISABLE_TIMINGS
-          value: "false"
-        # preStop sleep (15s) + drain budget (40s) fits inside the 60s
-        # terminationGracePeriodSeconds set below.
-        - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
-          value: "40000"
-        - name: RUST_LOG
-          value: "info"
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "1000m"
-          limits:
-            memory: "4Gi"
-            cpu: "2000m"
-        volumeMounts:
-        - name: data
-          mountPath: /data
-        livenessProbe:
-          httpGet:
-            path: /live
-            port: 8080
-          initialDelaySeconds: 15
-          periodSeconds: 10
-          timeoutSeconds: 2
-          failureThreshold: 3
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 2
-          failureThreshold: 3
-        lifecycle:
-          preStop:
-            exec:
-              # Give the endpoints controller time to remove this pod from rotation
-              # before SIGTERM starts the drain.
-              command: ["/bin/sh", "-c", "sleep 15"]
-      terminationGracePeriodSeconds: 60
-  volumeClaimTemplates:
-  - metadata:
-      name: data
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      storageClassName: fast-ssd
-      resources:
-        requests:
-          storage: 50Gi
-```
-
-**Deploy:**
+For the Raft backend instead of Postgres:
 
 ```bash
-kubectl apply -f statefulset.yaml
-kubectl get statefulset -n felix
-kubectl get pods -n felix -l app=felix-broker
+  --set controlplane.storage.backend=raft --set controlplane.replicas=3
 ```
 
-## Configuration Management
+The bootstrap listener is on its own ClusterIP Service, never behind the API's,
+so it is reachable only through a port-forward.
 
-### ConfigMap for Settings
+### 2. Day 0: an operator tenant and the broker credential
 
-Externalize configuration:
+Cluster scope (`node.view:cluster:*`, `node.manage`) cannot be granted by a
+tenant admin, so it is seeded at bootstrap. Initialise a tenant with a policy
+granting the broker role what a broker needs, and an operator role for
+yourself:
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: felix-broker-config
-  namespace: felix
-data:
-  broker.yml: |
-    quic_bind: "0.0.0.0:5000"
-    metrics_bind: "0.0.0.0:8080"
-    event_batch_max_events: 64
-    event_batch_max_delay_us: 250
-    event_batch_max_bytes: 65536
-    fanout_batch_size: 64
-    cache_conn_recv_window: 268435456
-    cache_stream_recv_window: 67108864
-    cache_send_window: 268435456
-    pub_workers_per_conn: 4
-    pub_queue_depth: 64
-    subscriber_queue_capacity: 512
-    subscriber_writer_lanes: 4
-    subscriber_lane_queue_depth: 64
-    max_subscriber_writer_lanes: 8
-    subscriber_lane_shard: auto
-    disable_timings: false
-
----
-# Mount in StatefulSet
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: felix-broker
-  namespace: felix
-spec:
-  template:
-    spec:
-      containers:
-      - name: broker
-        env:
-        - name: FELIX_BROKER_CONFIG
-          value: /etc/felix/broker.yml
-        volumeMounts:
-        - name: config
-          mountPath: /etc/felix
-          readOnly: true
-      volumes:
-      - name: config
-        configMap:
-          name: felix-broker-config
+```bash
+kubectl -n felix port-forward svc/felix-controlplane-bootstrap 9095 &
+curl -sS -X POST http://127.0.0.1:9095/internal/bootstrap/tenants/ops/initialize \
+  -H "X-Felix-Bootstrap-Token: $(kubectl -n felix get secret felix-bootstrap -o jsonpath='{.data.token}' | base64 -d)" \
+  -H 'Content-Type: application/json' -d '{
+    "display_name": "Operations",
+    "idp_issuers": [ { "issuer": "https://login.example.com/", "audiences": ["api://felix-controlplane"],
+                       "claim_mappings": { "subject_claim": "sub", "groups_claim": "groups" } } ],
+    "initial_admin_principals": ["p:alice"],
+    "policies": [
+      { "subject": "role:broker",   "object": "cluster:*", "action": "node.view" },
+      { "subject": "role:broker",   "object": "cluster:*", "action": "node.manage" },
+      { "subject": "role:operator", "object": "cluster:*", "action": "tenant.manage" },
+      { "subject": "role:operator", "object": "cluster:*", "action": "node.view" },
+      { "subject": "role:operator", "object": "cluster:*", "action": "node.manage" }
+    ],
+    "groupings": [
+      { "user": "p:broker", "role": "role:broker" },
+      { "user": "p:alice",  "role": "role:operator" }
+    ]
+  }'
 ```
 
-### Secrets for Sensitive Data
+Then exchange an IdP token for the broker principal (the
+[token exchange](/felix/features/security/#token-exchange-oidc--felix) flow)
+and put the Felix token in a Secret:
 
-Store credentials securely:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: felix-broker-secrets
-  namespace: felix
-type: Opaque
-stringData:
-  tls-cert.pem: |
-    -----BEGIN CERTIFICATE-----
-    ...
-    -----END CERTIFICATE-----
-  tls-key.pem: |
-    -----BEGIN PRIVATE KEY-----
-    ...
-    -----END PRIVATE KEY-----
-
----
-# Mount in StatefulSet
-volumeMounts:
-- name: tls-certs
-  mountPath: /etc/felix/tls
-  readOnly: true
-
-volumes:
-- name: tls-certs
-  secret:
-    secretName: felix-broker-secrets
+```bash
+kubectl -n felix create secret generic felix-broker-credential \
+  --from-file=token=./felix-node-token
 ```
 
-## Storage Configuration
+One token shared by every broker, carrying `node.manage:cluster:*`, is the
+simple form. The stricter one is a token per broker carrying
+`node.manage:node:felix-broker-0` and so on, so no broker can register, drain
+or report for another: put each under a key named after its pod and set
+`broker.credential.perBroker=true`. Either way, a Felix token expires. A broker reads
+its token once, at start, so a rotated Secret reaches it only through a
+restart (`kubectl rollout restart statefulset/felix-broker`, one pod at a time
+under the budget). Give the brokers an IdP refresh token under
+`broker.credential.refreshTokenKey` and they re-mint before expiry instead.
 
-### StorageClass for High Performance
+### 3. Brokers on, bootstrap off
 
-Create optimized storage class:
-
-```yaml
-# AWS EBS gp3 with provisioned IOPS
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: felix-fast-ssd
-provisioner: ebs.csi.aws.com
-parameters:
-  type: gp3
-  iops: "3000"
-  throughput: "125"
-  fsType: ext4
-volumeBindingMode: WaitForFirstConsumer
-allowVolumeExpansion: true
-
----
-# GCP persistent disk SSD
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: felix-fast-ssd
-provisioner: pd.csi.storage.gke.io
-parameters:
-  type: pd-ssd
-  replication-type: regional-pd
-volumeBindingMode: WaitForFirstConsumer
-allowVolumeExpansion: true
+```bash
+helm upgrade felix deploy/helm/felix -n felix --reuse-values \
+  --set broker.enabled=true \
+  --set broker.credential.existingSecret=felix-broker-credential \
+  --set controlplane.bootstrap.enabled=false
+kubectl -n felix rollout status statefulset/felix-broker
 ```
 
-### PersistentVolumeClaim Templates
+Each broker comes up, registers under its pod name, seeds the catalog from the
+control plane, and only then reports ready, so it is never routed traffic for
+streams it does not know yet. Verify:
 
-Define storage requirements in StatefulSet:
-
-```yaml
-volumeClaimTemplates:
-- metadata:
-    name: data
-    labels:
-      app: felix-broker
-  spec:
-    accessModes: ["ReadWriteOnce"]
-    storageClassName: felix-fast-ssd
-    resources:
-      requests:
-        storage: 100Gi
+```bash
+kubectl -n felix get pods -l app.kubernetes.io/component=broker
+kubectl -n felix exec felix-broker-0 -- wget -qO- http://127.0.0.1:8080/ready
+# and the fleet as the control plane sees it, with an operator token:
+curl -sS -H "Authorization: Bearer $OPERATOR_TOKEN" http://felix-controlplane.felix.svc:8443/v1/nodes
 ```
 
-## Networking
+## Clients
 
-:::caution[Give the internal port certificates]
+Clients connect to any broker first and follow discovery to the broker that
+owns a shard. The `felix-broker` Service (ClusterIP by default) is that first
+hop; discovery then hands out each broker's own name,
+`felix-broker-N.felix-broker-headless.felix.svc.cluster.local:5000`.
+
+Clients from outside the cluster need two things: a way in, and an address
+that resolves for them. Set `broker.clientService.type=LoadBalancer` on a
+provider that balances **UDP**, and `broker.clientAdvertiseAddr` to what
+each broker is reachable as from outside, with `$(POD_NAME)` expanded per pod
+(`"$(POD_NAME).brokers.example.com:5000"`, say, with one record per broker).
+
+A broker generates its own client-facing certificate at start and exports it
+to `/var/lib/felix/export/broker-cert.pem`; clients verify against it. Copy
+it out with `kubectl exec felix-broker-0 -- cat ...`.
+
+## Peer mTLS
+
 `FELIX_INTERNAL_BIND` is the port brokers use to forward publishes and ship
-replication to each other. With `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY`
-and `FELIX_INTERNAL_TLS_CA` set, every peer connection is mutually
-authenticated: a peer is a broker holding a certificate the cluster's CA issued
-to its own node id, checked in both directions. **Without them the port is
-encrypted but unauthenticated** — anything that can reach it is a broker, and a
-caller on it can forward into any stream — and startup warns.
+replication to each other. With `FELIX_INTERNAL_TLS_CERT`, `_KEY` and `_CA`
+set, every peer connection is mutually authenticated: a peer is a broker
+holding a certificate the cluster's CA issued to its own node id, checked in
+both directions. Without them the port is encrypted but unauthenticated,
+anything that can reach it is a broker, and the broker warns at startup.
 
-With cert-manager, one `Certificate` per broker whose `dnsNames` is the pod's
-node id, mounted where the three variables point:
+Each broker needs a certificate issued to its own pod name, and a Secret
+cannot vary per pod of one StatefulSet, so the chart uses cert-manager's CSI
+driver: one certificate per pod, issued at start, renewed in place.
 
-```yaml
+```bash
+kubectl -n felix apply -f - <<'EOF'
 apiVersion: cert-manager.io/v1
-kind: Certificate
+kind: Issuer
 metadata:
-  name: felix-broker-0-peer
+  name: felix-peer-ca
 spec:
-  secretName: felix-broker-0-peer
-  issuerRef:
-    name: felix-peer-ca
-    kind: Issuer
-  # The DNS name is the identity: it must equal FELIX_NODE_ID.
-  dnsNames:
-    - felix-broker-0
-  duration: 24h
-  renewBefore: 8h
+  ca:
+    secretName: felix-peer-ca   # a CA key pair you hold; never the cluster's default CA
+EOF
+helm upgrade felix deploy/helm/felix -n felix --reuse-values \
+  --set broker.peerTls.enabled=true --set broker.peerTls.issuerName=felix-peer-ca
 ```
 
-```yaml
-env:
-  - name: FELIX_INTERNAL_TLS_CERT
-    value: /etc/felix/peer/tls.crt
-  - name: FELIX_INTERNAL_TLS_KEY
-    value: /etc/felix/peer/tls.key
-  - name: FELIX_INTERNAL_TLS_CA
-    value: /etc/felix/peer/ca.crt
-```
-
-Renewals are picked up from disk without a restart, and connections already up
-keep working, so a rolling renewal never drops traffic. Node ids must be valid
-DNS names for this; a StatefulSet's pod names are.
-
-Whichever mode, restrict the port to the brokers themselves — a `NetworkPolicy`
-selecting the broker pods, a private subnet, or both — and never expose it
-through a `LoadBalancer` or `Ingress`. The client port (`FELIX_QUIC_BIND`) is
-the one clients use. Startup refuses a configuration where the two share a
-port.
-[`docs/threat-model-internal.md`](https://github.com/gabloe/felix/blob/main/docs/threat-model-internal.md)
+Renewals are picked up from disk without a restart. Whichever mode, the
+internal port is never on a routable Service, and the NetworkPolicy admits it
+from broker pods only. [`docs/threat-model-internal.md`](https://github.com/gabloe/felix/blob/main/docs/threat-model-internal.md)
 sets out what is and is not defended in each mode.
-:::
-
-### Service for External Access
-
-Expose broker externally:
-
-```yaml
-# LoadBalancer (cloud providers)
-apiVersion: v1
-kind: Service
-metadata:
-  name: felix-broker-external
-  namespace: felix
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-spec:
-  type: LoadBalancer
-  ports:
-    - port: 5000
-      targetPort: 5000
-      protocol: UDP
-      name: quic
-  selector:
-    app: felix-broker
-
----
-# NodePort (bare metal)
-apiVersion: v1
-kind: Service
-metadata:
-  name: felix-broker-nodeport
-  namespace: felix
-spec:
-  type: NodePort
-  ports:
-    - port: 5000
-      targetPort: 5000
-      nodePort: 30500
-      protocol: UDP
-      name: quic
-  selector:
-    app: felix-broker
-```
-
-### Ingress for HTTP Metrics
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: felix-metrics
-  namespace: felix
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: felix-metrics.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: felix-broker
-            port:
-              number: 8080
-```
-
-## High Availability Setup
-
-### Multi-Zone Deployment
-
-```yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: felix-broker
-  namespace: felix
-spec:
-  replicas: 3
-  template:
-    spec:
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchExpressions:
-              - key: app
-                operator: In
-                values:
-                - felix-broker
-            topologyKey: topology.kubernetes.io/zone
-      topologySpreadConstraints:
-      - maxSkew: 1
-        topologyKey: topology.kubernetes.io/zone
-        whenUnsatisfiable: DoNotSchedule
-        labelSelector:
-          matchLabels:
-            app: felix-broker
-```
-
-### Pod Disruption Budget
-
-Protect against voluntary disruptions:
-
-```yaml
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: felix-broker-pdb
-  namespace: felix
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels:
-      app: felix-broker
-```
-
-### HorizontalPodAutoscaler
-
-Scale based on metrics:
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: felix-broker-hpa
-  namespace: felix
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: StatefulSet
-    name: felix-broker
-  minReplicas: 3
-  maxReplicas: 10
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
-```
-
-## Monitoring and Observability
-
-### ServiceMonitor for Prometheus
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: felix-broker
-  namespace: felix
-  labels:
-    app: felix-broker
-spec:
-  selector:
-    matchLabels:
-      app: felix-broker
-  endpoints:
-  - port: metrics
-    interval: 15s
-    path: /metrics
-```
-
-### Grafana Dashboard ConfigMap
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: felix-dashboard
-  namespace: monitoring
-  labels:
-    grafana_dashboard: "1"
-data:
-  felix-overview.json: |
-    {
-      "dashboard": {
-        "title": "Felix Broker Overview",
-        "panels": [...]
-      }
-    }
-```
-
-## Resource Management
-
-### Quality of Service Classes
-
-**Guaranteed QoS** (production):
-
-```yaml
-resources:
-  requests:
-    memory: "4Gi"
-    cpu: "2000m"
-  limits:
-    memory: "4Gi"
-    cpu: "2000m"
-```
-
-**Burstable QoS** (development):
-
-```yaml
-resources:
-  requests:
-    memory: "2Gi"
-    cpu: "1000m"
-  limits:
-    memory: "4Gi"
-    cpu: "2000m"
-```
-
-### Resource Quotas
-
-Limit namespace resources:
-
-```yaml
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: felix-quota
-  namespace: felix
-spec:
-  hard:
-    requests.cpu: "20"
-    requests.memory: "40Gi"
-    limits.cpu: "40"
-    limits.memory: "80Gi"
-    persistentvolumeclaims: "10"
-```
-
-### LimitRange
-
-Set default resource limits:
-
-```yaml
-apiVersion: v1
-kind: LimitRange
-metadata:
-  name: felix-limits
-  namespace: felix
-spec:
-  limits:
-  - type: Container
-    default:
-      cpu: "2000m"
-      memory: "4Gi"
-    defaultRequest:
-      cpu: "1000m"
-      memory: "2Gi"
-    max:
-      cpu: "4000m"
-      memory: "8Gi"
-    min:
-      cpu: "500m"
-      memory: "1Gi"
-```
-
-## Security
-
-### Network Policies
-
-Restrict network access:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: felix-broker-netpol
-  namespace: felix
-spec:
-  podSelector:
-    matchLabels:
-      app: felix-broker
-  policyTypes:
-  - Ingress
-  - Egress
-  ingress:
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: felix-clients
-    ports:
-    - protocol: UDP
-      port: 5000
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          name: monitoring
-    ports:
-    - protocol: TCP
-      port: 8080
-  egress:
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: felix-controlplane
-    ports:
-    - protocol: TCP
-      port: 8443
-  - to:
-    - podSelector: {}
-```
-
-### Pod Security Standards
-
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: felix
-  labels:
-    pod-security.kubernetes.io/enforce: baseline
-    pod-security.kubernetes.io/audit: restricted
-    pod-security.kubernetes.io/warn: restricted
-```
-
-### Security Context
-
-```yaml
-spec:
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 10001
-    fsGroup: 10001
-    seccompProfile:
-      type: RuntimeDefault
-  containers:
-  - name: broker
-    securityContext:
-      allowPrivilegeEscalation: false
-      readOnlyRootFilesystem: true
-      capabilities:
-        drop:
-        - ALL
-```
 
 ## Operations
 
-### Scaling
+### Rolling upgrade
+
+The order, and why, is on [Upgrades & Compatibility](/felix/deployment/upgrades/):
+control plane first, then brokers, clients whenever. The chart's budgets and
+update strategies make `helm upgrade` do that order one pod at a time, but a
+new broker image should still wait on the previous broker being back in its
+replica sets:
 
 ```bash
-# Scale StatefulSet
-kubectl scale statefulset felix-broker --replicas=5 -n felix
-
-# Check scaling progress
-kubectl rollout status statefulset/felix-broker -n felix
+helm upgrade felix deploy/helm/felix -n felix --reuse-values \
+  --set controlplane.image.digest=sha256:... --set broker.image.digest=sha256:...
+kubectl -n felix rollout status deployment/felix-controlplane
+kubectl -n felix rollout status statefulset/felix-broker
+# Between brokers, and after: nothing halted.
+kubectl -n felix exec felix-broker-0 -- wget -qO- http://127.0.0.1:8080/replication/halted
 ```
 
-### Rolling Updates
+`[]` is the answer to want. A release that changes `INTERNAL_VERSION` is not
+rolling: scale brokers to zero, upgrade, scale back.
+
+### Scaling out
 
 ```bash
-# Update image
-kubectl set image statefulset/felix-broker \
-  broker=ghcr.io/gabloe/felix-broker:v0.2.0 -n felix
-
-# Watch rollout
-kubectl rollout status statefulset/felix-broker -n felix
-
-# Rollback if needed
-kubectl rollout undo statefulset/felix-broker -n felix
+helm upgrade felix deploy/helm/felix -n felix --reuse-values --set broker.replicas=5
 ```
 
-### Debugging
+New brokers register and become placement targets; existing shards stay where
+they are until something moves them. Scaling **in** removes the highest
+ordinals: drain each first (`POST /v1/nodes/{id}/drain` with an operator
+token), wait for its shards to fail over, then lower `replicas`. The budget
+refuses a value it cannot keep a quorum under.
+
+### Replacing a broker's volume
+
+A broker whose volume is lost comes back empty under the same name and the
+same assignments. For every shard it follows, the leader offers a log placed
+at its oldest surviving offset; a replica holding nothing takes it and
+replication resumes.
 
 ```bash
-# View logs
-kubectl logs -f felix-broker-0 -n felix
-
-# Shell into pod
-kubectl exec -it felix-broker-0 -n felix -- /bin/sh
-
-# Port forward for local access
-kubectl port-forward felix-broker-0 5000:5000 8080:8080 -n felix
-
-# Check events
-kubectl get events -n felix --sort-by='.lastTimestamp'
-
-# Describe pod
-kubectl describe pod felix-broker-0 -n felix
+kubectl -n felix delete pvc data-felix-broker-2 --wait=false
+kubectl -n felix delete pod felix-broker-2
 ```
 
-### Backup and Recovery
+Watch `felix_broker_replication_lag_records` fall and `/replication/halted`
+stay empty.
 
-```bash
-# Backup PVC data
-kubectl exec felix-broker-0 -n felix -- tar czf - /data > backup.tar.gz
+### Control-plane instance loss and database failover
 
-# List PVCs
-kubectl get pvc -n felix
+Nothing to do. Survivors serve; readiness takes a failing instance out of
+rotation; brokers keep their last-known catalog and retry heartbeats. Keep
+`controlplane.liveness.nodeExpiryTimeoutMs` above a database failover plus
+one heartbeat interval, so a failover alone never expires brokers that were
+serving fine.
 
-# Restore from backup
-cat backup.tar.gz | kubectl exec -i felix-broker-0 -n felix -- tar xzf - -C /
-```
+### Backups
 
-## Complete Production Example
+The control plane's metadata lives in the database (back it up whole, restore
+it whole) or, under Raft, in the members' volumes: snapshot those at the
+storage layer, and keep the state file the group was seeded from, since
+`felix-controlplane migrate import --overwrite` onto a fresh group is the
+recovery beyond quorum loss (see [Metadata Raft](/felix/architecture/metadata-raft/)).
+Broker volumes hold the streams themselves; snapshot them at the storage
+layer, or rely on replication and retention.
 
 ## Troubleshooting
 
-### Pod Stuck in Pending
-
-```bash
-kubectl describe pod felix-broker-0 -n felix
-# Check for: insufficient resources, PVC binding, node affinity
-```
-
-### CrashLoopBackOff
-
-```bash
-kubectl logs felix-broker-0 -n felix --previous
-# Check for: config errors, port conflicts, resource limits
-```
-
-### Service Not Reachable
-
-```bash
-# Test from within cluster
-kubectl run -it --rm debug --image=busybox --restart=Never -n felix -- sh
-nc -zvu felix-broker-headless 5000
-```
-
-### High Memory Usage
-
-```bash
-# Check metrics
-kubectl top pods -n felix
-
-# Adjust resource limits
-kubectl set resources statefulset felix-broker \
-  --limits=memory=8Gi -n felix
-```
+| Symptom | Likely cause |
+| --- | --- |
+| Broker pod in `CrashLoopBackOff`, log says a node id needs a credential | `broker.credential.existingSecret` is missing the key the pod reads (`tokenKey`, or the pod's name with `perBroker`). |
+| Broker registers, then heartbeats are refused with 403 | The token lacks `node.manage` over `node:<pod name>` or `cluster:*`. |
+| Broker never becomes ready | It cannot reach the control plane (`FELIX_CONTROLPLANE_URL`), or the token lacks `node.view:cluster:*`, so it never seeds a catalog. Check its log. |
+| Control plane not ready, liveness fine | The store: Postgres unreachable, or the database is behind the build's migrations. That is readiness doing its job. |
+| Raft group never forms | Fewer members than the peers map names, or the headless Service was changed. Every member must carry the same map. |
+| `helm upgrade` refused with a message about budgets, drains, or members | Deliberate. The message names the values that are wrong together. |
+| PVC `Pending` | No default StorageClass, or the named one does not exist in this zone. |
+| Peer mTLS pods stuck in `ContainerCreating` | cert-manager-csi-driver is not installed, or the Issuer cannot sign. `kubectl describe pod` shows the CSI error. |
 
 ## Next Steps
 
 - **Monitor deployment**: [Observability Guide](/felix/features/observability/)
-- **Tune performance**: [Performance Guide](/felix/features/performance/)
+- **Control-plane HA**: [what the database must provide](/felix/deployment/control-plane-ha/)
+- **Graceful shutdown**: [what the probes and drain do](/felix/deployment/graceful-shutdown/)
 - **Configure fully**: [Configuration Reference](/felix/reference/configuration/)
 - **Secure deployment**: [Security Guide](/felix/features/security/)
