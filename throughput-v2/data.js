@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789706760984,
+  "lastUpdate": 1789711781963,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10608,6 +10608,58 @@ window.BENCHMARK_DATA = {
             "range": "56721.05",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 544265.32\nmean: 523854.88\nstdev: 56721.05\ncv: 10.83%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9be3018aadd123e170e83804cbfd9b07cba7f52b",
+          "message": "fix(controlplane): require a credential on the resource API (#513)\n\nTenants, namespaces, streams and caches were created, listed and deleted\nwith no token at all, and the metadata feeds were open, while /v1/nodes on\nthe same port answered 401. Every resource endpoint now takes a Felix\nbearer token, checked before the existence check: tenant resources by the\ntenant's own manage permissions, the tenant catalog and the feeds by\ncluster scope.\n\nThe broker presents its node token on the metadata sync, and accepts one\nwithout a node id, since a standalone broker needs it to learn any stream.\n\nThe parser also refused stream:t1/*/*, the form exchange expands\ntenant.manage to, which would have locked a tenant admin out of their own\nstreams; a wildcard namespace is now accepted under a wildcard leaf.\n\nCloses #510.",
+          "timestamp": "2026-09-17T23:07:08-07:00",
+          "tree_id": "159a735e0bf5f2cf709f9a97d9f8f95491970cc7",
+          "url": "https://github.com/gabloe/felix/commit/9be3018aadd123e170e83804cbfd9b07cba7f52b"
+        },
+        "date": 1789711781259,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233656.75,
+            "range": "5135.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233656.75\nmean: 233114.22\nstdev: 5135.35\ncv: 2.20%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233656.75,
+            "range": "5135.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233656.75\nmean: 233114.22\nstdev: 5135.35\ncv: 2.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55714.24,
+            "range": "1664.13",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55714.24\nmean: 55765.79\nstdev: 1664.13\ncv: 2.98%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 557142.43,
+            "range": "16641.35",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 557142.43\nmean: 557657.89\nstdev: 16641.35\ncv: 2.98%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
