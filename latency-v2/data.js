@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789735478301,
+  "lastUpdate": 1789746219810,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14058,6 +14058,72 @@ window.BENCHMARK_DATA = {
             "range": "162.70",
             "unit": "us",
             "extra": "trials: 5\nmedian: 576.00\nmean: 643.40\nstdev: 162.70\ncv: 25.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "449d1bb03f8d0a148add8e47d460a266d391f70a",
+          "message": "docs(formal): a TLA+ model of one shard's lease, replication and promotion (#523)\n\ndocs/formal/FelixShard.tla models the protocol in replication-design.md:\nthe heartbeat lease anchored at send time, the control plane's margin\nbefore it grants again, admission and commit-time lease checks,\nreplication with divergence repair above the high-water mark, Quorum and\nLeader acknowledgement, the leader's asynchronous report, and promotion.\nTLC holds no-two-leaders, acknowledged-records-survive,\nacknowledged-records-agree, no-truncation-below-the-mark and\nno-stale-commit under clock drift, lost heartbeats, lost reports, and a\nbroker paused between admitting a write and committing it.\n\nscripts/check_tla.sh (task tla:check, and a CI job) holds each\nconfiguration to a declared outcome. Two must pass. Three must fail, on a\nnamed invariant: no safety interval, no commit-time lease check, and\npromotion as the design writes it -- where a leader report older than\nthe last acknowledgement promotes a replica missing an acknowledged\nQuorum record. Promotion by (last generation, length) passes and is the\nrule to move to; the design doc says so.\n\nTLC runs with checkpoints off and its scratch directory outside the\ntree, and .gitignore covers the states/ directory a run by hand leaves.\n\nCloses #420.",
+          "timestamp": "2026-09-18T08:40:58-07:00",
+          "tree_id": "26a84a10ed3bdc8d74ddcb798a9886f4b07163d6",
+          "url": "https://github.com/gabloe/felix/commit/449d1bb03f8d0a148add8e47d460a266d391f70a"
+        },
+        "date": 1789746217548,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "2.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 164.60\nstdev: 2.07\ncv: 1.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "1.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 211.20\nstdev: 1.79\ncv: 0.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 259,
+            "range": "179.43",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 259.00\nmean: 344.20\nstdev: 179.43\ncv: 52.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 204,
+            "range": "1.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 204.00\nstdev: 1.87\ncv: 0.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 420,
+            "range": "38.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 420.00\nmean: 441.80\nstdev: 38.34\ncv: 8.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 879,
+            "range": "454.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 879.00\nmean: 1021.80\nstdev: 454.49\ncv: 44.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
