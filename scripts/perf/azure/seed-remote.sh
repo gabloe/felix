@@ -98,7 +98,7 @@ CODE=$(curl -s -o "$RESP" -w '%{http_code}' -X POST "$CP/v1/tenants/$TENANT/toke
 TOKEN=$(python3 -c 'import json; print(json.load(open("/tmp/felix-seed-resp"))["felix_token"])')
 [ -n "$TOKEN" ] || { echo "!! exchange returned no felix_token" >&2; exit 1; }
 
-echo ">> namespace, streams, cache scope"
+echo ">> namespace and cache scope"
 post_ok "$CP/v1/tenants/$TENANT/namespaces" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' <<JSON
 { "namespace": "$NAMESPACE", "display_name": "Perf" }
@@ -112,6 +112,16 @@ JSON
 # streams measure the same path as their siblings -- seed them anyway, so the
 # stream names are stable across tiers and a run script does not have to know
 # the replication factor to know what to ask for.
+# Streams are created only when SEED_STREAMS=1, which seed.sh sets on a second
+# pass *after* every broker has registered.
+#
+# Placement happens once, when a stream is created, against whatever brokers the
+# control plane can see at that instant -- and nothing ever moves a shard
+# afterwards (#130). Create the streams while only the first broker has
+# registered and it takes all of them; the rest of the cluster then sits idle
+# for the whole session with no remedy short of deleting the streams, which
+# destroys their data. A two-broker session measured exactly that: 49/0.
+if [ "${SEED_STREAMS:-1}" = "1" ]; then
 for stream in perf perf-durable perf-quorum perf-durable-quorum; do
   case "$stream" in
     *durable*) durable=true ;;
@@ -142,6 +152,9 @@ for stream in perf perf-durable perf-quorum perf-durable-quorum; do
 }
 STREAM
 done
+else
+  echo "   (skipping streams: they are created after the brokers register)"
+fi
 post_ok "$CP/v1/tenants/$TENANT/namespaces/$NAMESPACE/caches" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' <<JSON
 { "cache": "perf", "display_name": "Perf" }
