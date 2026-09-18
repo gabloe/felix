@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789692178732,
+  "lastUpdate": 1789695382589,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13200,6 +13200,72 @@ window.BENCHMARK_DATA = {
             "range": "363.36",
             "unit": "us",
             "extra": "trials: 5\nmedian: 655.00\nmean: 735.60\nstdev: 363.36\ncv: 49.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "646f3fbc006955d146f43ff2db03840e237f746b",
+          "message": "fix(peer): bound inbound connections on the internal listener (#505)\n\n* fix(peer): bound inbound connections on the internal listener\n\n#504, found while threat-modelling the internal surface. QUIC caps streams per\nconnection at 1024 and the decoder caps a frame at 64 MiB, but nothing capped\nconnections — so one caller could make a broker hold the product of those and\nhowever many it cared to open. `max_inflight_per_peer` does not help: it is an\noutbound shed on requests this broker sends, not a bound on what it accepts.\n\nTwo limits, because the total alone does not stop one peer taking the whole\nallowance, and the peer that does is likelier to be looping on a reconnect bug\nthan attacking — it starves the rest of the cluster either way.\n\nAdmission happens before anything is spawned for the connection. A refused one\nhas cost a handshake; an accepted one can cost a thousand streams of buffered\nframes, and the decision belongs before that. Refused rather than queued: a peer\ntold no backs off, where one left waiting cannot tell a busy broker from a stuck\none.\n\nThe place is held by a guard that gives it back on drop, not by a decrement at\nthe end of the serving function. That function has several exits and its task\ncan be cancelled between any of them, and a count that leaks is a broker that\nstops accepting peers after an uptime nobody can correlate with anything. The\nper-source map drops an entry at zero for the same reason, or it grows by one\nper address ever seen.\n\nStartup refuses a per-source limit above the total, where the per-source one\ncould never be the limit that applies.\n\nThis is the mitigation that outlives #125: an authenticated peer is still a peer\nthat can loop.\n\nReverted the refusal and watched the test fail with \"a third connection was\nserved against a limit of two\".\n\n* fix(peer): register the two new inbound-limit variables\n\nThe registry check added in #499 caught these: a variable the code reads and\nthe registry does not know would have its *real* name reported as unknown at\nstartup, which teaches operators to ignore the warning.\n\nWorking as intended — the check landed between this branch starting and\nfinishing, and found exactly what it is for.",
+          "timestamp": "2026-09-17T18:33:39-07:00",
+          "tree_id": "0a71408fb0159dda2a6dd6c43ebfcf5719fcc694",
+          "url": "https://github.com/gabloe/felix/commit/646f3fbc006955d146f43ff2db03840e237f746b"
+        },
+        "date": 1789695380831,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 161,
+            "range": "4.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 161.00\nmean: 158.60\nstdev: 4.83\ncv: 3.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 204,
+            "range": "67.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 238.80\nstdev: 67.41\ncv: 28.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 254,
+            "range": "130.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 254.00\nmean: 310.20\nstdev: 130.27\ncv: 42.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.60\nstdev: 0.89\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 397,
+            "range": "24.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 397.00\nmean: 404.40\nstdev: 24.59\ncv: 6.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 549,
+            "range": "443.86",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 549.00\nmean: 838.40\nstdev: 443.86\ncv: 52.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
