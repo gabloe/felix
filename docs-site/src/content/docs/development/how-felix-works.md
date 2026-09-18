@@ -839,6 +839,18 @@ Neither policy is universally correct:
 - blocking preserves delivery but can let one slow subscriber throttle every
   producer of that stream.
 
+**What `Block` costs, and to whom.** Every publish to a shard fans out to
+every subscriber of that shard, so under `Block` one stalled subscriber makes
+*every* publisher of that shard wait — each on its own enqueue, not on each
+other. The commit turn the durable publish path holds across fanout (so that
+delivery order matches log order) does not widen this: a second publisher
+would wait on the same full queue with no turn at all, which
+`block_policy_stalls_every_publisher_of_the_shard_without_a_commit_turn` shows
+on an ephemeral stream. The blast radius of `Block` is the shard, by
+construction; a shard whose subscribers all keep up is unaffected. Under
+`DropNew`, the default, the in-turn work per subscriber is one non-blocking
+`try_reserve`, and publish latency is flat across fanout.
+
 ### 13.2 Why both byte limits and item limits exist
 
 A queue depth of 64 does not express how much memory 64 jobs consume. Jobs may

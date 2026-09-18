@@ -188,6 +188,68 @@ async fn block_policy_backpressures_publish_when_queue_is_full() {
     assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"two"));
 }
 
+/// **Under `Block`, every publisher of a shard waits on the stalled subscriber,
+/// and the commit turn has nothing to do with it.**
+///
+/// The publish path holds a stream's commit turn across fanout on durable
+/// streams, and it is tempting to read that as publisher-to-publisher coupling
+/// introduced by the ordering. It is not: every publish to a shard delivers to
+/// every subscriber of that shard, so a second publisher's *own* enqueue waits
+/// on the same full queue. This stream is ephemeral -- no log, no sequencer,
+/// no turn -- and the second publisher still waits, and still proceeds in
+/// order the moment the subscriber drains. That is `Block`'s contract, and it
+/// is per shard whichever path took the record.
+#[tokio::test]
+async fn block_policy_stalls_every_publisher_of_the_shard_without_a_commit_turn() {
+    let broker = std::sync::Arc::new(
+        Broker::new(EphemeralCache::new().into())
+            .with_topic_capacity(1)
+            .expect("capacity")
+            .with_subscriber_queue_policy(SubQueuePolicy::Block),
+    );
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    broker
+        .register_stream("t1", "default", "shared", StreamMetadata::default())
+        .await
+        .expect("register");
+    let mut sub = broker
+        .subscribe("t1", "default", "shared", 0)
+        .await
+        .expect("subscribe");
+
+    // Publisher A fills the one slot.
+    broker
+        .publish("t1", "default", "shared", Bytes::from_static(b"a1"))
+        .await
+        .expect("publish");
+
+    // Publisher B, a different task, has nothing to do with A and no turn to
+    // wait for -- and waits anyway, on the subscriber.
+    let b = {
+        let broker = std::sync::Arc::clone(&broker);
+        tokio::spawn(async move {
+            broker
+                .publish("t1", "default", "shared", Bytes::from_static(b"b1"))
+                .await
+                .expect("publish")
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(
+        !b.is_finished(),
+        "a second publisher got past a stalled subscriber under Block"
+    );
+
+    // The subscriber drains one record and B goes through, behind A.
+    assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"a1"));
+    assert_eq!(b.await.expect("join"), 1);
+    assert_eq!(sub.recv().await.expect("recv"), Bytes::from_static(b"b1"));
+}
+
 #[tokio::test]
 async fn drop_old_policy_is_emulated_as_drop_new() {
     let broker = Broker::new(EphemeralCache::new().into())
