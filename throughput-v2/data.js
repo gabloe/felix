@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789765270929,
+  "lastUpdate": 1789765636536,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11596,6 +11596,58 @@ window.BENCHMARK_DATA = {
             "range": "10849.61",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 549924.38\nmean: 546256.13\nstdev: 10849.61\ncv: 1.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "095533b13663b9b9dc2a3d930173fa26f4ce169b",
+          "message": "perf(azure): create the streams after every broker has registered (#544)\n\nPlacement runs once, when a stream is created, against whatever brokers the\ncontrol plane can see at that instant -- and nothing ever moves a shard\nafterwards (#130). The seed created streams in step 1, before step 2 started\nany broker, so the first broker to register took everything and the rest of the\ncluster sat idle for the whole session.\n\nThe two-broker session measured exactly that: 49 shards on broker-0 and 0 on\nbroker-1, with broker-1 healthy, registered, and seeing all 49 assignments it\ndid not own. The only remedy available was deleting and re-creating the streams\n-- fine for a benchmark, data loss anywhere else. Every multi-broker number\nFelix has was taken on a skewed cluster for this reason: 48/0 on nvme2, 11/5/8\non nvme1.\n\nStream creation now happens on a second pass, gated by SEED_STREAMS, after the\nexisting \"wait for the brokers to register\" step has confirmed all of them.\nThe remote script is idempotent -- bootstrap answers 409 and the exchange\nre-runs -- so the second pass costs a few seconds. Default stays 1, so any\nother caller behaves as before.\n\nThe seed then reports shard ownership per broker, because an even split is the\nproperty the reordering exists to produce and it should be visible rather than\nassumed. An uneven one now means placement has a problem, instead of meaning\nthe seed raced the cluster.\n\nThis is a harness fix, not a product one: #130 is still that a transient\nregistration race becomes permanent because nothing rebalances.",
+          "timestamp": "2026-09-18T13:54:54-07:00",
+          "tree_id": "38c3934908b85580208bf89219369cd8db56742e",
+          "url": "https://github.com/gabloe/felix/commit/095533b13663b9b9dc2a3d930173fa26f4ce169b"
+        },
+        "date": 1789765635754,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 313886.08,
+            "range": "3021.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 313886.08\nmean: 314110.54\nstdev: 3021.38\ncv: 0.96%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 313886.08,
+            "range": "3021.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 313886.08\nmean: 314110.54\nstdev: 3021.38\ncv: 0.96%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 74153.91,
+            "range": "2362.71",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 74153.91\nmean: 73674.30\nstdev: 2362.71\ncv: 3.21%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 741539.1,
+            "range": "23627.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 741539.10\nmean: 736743.01\nstdev: 23627.11\ncv: 3.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
