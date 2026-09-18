@@ -1,6 +1,33 @@
 use anyhow::{Context, Result};
 use felix_broker::SubQueuePolicy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+/// Never write a secret into a dump meant to be shared.
+///
+/// `--print-config` is for pasting into an issue or a ticket, so a credential
+/// that appears in it has been published. Shown as a fixed marker rather than
+/// omitted: an operator has to be able to see that a token *is* set.
+fn queue_policy<S: serde::Serializer>(
+    value: &SubQueuePolicy,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    // Named here rather than by deriving on `SubQueuePolicy`, which lives in
+    // `felix-broker` and has no serde dependency. A printing feature is not a
+    // reason to give a core crate one.
+    serializer.serialize_str(match value {
+        SubQueuePolicy::DropNew => "drop_new",
+        SubQueuePolicy::DropOld => "drop_old",
+        SubQueuePolicy::Block => "block",
+    })
+}
+
+fn redacted<S: serde::Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(if value.is_empty() {
+        "<unset>"
+    } else {
+        "<redacted>"
+    })
+}
 use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -10,7 +37,7 @@ use std::net::SocketAddr;
 /// Present only when `FELIX_NODE_ID` is set. Membership is opt-in because a
 /// single-node broker has no cluster to join, and registering one would put a
 /// node in the catalog that placement would then try to use.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MembershipConfig {
     /// Stable across restarts. This is the identity, not the process.
     pub node_id: String,
@@ -19,6 +46,9 @@ pub struct MembershipConfig {
     /// Required, not optional. A broker with an identity and no credential
     /// cannot register, and starting one that will fail every control-plane
     /// call on a loop is worse than refusing to start.
+    ///
+    /// Never printed. `--print-config` exists to be pasted into an issue.
+    #[serde(serialize_with = "redacted")]
     pub token: String,
     /// `host:port` peers reach this broker on. Not the bind address: a broker
     /// bound to 0.0.0.0 has to advertise something routable.
@@ -77,7 +107,12 @@ fn warn_on_unreachable_advertise(
 }
 
 // Broker service configuration sourced from environment variables.
-#[derive(Debug, Clone)]
+//
+// `Serialize` is for `--print-config`, and it is *derived* rather than written
+// out by hand so the dump cannot drift from the struct — a listing that quietly
+// stops mentioning a setting is the same class of problem as a documented
+// variable nothing reads.
+#[derive(Debug, Clone, Serialize)]
 pub struct BrokerConfig {
     // QUIC listener bind address.
     pub quic_bind: SocketAddr,
@@ -165,12 +200,14 @@ pub struct BrokerConfig {
     // registrations.
     pub max_subscriptions_per_conn: usize,
     // Subscriber queue policy for publish->fanout enqueue.
+    #[serde(serialize_with = "queue_policy")]
     pub subscriber_queue_policy: SubQueuePolicy,
     // Number of outbound subscriber writer lanes.
     pub subscriber_writer_lanes: usize,
     // Bounded queue depth per writer lane.
     pub subscriber_lane_queue_depth: usize,
     // Queue policy for lane ingress.
+    #[serde(serialize_with = "queue_policy")]
     pub subscriber_lane_queue_policy: SubQueuePolicy,
     // Upper bound to prevent over-sharding lane counts that can regress p99/p999 under load.
     pub max_subscriber_writer_lanes: usize,
@@ -294,7 +331,7 @@ impl Default for BrokerConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubscriberLaneShard {
     // Prefer connection-aware routing when a connection id is known, else fallback to subscriber id.
@@ -305,7 +342,7 @@ pub enum SubscriberLaneShard {
     RoundRobinPin,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubStreamMode {
     PerSubscriber,
@@ -1701,6 +1738,65 @@ subscriber_single_writer_per_conn: false
         assert!(!config.subscriber_single_writer_per_conn);
 
         clear_felix_env();
+    }
+
+    /// What `--print-config` renders, and the one thing it must never render.
+    mod printing {
+        use super::*;
+
+        fn with_membership(token: &str) -> BrokerConfig {
+            BrokerConfig {
+                membership: Some(MembershipConfig {
+                    node_id: "broker-a".to_string(),
+                    token: token.to_string(),
+                    advertise_addr: "10.0.0.1:5000".to_string(),
+                    client_advertise_addr: None,
+                    refresh_token_file: None,
+                    region: "us-west-2".to_string(),
+                }),
+                ..BrokerConfig::default()
+            }
+        }
+
+        /// **The credential never appears.**
+        ///
+        /// `--print-config` exists to be pasted into an issue, so a token that
+        /// reaches the output has been published. This is the assertion that
+        /// has to hold even if every other field's rendering changes.
+        #[test]
+        fn the_credential_is_never_printed() {
+            let rendered =
+                serde_yaml_ng::to_string(&with_membership("super-secret-value")).expect("render");
+            assert!(
+                !rendered.contains("super-secret-value"),
+                "the credential reached the output:\n{rendered}",
+            );
+            assert!(rendered.contains("token: <redacted>"));
+        }
+
+        /// Redacted, not omitted: whether a token is set at all is exactly what
+        /// someone debugging a registration failure needs to see.
+        #[test]
+        fn an_absent_credential_says_so_rather_than_vanishing() {
+            let rendered = serde_yaml_ng::to_string(&with_membership("")).expect("render");
+            assert!(rendered.contains("token: <unset>"), "{rendered}");
+        }
+
+        /// Durations come out in the unit their variables are named for.
+        /// Serde's default for `Duration` is `{ secs, nanos }`, which is
+        /// unreadable beside `FELIX_PEER_REQUEST_TIMEOUT_MS`.
+        #[test]
+        fn peer_timeouts_are_printed_as_milliseconds() {
+            let config = BrokerConfig {
+                peer_transport: Some(crate::peer::PeerTransportConfig {
+                    request_timeout: std::time::Duration::from_millis(2500),
+                    ..crate::peer::PeerTransportConfig::default()
+                }),
+                ..BrokerConfig::default()
+            };
+            let rendered = serde_yaml_ng::to_string(&config).expect("render");
+            assert!(rendered.contains("request_timeout: 2500"), "{rendered}");
+        }
     }
 
     /// The YAML config file, folded over what the environment already gave.

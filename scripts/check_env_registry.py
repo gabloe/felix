@@ -23,7 +23,20 @@ REGISTRY = REPO / "crates/felix-common/src/env_registry.rs"
 
 def read_by_code() -> set[str]:
     out = subprocess.run(
-        ["git", "grep", "-hoE", r'"FELIX_[A-Z0-9_]+"', "--", "*.rs"],
+        # Test files are excluded: a name that appears only in one is a
+        # fixture — a deliberately wrong name, or a setting exercised by a
+        # harness — not a knob an operator has. Counting them made
+        # `FELIX_QUIC_BINDD` look like something to document.
+        [
+            "git",
+            "grep",
+            "-hoE",
+            r'"FELIX_[A-Z0-9_]+"',
+            "--",
+            "*.rs",
+            ":!*_tests.rs",
+            ":!*/tests/*",
+        ],
         cwd=REPO,
         capture_output=True,
         text=True,
