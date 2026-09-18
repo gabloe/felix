@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789695385546,
+  "lastUpdate": 1789695540057,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10452,6 +10452,58 @@ window.BENCHMARK_DATA = {
             "range": "36754.64",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 559030.32\nmean: 542942.23\nstdev: 36754.64\ncv: 6.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d68d961bee8255e5aef331a1b1b51f2d7f9f733",
+          "message": "test(cluster): print what the brokers were saying when a test fails (#508)\n\nA cluster test that failed an assertion gave the assertion and nothing else.\nThe data root is a `TempDir`, so it took every broker log with it on the way\nout — and a CI failure like \"broker-2 never started forwarding after it moved\"\nleft no way to ask *why* without reproducing it, which is the one thing a\ntiming-dependent failure will not do on request. I spent time on exactly that\ntoday.\n\n`Cluster`'s existing `Drop` already kills the brokers; it now prints their logs\nfirst, but only while the thread is panicking, so a passing run stays silent.\n\nFiltered, not tailed, and that is the whole difference between useful and not.\nThe first version printed the last forty lines and they were all teardown:\n\"connection lost\" repeated a dozen times and a page-wide `ConnectionStats` dump\nfrom the harness killing the process. Reusing `log_lines_matching` — the topic\nfilter the redirect diagnostics already had, plus replication, quorum and\nhalted — surfaces shard seeding, shards opening, and ownership moving instead,\nwhich is what these tests wait on.\n\nIt falls back to a plain tail when none of the topics appear, so nothing is\nhidden: the absence of routing lines is itself evidence about what a broker was\ndoing.\n\nBrokers only. The control plane runs in-process here, so its tracing is already\non the test's stderr.",
+          "timestamp": "2026-09-17T18:34:24-07:00",
+          "tree_id": "f2ef8c6abfb6a38bc02f610eae7336bb5e65ff10",
+          "url": "https://github.com/gabloe/felix/commit/3d68d961bee8255e5aef331a1b1b51f2d7f9f733"
+        },
+        "date": 1789695539126,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 240032.08,
+            "range": "4673.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 240032.08\nmean: 242226.30\nstdev: 4673.73\ncv: 1.93%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 240032.08,
+            "range": "4673.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 240032.08\nmean: 242226.30\nstdev: 4673.73\ncv: 1.93%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 57233.51,
+            "range": "1247.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 57233.51\nmean: 57785.17\nstdev: 1247.29\ncv: 2.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 572335.13,
+            "range": "12472.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 572335.13\nmean: 577851.68\nstdev: 12472.94\ncv: 2.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
