@@ -58,7 +58,9 @@ pub(crate) struct StreamState {
     // Orders the post-durability half of a publish by disk offset, so cursor
     // replay and subscriber delivery agree with what is on disk. Only durable
     // streams use it; an ephemeral stream has no disk offsets to order by.
-    pub(crate) commit_sequencer: CommitSequencer,
+    /// `Arc` so a claim can outlive the call that made it: see
+    /// `CommitSequencer::reserve_owned` and `Broker::claim_publish` (#535).
+    pub(crate) commit_sequencer: Arc<CommitSequencer>,
     /// What an acknowledgement of a publish to this stream means. Carried on
     /// the state so the publish path reads it from the handle it already has,
     /// rather than looking the stream up again on the hot path.
@@ -123,7 +125,7 @@ impl StreamState {
             subscriber_queue_policy,
             queued_items: Arc::new(AtomicUsize::new(0)),
             durable,
-            commit_sequencer: CommitSequencer::new(0),
+            commit_sequencer: Arc::new(CommitSequencer::new(0)),
             producers: crate::producers::ProducerTable::default(),
         }
     }

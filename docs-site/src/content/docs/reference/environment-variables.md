@@ -739,7 +739,13 @@ export FELIX_PUBLISH_INFLIGHT_BYTES="4194304"
 
 ### `FELIX_BROKER_PUB_WORKERS_PER_CONN`
 
-**Description**: Publish workers per QUIC connection (broker).
+**Description**: Publish workers in the broker's pool. Despite the name the
+pool is **process-wide**, not per connection — it is built once, before the
+accept loop, because per-connection pools multiplied concurrent callers into
+shared broker state. A stream-shard handle maps to one worker
+(`handle.id() % count`), so raising this spreads *different* shards across more
+workers; it cannot give one shard more than one. The name is misleading and is
+tracked for a rename in #535.
 
 **Type**: Positive integer (count)
 
@@ -750,6 +756,25 @@ export FELIX_PUBLISH_INFLIGHT_BYTES="4194304"
 export FELIX_BROKER_PUB_WORKERS_PER_CONN="4"
 export FELIX_BROKER_PUB_WORKERS_PER_CONN="8"   # High concurrency
 export FELIX_BROKER_PUB_WORKERS_PER_CONN="2"   # Lower overhead
+```
+
+### `FELIX_BROKER_PUB_FLUSH_CONCURRENCY`
+
+**Description**: Durable publishes one publish worker may have awaiting their
+device flush at once (broker). Offsets are still claimed serially, in arrival
+order, so this does not affect the order records land in — it decides how many
+flushes group commit gets to coalesce. `1` restores the pre-0.4.1 behaviour of
+one flush at a time, which capped a shard at roughly one batch per flush (#535).
+
+**Type**: Positive integer (count)
+
+**Default**: `32`
+
+**Example**:
+```bash
+export FELIX_BROKER_PUB_FLUSH_CONCURRENCY="32"
+export FELIX_BROKER_PUB_FLUSH_CONCURRENCY="64"  # Deeper coalescing on fast devices
+export FELIX_BROKER_PUB_FLUSH_CONCURRENCY="1"   # Serialise, as before 0.4.1
 ```
 
 ### `FELIX_BROKER_PUB_QUEUE_DEPTH`

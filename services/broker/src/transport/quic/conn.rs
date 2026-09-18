@@ -180,6 +180,20 @@ fn build_publish_context(
         let lease_for_worker = lease.clone();
         let marks_for_worker = marks.clone();
         let ingress_for_worker = ingress.clone();
+        // How many durable publishes this worker may have awaiting their device
+        // flush at once. The worker claims offsets serially -- that is what
+        // keeps disk order equal to arrival order -- and then lets the flushes
+        // overlap, because group commit only coalesces what is concurrently in
+        // `ensure_durable`. At a fan-in of one the ceiling was one batch per
+        // flush (#535).
+        //
+        // Bounded, not unbounded: the reason this pool is process-wide in the
+        // first place is that unbounded concurrent `publish_batch` callers
+        // contended on shared broker state (see the note above). This buys the
+        // flush overlap without going back to that.
+        let flush_slots = Arc::new(tokio::sync::Semaphore::new(
+            config.pub_flush_concurrency.max(1),
+        ));
         let worker_task = async move {
             while let Some(job) = publish_rx.recv().await {
                 #[cfg(feature = "perf_debug")]
@@ -195,6 +209,65 @@ fn build_publish_context(
                 );
                 #[cfg(feature = "perf_debug")]
                 let worker_start = std::time::Instant::now();
+
+                // Durable local publishes take the split path: claim here, in
+                // queue order, then complete off-worker so the device flushes
+                // overlap. Everything else -- forwards, idempotent sequences,
+                // the single-node local target -- stays inline, because none of
+                // them is waiting on a flush this worker could be sharing.
+                if let PublishTarget::Resolved { handle, shard } = &job.target {
+                    let lease_ok = match &lease_for_worker {
+                        Some(lease) => lease.is_valid_now(),
+                        None => true,
+                    };
+                    if lease_ok && handle.is_durable() {
+                        // Serial, and the only ordered part: offsets are
+                        // consumed here, so the order these return in is the
+                        // order records land on disk.
+                        match broker_for_worker.claim_publish(handle, &job.payloads).await {
+                            Ok(claimed) => {
+                                let permit = Arc::clone(&flush_slots)
+                                    .acquire_owned()
+                                    .await
+                                    .expect("flush slots are never closed");
+                                let broker = Arc::clone(&broker_for_worker);
+                                let handle = handle.clone();
+                                let shard = shard.clone();
+                                let marks = marks_for_worker.clone();
+                                let ingress = ingress_for_worker.clone();
+                                let response = job.response;
+                                tokio::spawn(async move {
+                                    let result = match broker.complete_publish(claimed).await {
+                                        Ok(outcome) => {
+                                            crate::replication::quorum::await_quorum(
+                                                &handle,
+                                                shard.as_ref(),
+                                                &outcome,
+                                                marks.as_deref(),
+                                                ingress.as_deref(),
+                                                quorum_timeout,
+                                            )
+                                            .await
+                                        }
+                                        Err(err) => Err(err.into()),
+                                    };
+                                    if let Some(response) = response {
+                                        let _ = response.send(result);
+                                    }
+                                    drop(permit);
+                                });
+                                continue;
+                            }
+                            Err(err) => {
+                                if let Some(response) = job.response {
+                                    let _ = response.send(Err(err.into()));
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 let result: Result<(), anyhow::Error> = match &job.target {
                     PublishTarget::Resolved { handle, shard } => {
                         // The commit fence, and the authoritative one. Everything
