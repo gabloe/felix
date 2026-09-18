@@ -193,6 +193,60 @@ jobs:
       - name: Lint, render, and check
         run: python3 scripts/check_chart.py
 
+  # The Python binding, built and run against real brokers the way the release
+  # does. It lives here and not only in release.yml because a job whose first
+  # execution in its life was the v0.4.0 tag build is a job that fails at the
+  # tag: `maturin develop` needs an active virtualenv, `actions/setup-python`
+  # provides none, and nothing caught it until the wheels did not ship (#534).
+  #
+  # Unconditional, despite driving real QUIC and costing a broker build: the
+  # lesson of #534 is that a job which does not run is a job that breaks
+  # silently, and a filter on `crates/felix-python/**` would have missed it
+  # anyway -- the binding wraps the Rust client, so a change anywhere under
+  # `crates/felix-client` can break it just as surely.
+  python:
+    name: Python client conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # The suite starts these.
+      - name: Build the broker and cluster harness
+        run: |
+          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-cluster --bin felix-cluster
+
+      # Same installation the release job uses, so the two cannot drift.
+      - name: Install the binding
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install ./crates/felix-python
+          python -c "import felix; print('felix binding imported OK')"
+
+      - name: Run the conformance suite
+        env:
+          FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/python-conformance.json
+        run: cd crates/felix-python && pytest -q
+
+      # The verdict, not the exit code: a suite that passed while skipping a
+      # required scenario is not conformance.
+      - name: Verify against the catalogue
+        run: cargo run --locked -q -p felix-conformance -- verify python-conformance.json
+
   # The formal model of one shard's lease, replication and promotion, checked
   # with TLC. Bounded, so it finishes in minutes; each configuration says
   # whether it must pass or which invariant it must violate, so the trace

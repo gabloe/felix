@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "felix-client"
-version = "0.4.0-preview"
+version = "0.4.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "felix-python"
-version = "0.4.0-preview"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -233,11 +233,12 @@ dependencies = [
 
 [[package]]
 name = "felix-transport"
-version = "0.4.0-preview"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "libc",
  "quinn",
+ "rustls",
  "socket2",
  "tokio",
  "tracing",
@@ -245,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "felix-wire"
-version = "0.4.0-preview"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bytes",
