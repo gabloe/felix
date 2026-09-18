@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789733822482,
+  "lastUpdate": 1789735481240,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11024,6 +11024,58 @@ window.BENCHMARK_DATA = {
             "range": "15877.81",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 747090.75\nmean: 742764.89\nstdev: 15877.81\ncv: 2.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d757dbb72030dbb763ff5fdcad8c5115359330e",
+          "message": "feat(publish): idempotent producers, so an ambiguous outcome is safely re-sent (#522)\n\nA Quorum publish that times out reports failure for a record that may be\ndurable. The client cannot tell, so re-sending duplicates it and not\nre-sending loses it. With a producer id and a sequence the broker can tell\nthe copies apart.\n\nA client asks the broker for a producer id (producer_init) and sends its\nbatches as publish_idempotent with a per-shard sequence. The shard's\nleader appends the sequence it expects, answers a re-send of one it\nalready holds with the original outcome and no second append, and\nrefuses a gap, an unknown producer, or a sequence older than it\nremembers with a typed publish_refused. A batch for a shard led\nelsewhere is refused with the leader's address rather than forwarded,\nsince only the leader holds the sequences. Negotiated as\nFEATURE_IDEMPOTENT_PRODUCER.\n\nClusterClient::idempotent_producer and Client::idempotent_producer\nre-send under the same sequence after an ambiguous outcome, follow a\nnot-leader refusal, and end on any other. A typed refusal no longer\nfails the client's publish worker: it answers one request on a stream\nthe broker keeps serving.\n\nThe sequences live in the leader's memory. A new leader answers\nunknown_producer, so a batch in flight across a failover is reported\nrather than silently landed or dropped; persisting them through\nreplication is the follow-up.\n\nCloses #422.",
+          "timestamp": "2026-09-18T05:42:00-07:00",
+          "tree_id": "b286a45c693341cf39e0fae62895bcb9f9555ea5",
+          "url": "https://github.com/gabloe/felix/commit/6d757dbb72030dbb763ff5fdcad8c5115359330e"
+        },
+        "date": 1789735480677,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 230828.21,
+            "range": "5208.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230828.21\nmean: 231677.39\nstdev: 5208.46\ncv: 2.25%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 230828.21,
+            "range": "5208.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 230828.21\nmean: 231677.39\nstdev: 5208.46\ncv: 2.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54030.94,
+            "range": "2457.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54030.94\nmean: 53812.09\nstdev: 2457.23\ncv: 4.57%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 540309.39,
+            "range": "24572.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 540309.39\nmean: 538120.93\nstdev: 24572.31\ncv: 4.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
