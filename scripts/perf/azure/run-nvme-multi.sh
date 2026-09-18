@@ -10,10 +10,17 @@ set -uo pipefail
 : "${SESSION:?SESSION=<name>}"
 : "${STREAM:=perf-durable}"
 : "${CONC:=16}"                       # publishers per loadgen
-: "${LOADGENS:=felixperf-loadgen felixperf-loadgen-2 felixperf-loadgen-3}"
+# Sourcing the inventory below would clobber a LOADGENS given on the command
+# line, and sweeping the generator count is the whole point of this script --
+# one, two, then three against the same broker. Remember the caller's value and
+# put it back afterwards, so an explicit LOADGENS always wins over the
+# inventory's full list.
+_loadgens_override="${LOADGENS:-}"
 here="$(cd "$(dirname "$0")" && pwd)"
 source "${here}/lib.sh"
 source "${here}/sessions/${SESSION}.env"
+LOADGENS="${_loadgens_override:-${LOADGENS:-felixperf-loadgen}}"
+echo ">> generators: ${LOADGENS}"
 export GROUP="${GROUP}"
 
 IFS=',' read -ra brokers <<<"${BROKER_IPS}"

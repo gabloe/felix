@@ -44,6 +44,11 @@ param brokerVmSize string = 'Standard_D4as_v5'
 param controlPlaneVmSize string = 'Standard_D2as_v5'
 param loadgenVmSize string = 'Standard_D4as_v5'
 
+@description('How many load generators. One D4 generator is crypto-bound near ~1.15 GB/s, well under what a broker can absorb, so measuring a broker\'s ceiling needs several driving it at once. Only generator 0 gets a public address; the rest are reachable through run-command like every other VM.')
+@minValue(1)
+@maxValue(8)
+param loadgenCount int = 1
+
 @description('Broker data disk, GiB. Premium, so fsync latency is a real number. Ignored when useLocalNvme is true.')
 param brokerDataDiskGib int = 128
 
@@ -169,23 +174,25 @@ resource loadgenIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   properties: { publicIPAllocationMethod: 'Static' }
 }
 
-resource loadgenNic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
-  name: nicName('loadgen', 0)
-  location: location
-  properties: {
-    enableAcceleratedNetworking: true
-    ipConfigurations: [
-      {
-        name: 'primary'
-        properties: {
-          subnet: { id: vnet.properties.subnets[0].id }
-          privateIPAllocationMethod: 'Dynamic'
-          publicIPAddress: { id: loadgenIp.id }
+resource loadgenNics 'Microsoft.Network/networkInterfaces@2024-05-01' = [
+  for i in range(0, loadgenCount): {
+    name: nicName('loadgen', i)
+    location: location
+    properties: {
+      enableAcceleratedNetworking: true
+      ipConfigurations: [
+        {
+          name: 'primary'
+          properties: {
+            subnet: { id: vnet.properties.subnets[0].id }
+            privateIPAllocationMethod: 'Dynamic'
+            publicIPAddress: i == 0 ? { id: loadgenIp.id } : null
+          }
         }
-      }
-    ]
+      ]
+    }
   }
-}
+]
 
 var linuxConfiguration = {
   disablePasswordAuthentication: true
@@ -258,26 +265,32 @@ resource controlPlane 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   }
 }
 
-resource loadgen 'Microsoft.Compute/virtualMachines@2024-07-01' = {
-  name: '${prefix}-loadgen'
-  location: location
-  properties: {
-    hardwareProfile: { vmSize: loadgenVmSize }
-    proximityPlacementGroup: tier == 't1' ? { id: ppg.id } : null
-    storageProfile: {
-      imageReference: image
-      osDisk: { createOption: 'FromImage', managedDisk: { storageAccountType: 'Premium_LRS' } }
+// Generator 0 keeps the bare name: it is the jump host and every existing
+// script addresses it as `<prefix>-loadgen`. The rest are -2, -3, ... matching
+// what run-nvme-multi.sh already expects.
+resource loadgens 'Microsoft.Compute/virtualMachines@2024-07-01' = [
+  for i in range(0, loadgenCount): {
+    name: i == 0 ? '${prefix}-loadgen' : '${prefix}-loadgen-${i + 1}'
+    location: location
+    properties: {
+      hardwareProfile: { vmSize: loadgenVmSize }
+      proximityPlacementGroup: tier == 't1' ? { id: ppg.id } : null
+      storageProfile: {
+        imageReference: image
+        osDisk: { createOption: 'FromImage', managedDisk: { storageAccountType: 'Premium_LRS' } }
+      }
+      osProfile: {
+        computerName: i == 0 ? '${prefix}-loadgen' : '${prefix}-loadgen-${i + 1}'
+        adminUsername: adminUsername
+        linuxConfiguration: linuxConfiguration
+        customData: loadgenInit
+      }
+      networkProfile: { networkInterfaces: [{ id: loadgenNics[i].id }] }
     }
-    osProfile: {
-      computerName: '${prefix}-loadgen'
-      adminUsername: adminUsername
-      linuxConfiguration: linuxConfiguration
-      customData: loadgenInit
-    }
-    networkProfile: { networkInterfaces: [{ id: loadgenNic.id }] }
   }
-}
+]
 
 output loadgenPublicIp string = loadgenIp.properties.ipAddress
 output controlPlaneIp string = controlPlaneNic.properties.ipConfigurations[0].properties.privateIPAddress
 output brokerIps array = [for i in range(0, brokerCount): brokerNics[i].properties.ipConfigurations[0].properties.privateIPAddress]
+output loadgenNames array = [for i in range(0, loadgenCount): i == 0 ? '${prefix}-loadgen' : '${prefix}-loadgen-${i + 1}']
