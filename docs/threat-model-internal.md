@@ -193,20 +193,20 @@ the connection. Neither leaves the reader mid-frame.
 treated as a trusted network — reachable from other brokers and nothing else —
 which is an operational control rather than a product one. With it, a peer is a
 broker holding a certificate the cluster's CA issued to its own node id, and
-reachability is no longer the boundary. #126 (the broker's relationship with
-the control plane) is separate and still open.
+reachability is no longer the boundary.
 
-One gap will remain after mTLS:
-
-- **Connection admission.** An authenticated peer that misbehaves — compromised,
-  or simply looping on a bug — is still unbounded in connections.
+Connection admission is bounded independently of authentication, because an
+authenticated peer looping on a bug exhausts a listener just as a hostile one
+does: `FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS` caps the listener and
+`FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE` caps any single source.
 
 Tenant authority across a forward is no longer one: the owner verifies the
 client's credential itself, so authenticating the peer is about *who is
 calling*, not about what may be written.
 
 The milestone signal for this review is *"no unauthenticated internal RPC and no
-unencrypted cluster-internal link"*. Encryption is satisfied: QUIC requires TLS,
-so the link is encrypted even though the peer is unauthenticated. Authentication
-is **not** satisfied, and this document should be re-read when #125 lands, since
-several cases above change status the moment it does.
+unencrypted cluster-internal link"*. Both halves are satisfied for a cluster that
+configures certificates: QUIC requires TLS, so the link was never unencrypted,
+and #125 closed authentication. It is **not** satisfied by default — without the
+three variables the peer link is still encrypted but unauthenticated, which is
+why startup warns and why every case above is written against both modes.

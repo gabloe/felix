@@ -106,7 +106,9 @@ flowchart TB
   subscriber registry, fanout, cache index, consumer groups.
 - **`felix-client`** is the Rust SDK: publisher, subscription, and cache APIs
   over pooled connections, with reconnection and redirect-following in the
-  cluster client. Clients in other languages are planned but not built.
+  cluster client. Python ships too (`crates/felix-python`), as a binding over
+  this client rather than a reimplementation; TypeScript, Go and C# are not
+  started.
 - **The control plane** (`services/controlplane`) holds metadata — tenants,
   namespaces, streams, caches, nodes — behind a REST API, and assigns every
   shard to a broker. Brokers watch its assignment feed. It is not on the data

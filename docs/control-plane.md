@@ -518,17 +518,18 @@ One task keeps the two views in step, in a fixed order: reconcile local shard
 state, publish what is servable, then publish the routes. Publishing routes
 first would advertise this node as the owner of a shard it has not opened.
 
-**A broker cannot forward yet.** Building an address book needs `/v1/nodes`,
-which requires `node.view:cluster:*`; a broker's own credential is scoped to its
-own node.
-So a shard led by this node resolves on the node id alone, and every other shard
-is refused with the owner named rather than forwarded. Forwarding is M4.
+**A shard this broker does not own is forwarded to the one that does**, and the
+publish is acknowledged only once the owner has written it. The owner does not
+take the forwarder's word for the caller's authority: it verifies the client's
+own credential before writing, so an authenticated peer is *who is calling*, not
+what may be written.
 
-**Sharding is not reachable from the wire.** `Publish` carries no routing key,
-so every record of a stream lands on shard 0 and a stream's configured `shards`
-count is metadata the data path does not use. `shard_for` is where a negotiated
-key plugs in; the hashing is written and tested, so adding the field is a wire
-change rather than a routing change.
+**Sharding is reachable from the wire.** A publish may carry a routing key, and
+the key picks the shard through `shard_for`, so a stream placed across brokers
+spreads across them. Ordering is per key once a stream has more than one shard;
+a single-shard stream keeps total order. The key rides the JSON encoding — the
+binary frames have no room for one — which is the remaining limitation rather
+than the routing itself.
 
 #### Referential integrity
 
