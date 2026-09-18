@@ -10,7 +10,7 @@ type: application
 version: 0.1.0
 # The Felix release the defaults were written against. Image tags default to
 # this; pin by digest in production.
-appVersion: "0.4.0-preview"
+appVersion: "0.4.0"
 kubeVersion: ">=1.25.0-0"
 home: https://gabloe.github.io/felix/
 sources:
