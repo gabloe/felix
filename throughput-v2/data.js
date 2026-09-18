@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789765636536,
+  "lastUpdate": 1789766090736,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11648,6 +11648,58 @@ window.BENCHMARK_DATA = {
             "range": "23627.11",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 741539.10\nmean: 736743.01\nstdev: 23627.11\ncv: 3.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "38b252182f643cbaf58bd45d81854809c5610cc1",
+          "message": "fix(release): build the Intel macOS wheel on Apple Silicon (#545)\n\n`macos-13` is the Intel macOS image, which GitHub is retiring. On the v0.4.1\ntag the x86_64-apple-darwin leg never got an agent and sat queued while the\nother four targets finished in minutes.\n\nThat is not one missing wheel. `attach-wheels` and `publish-pypi` both\n`needs: [python-wheels, python-sdist]`, and a matrix job that never starts\nnever completes, so a single retired runner label holds back *all five* wheels\nand the PyPI publish behind it. v0.4.0 shipped without wheels because the\ninstall step was broken; v0.4.1 was about to ship without them because a runner\nlabel went away.\n\nx86_64-apple-darwin is now cross-compiled from `macos-latest`. maturin-action\ninstalls the rust target, and the wheel is abi3-py39, so nothing about it is\ninterpreter- or host-specific.\n\nLeaves the retired label nowhere in the workflow, which is the point: the\nfailure mode was silent and indefinite rather than a visible error.",
+          "timestamp": "2026-09-18T14:09:49-07:00",
+          "tree_id": "18deb19f54b83268ae112eaac7cedfcce6b21397",
+          "url": "https://github.com/gabloe/felix/commit/38b252182f643cbaf58bd45d81854809c5610cc1"
+        },
+        "date": 1789766089927,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 237244.42,
+            "range": "5695.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 237244.42\nmean: 235808.09\nstdev: 5695.31\ncv: 2.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 237244.42,
+            "range": "5695.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 237244.42\nmean: 235808.09\nstdev: 5695.31\ncv: 2.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55314.55,
+            "range": "1439.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55314.55\nmean: 54687.10\nstdev: 1439.34\ncv: 2.63%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553145.46,
+            "range": "14393.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553145.46\nmean: 546870.98\nstdev: 14393.39\ncv: 2.63%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
