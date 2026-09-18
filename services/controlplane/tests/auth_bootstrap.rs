@@ -449,3 +449,114 @@ async fn bootstrap_respects_preseeded_admin_policies_matching_required_scopes() 
         .count();
     assert_eq!(ns_manage, 1);
 }
+
+/// **A policy supplied at bootstrap cannot reach another tenant.**
+///
+/// The caller chooses `policies` outright, and nothing validates their scope —
+/// a request initializing `t-victim-neighbour` may name `tenant:t-victim` in a
+/// rule. What stops that being a cross-tenant escalation is not a check on the
+/// way in but the domain on the way out: every rule is inserted into a
+/// per-tenant enforcer under that tenant's domain, so a rule stored against one
+/// tenant is not in the other's enforcer at all.
+///
+/// Asserted rather than assumed, because it is the whole answer to #127's
+/// "bootstrap cannot be used to mint credentials outside its intended scope",
+/// and it lives in a different file from the code that makes it true.
+#[tokio::test]
+async fn a_policy_naming_another_tenant_does_not_reach_it() {
+    let (store, state) = bootstrap_state(true, vec!["secret".to_string()]);
+
+    // The neighbour exists and is initialized first, so the attacker is aiming
+    // at a live tenant rather than claiming an unused name.
+    let app = build_bootstrap_router(state.clone()).into_service();
+    let victim = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/victim/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Victim",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:victim-admin"]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    assert_eq!(
+        app.oneshot(victim).await.expect("response").status(),
+        StatusCode::OK,
+    );
+
+    // Now initialize a different tenant, smuggling in a rule aimed at the
+    // first one.
+    let app = build_bootstrap_router(state).into_service();
+    let attack = Request::builder()
+        .method("POST")
+        .uri("/internal/bootstrap/tenants/neighbour/initialize")
+        .header("content-type", "application/json")
+        .header("X-Felix-Bootstrap-Token", "secret")
+        .body(Body::from(
+            json!({
+                "display_name": "Neighbour",
+                "idp_issuers": [],
+                "initial_admin_principals": ["p:attacker"],
+                "policies": [
+                    { "subject": "p:attacker", "object": "tenant:victim", "action": "tenant.manage" },
+                    { "subject": "p:attacker", "object": "tenant:*", "action": "tenant.manage" }
+                ]
+            })
+            .to_string(),
+        ))
+        .expect("request");
+    assert_eq!(
+        app.oneshot(attack).await.expect("response").status(),
+        StatusCode::OK,
+    );
+
+    // The rules were stored — nothing rejects them — but against the tenant
+    // that was being initialized.
+    let neighbour = store
+        .list_rbac_policies("neighbour")
+        .await
+        .expect("policies");
+    assert!(
+        neighbour
+            .iter()
+            .any(|policy| policy.subject == "p:attacker" && policy.object == "tenant:victim"),
+        "the test is not exercising anything if the rule was dropped on the way in",
+    );
+
+    // And the victim's own policy set is untouched, which is what the attacker
+    // needed and did not get.
+    let victim_policies = store.list_rbac_policies("victim").await.expect("policies");
+    assert!(
+        !victim_policies
+            .iter()
+            .any(|policy| policy.subject == "p:attacker"),
+        "a policy supplied while initializing one tenant reached another: {victim_policies:?}",
+    );
+
+    // The enforcement side, which is where the containment actually lives: the
+    // victim's enforcer is built from the victim's rules under the victim's
+    // domain, so the attacker is not in it however the rule was worded.
+    let enforcer = controlplane::auth::rbac::enforcer::build_enforcer(
+        &victim_policies,
+        &store
+            .list_rbac_groupings("victim")
+            .await
+            .expect("groupings"),
+        "victim",
+    )
+    .await
+    .expect("enforcer");
+    let granted = controlplane::auth::rbac::permissions::effective_permissions(
+        &enforcer,
+        "p:attacker",
+        "victim",
+    );
+    assert!(
+        granted.is_empty(),
+        "the attacker was granted {granted:?} on a tenant they did not initialize",
+    );
+}
