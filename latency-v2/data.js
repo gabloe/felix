@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789695537028,
+  "lastUpdate": 1789696491864,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13332,6 +13332,72 @@ window.BENCHMARK_DATA = {
             "range": "334.90",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1035.00\nmean: 877.60\nstdev: 334.90\ncv: 38.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6b29fbd2f65478876bf191d3d420b60c4d1dbaf0",
+          "message": "feat(config): refuse settings that are each fine alone and wrong together (#509)\n\n#416's last bullet: \"no cross-field validation beyond what each parser happens\nto do.\"\n\nEvery knob validates its own value where it is parsed. Nothing looked at pairs,\nand pairs are where the confusing failures live — a setting that can never take\neffect, or one that produces output the other end will not accept. Neither is an\nerror at the time; both surface later as behaviour nobody configured, with\nnothing to explain it.\n\nThree, all currently correct in the defaults and all invertible by hand:\n\n- `event_batch_max_bytes` above `max_frame_bytes` makes the broker send\n  subscribers frames larger than it will itself accept, and a client applying\n  the same limit drops them.\n- `pub_conn_inflight_bytes` above `pub_inflight_bytes` means the per-connection\n  limit can never be the one that applies, so one connection may take the whole\n  broker-wide allowance — the limit reads as protection and is not.\n- `cache_stream_recv_window` above `cache_conn_recv_window` means a stream can\n  never reach its own window, because the connection's runs out first.\n\nEqual is allowed in each. They bound each other and do not have to differ, and\nrefusing equality would fail a configuration that behaves exactly as written.\n\nChecked after both sources are folded, because a combination is only wrong once\nit is whole: a config file may fix what the environment set, or break what it\nhad right. A default that ever became a contradiction would stop every broker\nstarting, so there is a test asserting the defaults pass.\n\n`--print-config` runs the same checks without binding anything, so this is a\npre-flight failure rather than one found on the node.",
+          "timestamp": "2026-09-17T18:52:25-07:00",
+          "tree_id": "42a24519930b43e5a9e210969bc07f885e3eeb3d",
+          "url": "https://github.com/gabloe/felix/commit/6b29fbd2f65478876bf191d3d420b60c4d1dbaf0"
+        },
+        "date": 1789696490663,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 158,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 158.00\nmean: 158.00\nstdev: 0.71\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 198,
+            "range": "3.83",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.20\nstdev: 3.83\ncv: 1.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 231,
+            "range": "103.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 231.00\nmean: 300.80\nstdev: 103.71\ncv: 34.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 195,
+            "range": "6.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 195.00\nmean: 197.80\nstdev: 6.30\ncv: 3.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 411,
+            "range": "145.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 411.00\nmean: 466.40\nstdev: 145.48\ncv: 31.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 768,
+            "range": "855.86",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 768.00\nmean: 1207.80\nstdev: 855.86\ncv: 70.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
