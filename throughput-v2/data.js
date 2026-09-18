@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789763338910,
+  "lastUpdate": 1789764027617,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11492,6 +11492,58 @@ window.BENCHMARK_DATA = {
             "range": "14343.44",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 546087.66\nmean: 538217.74\nstdev: 14343.44\ncv: 2.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d5b7df150848dcdedb3e719777b82e8bb8f8eac",
+          "message": "release: 0.4.1 (#542)\n\nWorkspace and every internal path dependency move from 0.4.0 to 0.4.1, with the\nHelm chart's appVersion. SECURITY.md needs no change: the supported line is\nalready 0.4.x, which a patch release does not move.\n\nThe changelog leads with what the release means rather than what it touched.\nDurable publishes to one shard were processed strictly one at a time, so group\ncommit -- the mechanism that lets one device flush serve many waiters -- never\nhad more than one waiter, and every publish paid a full flush alone. Nothing\nwas lost and nothing was misordered; the broker simply used about half a\nmachine and refused the rest.\n\nDocuments FELIX_BROKER_PUB_FLUSH_CONCURRENCY, including that 1 restores the old\nbehaviour and is how the regression test proves itself, and records that\nPUB_WORKERS_PER_CONN is process-wide rather than per connection.\n\nA Performance notes section states that the ~977 MB/s at ~48% CPU published for\n0.4.0, and the conclusion drawn from it that durable throughput scales by\nadding brokers rather than cores, describe the defect rather than the design.\nThe measurements were accurate; the inference was not. No replacement numbers\nare guessed at -- those need a rig session against this release.",
+          "timestamp": "2026-09-18T13:37:41-07:00",
+          "tree_id": "e3cdf9a7aa3415a5a1d8e9bbcae955d06d2a9b45",
+          "url": "https://github.com/gabloe/felix/commit/3d5b7df150848dcdedb3e719777b82e8bb8f8eac"
+        },
+        "date": 1789764026355,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 227686.88,
+            "range": "2613.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227686.88\nmean: 228492.52\nstdev: 2613.32\ncv: 1.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 227686.88,
+            "range": "2613.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 227686.88\nmean: 228492.52\nstdev: 2613.32\ncv: 1.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 53665.12,
+            "range": "2791.33",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 53665.12\nmean: 53590.19\nstdev: 2791.33\ncv: 5.21%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 536651.2,
+            "range": "27913.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 536651.20\nmean: 535901.91\nstdev: 27913.27\ncv: 5.21%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
