@@ -118,6 +118,23 @@ impl BrokerNode {
         lines.join("\n")
     }
 
+    /// What this broker was doing, for a failing test to print.
+    ///
+    /// Filtered, not tailed. A raw tail is teardown: the last lines of every
+    /// broker log are "connection lost" and a page-wide `ConnectionStats` dump
+    /// from the harness killing it, which is noise in front of the answer.
+    /// `log_lines_matching` falls back to a plain tail when none of the topics
+    /// appear, so nothing is hidden — the absence of routing lines is itself
+    /// evidence about what the broker was doing.
+    fn failure_log(&self, take: usize) -> String {
+        let label = &self.node_id;
+        let lines = self.log_lines_matching(FAILURE_LOG_TOPICS, take);
+        if lines.is_empty() {
+            return format!("[{label}] no log");
+        }
+        format!("[{label}]\n  {}", lines.replace('\n', "\n  "))
+    }
+
     /// The tail of this broker's log, for a start-up failure to quote.
     ///
     /// An exit status alone cannot distinguish a lost port from a refused
@@ -1637,12 +1654,57 @@ fn process_is_stopped(pid: u32) -> bool {
 
 impl Drop for Cluster {
     fn drop(&mut self) {
+        // On the way out of a failing test, say what the brokers were saying.
+        //
+        // Until now an assertion failure gave the assertion and nothing else:
+        // the data root is a `TempDir` and took every broker log with it. A CI
+        // failure like "broker-2 never started forwarding after it moved" left
+        // no way to ask *why* without reproducing it, which is the one thing a
+        // timing-dependent failure will not do on request.
+        //
+        // Only while panicking, so a passing run stays quiet. Brokers only:
+        // the control plane runs in-process, so its tracing is already on this
+        // test's stderr.
+        if std::thread::panicking() {
+            eprintln!("\n--- broker logs (printed because the test failed) ---");
+            for node in &self.nodes {
+                eprintln!("{}", node.failure_log(FAILURE_LOG_LINES));
+            }
+            eprintln!("--- end broker logs ---\n");
+        }
+
         // A panicking test must not leave broker processes running. The data
         // root is a `TempDir`, so it goes with this too — but only after the
         // processes holding it are gone.
         self.kill_brokers();
     }
 }
+
+/// Lines per broker on a failure.
+///
+/// Enough to cover a shard reassignment and the replication pass after it,
+/// which is the sequence most of these tests wait on; small enough that a suite
+/// failing several cases is still readable.
+const FAILURE_LOG_LINES: usize = 40;
+
+/// What is worth printing when a cluster test fails.
+///
+/// The same set the redirect diagnostics already use, plus replication and
+/// quorum: these tests wait on ownership moving and records arriving, so those
+/// are the lines that say why the wait ended the way it did. Everything else a
+/// broker logs at the end of a test is the harness shutting it down.
+const FAILURE_LOG_TOPICS: &[&str] = &[
+    "shard",
+    "route",
+    "assignment",
+    "watch",
+    "forward",
+    "lease",
+    "open",
+    "replicat",
+    "quorum",
+    "halted",
+];
 
 /// Create the tenant, namespace, and streams the cluster serves.
 async fn seed_metadata(
