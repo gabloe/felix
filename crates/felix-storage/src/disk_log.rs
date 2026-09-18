@@ -354,16 +354,44 @@ impl LogInner {
         let had_pending_seal = retired.is_some();
 
         let started = std::time::Instant::now();
-        let outcome = tokio::task::spawn_blocking(move || {
-            // The retired segment first. `durable_upto` covers records in both,
-            // and it may not be reported until every one of them is on disk.
-            if let Some(retired) = retired {
-                sync_data(&retired)?;
+
+        // The Linux path a shipped broker runs: the fsync goes into a ring and
+        // the kernel completes it, so no thread is parked for its duration and
+        // the `await` is still a yield point. `None` means the ring is not
+        // available -- an old kernel, or a container that forbids the syscall --
+        // and the blocking pool below takes over, because durability must not
+        // depend on an optimisation being present (#548).
+        #[cfg(target_os = "linux")]
+        let via_uring: Option<std::io::Result<()>> = if crate::uring_fsync::enabled() {
+            use std::os::unix::io::AsRawFd;
+            // The retired segment first: `durable_upto` covers records in both,
+            // and may not be reported until every one of them is on disk.
+            let mut result = Some(Ok(()));
+            if let Some(retired) = retired.as_ref() {
+                result = crate::uring_fsync::fsync(retired.as_raw_fd()).await;
             }
-            sync_data(&handle)
-        })
-        .await
-        .map_err(|err| StorageError::SyncFailed(format!("flush task failed: {err}")))?;
+            if matches!(result, Some(Ok(()))) {
+                result = crate::uring_fsync::fsync(handle.as_raw_fd()).await;
+            }
+            result
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "linux"))]
+        let via_uring: Option<std::io::Result<()>> = None;
+
+        let outcome = match via_uring {
+            Some(result) => result,
+            None => tokio::task::spawn_blocking(move || {
+                // The retired segment first, for the same reason.
+                if let Some(retired) = retired {
+                    sync_data(&retired)?;
+                }
+                sync_data(&handle)
+            })
+            .await
+            .map_err(|err| StorageError::SyncFailed(format!("flush task failed: {err}")))?,
+        };
         if let Err(err) = outcome {
             let err = StorageError::SyncFailed(err.to_string());
             // A flush that could not cover the retired segment is the same

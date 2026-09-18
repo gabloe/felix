@@ -103,6 +103,9 @@ ed25519-dalek = { version = "3", features = ["alloc", "pkcs8"] }
 hashbrown = { version = "0.17", features = ["equivalent"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
 libc = "0.2"
+# Linux-only, and only for the broker's storage layer: device flushes go
+# through IORING_OP_FSYNC rather than a blocking thread (#548).
+io-uring = "0.7"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 opentelemetry = "0.32.0"
