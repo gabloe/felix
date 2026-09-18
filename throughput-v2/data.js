@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789689963980,
+  "lastUpdate": 1789692181795,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10348,6 +10348,58 @@ window.BENCHMARK_DATA = {
             "range": "21091.54",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 570518.62\nmean: 562750.95\nstdev: 21091.54\ncv: 3.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d0ab79071e1dcbc0211c93823b83e589208337c",
+          "message": "feat(broker): --print-config, so the effective configuration is readable (#500)\n\n#416's second bullet: \"no single place shows what a valid configuration looks\nlike.\" Until now the answer to \"what is this process running with\" was to read\nthe environment, the config file, and the defaults in the source, then combine\nthem by hand.\n\n`felix-broker --print-config` prints what the broker would run with — defaults,\nfile and environment already folded — as YAML, and exits without binding\nanything, so it is safe to run on a node that is already serving.\n\nIt doubles as a pre-flight check. The config is loaded exactly as startup loads\nit, so a file that will not parse or a key the broker does not know fails here,\nbefore a rollout, with the message it would have produced on the node.\n\nThe rendering is **derived**, not written out by hand, so the dump cannot\nquietly stop mentioning a setting — the same failure as a documented variable\nnothing reads, which is what the rest of this work is about.\n\nTwo things the derive needed. The node credential is redacted, because this\noutput exists to be pasted into an issue; shown as `<redacted>` or `<unset>`\nrather than omitted, since whether a token is set is exactly what someone\ndebugging a registration failure needs. And peer timeouts print as milliseconds:\nserde's default for `Duration` is `{ secs, nanos }`, which is unreadable beside\n`FELIX_PEER_REQUEST_TIMEOUT_MS`.\n\n`SubQueuePolicy` is serialized from this crate rather than by deriving on it,\nbecause it lives in `felix-broker` and a printing feature is not a reason to\ngive a core crate a serde dependency.\n\nThe env checks now skip `*_tests.rs`. Adding the registry's tests made\n`FELIX_QUIC_BINDD` and `FELIX_SOMETHING_ENTIRELY_UNRELATED` look like variables\nthe code reads and therefore ought to document — they are fixtures, and one of\nthem is deliberately wrong.",
+          "timestamp": "2026-09-17T17:37:06-07:00",
+          "tree_id": "2982c1abd906802cbbb510bcf1a4d8289306e7da",
+          "url": "https://github.com/gabloe/felix/commit/9d0ab79071e1dcbc0211c93823b83e589208337c"
+        },
+        "date": 1789692181005,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 250227.62,
+            "range": "2192.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 250227.62\nmean: 250718.41\nstdev: 2192.14\ncv: 0.87%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 250227.62,
+            "range": "2192.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 250227.62\nmean: 250718.41\nstdev: 2192.14\ncv: 0.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 60452.42,
+            "range": "8649.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 60452.42\nmean: 56099.17\nstdev: 8649.31\ncv: 15.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 604524.21,
+            "range": "86493.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 604524.21\nmean: 560991.72\nstdev: 86493.12\ncv: 15.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
