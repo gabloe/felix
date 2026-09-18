@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789695382589,
+  "lastUpdate": 1789695537028,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13266,6 +13266,72 @@ window.BENCHMARK_DATA = {
             "range": "443.86",
             "unit": "us",
             "extra": "trials: 5\nmedian: 549.00\nmean: 838.40\nstdev: 443.86\ncv: 52.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d68d961bee8255e5aef331a1b1b51f2d7f9f733",
+          "message": "test(cluster): print what the brokers were saying when a test fails (#508)\n\nA cluster test that failed an assertion gave the assertion and nothing else.\nThe data root is a `TempDir`, so it took every broker log with it on the way\nout — and a CI failure like \"broker-2 never started forwarding after it moved\"\nleft no way to ask *why* without reproducing it, which is the one thing a\ntiming-dependent failure will not do on request. I spent time on exactly that\ntoday.\n\n`Cluster`'s existing `Drop` already kills the brokers; it now prints their logs\nfirst, but only while the thread is panicking, so a passing run stays silent.\n\nFiltered, not tailed, and that is the whole difference between useful and not.\nThe first version printed the last forty lines and they were all teardown:\n\"connection lost\" repeated a dozen times and a page-wide `ConnectionStats` dump\nfrom the harness killing the process. Reusing `log_lines_matching` — the topic\nfilter the redirect diagnostics already had, plus replication, quorum and\nhalted — surfaces shard seeding, shards opening, and ownership moving instead,\nwhich is what these tests wait on.\n\nIt falls back to a plain tail when none of the topics appear, so nothing is\nhidden: the absence of routing lines is itself evidence about what a broker was\ndoing.\n\nBrokers only. The control plane runs in-process here, so its tracing is already\non the test's stderr.",
+          "timestamp": "2026-09-17T18:34:24-07:00",
+          "tree_id": "f2ef8c6abfb6a38bc02f610eae7336bb5e65ff10",
+          "url": "https://github.com/gabloe/felix/commit/3d68d961bee8255e5aef331a1b1b51f2d7f9f733"
+        },
+        "date": 1789695534778,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 147,
+            "range": "2.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 147.00\nmean: 145.80\nstdev: 2.17\ncv: 1.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 186,
+            "range": "16.09",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 186.00\nmean: 191.40\nstdev: 16.09\ncv: 8.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 208,
+            "range": "157.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 277.80\nstdev: 157.77\ncv: 56.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 189,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 189.00\nmean: 188.80\nstdev: 1.30\ncv: 0.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 383,
+            "range": "6.57",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 383.00\nmean: 378.80\nstdev: 6.57\ncv: 1.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1035,
+            "range": "334.90",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1035.00\nmean: 877.60\nstdev: 334.90\ncv: 38.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
