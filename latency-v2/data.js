@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789758397254,
+  "lastUpdate": 1789761214226,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -14454,6 +14454,72 @@ window.BENCHMARK_DATA = {
             "range": "352.33",
             "unit": "us",
             "extra": "trials: 5\nmedian: 746.00\nmean: 877.20\nstdev: 352.33\ncv: 40.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d009130d1d75945239badaa646785bcc6a80dd58",
+          "message": "fix(ci): install the Python binding a way that works, and run it before the tag (#541)\n\nv0.4.0 shipped with no wheels and nothing on PyPI. The release job failed at\n\"Install the binding\", which took the wheel, sdist, attach and publish jobs\nwith it -- and the Python client is one of that release's headline features.\n\n`maturin develop` installs into an *active* virtualenv and refuses to run\nwithout one. `actions/setup-python` puts an interpreter on PATH; it creates no\nvenv. The step could never have succeeded as written. `pip install\n./crates/felix-python` builds through maturin as the PEP 517 backend and\ninstalls into the interpreter that is actually there, which is also what a user\ndoes. Verified locally in a clean venv, including the import.\n\nThe reason it went unnoticed is the part worth fixing properly: this job\nexisted only in release.yml. ci.yml had no Python job at all, the client merged\nafter v0.3.1, and every prior release predates it -- so the job's first\nexecution in its life was the v0.4.0 tag build, which is the worst possible\nmoment to discover it does not work.\n\nIt now runs in CI too, using the same installation steps so the two cannot\ndrift. Unconditional rather than path-filtered: a job that does not run is a\njob that breaks silently, and filtering on crates/felix-python would have\nmissed it anyway, since the binding wraps the Rust client.\n\nCloses #534. The wheels for v0.4.0 can be built against the existing tag\nthrough release.yml's workflow_dispatch input, with no re-tag.",
+          "timestamp": "2026-09-18T12:50:14-07:00",
+          "tree_id": "f7d49c1a115ba71a9fab90ea5b35cb52f795d1a6",
+          "url": "https://github.com/gabloe/felix/commit/d009130d1d75945239badaa646785bcc6a80dd58"
+        },
+        "date": 1789761207417,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 159,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 159.00\nmean: 159.60\nstdev: 0.89\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "1.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 202.40\nstdev: 1.34\ncv: 0.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 240,
+            "range": "44.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 240.00\nmean: 259.60\nstdev: 44.91\ncv: 17.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 196,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 196.00\nmean: 196.20\nstdev: 0.45\ncv: 0.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 396,
+            "range": "25.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 396.00\nmean: 406.00\nstdev: 25.91\ncv: 6.38%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1263,
+            "range": "696.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1263.00\nmean: 1227.20\nstdev: 696.80\ncv: 56.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
