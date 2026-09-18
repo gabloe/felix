@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789692181795,
+  "lastUpdate": 1789695385546,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10400,6 +10400,58 @@ window.BENCHMARK_DATA = {
             "range": "86493.12",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 604524.21\nmean: 560991.72\nstdev: 86493.12\ncv: 15.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "646f3fbc006955d146f43ff2db03840e237f746b",
+          "message": "fix(peer): bound inbound connections on the internal listener (#505)\n\n* fix(peer): bound inbound connections on the internal listener\n\n#504, found while threat-modelling the internal surface. QUIC caps streams per\nconnection at 1024 and the decoder caps a frame at 64 MiB, but nothing capped\nconnections — so one caller could make a broker hold the product of those and\nhowever many it cared to open. `max_inflight_per_peer` does not help: it is an\noutbound shed on requests this broker sends, not a bound on what it accepts.\n\nTwo limits, because the total alone does not stop one peer taking the whole\nallowance, and the peer that does is likelier to be looping on a reconnect bug\nthan attacking — it starves the rest of the cluster either way.\n\nAdmission happens before anything is spawned for the connection. A refused one\nhas cost a handshake; an accepted one can cost a thousand streams of buffered\nframes, and the decision belongs before that. Refused rather than queued: a peer\ntold no backs off, where one left waiting cannot tell a busy broker from a stuck\none.\n\nThe place is held by a guard that gives it back on drop, not by a decrement at\nthe end of the serving function. That function has several exits and its task\ncan be cancelled between any of them, and a count that leaks is a broker that\nstops accepting peers after an uptime nobody can correlate with anything. The\nper-source map drops an entry at zero for the same reason, or it grows by one\nper address ever seen.\n\nStartup refuses a per-source limit above the total, where the per-source one\ncould never be the limit that applies.\n\nThis is the mitigation that outlives #125: an authenticated peer is still a peer\nthat can loop.\n\nReverted the refusal and watched the test fail with \"a third connection was\nserved against a limit of two\".\n\n* fix(peer): register the two new inbound-limit variables\n\nThe registry check added in #499 caught these: a variable the code reads and\nthe registry does not know would have its *real* name reported as unknown at\nstartup, which teaches operators to ignore the warning.\n\nWorking as intended — the check landed between this branch starting and\nfinishing, and found exactly what it is for.",
+          "timestamp": "2026-09-17T18:33:39-07:00",
+          "tree_id": "0a71408fb0159dda2a6dd6c43ebfcf5719fcc694",
+          "url": "https://github.com/gabloe/felix/commit/646f3fbc006955d146f43ff2db03840e237f746b"
+        },
+        "date": 1789695384853,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235651.75,
+            "range": "2665.92",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235651.75\nmean: 235164.03\nstdev: 2665.92\ncv: 1.13%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235651.75,
+            "range": "2665.92",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235651.75\nmean: 235164.03\nstdev: 2665.92\ncv: 1.13%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55903.03,
+            "range": "3675.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55903.03\nmean: 54294.22\nstdev: 3675.47\ncv: 6.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 559030.32,
+            "range": "36754.64",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 559030.32\nmean: 542942.23\nstdev: 36754.64\ncv: 6.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
