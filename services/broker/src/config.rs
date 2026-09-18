@@ -871,7 +871,53 @@ impl BrokerConfig {
                 serde_yaml_ng::from_str(&contents).with_context(|| "parse broker config yaml")?;
             config.apply(override_cfg)?;
         }
+        // After both sources, because a combination is only wrong once it is
+        // whole: an override may fix what the environment set, or break what it
+        // had right.
+        config.validate()?;
         Ok(config)
+    }
+
+    /// Settings that are each fine alone and wrong together.
+    ///
+    /// Every knob validates its own value where it is parsed. Nothing looked at
+    /// *pairs*, which is where the confusing failures live — a setting that
+    /// never takes effect, or one that produces output the other end will not
+    /// accept. Neither shows up as an error at the time; both show up later as
+    /// behaviour nobody configured (#416).
+    ///
+    /// Refusing at startup is the same choice the peer transport already makes
+    /// for a shared port: a broker that will not do what its configuration says
+    /// should say so while someone is watching.
+    pub fn validate(&self) -> Result<()> {
+        if self.event_batch_max_bytes > self.max_frame_bytes {
+            anyhow::bail!(
+                "event_batch_max_bytes ({}) exceeds max_frame_bytes ({}): this \
+                 broker would send subscribers frames larger than it will itself \
+                 accept, and a client applying the same limit drops them",
+                self.event_batch_max_bytes,
+                self.max_frame_bytes,
+            );
+        }
+        if self.pub_conn_inflight_bytes > self.pub_inflight_bytes {
+            anyhow::bail!(
+                "pub_conn_inflight_bytes ({}) exceeds pub_inflight_bytes ({}): \
+                 the per-connection limit can never be the one that applies, so \
+                 one connection may take the whole broker-wide allowance",
+                self.pub_conn_inflight_bytes,
+                self.pub_inflight_bytes,
+            );
+        }
+        if self.cache_stream_recv_window > self.cache_conn_recv_window {
+            anyhow::bail!(
+                "cache_stream_recv_window ({}) exceeds cache_conn_recv_window \
+                 ({}): a single stream can never reach its own window, because \
+                 the connection's runs out first",
+                self.cache_stream_recv_window,
+                self.cache_conn_recv_window,
+            );
+        }
+        Ok(())
     }
 
     /// Fold a parsed config file over the values already taken from the
@@ -1738,6 +1784,74 @@ subscriber_single_writer_per_conn: false
         assert!(!config.subscriber_single_writer_per_conn);
 
         clear_felix_env();
+    }
+
+    /// Pairs that are each fine alone and wrong together.
+    ///
+    /// The defaults are all correctly ordered, so these only fire for someone
+    /// who inverted one — which is exactly the case that produced behaviour
+    /// nobody configured and no error to explain it.
+    mod cross_field {
+        use super::*;
+
+        #[test]
+        fn the_defaults_are_valid() {
+            // If this ever fails, a default was changed into a contradiction
+            // and every broker would refuse to start.
+            BrokerConfig::default().validate().expect("defaults");
+        }
+
+        #[test]
+        fn a_batch_larger_than_a_frame_is_refused() {
+            let config = BrokerConfig {
+                max_frame_bytes: 64 * 1024,
+                event_batch_max_bytes: 128 * 1024,
+                ..BrokerConfig::default()
+            };
+            let err = config
+                .validate()
+                .expect_err("a batch cannot exceed a frame");
+            let message = format!("{err:#}");
+            assert!(message.contains("event_batch_max_bytes"), "{message}");
+            assert!(message.contains("max_frame_bytes"), "{message}");
+        }
+
+        #[test]
+        fn a_per_connection_limit_above_the_broker_wide_one_is_refused() {
+            let config = BrokerConfig {
+                pub_inflight_bytes: 1024,
+                pub_conn_inflight_bytes: 2048,
+                ..BrokerConfig::default()
+            };
+            assert!(config.validate().is_err());
+        }
+
+        #[test]
+        fn a_stream_window_above_the_connection_window_is_refused() {
+            let config = BrokerConfig {
+                cache_conn_recv_window: 1024,
+                cache_stream_recv_window: 2048,
+                ..BrokerConfig::default()
+            };
+            assert!(config.validate().is_err());
+        }
+
+        /// Equal is fine everywhere. The limits bound each other; they do not
+        /// have to differ, and refusing equality would fail a configuration
+        /// that behaves exactly as written.
+        #[test]
+        fn equal_limits_are_allowed() {
+            let config = BrokerConfig {
+                max_frame_bytes: 64 * 1024,
+                event_batch_max_bytes: 64 * 1024,
+                pub_inflight_bytes: 4096,
+                pub_conn_inflight_bytes: 4096,
+                cache_conn_recv_window: 8192,
+                cache_stream_recv_window: 8192,
+                ..BrokerConfig::default()
+            };
+            config.validate().expect("equal limits");
+        }
     }
 
     /// What `--print-config` renders, and the one thing it must never render.

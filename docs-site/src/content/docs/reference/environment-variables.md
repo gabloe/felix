@@ -1091,6 +1091,25 @@ exactly what someone debugging a registration failure needs to see. Warnings
 about unrecognised variables go to stderr, so `--print-config > current.yml`
 gives a clean document and still shows them.
 
+## Settings that are wrong together
+
+Each variable validates its own value where it is parsed. Some pairs are each
+fine alone and wrong in combination, and those are refused at startup too —
+because the failure they produce otherwise is behaviour nobody configured, with
+no error to explain it:
+
+| Refused when | Why |
+|---|---|
+| `event_batch_max_bytes` > `max_frame_bytes` | The broker would send subscribers frames larger than it will itself accept, and a client applying the same limit drops them |
+| `pub_conn_inflight_bytes` > `pub_inflight_bytes` | The per-connection limit could never be the one that applies, so one connection may take the whole broker-wide allowance |
+| `cache_stream_recv_window` > `cache_conn_recv_window` | A single stream can never reach its own window, because the connection's runs out first |
+| `FELIX_INTERNAL_BIND` shares a port with `FELIX_QUIC_BIND` | The internal and client-facing listeners must be separate |
+
+Equal is allowed everywhere: these bound each other and do not have to differ.
+
+`felix-broker --print-config` runs the same checks without starting anything,
+so a bad combination fails before a rollout rather than on the node.
+
 ## Typos in variable names
 
 A misspelled *variable* cannot be refused the same way — the process cannot
