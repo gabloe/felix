@@ -99,7 +99,7 @@ RELEASE_TAG=${RELEASE_TAG}
 LOADGEN_IP=${loadgen_ip}
 CONTROLPLANE_IP=${cp_ip}
 BROKER_IPS=${brokers}
-LOADGENS=${loadgens}
+LOADGENS="${loadgens}"
 BOOTSTRAP_TOKEN=${bootstrap_token}
 INV
 echo ">> inventory: ${here}/sessions/${SESSION}.env"
