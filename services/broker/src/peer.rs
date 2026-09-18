@@ -18,7 +18,7 @@ pub mod metrics;
 pub mod pool;
 pub mod replica;
 pub mod server;
-mod tls;
+pub mod tls;
 
 mod partition;
 pub use config::PeerTransportConfig;

@@ -107,21 +107,40 @@ pub struct PeerPool {
     client: QuicClient,
     peers: Mutex<HashMap<String, Arc<Peer>>>,
     shutdown: CancellationToken,
+    /// Whether this broker presents a certificate and verifies each peer's
+    /// against the node id it dials.
+    authenticated: bool,
 }
 
 impl PeerPool {
-    /// Bind the outbound endpoint. No peer is dialled until one is requested.
+    /// Bind the outbound endpoint without peer authentication. See
+    /// [`Self::new_with_tls`].
     pub fn new(
         local_node_id: String,
         config: PeerTransportConfig,
         shutdown: CancellationToken,
     ) -> Result<Arc<Self>> {
+        Self::new_with_tls(local_node_id, config, shutdown, None)
+    }
+
+    /// Bind the outbound endpoint. No peer is dialled until one is requested.
+    ///
+    /// With `tls`, every dial verifies the peer's certificate against the
+    /// node id being dialled, so a catalog entry pointing at the wrong broker
+    /// fails in the handshake rather than after a `HelloOk`.
+    pub fn new_with_tls(
+        local_node_id: String,
+        config: PeerTransportConfig,
+        shutdown: CancellationToken,
+        tls: Option<Arc<tls::PeerTls>>,
+    ) -> Result<Arc<Self>> {
         let client = QuicClient::bind(
             "0.0.0.0:0".parse().expect("literal address"),
-            tls::client_config()?,
+            tls::client_config(tls.as_deref())?,
             config.quic_transport(),
         )
         .context("bind peer QUIC endpoint")?;
+        let authenticated = tls.is_some();
 
         let pool = Arc::new(Self {
             partition: config
@@ -133,6 +152,7 @@ impl PeerPool {
             client,
             peers: Mutex::new(HashMap::new()),
             shutdown,
+            authenticated,
         });
         pool.clone().spawn_reaper();
         Ok(pool)
@@ -479,9 +499,16 @@ impl PeerPool {
         node_id: &str,
         addr: SocketAddr,
     ) -> std::result::Result<Arc<PeerConnection>, PeerError> {
+        // Under mTLS the certificate is verified for the node id being
+        // dialled; without it the name is a fixed one both ends agree on.
+        let server_name = if self.authenticated {
+            node_id
+        } else {
+            tls::INTERNAL_SERVER_NAME
+        };
         let connect = tokio::time::timeout(
             self.config.handshake_timeout,
-            self.client.connect(addr, tls::INTERNAL_SERVER_NAME),
+            self.client.connect(addr, server_name),
         );
         let connection = match connect.await {
             Ok(Ok(connection)) => connection,

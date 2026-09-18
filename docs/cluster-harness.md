@@ -12,6 +12,17 @@ task cluster:test     # the cross-broker integration tests
 `-- --nodes 5` sets the size. Nothing else is required: no compose file, no
 images, no ports to reserve, and no state left behind.
 
+## Peer certificates
+
+Every cluster the harness starts runs under broker-to-broker mTLS. It issues
+one CA per cluster under the data root (`pki/ca.pem`, `pki/ca.key.pem`) and one
+certificate per broker, issued to the broker's node id, and passes the three
+paths as `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY` and
+`FELIX_INTERNAL_TLS_CA`. A broker spawned again keeps its identity: its
+certificate is re-issued from the same CA. So what the failover, reconnect and
+partition tests prove, they prove of the authenticated transport, not of a
+mode no deployment should run.
+
 ## Driving it by hand
 
 `up` writes a session file — the broker addresses and a credential — so a second

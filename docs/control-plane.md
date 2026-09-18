@@ -107,6 +107,7 @@ put a node in the catalog that placement would then try to use.
 | `FELIX_CONTROLPLANE_URL` | with `FELIX_NODE_ID` | Where to register. |
 | `FELIX_REGION_ID` | no | Defaults to `local`. |
 | `FELIX_INTERNAL_BIND` | no | Where the internal listener binds. Defaults to `0.0.0.0:5001`. Must not share a port with `FELIX_QUIC_BIND`. |
+| `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY`, `FELIX_INTERNAL_TLS_CA` | recommended | Peer mTLS: this broker's certificate (its DNS name must be `FELIX_NODE_ID`), its key, and the CA every peer must chain to. All three or none; without them the peer link is encrypted but unauthenticated. See `docs/internal-protocol.md`. |
 
 The advertised address is the internal listener's, not the client-facing one:
 peers are the only thing that reads it. A broker that advertises a port it does

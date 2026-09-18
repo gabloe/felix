@@ -485,6 +485,32 @@ ownership check for that reason.
 Peers reach each other over a QUIC endpoint of their own. What it guarantees,
 and what it refuses:
 
+**Peers authenticate each other, when told how.** With `FELIX_INTERNAL_TLS_CERT`,
+`FELIX_INTERNAL_TLS_KEY` and `FELIX_INTERNAL_TLS_CA` set — all three or none —
+both ends of every peer connection present a certificate and verify the other's
+chains to the CA. The certificate's DNS name is the broker's identity, and it
+is checked in both directions: a dialler verifies the listener's certificate
+against the node id it meant to reach, so a catalog entry pointing at the wrong
+broker fails in the handshake; and the listener checks the node id a peer
+claims in `Hello` against the certificate it presented, so a broker holding a
+valid certificate for one name cannot speak as another. A peer without a
+certificate, with one from another CA, with an expired one, or claiming a name
+its certificate does not carry, is refused — the first three in the handshake,
+the last with `Unauthorized` and a closed connection. It follows that a node id
+has to be a valid DNS name, and startup refuses one that is not.
+
+Rotation is a file swap: the certificate and key are re-read every thirty
+seconds and installed for the *next* handshake, and connections already up keep
+the identity they were made with, so a rolling renewal — cert-manager's, say —
+never drops healthy traffic. The CA bundle is read once; changing trust roots
+is a restart. Nothing about the key is ever logged; a load failure names the
+variable and the path.
+
+Without the three variables the transport runs **unauthenticated**: the link
+is encrypted, brokers present self-signed certificates and accept any, and
+anything that can reach the port is a peer. Startup says so, as a warning. In
+that mode the internal listener must be on a network only brokers can reach.
+
 **Connections are pooled and reused.** Repeated requests to one peer share a
 connection; several multiplexed streams carry them, because a QUIC stream is
 ordered and one large forwarded batch would otherwise hold up every smaller
