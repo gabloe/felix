@@ -660,3 +660,148 @@ mod divergence {
         assert_eq!(refusal(&answer).code, ErrorCode::LogConflict);
     }
 }
+
+/// Rebuilding at the leader's request: the one path that discards records.
+mod rebuild {
+    use super::*;
+    use felix_wire::internal::{ReplicaLog, ReplicateRebuild};
+
+    fn request(generation: u64, base_offset: u64) -> ReplicateRebuild {
+        ReplicateRebuild {
+            correlation_id: 1,
+            shard: ShardRef {
+                tenant_id: TENANT.to_string(),
+                namespace: NAMESPACE.to_string(),
+                stream: STREAM.to_string(),
+                shard: 0,
+                generation,
+            },
+            log: ReplicaLog::Stream,
+            base_offset,
+        }
+    }
+
+    /// **The records go, and the log restarts at the leader's base.** This
+    /// is the case a bootstrap refuses: the broker holds records, and only
+    /// the leader may decide they are not worth keeping.
+    #[tokio::test]
+    async fn a_replica_holding_records_discards_them_and_restarts_at_the_base() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        handler
+            .apply(batch(4, 0, &["a", "b", "c"]), felix_broker::LogKind::Stream)
+            .await;
+
+        let answer = handler.rebuild(request(4, 500)).await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, 500),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+        let log = broker
+            .durable_storage()
+            .expect("storage")
+            .open_stream(TENANT, NAMESPACE, STREAM, 0)
+            .expect("open");
+        assert_eq!(log.base_offset(), 500);
+        assert_eq!(
+            log.tail_offset().await.expect("tail"),
+            500,
+            "records survived the rebuild"
+        );
+    }
+
+    /// Records shipped after a rebuild land at the leader's offsets, and the
+    /// generation history that would have refused them as a conflict is gone.
+    #[tokio::test]
+    async fn records_after_a_rebuild_land_at_the_leaders_offsets() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        handler
+            .apply(batch(4, 0, &["a", "b", "c"]), felix_broker::LogKind::Stream)
+            .await;
+        handler.rebuild(request(4, 500)).await;
+
+        let answer = handler
+            .apply(batch(4, 500, &["x", "y"]), felix_broker::LogKind::Stream)
+            .await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, 502),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+    }
+
+    /// A rebuild can go backwards too: a leader whose base is below this
+    /// broker's records.
+    #[tokio::test]
+    async fn a_rebuild_may_move_the_base_down() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 4));
+        handler
+            .bootstrap(
+                felix_wire::internal::ReplicateBootstrap {
+                    correlation_id: 1,
+                    shard: request(4, 0).shard,
+                    base_offset: 900,
+                },
+                felix_broker::LogKind::Stream,
+            )
+            .await;
+        handler
+            .apply(batch(4, 900, &["a"]), felix_broker::LogKind::Stream)
+            .await;
+
+        let answer = handler.rebuild(request(4, 100)).await;
+
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, 100),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+        let answer = handler
+            .apply(batch(4, 100, &["b"]), felix_broker::LogKind::Stream)
+            .await;
+        match answer {
+            InternalMessage::ReplicateOk(ok) => assert_eq!(ok.durable_offset, 101),
+            other => panic!("expected an acknowledgement, got {:?}", other.kind()),
+        }
+    }
+
+    /// **The same fence applies as to storing records.** A superseded leader
+    /// telling a follower to discard its copy is the most damage a stale
+    /// leader could do, and the one thing the check most has to stop.
+    #[tokio::test]
+    async fn a_superseded_leader_cannot_rebuild_a_follower() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(Arc::clone(&broker), router_with(&[LOCAL], 5));
+        handler
+            .apply(batch(5, 0, &["a", "b"]), felix_broker::LogKind::Stream)
+            .await;
+
+        let answer = handler.rebuild(request(4, 500)).await;
+
+        assert_eq!(refusal(&answer).code, ErrorCode::FencedEpoch);
+        let log = broker
+            .durable_storage()
+            .expect("storage")
+            .open_stream(TENANT, NAMESPACE, STREAM, 0)
+            .expect("open");
+        assert_eq!(
+            log.tail_offset().await.expect("tail"),
+            2,
+            "records were discarded"
+        );
+    }
+
+    /// And a broker outside the replica set holds nothing the leader may
+    /// discard.
+    #[tokio::test]
+    async fn a_broker_outside_the_replica_set_is_not_rebuilt() {
+        let (broker, _dir) = broker_with_storage().await;
+        let handler = ReplicaHandler::new(broker, router_with(&["broker-c"], 4));
+
+        let answer = handler.rebuild(request(4, 500)).await;
+
+        assert_eq!(refusal(&answer).code, ErrorCode::Unauthorized);
+    }
+}

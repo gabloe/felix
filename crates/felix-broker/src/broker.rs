@@ -807,6 +807,24 @@ impl Broker {
     /// view of the stream stays at zero while its disk fills. Left that way, the
     /// first publish this broker accepts after being promoted waits on commit
     /// turns that were never taken, and never returns.
+    /// The stream's log was rebuilt from `base_offset`; forget the tail the
+    /// old copy had. The counterpart of [`Self::adopt_replicated`] for a
+    /// follower that discarded its records rather than storing more.
+    pub async fn reset_replicated(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Result<()> {
+        let handle = self
+            .resolve_stream_handle(tenant_id, namespace, stream, shard)
+            .await?;
+        handle.state.reset_to(base_offset);
+        Ok(())
+    }
+
     pub async fn adopt_replicated(
         &self,
         tenant_id: &str,

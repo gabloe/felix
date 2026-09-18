@@ -1091,6 +1091,7 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         },
         None,
         Duration::from_secs(300),
+        RebuildPolicy::default(),
         shutdown.clone(),
     );
 

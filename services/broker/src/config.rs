@@ -232,6 +232,12 @@ pub struct BrokerConfig {
     /// How long a publish to a `Quorum` stream waits for a majority before the
     /// broker says it cannot vouch for the write.
     pub publish_quorum_timeout_ms: u64,
+    /// Halted followers this broker rebuilds at once, across every shard it
+    /// leads; zero leaves every halt to an operator. A rebuild is a full
+    /// transfer, and every follower of a failed broker at once is an outage.
+    pub replication_rebuild_max_concurrent: usize,
+    /// Bytes per second a rebuilding follower is shipped at; zero is unlimited.
+    pub replication_rebuild_bytes_per_sec: u64,
 }
 
 /// A margin over the quorum wait, covering the hop from the publish worker back
@@ -332,6 +338,8 @@ impl Default for BrokerConfig {
             sub_streams_per_conn: DEFAULT_SUB_STREAMS_PER_CONN,
             sub_stream_mode: DEFAULT_SUB_STREAM_MODE,
             publish_quorum_timeout_ms: DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS,
+            replication_rebuild_max_concurrent: DEFAULT_REPLICATION_REBUILD_MAX_CONCURRENT,
+            replication_rebuild_bytes_per_sec: DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC,
         }
     }
 }
@@ -511,6 +519,9 @@ const DEFAULT_PUBLISH_QUEUE_WAIT_TIMEOUT_MS: u64 = 2000;
 /// costs a publish the broker cannot vouch for even though the record is on its
 /// disk and about to reach a majority.
 const DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS: u64 = 5_000;
+// One at a time: the cautious reading of "under a policy".
+const DEFAULT_REPLICATION_REBUILD_MAX_CONCURRENT: usize = 1;
+const DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC: u64 = 0;
 const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 /// Thirty seconds. Long enough that ordinary work finishes inside it, short
 /// enough that a dead consumer does not hold its records for minutes.
@@ -825,6 +836,16 @@ impl BrokerConfig {
             .ok()
             .and_then(|value| SubStreamMode::parse_env(value.as_str()))
             .unwrap_or(DEFAULT_SUB_STREAM_MODE);
+        let replication_rebuild_max_concurrent =
+            std::env::var("FELIX_REPLICATION_REBUILD_MAX_CONCURRENT")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_REPLICATION_REBUILD_MAX_CONCURRENT);
+        let replication_rebuild_bytes_per_sec =
+            std::env::var("FELIX_REPLICATION_REBUILD_BYTES_PER_SEC")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC);
         Ok(Self {
             quic_bind,
             metrics_bind,
@@ -871,6 +892,8 @@ impl BrokerConfig {
             sub_streams_per_conn,
             sub_stream_mode,
             publish_quorum_timeout_ms,
+            replication_rebuild_max_concurrent,
+            replication_rebuild_bytes_per_sec,
         })
     }
 

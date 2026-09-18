@@ -227,6 +227,14 @@ impl StreamLog {
         self.log.truncate(offset).await.map_err(storage_error)
     }
 
+    /// Discard this log and start again, empty, at `base_offset`.
+    ///
+    /// For a follower rebuilding a diverged copy of a shard; see
+    /// `DiskLog::reset_to`.
+    pub async fn rebuild_at(&self, base_offset: Offset) -> Result<()> {
+        self.log.reset_to(base_offset).await.map_err(storage_error)
+    }
+
     /// Note that `generation` begins at `start_offset`.
     pub fn record_generation(&self, generation: u64, start_offset: Offset) -> Result<bool> {
         self.log

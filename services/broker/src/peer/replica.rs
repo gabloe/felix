@@ -21,7 +21,8 @@ use felix_broker::Broker;
 use felix_broker::replication::{self, Divergence};
 use felix_router::{ReplicaRole, ShardRouter};
 use felix_wire::internal::{
-    ErrorCode, InternalMessage, ReplicateBootstrap, ReplicateError, ReplicateOk, ReplicateRecords,
+    ErrorCode, InternalMessage, ReplicaLog, ReplicateBootstrap, ReplicateError, ReplicateOk,
+    ReplicateRebuild, ReplicateRecords,
 };
 
 use super::metrics;
@@ -94,31 +95,93 @@ impl ReplicaHandler {
     /// operator's decision, not a leader's — and a log placed over them would
     /// have a hole between what it held and what it was given, which nothing
     /// downstream could detect.
+    /// Discard this broker's copy of one of the shard's logs and start again
+    /// at the leader's base.
+    ///
+    /// Only at the leader's request, and only for a shard this broker follows
+    /// at the named generation: the leader decided the copy is not worth
+    /// keeping, and the leader's copy is the one the majority holds. The
+    /// records go, the generation history goes with them, and the answer is
+    /// where the new copy begins.
+    pub async fn rebuild(&self, request: ReplicateRebuild) -> InternalMessage {
+        let correlation_id = request.correlation_id;
+        let log_kind = match request.log {
+            ReplicaLog::Stream => felix_broker::LogKind::Stream,
+            ReplicaLog::Cache => felix_broker::LogKind::Cache,
+            ReplicaLog::GroupCursors => felix_broker::LogKind::GroupCursors,
+            ReplicaLog::GroupDeadLetters => felix_broker::LogKind::GroupDeadLetters,
+            ReplicaLog::Counters => felix_broker::LogKind::Counters,
+        };
+        let key = shard_key(&request.shard, log_kind);
+        if let Some(refusal) = self.check_role(correlation_id, &key, request.shard.generation) {
+            return refusal;
+        }
+        let Some(log) = self
+            .broker
+            .shard_log_at(
+                log_kind,
+                &key.tenant_id,
+                &key.namespace,
+                &key.stream,
+                key.shard,
+                request.base_offset,
+            )
+            .await
+        else {
+            metrics::record_replicated(metrics::OUTCOME_REFUSED);
+            return refused(
+                correlation_id,
+                ErrorCode::Unauthorized,
+                0,
+                "this broker has no log for that shard".to_string(),
+            );
+        };
+        if let Err(err) = log.rebuild_at(request.base_offset).await {
+            metrics::record_replicated(metrics::OUTCOME_ERROR);
+            return refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string());
+        }
+        // The in-memory tail was built from the records that just went.
+        if log_kind == felix_broker::LogKind::Stream
+            && let Err(err) = self
+                .broker
+                .reset_replicated(
+                    &key.tenant_id,
+                    &key.namespace,
+                    &key.stream,
+                    key.shard,
+                    request.base_offset,
+                )
+                .await
+        {
+            tracing::warn!(
+                stream = %key.stream,
+                shard = key.shard,
+                error = %err,
+                "rebuilt the log but could not reset the stream's tail",
+            );
+        }
+        tracing::warn!(
+            stream = %key.stream,
+            shard = key.shard,
+            log = ?request.log,
+            generation = request.shard.generation,
+            base_offset = request.base_offset,
+            "discarded this broker's copy of a shard at the leader's request; rebuilding",
+        );
+        metrics::record_replicated(metrics::OUTCOME_REBUILT);
+        InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id,
+            durable_offset: request.base_offset,
+        })
+    }
+
     pub async fn bootstrap(
         &self,
         request: ReplicateBootstrap,
         log_kind: felix_broker::LogKind,
     ) -> InternalMessage {
         let correlation_id = request.correlation_id;
-        let key = felix_router::ShardKey {
-            tenant_id: request.shard.tenant_id.clone(),
-            namespace: request.shard.namespace.clone(),
-            stream: request.shard.stream.clone(),
-            shard: request.shard.shard,
-            // The cursors belong to their stream's shard, so ownership is
-            // checked against that shard rather than a placement of their own.
-            kind: match log_kind {
-                // The counter log belongs to its cache's shard, so ownership
-                // is checked against the cache's placement — the cursors make
-                // the same argument about their stream.
-                felix_broker::LogKind::Cache | felix_broker::LogKind::Counters => {
-                    felix_router::ShardKind::Cache
-                }
-                felix_broker::LogKind::Stream
-                | felix_broker::LogKind::GroupCursors
-                | felix_broker::LogKind::GroupDeadLetters => felix_router::ShardKind::Stream,
-            },
-        };
+        let key = shard_key(&request.shard, log_kind);
 
         if let Some(refusal) = self.check_role(correlation_id, &key, request.shard.generation) {
             return refusal;
@@ -406,6 +469,29 @@ fn divergence_outcome(divergence: &Divergence) -> &'static str {
         Divergence::Gap { .. } => metrics::OUTCOME_GAP,
         Divergence::Conflict { .. } => metrics::OUTCOME_CONFLICT,
         Divergence::Corrupt { .. } => metrics::OUTCOME_CORRUPT,
+    }
+}
+
+/// The placement a log's ownership is checked against. The cursor and
+/// dead-letter logs belong to their stream's shard and the counter log to
+/// its cache's, rather than having placements of their own.
+fn shard_key(
+    shard: &felix_wire::internal::ShardRef,
+    log_kind: felix_broker::LogKind,
+) -> felix_router::ShardKey {
+    felix_router::ShardKey {
+        tenant_id: shard.tenant_id.clone(),
+        namespace: shard.namespace.clone(),
+        stream: shard.stream.clone(),
+        shard: shard.shard,
+        kind: match log_kind {
+            felix_broker::LogKind::Cache | felix_broker::LogKind::Counters => {
+                felix_router::ShardKind::Cache
+            }
+            felix_broker::LogKind::Stream
+            | felix_broker::LogKind::GroupCursors
+            | felix_broker::LogKind::GroupDeadLetters => felix_router::ShardKind::Stream,
+        },
     }
 }
 

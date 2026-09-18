@@ -191,6 +191,19 @@ impl StreamState {
     /// replicated batch would read the whole window each time, and a reader is
     /// served from the log when the ring has nothing — see
     /// `Broker::subscribe_from`.
+    /// Forget everything and continue from `next_seq`, wherever that is.
+    ///
+    /// For a follower whose log was just rebuilt: the ring and the sequence
+    /// described records that are gone, and `advance_to` only ever moves
+    /// forward.
+    pub(crate) fn reset_to(&self, next_seq: u64) {
+        let mut state = self.log_state.lock();
+        state.log.clear();
+        state.next_seq = next_seq;
+        drop(state);
+        self.commit_sequencer.reset(next_seq);
+    }
+
     pub(crate) fn advance_to(&self, next_seq: u64) {
         let mut state = self.log_state.lock();
         if next_seq <= state.next_seq {

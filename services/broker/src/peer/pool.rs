@@ -851,6 +851,12 @@ fn with_correlation(message: InternalMessage, correlation_id: u64) -> InternalMe
                 ..m
             })
         }
+        InternalMessage::ReplicateRebuild(m) => {
+            InternalMessage::ReplicateRebuild(ReplicateRebuild {
+                correlation_id,
+                ..m
+            })
+        }
         InternalMessage::ReplicateGroupBootstrap(m) => {
             InternalMessage::ReplicateGroupBootstrap(ReplicateBootstrap {
                 correlation_id,
