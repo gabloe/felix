@@ -50,6 +50,12 @@ az login                                    # the Azure account
   zones 1/2/3 (set `REPLICATION_FACTOR=3` in the environment before
   `session.sh` so the seeded streams replicate). t3 is a second small
   deployment of a loadgen in another region, pointed at a t1 session.
+- **Seeded streams**: `perf`, `perf-durable`, `perf-quorum` and
+  `perf-durable-quorum` — the two durability settings crossed with the two
+  consistency levels, so one seed covers every combination a run wants to
+  price. Pass the one you want as `--stream`. `Quorum` only means anything
+  above `REPLICATION_FACTOR=1`: a quorum of one is the leader, so on a t1
+  session the `-quorum` streams measure the same path as their siblings.
 - **IdP**: an Entra **app registration** (no user — a perf harness wants a
   non-interactive credential), used through the **client-credentials** grant.
   `idp-token.sh` turns `IDP_TENANT_ID` + `IDP_CLIENT_ID` + `IDP_CLIENT_SECRET`

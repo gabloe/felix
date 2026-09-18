@@ -103,14 +103,29 @@ post_ok "$CP/v1/tenants/$TENANT/namespaces" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' <<JSON
 { "namespace": "$NAMESPACE", "display_name": "Perf" }
 JSON
-for stream in perf perf-durable; do
-  if [ "$stream" = perf-durable ]; then durable=true; else durable=false; fi
+# Four streams, the two durability settings crossed with the two consistency
+# levels, so a run can price each one against the others without reseeding.
+# The -quorum pair is what #425 needs: every published figure before this was
+# RF=1 Leader, which is not the configuration the docs recommend.
+#
+# A quorum of one is just the leader, so at REPLICATION_FACTOR=1 the -quorum
+# streams measure the same path as their siblings -- seed them anyway, so the
+# stream names are stable across tiers and a run script does not have to know
+# the replication factor to know what to ask for.
+for stream in perf perf-durable perf-quorum perf-durable-quorum; do
+  case "$stream" in
+    *durable*) durable=true ;;
+    *)         durable=false ;;
+  esac
+  case "$stream" in
+    *quorum*) consistency=Quorum ;;
+    *)        consistency=Leader ;;
+  esac
   # Delete first so a reseed can change the shard count -- a fresh seed 404s
   # harmlessly. SHARDS spreads the write load across brokers: a single shard
   # pins the whole stream (and all its ingest) to one broker, which on fast
   # local disk caps throughput at one broker's write bandwidth. Default 12 (4
-  # per broker on a 3-broker tier). Replicated when the tier has zones; the
-  # Leader vs Quorum comparison registers its own streams per run.
+  # per broker on a 3-broker tier). Replicated when the tier has zones.
   curl -s -X DELETE "$CP/v1/tenants/$TENANT/namespaces/$NAMESPACE/streams/$stream" \
     -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1 || true
   post_ok "$CP/v1/tenants/$TENANT/namespaces/$NAMESPACE/streams" \
@@ -121,7 +136,7 @@ for stream in perf perf-durable; do
   "shards": $SHARDS,
   "replication_factor": $REPLICATION_FACTOR,
   "retention": { "max_age_seconds": null, "max_size_bytes": null },
-  "consistency": "Leader",
+  "consistency": "$consistency",
   "delivery": "AtLeastOnce",
   "durable": $durable
 }
