@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789689960758,
+  "lastUpdate": 1789692178732,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13134,6 +13134,72 @@ window.BENCHMARK_DATA = {
             "range": "114.65",
             "unit": "us",
             "extra": "trials: 5\nmedian: 535.00\nmean: 583.40\nstdev: 114.65\ncv: 19.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d0ab79071e1dcbc0211c93823b83e589208337c",
+          "message": "feat(broker): --print-config, so the effective configuration is readable (#500)\n\n#416's second bullet: \"no single place shows what a valid configuration looks\nlike.\" Until now the answer to \"what is this process running with\" was to read\nthe environment, the config file, and the defaults in the source, then combine\nthem by hand.\n\n`felix-broker --print-config` prints what the broker would run with — defaults,\nfile and environment already folded — as YAML, and exits without binding\nanything, so it is safe to run on a node that is already serving.\n\nIt doubles as a pre-flight check. The config is loaded exactly as startup loads\nit, so a file that will not parse or a key the broker does not know fails here,\nbefore a rollout, with the message it would have produced on the node.\n\nThe rendering is **derived**, not written out by hand, so the dump cannot\nquietly stop mentioning a setting — the same failure as a documented variable\nnothing reads, which is what the rest of this work is about.\n\nTwo things the derive needed. The node credential is redacted, because this\noutput exists to be pasted into an issue; shown as `<redacted>` or `<unset>`\nrather than omitted, since whether a token is set is exactly what someone\ndebugging a registration failure needs. And peer timeouts print as milliseconds:\nserde's default for `Duration` is `{ secs, nanos }`, which is unreadable beside\n`FELIX_PEER_REQUEST_TIMEOUT_MS`.\n\n`SubQueuePolicy` is serialized from this crate rather than by deriving on it,\nbecause it lives in `felix-broker` and a printing feature is not a reason to\ngive a core crate a serde dependency.\n\nThe env checks now skip `*_tests.rs`. Adding the registry's tests made\n`FELIX_QUIC_BINDD` and `FELIX_SOMETHING_ENTIRELY_UNRELATED` look like variables\nthe code reads and therefore ought to document — they are fixtures, and one of\nthem is deliberately wrong.",
+          "timestamp": "2026-09-17T17:37:06-07:00",
+          "tree_id": "2982c1abd906802cbbb510bcf1a4d8289306e7da",
+          "url": "https://github.com/gabloe/felix/commit/9d0ab79071e1dcbc0211c93823b83e589208337c"
+        },
+        "date": 1789692176367,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 123,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 123.00\nmean: 122.40\nstdev: 0.89\ncv: 0.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 167,
+            "range": "2.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 167.00\nstdev: 2.12\ncv: 1.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 213,
+            "range": "7.33",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 212.40\nstdev: 7.33\ncv: 3.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 164.20\nstdev: 0.45\ncv: 0.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 337,
+            "range": "14.74",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 337.00\nmean: 339.80\nstdev: 14.74\ncv: 4.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 655,
+            "range": "363.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 655.00\nmean: 735.60\nstdev: 363.36\ncv: 49.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
