@@ -126,6 +126,7 @@ export default defineConfig({
             { label: 'Kubernetes', slug: 'deployment/kubernetes' },
             { label: 'Control-plane HA', slug: 'deployment/control-plane-ha' },
             { label: 'Graceful Shutdown', slug: 'deployment/graceful-shutdown' },
+            { label: 'Upgrades & Compatibility', slug: 'deployment/upgrades' },
           ],
         },
         {
