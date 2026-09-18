@@ -84,6 +84,7 @@ impl PeerRequestHandler for BrokerPeerHandler {
                     .bootstrap(request, felix_broker::LogKind::Counters)
                     .await
             }
+            InternalMessage::ReplicateRebuild(request) => self.replica.rebuild(request).await,
             // Responses have no business arriving as requests, and a broker that
             // answered one would be inventing a request that was never made.
             other => InternalMessage::ForwardPublishError(ForwardPublishError {

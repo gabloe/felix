@@ -681,6 +681,10 @@ where
                         reporter
                     }),
                     Duration::from_millis(config.controlplane_sync_interval_ms),
+                    replication::RebuildPolicy {
+                        max_concurrent: config.replication_rebuild_max_concurrent,
+                        bytes_per_sec: config.replication_rebuild_bytes_per_sec,
+                    },
                     sync_shutdown.clone(),
                 );
             }

@@ -1521,6 +1521,8 @@ absent; they are listed in that script rather than here.
 | `FELIX_INTERNAL_RECONNECT_BASE_MS` | `50` | First reconnect backoff after losing a peer. |
 | `FELIX_INTERNAL_RECONNECT_MAX_MS` | `5000` | Backoff ceiling. |
 | `FELIX_PUBLISH_QUORUM_TIMEOUT_MS` | `5000` | Longest a `Quorum` publish waits for a majority before failing. |
+| `FELIX_REPLICATION_REBUILD_MAX_CONCURRENT` | `1` | Halted followers this broker rebuilds at once, across every shard it leads. `0` rebuilds nothing and leaves every halt to an operator. |
+| `FELIX_REPLICATION_REBUILD_BYTES_PER_SEC` | `0` | Bytes per second a rebuilding follower is shipped at. `0` is unlimited. |
 
 ### Consumer groups
 

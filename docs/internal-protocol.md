@@ -384,8 +384,31 @@ needs before it may place a log that begins anywhere other than zero.
 The last row is the point. A log placed over existing records would have a hole
 between what the follower held and what it was given, and a log with a hole is
 one nothing downstream can detect — from the follower's own view its offsets are
-still contiguous. Discarding those records is an operator's decision, not a
-leader's, so the leader halts that follower instead.
+still contiguous. Discarding those records is not something a bootstrap may do,
+so the leader halts that follower instead, and rebuilds it under its policy.
+
+### Rebuilding a follower
+
+`ReplicateRebuild` (kind 24) is the one message that discards records. It names
+the shard, which of the shard's logs (`ReplicaLog`: stream, cache, group
+cursors, dead letters, or counters), and the leader's oldest surviving offset.
+A follower of that shard at that generation discards its copy of that log,
+generation history included, and answers `ReplicateOk` with the offset it was
+given, where its new copy begins. Shipping then resumes from there as if the
+follower had been bootstrapped.
+
+| The follower | Answer |
+| --- | --- |
+| follows the shard at that generation | discards the log, `ReplicateOk` at `base_offset` |
+| knows a newer generation | `FencedEpoch` |
+| is outside the replica set | `Unauthorized` |
+| predates the kind | `UnsupportedKind`; it stays halted |
+
+The fence matters more here than anywhere: a superseded leader telling a
+follower to discard its copy is the most damage a stale leader could do. The
+leader sends it only for a halt discarding would resolve (`diverged`,
+`needs_bootstrap`), never when it is itself fenced, and only within the policy
+in `docs/replication-design.md`, "Rebuilding a halted follower".
 
 The same fence applies as to storing records: a superseded leader cannot place a
 log, and a broker outside the replica set cannot be given a shard. Placing a log
@@ -412,9 +435,10 @@ Typed, because they need different responses:
 | `FencedEpoch` | the sender named an epoch older than the responder's | do not retry; it is no longer the leader |
 | `UnsupportedKind` | the responder predates the kind that was sent | do not retry with that kind; a forwarder falls back to the legacy forward kind once |
 
-`ReplicateBootstrap` is kind 10. A peer that predates it rejects the kind rather
-than misreading the body, which is why it is a new kind rather than a field on
-`ReplicateRecords`: this protocol freezes existing body layouts.
+`ReplicateBootstrap` is kind 10 and `ReplicateRebuild` kind 24. A peer that
+predates either rejects the kind rather than misreading the body, which is why
+each is a new kind rather than a field on `ReplicateRecords`: this protocol
+freezes existing body layouts.
 
 `NotLeader` is a distinct kind rather than an error code, because it carries a
 routing answer rather than only a reason.

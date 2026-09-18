@@ -26,4 +26,6 @@ pub enum Error {
     UnknownInternalAckMode(u8),
     #[error("unknown internal cache operation {0}")]
     UnknownInternalCacheOp(u8),
+    #[error("unknown internal replica log {0}")]
+    UnknownInternalReplicaLog(u8),
 }

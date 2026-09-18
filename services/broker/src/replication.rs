@@ -34,7 +34,8 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use felix_broker::StreamLog;
 use felix_wire::internal::{
-    ErrorCode, InternalMessage, ReplicateBootstrap, ReplicateRecords, ShardRef, batch_checksum,
+    ErrorCode, InternalMessage, ReplicaLog, ReplicateBootstrap, ReplicateRebuild, ReplicateRecords,
+    ShardRef, batch_checksum,
 };
 
 use crate::peer::{PeerError, PeerRequester};
@@ -55,6 +56,112 @@ pub struct FollowerCursor {
     /// Set once this follower has answered something that does not resolve by
     /// retrying. Nothing more is shipped to it at this generation.
     pub halted: Option<Halt>,
+    /// This follower discarded its copy at the leader's request and is being
+    /// shipped from the leader's base. Holds one of the policy's slots until
+    /// it reaches the tail.
+    pub rebuilding: bool,
+    /// This follower refused, or did not understand, a rebuild. Asked once per
+    /// generation: nothing about a refusal changes with the next pass.
+    pub rebuild_refused: bool,
+}
+
+/// What the leader may do about a halted follower on its own.
+///
+/// A halt does not resolve itself: the follower is out of every quorum until
+/// its copy is discarded and rebuilt. Doing that automatically is a full
+/// transfer per shard, and doing it for every halted follower at once, across
+/// every shard a failed broker led, is how a recovery becomes an outage. So
+/// it happens under a cap and, optionally, a rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebuildPolicy {
+    /// Rebuilds in flight at once, across every shard this broker leads.
+    /// Zero leaves every halt to an operator.
+    pub max_concurrent: usize,
+    /// Bytes per second a rebuilding follower is shipped at; zero is
+    /// unlimited. Applied per rebuilding follower, on this leader.
+    pub bytes_per_sec: u64,
+}
+
+impl Default for RebuildPolicy {
+    fn default() -> Self {
+        Self {
+            max_concurrent: 1,
+            bytes_per_sec: 0,
+        }
+    }
+}
+
+/// The policy plus how much of it is in use, shared by every shard this
+/// broker ships in one pass so the cap holds across them.
+#[derive(Debug)]
+pub struct Rebuilds {
+    policy: RebuildPolicy,
+    in_flight: std::sync::Mutex<usize>,
+}
+
+impl Rebuilds {
+    pub fn new(policy: RebuildPolicy) -> Self {
+        Self {
+            policy,
+            in_flight: std::sync::Mutex::new(0),
+        }
+    }
+
+    /// Never rebuild; every halt waits for an operator.
+    pub fn disabled() -> Self {
+        Self::new(RebuildPolicy {
+            max_concurrent: 0,
+            bytes_per_sec: 0,
+        })
+    }
+
+    pub fn policy(&self) -> RebuildPolicy {
+        self.policy
+    }
+
+    /// Reconcile the count with the cursors that actually carry a rebuild,
+    /// once per pass: a cursor discarded on a generation change takes its
+    /// slot with it, and nothing else would give it back.
+    pub fn set_in_flight(&self, count: usize) {
+        *self.in_flight.lock().expect("rebuild slots") = count;
+        metrics::record_rebuilding(count);
+    }
+
+    fn try_begin(&self) -> bool {
+        let mut in_flight = self.in_flight.lock().expect("rebuild slots");
+        if *in_flight >= self.policy.max_concurrent {
+            return false;
+        }
+        *in_flight += 1;
+        metrics::record_rebuilding(*in_flight);
+        true
+    }
+
+    fn finish(&self) {
+        let mut in_flight = self.in_flight.lock().expect("rebuild slots");
+        *in_flight = in_flight.saturating_sub(1);
+        metrics::record_rebuilding(*in_flight);
+    }
+}
+
+impl Halt {
+    /// Whether discarding the follower's copy would resolve this.
+    ///
+    /// A fenced halt is this broker's problem, not the follower's: it is no
+    /// longer the leader, and nothing it ships is authoritative.
+    fn rebuildable(self) -> bool {
+        matches!(self, Halt::Diverged | Halt::NeedsBootstrap)
+    }
+}
+
+fn replica_log(log_kind: felix_broker::LogKind) -> ReplicaLog {
+    match log_kind {
+        felix_broker::LogKind::Stream => ReplicaLog::Stream,
+        felix_broker::LogKind::Cache => ReplicaLog::Cache,
+        felix_broker::LogKind::GroupCursors => ReplicaLog::GroupCursors,
+        felix_broker::LogKind::GroupDeadLetters => ReplicaLog::GroupDeadLetters,
+        felix_broker::LogKind::Counters => ReplicaLog::Counters,
+    }
 }
 
 /// Why replication to a follower stopped.
@@ -82,6 +189,8 @@ impl FollowerCursor {
             addr,
             next_offset,
             halted: None,
+            rebuilding: false,
+            rebuild_refused: false,
         }
     }
 }
@@ -139,9 +248,39 @@ pub async fn ship_once<R: PeerRequester>(
     log_kind: felix_broker::LogKind,
     cursor: &mut FollowerCursor,
     max_batch_bytes: usize,
+    rebuilds: &Rebuilds,
 ) -> Progress {
     if let Some(halt) = cursor.halted {
-        return Progress::Halted(halt);
+        if !halt.rebuildable() || cursor.rebuild_refused || !rebuilds.try_begin() {
+            return Progress::Halted(halt);
+        }
+        match request_rebuild(requester, log, shard, log_kind, cursor).await {
+            Rebuild::Accepted { base_offset } => {
+                cursor.halted = None;
+                cursor.next_offset = base_offset;
+                cursor.rebuilding = true;
+                tracing::warn!(
+                    node_id = %cursor.node_id,
+                    stream = %shard.stream,
+                    shard = shard.shard,
+                    generation = shard.generation,
+                    reason = %halt,
+                    base_offset,
+                    "the follower discarded its copy of this shard; rebuilding it from here",
+                );
+                metrics::record_rebuild(metrics::OUTCOME_REBUILD_STARTED);
+            }
+            Rebuild::Unreachable => {
+                rebuilds.finish();
+                return Progress::Halted(halt);
+            }
+            Rebuild::Refused => {
+                cursor.rebuild_refused = true;
+                rebuilds.finish();
+                metrics::record_rebuild(metrics::OUTCOME_REBUILD_REFUSED);
+                return Progress::Halted(halt);
+            }
+        }
     }
 
     let records = match log.read_from(cursor.next_offset, max_batch_bytes).await {
@@ -185,12 +324,24 @@ pub async fn ship_once<R: PeerRequester>(
     };
 
     if records.is_empty() {
+        if cursor.rebuilding {
+            cursor.rebuilding = false;
+            rebuilds.finish();
+            tracing::info!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                "the rebuilt follower has reached this leader's tail",
+            );
+            metrics::record_rebuild(metrics::OUTCOME_REBUILD_COMPLETED);
+        }
         return Progress::UpToDate;
     }
 
     let first_offset = records[0].offset;
     let payloads: Vec<Bytes> = records.into_iter().map(|record| record.payload).collect();
     let batch_end = first_offset + payloads.len() as u64;
+    let batch_bytes: usize = payloads.iter().map(Bytes::len).sum();
     let batch = ReplicateRecords {
         // The pool assigns the real id; it owns the connection this lands on.
         correlation_id: 0,
@@ -233,6 +384,15 @@ pub async fn ship_once<R: PeerRequester>(
             // means resuming past records neither side has checked.
             cursor.next_offset = durable_offset.min(batch_end);
             metrics::record_shipped(metrics::OUTCOME_OK);
+            // A rebuild is a full transfer, and the policy may say how fast.
+            // Paced after the batch landed, so the follower is never waiting
+            // on records that were already read.
+            let rate = rebuilds.policy().bytes_per_sec;
+            if cursor.rebuilding && rate > 0 {
+                let nanos = (batch_bytes as u128 * 1_000_000_000) / rate as u128;
+                let nanos = nanos.min(u64::MAX as u128) as u64;
+                tokio::time::sleep(std::time::Duration::from_nanos(nanos)).await;
+            }
         }
         Progress::Resume { offset } => {
             cursor.next_offset = offset;
@@ -258,6 +418,80 @@ pub async fn ship_once<R: PeerRequester>(
         Progress::UpToDate => {}
     }
     progress
+}
+
+enum Rebuild {
+    /// The follower discarded its copy; its new one begins here.
+    Accepted { base_offset: u64 },
+    /// Not answered. Asked again next pass.
+    Unreachable,
+    /// Answered no, or with something that was not an answer. Not asked again
+    /// at this generation.
+    Refused,
+}
+
+/// Ask a halted follower to discard its copy and start again at this
+/// leader's oldest record.
+async fn request_rebuild<R: PeerRequester>(
+    requester: &R,
+    log: &StreamLog,
+    shard: &ShardRef,
+    log_kind: felix_broker::LogKind,
+    cursor: &FollowerCursor,
+) -> Rebuild {
+    let base_offset = log.base_offset();
+    let request = InternalMessage::ReplicateRebuild(ReplicateRebuild {
+        // The pool assigns the real id; it owns the connection this lands on.
+        correlation_id: 0,
+        shard: shard.clone(),
+        log: replica_log(log_kind),
+        base_offset,
+    });
+    let answer = match requester
+        .request(&cursor.node_id, cursor.addr, request)
+        .await
+    {
+        Ok(answer) => answer,
+        Err(err) => {
+            tracing::warn!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                error = %err,
+                "could not reach the follower to rebuild it",
+            );
+            return Rebuild::Unreachable;
+        }
+    };
+    match answer {
+        InternalMessage::ReplicateOk(ok) => Rebuild::Accepted {
+            base_offset: ok.durable_offset,
+        },
+        InternalMessage::ReplicateError(err) => {
+            tracing::warn!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                code = ?err.code,
+                detail = %err.detail,
+                "the follower refused to rebuild",
+            );
+            Rebuild::Refused
+        }
+        // Anything else is a peer that did not understand the request,
+        // most likely one that predates rebuilds. The halt stands until it
+        // is upgraded or an operator acts.
+        other => {
+            tracing::warn!(
+                node_id = %cursor.node_id,
+                stream = %shard.stream,
+                shard = shard.shard,
+                kind = ?other.kind(),
+                "the follower did not understand a rebuild; it stays halted",
+            );
+            Rebuild::Refused
+        }
+    }
 }
 
 /// Offer a follower a log that begins where this leader's surviving log does.

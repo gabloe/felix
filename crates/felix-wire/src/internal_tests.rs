@@ -80,6 +80,12 @@ fn every_message() -> Vec<InternalMessage> {
             shard: shard(),
             base_offset: 5_000,
         }),
+        InternalMessage::ReplicateRebuild(ReplicateRebuild {
+            correlation_id: 42,
+            shard: shard(),
+            log: ReplicaLog::Counters,
+            base_offset: 5_000,
+        }),
         InternalMessage::ForwardCacheOp(ForwardCacheOp {
             correlation_id: 42,
             shard: shard(),
@@ -451,7 +457,9 @@ fn unknown_enum_values_are_rejected() {
     assert!(Kind::from_u16(0).is_err());
     // One past the highest kind: an unknown kind must be rejected rather than
     // skipped, because the kind is what selects how to read the body.
-    assert!(Kind::from_u16(24).is_err());
+    assert!(Kind::from_u16(25).is_err());
+    assert!(ReplicaLog::from_u8(0).is_err());
+    assert!(ReplicaLog::from_u8(6).is_err());
     assert!(ErrorCode::from_u16(0).is_err());
     assert!(ErrorCode::from_u16(999).is_err());
     assert!(AckMode::from_u8(9).is_err());
@@ -605,6 +613,7 @@ fn the_existing_kind_discriminants_are_unchanged() {
         (21, Kind::ReplicateCounterBootstrap),
         (22, Kind::AuthorizedForwardPublish),
         (23, Kind::AuthorizedForwardCacheOp),
+        (24, Kind::ReplicateRebuild),
     ] {
         assert_eq!(Kind::from_u16(value).expect("known"), kind);
         assert_eq!(kind as u16, value);
