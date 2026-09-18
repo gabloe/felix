@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789735481240,
+  "lastUpdate": 1789746223253,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11076,6 +11076,58 @@ window.BENCHMARK_DATA = {
             "range": "24572.31",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 540309.39\nmean: 538120.93\nstdev: 24572.31\ncv: 4.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "449d1bb03f8d0a148add8e47d460a266d391f70a",
+          "message": "docs(formal): a TLA+ model of one shard's lease, replication and promotion (#523)\n\ndocs/formal/FelixShard.tla models the protocol in replication-design.md:\nthe heartbeat lease anchored at send time, the control plane's margin\nbefore it grants again, admission and commit-time lease checks,\nreplication with divergence repair above the high-water mark, Quorum and\nLeader acknowledgement, the leader's asynchronous report, and promotion.\nTLC holds no-two-leaders, acknowledged-records-survive,\nacknowledged-records-agree, no-truncation-below-the-mark and\nno-stale-commit under clock drift, lost heartbeats, lost reports, and a\nbroker paused between admitting a write and committing it.\n\nscripts/check_tla.sh (task tla:check, and a CI job) holds each\nconfiguration to a declared outcome. Two must pass. Three must fail, on a\nnamed invariant: no safety interval, no commit-time lease check, and\npromotion as the design writes it -- where a leader report older than\nthe last acknowledgement promotes a replica missing an acknowledged\nQuorum record. Promotion by (last generation, length) passes and is the\nrule to move to; the design doc says so.\n\nTLC runs with checkpoints off and its scratch directory outside the\ntree, and .gitignore covers the states/ directory a run by hand leaves.\n\nCloses #420.",
+          "timestamp": "2026-09-18T08:40:58-07:00",
+          "tree_id": "26a84a10ed3bdc8d74ddcb798a9886f4b07163d6",
+          "url": "https://github.com/gabloe/felix/commit/449d1bb03f8d0a148add8e47d460a266d391f70a"
+        },
+        "date": 1789746222443,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 232487.24,
+            "range": "3438.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232487.24\nmean: 231798.84\nstdev: 3438.10\ncv: 1.48%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 232487.24,
+            "range": "3438.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 232487.24\nmean: 231798.84\nstdev: 3438.10\ncv: 1.48%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54872.75,
+            "range": "670.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54872.75\nmean: 54995.20\nstdev: 670.12\ncv: 1.22%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 548727.53,
+            "range": "6701.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 548727.53\nmean: 549951.99\nstdev: 6701.16\ncv: 1.22%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
