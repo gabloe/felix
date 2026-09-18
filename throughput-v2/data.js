@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789726706545,
+  "lastUpdate": 1789726864431,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -10764,6 +10764,58 @@ window.BENCHMARK_DATA = {
             "range": "18762.90",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 591405.45\nmean: 601813.52\nstdev: 18762.90\ncv: 3.12%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dcf8f30efee2f131c1db70a68b78112183495875",
+          "message": "test(broker): the commit turn does not widen what Block already costs (#518)\n\nUnder Block, every publisher of a shard waits on a stalled subscriber's\nqueue on its own enqueue, so holding the commit turn across fanout adds no\ncoupling that was not already there. A test on an ephemeral stream, which\nhas no turn at all, shows a second publisher waiting and then proceeding in\norder; the internals doc says what Block costs and to whom.\n\nCloses #512.",
+          "timestamp": "2026-09-18T03:16:41-07:00",
+          "tree_id": "9dd09b28fb84e1e7277cb21ab7d288a6d739ca77",
+          "url": "https://github.com/gabloe/felix/commit/dcf8f30efee2f131c1db70a68b78112183495875"
+        },
+        "date": 1789726863397,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 236282.42,
+            "range": "3304.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236282.42\nmean: 236124.78\nstdev: 3304.79\ncv: 1.40%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 236282.42,
+            "range": "3304.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 236282.42\nmean: 236124.78\nstdev: 3304.79\ncv: 1.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 56069.37,
+            "range": "1215.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 56069.37\nmean: 56179.36\nstdev: 1215.61\ncv: 2.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 560693.7,
+            "range": "12156.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 560693.70\nmean: 561793.61\nstdev: 12156.08\ncv: 2.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
