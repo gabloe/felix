@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789731104625,
+  "lastUpdate": 1789732276113,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -13860,6 +13860,72 @@ window.BENCHMARK_DATA = {
             "range": "771.11",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1053.00\nmean: 1170.40\nstdev: 771.11\ncv: 65.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "890adb5ec25bbecb35a9ce7ad2f00ae57b30c484",
+          "message": "feat(deploy): a Helm chart for the control plane and a broker cluster (#521)\n\nThe Kubernetes page said \"you write the manifests\". The chart at\ndeploy/helm/felix is those manifests: a Deployment over Postgres that\nrolls one instance at a time with none unavailable, or a StatefulSet under\nRaft with a volume per member and the peers map derived from the release;\nbrokers as a StatefulSet whose pod name is the node id, with a volume\neach, the pod IP advertised to peers and the pod's DNS name to clients,\nthe credential and Postgres URL from Secrets the operator creates, probes\nand a derived grace period, budgets that keep a replication-factor-three\nquorum, anti-affinity and zone spread, a NetworkPolicy admitting the\ninternal port from brokers only, and optional peer mTLS issued per pod by\ncert-manager's CSI driver.\n\nCombinations that are each fine alone and wrong together refuse to\nrender. scripts/check_chart.py renders every value set under ci/, asserts\nthose properties on the output, and checks each refusal still refuses;\n`task chart:check` and a CI job run it.\n\nCloses #131. Closes #132.",
+          "timestamp": "2026-09-18T04:49:00-07:00",
+          "tree_id": "3b1cf14257ee3ee464612391fd625021c9448f44",
+          "url": "https://github.com/gabloe/felix/commit/890adb5ec25bbecb35a9ce7ad2f00ae57b30c484"
+        },
+        "date": 1789732272863,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 97,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 97.00\nmean: 97.60\nstdev: 0.89\ncv: 0.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 129,
+            "range": "2.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 130.80\nstdev: 2.95\ncv: 2.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 173,
+            "range": "8.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 173.00\nmean: 173.80\nstdev: 8.61\ncv: 4.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 129,
+            "range": "2.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 129.80\nstdev: 2.95\ncv: 2.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 269,
+            "range": "15.65",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 269.00\nmean: 271.40\nstdev: 15.65\ncv: 5.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1307,
+            "range": "433.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1307.00\nmean: 1091.60\nstdev: 433.70\ncv: 39.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
