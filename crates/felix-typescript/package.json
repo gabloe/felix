@@ -1,0 +1,40 @@
+{
+  "name": "@felix/client",
+  "version": "0.4.1",
+  "description": "Node.js/TypeScript bindings for the Felix client, over the Rust client rather than a reimplementation of it",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gabloe/felix.git",
+    "directory": "crates/felix-typescript"
+  },
+  "homepage": "https://github.com/gabloe/felix",
+  "keywords": [
+    "felix",
+    "quic",
+    "pubsub",
+    "streaming",
+    "bindings"
+  ],
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "felix.node"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "napi": {
+    "name": "felix",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node --test test/conformance.test.mjs"
+  }
+}

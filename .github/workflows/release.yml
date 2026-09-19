@@ -370,6 +370,191 @@ jobs:
           # The binaries job owns the release body; this only adds files to it.
           append_body: false
 
+  # --- Node / TypeScript addon --------------------------------------------
+  #
+  # Same shape as the Python half above: conformance first, then one artifact
+  # per platform, then an attach job that needs every leg.
+  typescript-conformance:
+    name: Node client conformance
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.97.1"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      # The suite drives real brokers over real QUIC; these are what it starts.
+      - name: Build the broker and cluster harness
+        run: |
+          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-cluster --bin felix-cluster
+
+      # No napi CLI here: `napi build` is mostly a rename of this cdylib, and
+      # the package loads it from the target directory either way. Keeping the
+      # gate off the CLI keeps it off a registry too.
+      - name: Build the addon
+        working-directory: crates/felix-typescript
+        run: cargo build --locked
+
+      - name: Run the conformance suite
+        env:
+          FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/ts-conformance.json
+        run: cd crates/felix-typescript && node --test test/conformance.test.mjs
+
+      # The verdict, not the test exit code: a suite that passed while skipping
+      # a required scenario is not conformance, and this is what says so.
+      - name: Verify against the catalogue
+        run: cargo run --locked -q -p felix-conformance -- verify ts-conformance.json
+
+      - name: Upload the conformance report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ts-conformance-${{ env.RELEASE_TAG }}
+          path: ts-conformance.json
+          if-no-files-found: warn
+
+  # Gated on conformance for the same reason the wheels are: an addon that
+  # ships without passing the suite is an addon that might diverge from the
+  # Rust client on resume, redirects, or retry classification — the divergences
+  # that get debugged as broker bugs.
+  #
+  # A napi addon is a native `cdylib`, so the matrix mirrors `python-wheels`
+  # target for target, including cross-compiling the Intel macOS artifact from
+  # Apple Silicon rather than asking for a `macos-13` runner that may never get
+  # an agent (#545).
+  typescript-addon:
+    name: Node addon (${{ matrix.target }})
+    needs: typescript-conformance
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { runner: macos-latest, target: aarch64-apple-darwin }
+          - { runner: macos-latest, target: x86_64-apple-darwin }
+          - { runner: windows-latest, target: x86_64-pc-windows-msvc }
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install the napi CLI
+        run: npm install -g @napi-rs/cli
+
+      - name: Build the addon
+        working-directory: crates/felix-typescript
+        run: napi build --platform --release --target ${{ matrix.target }}
+
+      # The addon is named by platform (felix.darwin-arm64.node and so on), so
+      # every leg's artifact can merge into one directory without colliding.
+      - name: Upload the addon
+        uses: actions/upload-artifact@v7
+        with:
+          name: napi-${{ matrix.target }}
+          path: crates/felix-typescript/*.node
+          if-no-files-found: error
+
+  typescript-release-assets:
+    name: Attach the Node addons to the release
+    needs: typescript-addon
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: napi-*
+          merge-multiple: true
+          path: addons
+
+      - name: What was built
+        run: ls -la addons
+
+      - name: Attach to the GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: addons/*
+          # The binaries job owns the release body; this only adds files to it.
+          append_body: false
+
+  # Same reasoning as the PyPI job below: `npm install @felix/client` is a
+  # public commitment — the scope is claimed, the version is permanent, and
+  # anyone can depend on it. Until Felix is ready for that, the addons ride the
+  # GitHub release and this stays behind an explicit switch.
+  #
+  # To turn it on: set the repository variable PUBLISH_NPM to "true", add an
+  # NPM_TOKEN secret with publish rights to the @felix scope, and check the
+  # scope is actually available first — it is unrelated to the crate name.
+  typescript-publish:
+    name: Publish to npm
+    needs: typescript-release-assets
+    if: vars.PUBLISH_NPM == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: napi-*
+          merge-multiple: true
+          path: crates/felix-typescript
+
+      - name: Install the napi CLI
+        run: npm install -g @napi-rs/cli
+
+      # `napi prepublish` turns the per-platform .node files into the platform
+      # packages the main package declares as optional dependencies, so a
+      # consumer installs only the one their machine needs.
+      - name: What is about to be published
+        working-directory: crates/felix-typescript
+        run: ls -la *.node
+
+      - name: Publish
+        working-directory: crates/felix-typescript
+        run: napi prepublish -t npm --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   python-publish:
     name: Publish to PyPI
     needs: python-release-assets

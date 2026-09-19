@@ -63,3 +63,6 @@ __pycache__/
 
 # TLC's checkpoints, if a run is ever started by hand without -metadir.
 docs/formal/states/
+
+# Conformance results, written by the client suites (see `task ts:conformance`).
+*-conformance.json

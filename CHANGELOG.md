@@ -34,6 +34,26 @@ they did before.
   client sends the keyed binary frame only to a broker that advertised it and
   uses JSON otherwise — costing throughput, not correctness.
 
+- **A Node.js / TypeScript client** (`crates/felix-typescript`), a napi-rs
+  addon over `felix-client` rather than a reimplementation of the protocol —
+  the same reasoning as the Python binding, and the same surface: publish
+  (keyed, or at-least-once), subscribe, sharded subscribe with per-shard
+  resume, cache get/put/delete, counters, cache watches and consumer groups.
+  Every call returns a `Promise`, and every handle is disposable.
+  Errors arrive as typed classes — `ConnectionError`, `AuthError`,
+  `NotFoundError`, `CursorError`, `InvalidArgumentError` — mirroring the
+  Python binding's exceptions, so an application branches on identity rather
+  than on message text.
+
+  It passes the client conformance suite, and CI and the release pipeline are
+  both gated on that: the suite drives a real three-node fixture cluster,
+  names the catalogue scenario each test demonstrates, and
+  `felix-conformance verify` checks the results against the catalogue, so a
+  green run that quietly skipped a required scenario still fails. Not
+  published to npm: the addon is built per platform and attached to the GitHub
+  release, with the npm step behind `PUBLISH_NPM` for the same reason PyPI is
+  behind `PUBLISH_PYPI`.
+
 - **`felix-loadgen --keys <n>`** spreads the ingest scenario's batches over `n`
   routing keys. The scenario published unkeyed, and an unkeyed record resolves
   to shard 0, so every "multi-shard" measurement taken with it was really a

@@ -2,9 +2,9 @@
 title: "Clients in Other Languages"
 ---
 
-Felix has two clients today: Rust, and Python. More are planned. This page is
-about how they relate to each other — which is the part that usually goes
-wrong, and the part worth understanding before you depend on one.
+Felix has three clients today: Rust, Python, and TypeScript. More are planned.
+This page is about how they relate to each other — which is the part that
+usually goes wrong, and the part worth understanding before you depend on one.
 
 ## One implementation, several bindings
 
@@ -23,7 +23,7 @@ flowchart TB
     subgraph langs["Language bindings"]
         direction LR
         PY["Python<br/><small>felix-python (PyO3)</small>"]
-        TS["TypeScript<br/><small>planned</small>"]
+        TS["TypeScript<br/><small>felix-typescript (napi-rs)</small>"]
         GO["Go<br/><small>planned</small>"]
     end
 
@@ -32,14 +32,14 @@ flowchart TB
     BROKER["Broker"]
 
     PY --> CORE
-    TS -.-> CORE
+    TS --> CORE
     GO -.-> CORE
     CORE --> WIRE
     WIRE -->|QUIC| BROKER
 
     classDef planned fill:#fdf0e3,stroke:#b07d3a,color:#3d2a12
     classDef core fill:#e8f0fe,stroke:#4a6fa5,color:#1a2b40
-    class TS,GO planned
+    class GO planned
     class CORE,WIRE core
 ```
 
@@ -340,14 +340,42 @@ them in silence.
 The reference client, and the one the others are built from. See the
 [Client SDK](/felix/api/client-sdk/) page.
 
+## TypeScript
+
+`crates/felix-typescript` — a napi-rs addon over the same Rust client, exposing
+the surface the Python binding does: publish (keyed, or at-least-once),
+subscribe, sharded subscribe with per-shard resume, cache get/put/delete,
+counters, cache watches and consumer groups. Every call returns a `Promise`,
+because blocking Node's event loop is not something a Node library may do;
+napi-rs runs the future on its own Tokio runtime and settles the promise from
+there.
+
+```ts
+const client = await Client.connect("127.0.0.1:5000", "t1", token, "localhost", caFile);
+await client.publish("t1", "default", "orders", payload, Buffer.from(customerId));
+```
+
+Errors arrive as typed classes — `ConnectionError`, `AuthError`,
+`NotFoundError`, `CursorError`, `InvalidArgumentError` under a `FelixError`
+base — mirroring the Python binding's exceptions, so an application branches on
+identity rather than on message text. Every handle has an idempotent `close()`
+and implements `Symbol.asyncDispose`, and `close` cancels a read in flight
+rather than waiting for it: a consumer shutting down is almost always parked on
+`nextEvent`, and waiting for the read it is cancelling would hang exactly the
+path that needs to make progress.
+
+It passes every required scenario in the catalogue, and CI and the release
+pipeline are both gated on that. It is not published to npm: the release
+pipeline builds the addon for each platform and attaches it to the GitHub
+release, with the npm step behind an explicit switch.
+
 ## Planned
 
-TypeScript, then Go, then C# — in that order, because it follows where Felix's
-intended workloads actually live. Each is gated on passing the conformance
-suite.
+Go, then C# — in that order, because it follows where Felix's intended
+workloads actually live. Each is gated on passing the conformance suite.
 
 If you want to write one sooner, the things you need are all public: the
 [wire protocol](/felix/architecture/wire-protocol/) if you are implementing
-natively, the conformance catalogue either way, and `crates/felix-python` as a
-worked example of the binding approach — roughly 700 lines of Rust over a
-client that already works.
+natively, the conformance catalogue either way, and `crates/felix-python` or
+`crates/felix-typescript` as worked examples of the binding approach — a few
+hundred lines of Rust over a client that already works.
