@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789837556574,
+  "lastUpdate": 1789839484221,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15642,6 +15642,72 @@ window.BENCHMARK_DATA = {
             "range": "1662.56",
             "unit": "us",
             "extra": "trials: 5\nmedian: 2923.00\nmean: 2262.60\nstdev: 1662.56\ncv: 73.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b7590a73a72f2a206613459b19679a5cf895426",
+          "message": "fix(transport): the loopback buffer gate must not move with the MTU knobs (#573)\n\nCI and coverage both failed on main with\n`loopback_initial_mtu_respects_configured_bounds`, and the test was\nright.\n\nThe gate asks one question -- was this host tuned? -- as a proxy, because\nLinux clamps SO_RCVBUF to a stock ~208 KB and an untuned host cannot\nabsorb the bursts the loopback pin exists to survive. It was measured\nagainst the size about to be pinned, which included\n`mtu_discovery_upper_bound`. When #571 dropped that default to 4096 on\nLinux, the requirement fell from ~1 MiB to 256 KiB, a stock host (~416\nKiB) newly qualified, and every untuned Linux host silently began pinning\nthe loopback MTU instead of taking the RFC-safe path.\n\nThe comment on that gate said exactly this must not happen: \"lowering the\npinned size cannot newly enable this path on a host that is working\ntoday\". #571's change was about a *routed*-path hazard and had no\nbusiness deciding who gets a loopback pin.\n\nSo the gate now reads `LOOPBACK_UDP_PAYLOAD` and nothing configurable.\nThe proxy means one thing and stops tracking an unrelated knob.\n\nOne behaviour goes with it, deliberately: setting FELIX_MTU_UPPER_BOUND\nlow on an untuned host no longer buys the guarantee, where it used to.\nAsking for a smaller pin is not evidence of headroom, and the case is an\nexplicit override on a host that has not been tuned -- more conservative,\nnever less safe. The test says so rather than being quietly adjusted.\n\nWhy this was not caught before merging: the existing test is\nplatform-sensitive by construction. On macOS the discovery bound stays\n16384, so the gate never moved and the test passed locally while failing\non Linux CI -- the same trap the GSO invariant tests fell into earlier\nthat day, where a `cfg!` made them vacuous on the machine doing the\nediting. The two new tests construct the config explicitly, so they check\nboth platforms' behaviour from either one. Verified by reintroducing the\nregression and watching them fail on macOS.",
+          "timestamp": "2026-09-19T10:35:33-07:00",
+          "tree_id": "127f1de8a4dddc17ecca18935f642ee1da0a6f0c",
+          "url": "https://github.com/gabloe/felix/commit/2b7590a73a72f2a206613459b19679a5cf895426"
+        },
+        "date": 1789839482487,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.80\nstdev: 1.10\ncv: 0.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "3.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 210.20\nstdev: 3.42\ncv: 1.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 262,
+            "range": "57.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 262.00\nmean: 287.40\nstdev: 57.07\ncv: 19.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "4.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 202.20\nstdev: 4.38\ncv: 2.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 420,
+            "range": "70.53",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 420.00\nmean: 446.40\nstdev: 70.53\ncv: 15.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 655,
+            "range": "553.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 655.00\nmean: 1014.20\nstdev: 553.14\ncv: 54.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
