@@ -21,7 +21,9 @@ Three things keep them apart, and only the first is a wire concern:
    client pointed at the internal port has no protocol in common with it and TLS
    refuses the handshake — before a frame is read, and before any broker state
    is touched.
-3. **A distinct credential.** Peer authentication is mTLS between brokers (M8.1).
+3. **A distinct credential.** Peer authentication is mTLS between brokers, with
+   the certificate's name checked against the node id in both directions, when
+   `FELIX_INTERNAL_TLS_CERT`, `_KEY` and `_CA` are set.
 
 The magic alone is not security — it is what makes a misdirected connection fail
 loudly instead of quietly.

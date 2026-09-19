@@ -417,8 +417,8 @@ every subsequent change* is not, and stitching the two yourself races.
 
 Felix is the wrong tool if you need long-term event history, tiered storage,
 transactional guarantees, exactly-once processing, or a mature multi-language
-ecosystem — there are two clients, Rust and Python, and Python does not yet
-  wrap every surface.
+ecosystem — there are three clients, Rust, Python and TypeScript, the latter
+two wrapping the first, and neither wraps quite every surface.
 
 ---
 

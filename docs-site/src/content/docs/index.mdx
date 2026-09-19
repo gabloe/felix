@@ -171,10 +171,12 @@ boundaries — including what Felix is deliberately *not*.
     - A control plane over REST, holding metadata in Raft — no external
       database — or in Postgres, and capability negotiation on the wire
     - Tenant-scoped tokens, RBAC, and OIDC token exchange
+    - Mutually authenticated broker-to-broker QUIC, when certificates are
+      configured
   </Card>
   <Card title="Not built yet" icon="seti:plan">
     - Rebalancing: a shard whose leader is alive is never moved, however uneven that leaves things
-    - mTLS between brokers, and end-to-end encryption
+    - End-to-end payload encryption, encryption at rest, and audit logging
     - Tiered storage and cold-tier reads
     - Cross-region bridges with explicit data movement
     - Clients in Go or C# (Rust, Python and TypeScript exist today)

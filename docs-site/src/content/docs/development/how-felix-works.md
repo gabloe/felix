@@ -19,9 +19,9 @@ into the running broker.
 
 What is *not* built is listed on the
 [status table](/felix/getting-started/what-felix-is-for/), which is the page to
-trust per capability — notably Raft for control-plane metadata, rebalancing, and
-mTLS between brokers. This guide distinguishes implemented behaviour from
-planned behaviour as it goes.
+trust per capability — notably rebalancing, tiered storage, and per-stream
+retention. This guide distinguishes implemented behaviour from planned
+behaviour as it goes.
 :::
 ## 1. The shortest useful mental model
 

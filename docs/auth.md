@@ -524,7 +524,5 @@ g, p:bob, role:payments-admin, tenant-a
 
 ## Future Work
 
-- Add control plane API auth for administrative endpoints.
-- mTLS and service-to-service auth for brokers and internal components.
 - Policy editor and audit logging for auth decisions.
 - More efficient permission compression for large policy sets.

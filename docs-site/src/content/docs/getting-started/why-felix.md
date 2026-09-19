@@ -177,8 +177,9 @@ What does not exist yet:
   unless you set it, so by default a log grows until the disk does.
 - **Rebalancing** — a shard whose leader is alive is never moved, however uneven
   that leaves the cluster.
-- **mTLS between brokers, tiered storage, and cross-region bridges.**
-- **Clients beyond Rust and Python.**
+- **Tiered storage, cross-region bridges, encryption at rest, and audit
+  logging.**
+- **Clients beyond Rust, Python and TypeScript.**
 
 For capability-by-capability detail — what is shipped, what is partial, and what
 is only intended — read

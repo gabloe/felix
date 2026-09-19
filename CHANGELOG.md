@@ -358,6 +358,19 @@ same bytes they did before.
   container that forbids the syscall, falls back rather than failing. Durability
   must not depend on an optimisation being available.
 
+
+- **Docs stopped calling shipped capabilities unbuilt.** The README, the docs
+  site landing page, the overview, why-felix, the FAQ, the components and
+  project-structure pages, `docs/architecture.md`, `docs/auth.md` and
+  `docs/internal-protocol.md` all still listed broker-to-broker mTLS as future
+  work; it shipped in M8 (#125, #126). Alongside it: `docs/architecture.md`
+  said no metadata rides the control plane's Raft group, which M13 closed;
+  `how-felix-works.md` named Raft and mTLS as unbuilt; the threat model called
+  peer connection exhaustion unmitigated after #504 capped it, and credited
+  #422 with closing forwarded-publish replay, which it does not —
+  `ForwardPublish` carries no producer identity, so that case stands open.
+  A status marker that is wrong about a *security* control is worse than none.
+
 ## [0.4.1] - 2026-09-18
 
 A throughput fix. Durable publishes to one shard were processed strictly one at
