@@ -56,6 +56,7 @@ Field definitions:
   | `0x0008` | `BINARY_PUBLISH_ACKED` | Modifier on `0x0001`: the batch carries a `request_id` prefix and is owed an ack |
   | `0x0010` | `BINARY_PUBLISH_ACK` | Payload is a binary publish acknowledgement (broker → client) |
   | `0x0020` | `EVENT_BATCH_OFFSETS` | Modifier on `0x0002` or `0x0004`: the batch carries a `base_offset` |
+  | `0x0040` | `BINARY_PUBLISH_KEYED` | Modifier on `0x0001`: the batch carries a routing key prefix |
 
   Because these bits change how the payload is parsed, a receiver MUST reject a
   frame carrying any bit it does not recognise rather than masking it off — see
@@ -590,6 +591,32 @@ repeated count times:
 
 This is the default encoding for unacknowledged client publishes. Clients can
 explicitly select JSON for compatibility.
+
+## Binary keyed PublishBatch
+When `flags & 0x0040 != 0` (always together with `0x0001`), the publish batch body
+is prefixed with a routing key:
+
+```
+u16 key_len
+u8[key_len] key
+... then the Binary PublishBatch body exactly as above
+```
+
+The key decides the shard, and therefore which broker owns the batch. Every record
+in a batch shares one key: a batch is acknowledged as a unit, so splitting it across
+shards would make it several batches.
+
+An empty key is a key. It hashes to a shard like any other, and is not the same as
+an unkeyed frame, which always resolves to shard 0.
+
+With `0x0008` set as well, the correlation prefix comes first and the key prefix
+follows it, so `request_id` stays readable at offset 0 whether or not a key follows.
+
+**Compatibility:** `0x0040` was added after `0x0008`. A broker predating it matches
+on `0x0001`, knows nothing of the key prefix, and would misparse `key_len` as
+`tenant_len`. Clients therefore MUST NOT send `0x0040` unless the broker has
+advertised it — see Capability negotiation below. A client talking to such a broker
+sends a keyed publish with the JSON encoding instead.
 
 ## Binary acked PublishBatch
 When `flags & 0x0008 != 0` (always together with `0x0001`), the publish batch above

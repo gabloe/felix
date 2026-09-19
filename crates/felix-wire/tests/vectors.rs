@@ -68,16 +68,56 @@ fn vectors_match_frame_encoding() {
                     .map(|p| p.as_str().unwrap().as_bytes().to_vec())
                     .collect();
                 assert_eq!(acked.batch.payloads, expected);
+                let expected_key = value["key_utf8"].as_str();
+                assert_eq!(
+                    acked.batch.key.as_deref(),
+                    expected_key.map(str::as_bytes),
+                    "key mismatch for {path:?}"
+                );
 
-                let re_encoded = binary::encode_acked_publish_batch_bytes(
+                let re_encoded = binary::encode_acked_publish_batch_bytes_keyed(
                     acked.request_id,
                     acked.ack,
+                    acked.batch.key.as_deref(),
                     &acked.batch.tenant_id,
                     &acked.batch.namespace,
                     &acked.batch.stream,
                     &acked.batch.payloads,
                 )
                 .expect("re-encode acked");
+                assert_eq!(
+                    re_encoded.as_ref(),
+                    frame_expected.as_ref(),
+                    "round trip mismatch for {path:?}"
+                );
+            }
+            "binary_publish_batch" => {
+                let batch = binary::decode_publish_batch(&decoded).expect("decode batch");
+                assert_eq!(batch.tenant_id, value["tenant_id"].as_str().unwrap());
+                assert_eq!(batch.namespace, value["namespace"].as_str().unwrap());
+                assert_eq!(batch.stream, value["stream"].as_str().unwrap());
+                let expected_key = value["key_utf8"].as_str();
+                assert_eq!(
+                    batch.key.as_deref(),
+                    expected_key.map(str::as_bytes),
+                    "key mismatch for {path:?}"
+                );
+                let expected: Vec<Vec<u8>> = value["payloads_utf8"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|p| p.as_str().unwrap().as_bytes().to_vec())
+                    .collect();
+                assert_eq!(batch.payloads, expected);
+
+                let (re_encoded, _stats) = binary::encode_publish_batch_bytes_with_stats_keyed(
+                    batch.key.as_deref(),
+                    &batch.tenant_id,
+                    &batch.namespace,
+                    &batch.stream,
+                    &batch.payloads,
+                )
+                .expect("re-encode batch");
                 assert_eq!(
                     re_encoded.as_ref(),
                     frame_expected.as_ref(),
@@ -109,7 +149,7 @@ fn vectors_match_frame_encoding() {
     }
     // Guard against the loop silently matching nothing.
     assert!(
-        checked >= 11,
+        checked >= 13,
         "expected all vectors to be checked, got {checked}"
     );
 }

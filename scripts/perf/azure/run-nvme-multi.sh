@@ -9,7 +9,11 @@
 set -uo pipefail
 : "${SESSION:?SESSION=<name>}"
 : "${STREAM:=perf-durable}"
-: "${CONC:=16}"                       # publishers per loadgen
+: "${CONC:=16}"
+# Routing keys to spread batches over. 0 is unkeyed, which lands every record
+# on shard 0 however many shards the stream has -- so a multi-shard stream is
+# only actually exercised when this is set.
+: "${KEYS:=0}"
 # Sourcing the inventory below would clobber a LOADGENS given on the command
 # line, and sweeping the generator count is the whole point of this script --
 # one, two, then three against the same broker. Remember the caller's value and
@@ -81,7 +85,7 @@ run_agg() {
   pids=""
   for lg in ${LOADGENS}; do
     ( run_on_str "$lg" "export FELIX_MTU_UPPER_BOUND=4096; ulimit -n 1048576 || true
-felix-loadgen --brokers '${broker_addrs}' --tenant perf --token-file '${TOKEN_FILE}' --environment 'azure-nvme-multi' --scenario ingest --stream '${STREAM}' --payload-bytes 4096 --batch 64 --concurrency ${conc} --total ${total}
+felix-loadgen --brokers '${broker_addrs}' --tenant perf --token-file '${TOKEN_FILE}' --environment 'azure-nvme-multi' --scenario ingest --stream '${STREAM}' --payload-bytes 4096 --batch 64 --concurrency ${conc} --total ${total} --keys ${KEYS}
 echo __RUNOK__" > "/tmp/agg-${lg}.txt" 2>&1 ) &
     pids="$pids $!"
   done

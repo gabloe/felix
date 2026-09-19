@@ -23,6 +23,11 @@ parking_lot = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+# The broker is a Linux-only artifact; this is the path it actually runs.
+# Everything else keeps the portable blocking-pool fallback.
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true }
 tempfile = { workspace = true }

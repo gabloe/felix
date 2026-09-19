@@ -14,6 +14,8 @@ pub mod log_cache;
 pub mod metrics_names;
 pub mod segment;
 pub mod tiered;
+#[cfg(target_os = "linux")]
+mod uring_fsync;
 pub use commit_order::{CommitSequencer, CommitTurn};
 pub use counter_log::CounterStore;
 pub use disk_log::{DiskLog, DiskLogProvider};

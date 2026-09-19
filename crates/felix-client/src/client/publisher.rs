@@ -326,6 +326,19 @@ impl Publisher {
         )
     }
 
+    /// Whether the broker advertised the keyed binary publish frame.
+    ///
+    /// False against a broker that predates it, for the same reason
+    /// `supports_binary_ack` is: an unadvertised mask resolves to
+    /// `ORIGINAL_V1_FLAGS`, and such a broker would read the key prefix as a
+    /// `tenant_len`.
+    fn supports_binary_keyed(&self) -> bool {
+        felix_wire::supports(
+            self.inner.server_flags,
+            felix_wire::FLAG_BINARY_PUBLISH_KEYED,
+        )
+    }
+
     /// Publish one payload using the JSON compatibility encoding.
     pub async fn publish_json(
         &self,
@@ -341,14 +354,13 @@ impl Publisher {
 
     /// Publish one payload with a routing key.
     ///
-    /// **Keyed publishes use the JSON encoding.** The binary publish frames are
-    /// fixed layouts with no room for a key, and adding one means a new frame
-    /// flag and a new layout rather than an optional field. Until that exists, a
-    /// caller that needs a key trades the binary fast path for it.
-    ///
     /// The key decides the shard, and therefore the broker. Records sharing a
     /// key are ordered with respect to each other; records with different keys
     /// are not, once a stream has more than one shard.
+    ///
+    /// Binary against a broker that advertised `FLAG_BINARY_PUBLISH_KEYED`, JSON
+    /// against one that did not. A single keyed publish is a one-item keyed
+    /// batch on the wire, exactly as `publish` is for the unkeyed case.
     pub async fn publish_keyed(
         &self,
         tenant_id: &str,
@@ -358,7 +370,7 @@ impl Publisher {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
-        self.publish_json_keyed(tenant_id, namespace, stream, payload, Some(key), ack)
+        self.publish_batch_keyed(tenant_id, namespace, stream, key, vec![payload], ack)
             .await
     }
 
@@ -466,9 +478,22 @@ impl Publisher {
         payloads: Vec<Vec<u8>>,
         ack: AckMode,
     ) -> Result<()> {
+        self.publish_batch_binary_acked_inner(None, tenant_id, namespace, stream, payloads, ack)
+            .await
+    }
+
+    async fn publish_batch_binary_acked_inner(
+        &self,
+        key: Option<&[u8]>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
         if ack == AckMode::None {
             return self
-                .publish_batch_binary(tenant_id, namespace, stream, &payloads)
+                .publish_batch_binary_inner(key, tenant_id, namespace, stream, &payloads)
                 .await;
         }
         let worker = self.select_worker(tenant_id, namespace, stream)?;
@@ -482,8 +507,8 @@ impl Publisher {
         let _ = sample;
         #[cfg(feature = "telemetry")]
         let start = crate::t_now_if(sample);
-        let bytes = felix_wire::binary::encode_acked_publish_batch_bytes(
-            request_id, ack, tenant_id, namespace, stream, &payloads,
+        let bytes = felix_wire::binary::encode_acked_publish_batch_bytes_keyed(
+            request_id, ack, key, tenant_id, namespace, stream, &payloads,
         )?;
         #[cfg(feature = "telemetry")]
         if let Some(start) = start {
@@ -536,6 +561,10 @@ impl Publisher {
     /// A batch routed by one key. Every record in it lands on the same shard,
     /// because a batch is acknowledged as a unit and splitting it across shards
     /// would make it several batches.
+    ///
+    /// Binary whenever the broker advertised `FLAG_BINARY_PUBLISH_KEYED`, with
+    /// the JSON encoding as the fallback for brokers that predate it. The
+    /// fallback costs throughput, not correctness.
     pub async fn publish_batch_keyed(
         &self,
         tenant_id: &str,
@@ -545,8 +574,32 @@ impl Publisher {
         payloads: Vec<Vec<u8>>,
         ack: AckMode,
     ) -> Result<()> {
-        self.publish_batch_json_keyed(tenant_id, namespace, stream, payloads, Some(key), ack)
-            .await
+        if !self.supports_binary_keyed() {
+            return self
+                .publish_batch_json_keyed(tenant_id, namespace, stream, payloads, Some(key), ack)
+                .await;
+        }
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(Some(&key), tenant_id, namespace, stream, &payloads)
+                .await;
+        }
+        // An acked keyed batch needs both modifier bits, so it also needs the
+        // broker to have advertised the acked frame.
+        if !self.supports_binary_ack() {
+            return self
+                .publish_batch_json_keyed(tenant_id, namespace, stream, payloads, Some(key), ack)
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            Some(&key),
+            tenant_id,
+            namespace,
+            stream,
+            payloads,
+            ack,
+        )
+        .await
     }
 
     /// One batch under a producer's sequence, appended once however many
@@ -661,6 +714,18 @@ impl Publisher {
         stream: &str,
         payloads: &[Vec<u8>],
     ) -> Result<()> {
+        self.publish_batch_binary_inner(None, tenant_id, namespace, stream, payloads)
+            .await
+    }
+
+    async fn publish_batch_binary_inner(
+        &self,
+        key: Option<&[u8]>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<()> {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads_with_ts;
         let payloads = if self.inner.bench_embed_ts {
@@ -680,8 +745,8 @@ impl Publisher {
         let _ = sample;
         #[cfg(feature = "telemetry")]
         let start = crate::t_now_if(sample);
-        let (bytes, stats) = felix_wire::binary::encode_publish_batch_bytes_with_stats(
-            tenant_id, namespace, stream, payloads,
+        let (bytes, stats) = felix_wire::binary::encode_publish_batch_bytes_with_stats_keyed(
+            key, tenant_id, namespace, stream, payloads,
         )?;
         #[cfg(not(feature = "telemetry"))]
         let _ = stats;

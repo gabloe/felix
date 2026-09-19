@@ -11,6 +11,49 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+**Wire protocol:** one new frame flag, `FLAG_BINARY_PUBLISH_KEYED` (`0x0040`).
+`VERSION` remains `1` and no feature bit is added. The bit is negotiated on the
+handshake, so a client and broker that disagree about it exchange the same bytes
+they did before.
+
+### Added
+
+- **A routing key rides in the binary publish frame** (#549). A keyed publish
+  used to force the JSON encoding — the binary layouts were fixed and had
+  nowhere to put a key — and that fallback measured **645.8 MB/s against 917
+  MB/s** unkeyed on the same rig, with user CPU up from 20% to 28%. Routing a
+  record cost roughly 30% of throughput, which made sharding something you paid
+  for rather than something you got.
+
+  `0x0040` is a modifier on `0x0001`, the shape `FLAG_BINARY_PUBLISH_ACKED`
+  already established: the body is prefixed with a `u16` key length and the key
+  bytes. With both bits set the correlation prefix still comes first, so a
+  broker reads `request_id` at offset 0 whether or not a key follows.
+
+  A broker that predates the bit would read `key_len` as `tenant_len`, so the
+  client sends the keyed binary frame only to a broker that advertised it and
+  uses JSON otherwise — costing throughput, not correctness.
+
+- **`felix-loadgen --keys <n>`** spreads the ingest scenario's batches over `n`
+  routing keys. The scenario published unkeyed, and an unkeyed record resolves
+  to shard 0, so every "multi-shard" measurement taken with it was really a
+  single-shard one — a 12-shard and a 1-shard stream measured identically
+  (920 vs 923 MB/s) because both exercised the same log. Default `0` keeps the
+  old behaviour, so existing runs stay comparable.
+
+### Changed
+
+- **Device flushes can go through `io_uring` on Linux** (#548), behind
+  `FELIX_STORAGE_IO_URING=1`, default off. `IORING_OP_FSYNC` removes the
+  `spawn_blocking` hand-off rather than shrinking it, and unlike running the
+  sync inline it keeps the `await` as a yield point, so background rollover and
+  retention still get scheduled. A perf session measured **956.7 MB/s against
+  917.2** with it on — every run better, no overlap between the distributions.
+
+  The blocking pool stays as the fallback: a kernel too old for the opcode, or a
+  container that forbids the syscall, falls back rather than failing. Durability
+  must not depend on an optimisation being available.
+
 ## [0.4.1] - 2026-09-18
 
 A throughput fix. Durable publishes to one shard were processed strictly one at

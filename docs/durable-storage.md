@@ -456,8 +456,17 @@ cursors.
 | `FELIX_DURABLE_PREALLOCATE` | `true` | Reserve segment blocks at creation |
 | `FELIX_DURABLE_VERIFY_ALL_ON_OPEN` | `false` | Checksum every segment at startup |
 | `FELIX_DURABLE_REPAIR_CHECKSUM_TAIL` | `false` | Truncate a complete trailing record that fails its checksum (see below) |
+| `FELIX_STORAGE_IO_URING` | `0` | Submit device flushes to `io_uring` instead of the blocking pool (Linux only) |
 
 Invalid combinations fail at startup, not at the first publish.
+
+`FELIX_STORAGE_IO_URING=1` replaces the `spawn_blocking` hand-off on the flush
+path with `IORING_OP_FSYNC` on one process-wide ring. It is Linux-only and
+default off: a kernel too old for the opcode, or a container that forbids the
+syscall, falls back to the blocking pool rather than failing, because durability
+must not depend on an optimisation being available. A perf session measured
+956.7 MB/s against 917.2 with it on, every run better and no overlap between the
+two distributions.
 
 ```sh
 FELIX_DURABLE_STORAGE_DIR=/var/lib/felix/streams \

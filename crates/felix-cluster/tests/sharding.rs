@@ -73,6 +73,35 @@ async fn a_sharded_stream_is_placed_across_brokers() {
     cluster.shutdown().await;
 }
 
+/// **A keyed publish takes the binary encoding.**
+///
+/// The key used to force the JSON framing — the binary layouts had nowhere to
+/// put one — and a perf session measured that fallback at roughly 30% of
+/// throughput (#549). Without this assertion the routing tests below would go on
+/// passing over JSON and the regression would be invisible.
+#[serial]
+#[tokio::test]
+async fn a_keyed_publish_negotiates_the_binary_frame() {
+    let cluster = Cluster::start(sharded()).await.expect("start cluster");
+    let client = felix_cluster::client::connect(
+        cluster.nodes[0].client_addr,
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await
+    .expect("connect");
+    let publisher = client.publisher().await.expect("publisher");
+
+    let flags = publisher.negotiated_server_flags();
+    assert!(
+        felix_wire::supports(flags, felix_wire::FLAG_BINARY_PUBLISH_KEYED),
+        "the broker did not advertise the keyed binary frame (flags {flags:#06x}), so every \
+         keyed publish here silently falls back to JSON",
+    );
+
+    cluster.shutdown().await;
+}
+
 /// **Different keys reach different shards.** The whole point of a routing key:
 /// without it every record went to shard 0 and a stream could not scale past
 /// one broker.
@@ -115,6 +144,72 @@ async fn keys_spread_records_across_shards() {
     assert!(
         occupied > 1,
         "all 40 records landed on one shard; the routing key is not reaching shard_for",
+    );
+
+    cluster.shutdown().await;
+}
+
+/// **An unacked keyed publish reaches its shard too.**
+///
+/// `AckMode::None` takes the plain `FLAG_BINARY_PUBLISH_BATCH` frame rather than
+/// the acked one, so it is a second decode path with its own key handling — and
+/// it is the path `felix-loadgen` drives, which makes it the one the perf rig
+/// measures. One node, so nothing here waits on a forward settling: every shard
+/// is local and the only question is whether the key survived the frame.
+#[serial]
+#[tokio::test]
+async fn an_unacked_keyed_publish_reaches_its_shard() {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 1,
+        streams: vec![StreamSpec::new(STREAM, SHARDS)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.node_ids().first().expect("a node").clone();
+
+    let client = felix_cluster::client::connect(
+        cluster.nodes[0].client_addr,
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await
+    .expect("connect");
+    let publisher = client.publisher().await.expect("publisher");
+
+    for index in 0..40u32 {
+        publisher
+            .publish_keyed(
+                &cluster.tenant_id,
+                &cluster.namespace,
+                STREAM,
+                bytes::Bytes::from(format!("customer-{index}")),
+                format!("record-{index}").into_bytes(),
+                felix_wire::AckMode::None,
+            )
+            .await
+            .expect("unacked keyed publish");
+    }
+    // Nothing acknowledged these, so the only way to know they landed is to
+    // wait for the flush behind them.
+    publisher.finish().await.expect("flush publisher");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let mut occupied = 0;
+    let mut total = 0;
+    for shard in 0..SHARDS {
+        let records = read_shard(&cluster, &owner, shard).await;
+        if !records.is_empty() {
+            occupied += 1;
+        }
+        total += records.len();
+    }
+
+    assert_eq!(total, 40, "records were lost between the key and the log");
+    assert!(
+        occupied > 1,
+        "all 40 unacked records landed on one shard; the key is not reaching \
+         shard_for on the plain binary publish frame",
     );
 
     cluster.shutdown().await;
