@@ -141,6 +141,7 @@ pub(crate) async fn handle_publish_message_uni(
     // The publisher's token, carried on a forward for the owner to verify.
     credential: String,
 ) -> Result<bool> {
+    super::record_json_publish("publish");
     #[cfg(feature = "telemetry")]
     {
         let counters = crate::transport::quic::telemetry::frame_counters();
@@ -215,6 +216,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
     // The publisher's token, carried on a forward for the owner to verify.
     credential: String,
 ) -> Result<bool> {
+    super::record_json_publish("publish_batch");
     #[cfg(feature = "telemetry")]
     {
         let counters = crate::transport::quic::telemetry::frame_counters();

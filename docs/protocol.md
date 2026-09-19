@@ -70,15 +70,29 @@ Payload:
 ## Message Types (v1)
 Message schemas below are shown in pseudo-struct notation for readability; on the wire they are binary-encoded.
 
-### Publish
+### Publish / PublishBatch (compatibility only)
 ```
 { "type": "publish", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payload": "<base64>", "ack": "<none|per_message>" }
-```
-
-### PublishBatch
-```
 { "type": "publish_batch", "tenant_id": "<string>", "namespace": "<string>", "stream": "<string>", "payloads": ["<base64>", ...], "ack": "<none|per_batch>" }
 ```
+
+**These are not the data path.** A publish travels as a binary frame — see
+[Binary PublishBatch](#binary-publishbatch) and
+[Binary keyed PublishBatch](#binary-keyed-publishbatch) — and a routing key has
+ridden in that frame since `0x0040`. The JSON forms measured **645.8 MB/s
+against 917** for the same keyed workload on the same rig, with user CPU up from
+20% to 28%, and they now buy nothing the binary frames do not cover.
+
+They are still accepted, and will be: `ORIGINAL_V1_FLAGS` is frozen, so a client
+older than `0x0008` or `0x0040` is entitled to keep sending them and must keep
+working. What changed is that **no current Felix client emits one except as a
+fallback** it chooses itself, against a broker that did not advertise the frame
+it wanted. Brokers count what still arrives on this path as
+`felix_broker_json_publishes_total{frame="publish"|"publish_batch"}`, which is
+the evidence a deployment would need before this arm could ever be dropped.
+
+`publish_idempotent` is unaffected: it is JSON because no binary layout carries a
+producer id and sequence yet, not for compatibility.
 
 ### ProducerInit
 ```
@@ -589,8 +603,10 @@ repeated count times:
   u8[payload_len] payload
 ```
 
-This is the default encoding for unacknowledged client publishes. Clients can
-explicitly select JSON for compatibility.
+This is the encoding for client publishes. JSON is reached only as the
+compatibility fallback described under
+[Publish / PublishBatch](#publish--publishbatch-compatibility-only) — a client
+does not choose it, it falls back to it.
 
 ## Binary keyed PublishBatch
 When `flags & 0x0040 != 0` (always together with `0x0001`), the publish batch body

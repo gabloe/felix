@@ -282,8 +282,12 @@ impl Publisher {
     ///
     /// Acked and unacked publishes both take the binary path: an unacked publish is
     /// a plain `FLAG_BINARY_PUBLISH_BATCH` frame, and an acked one adds
-    /// `FLAG_BINARY_PUBLISH_ACKED` and waits for the broker's binary ack. Call
-    /// `publish_json` to force the JSON compatibility encoding instead.
+    /// `FLAG_BINARY_PUBLISH_ACKED` and waits for the broker's binary ack.
+    ///
+    /// JSON is reached only as a compatibility fallback, against a broker that
+    /// never advertised the binary frame this call needs. There is no longer a
+    /// way to ask for it: it is strictly more expensive and buys nothing the
+    /// binary frames do not cover.
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -340,6 +344,12 @@ impl Publisher {
     }
 
     /// Publish one payload using the JSON compatibility encoding.
+    #[deprecated(
+        since = "0.5.0",
+        note = "the data path is binary; the binary publish frame carries a routing key \
+                since 0.5.0. JSON is still spoken to a broker that predates the frame, but \
+                the client chooses that itself — see `publish`. Removed in 0.6.0."
+    )]
     pub async fn publish_json(
         &self,
         tenant_id: &str,
@@ -434,8 +444,11 @@ impl Publisher {
         response_rx.await.context("publish response dropped")?
     }
 
-    /// Publish a batch. Both acked and unacked batches use the binary encoding by
-    /// default; call `publish_batch_json` for the JSON compatibility encoding.
+    /// Publish a batch.
+    ///
+    /// Binary, unless the broker never advertised the frame this needs — then
+    /// JSON, which costs throughput and not correctness. That fallback is the
+    /// only way a Felix client emits a JSON publish.
     pub async fn publish_batch(
         &self,
         tenant_id: &str,
@@ -453,8 +466,10 @@ impl Publisher {
         // the acked binary frame. Both paths are equivalent in semantics; only the
         // framing differs, so the fallback costs throughput, not correctness.
         if !self.supports_binary_ack() {
+            // The private keyed form, not the deprecated public one: the
+            // fallback has to keep working after that surface is removed.
             return self
-                .publish_batch_json(tenant_id, namespace, stream, payloads, ack)
+                .publish_batch_json_keyed(tenant_id, namespace, stream, payloads, None, ack)
                 .await;
         }
         self.publish_batch_binary_acked(tenant_id, namespace, stream, payloads, ack)
@@ -546,6 +561,12 @@ impl Publisher {
     }
 
     /// Publish a batch using the JSON compatibility encoding.
+    #[deprecated(
+        since = "0.5.0",
+        note = "the data path is binary; the binary publish frame carries a routing key \
+                since 0.5.0. JSON is still spoken to a broker that predates the frame, but \
+                the client chooses that itself — see `publish_batch`. Removed in 0.6.0."
+    )]
     pub async fn publish_batch_json(
         &self,
         tenant_id: &str,
@@ -1521,6 +1542,57 @@ mod tests {
         publisher.finish().await.expect("finish");
     }
 
+    /// An acked batch falls back to JSON against a broker that never advertised
+    /// the acked binary frame, and the fallback carries no key.
+    ///
+    /// The fallback used to route through the public `publish_batch_json`, which
+    /// is deprecated and goes away in 0.6.0. It now calls the private keyed form
+    /// with `key: None`, and this pins that the rewiring did not quietly start
+    /// sending a key — an empty key is a key, and would hash to a shard rather
+    /// than resolving to shard 0.
+    #[tokio::test]
+    async fn an_acked_batch_falls_back_to_keyless_json_without_the_binary_flag() {
+        let (tx, mut rx) = mpsc::channel::<PublishRequest>(2);
+        let publisher = Publisher {
+            inner: Arc::new(PublisherInner::new(
+                Arc::new(vec![PublishWorker {
+                    tx,
+                    handle: tokio::sync::Mutex::new(None),
+                    request_counter: AtomicU64::new(1),
+                    // What a broker predating capability negotiation resolves to.
+                    server_flags: felix_wire::ORIGINAL_V1_FLAGS,
+                }]),
+                PublishSharding::RoundRobin,
+            )),
+        };
+
+        let publish = tokio::spawn({
+            let publisher = publisher.clone();
+            async move {
+                publisher
+                    .publish_batch("t", "ns", "s", vec![b"one".to_vec()], AckMode::PerBatch)
+                    .await
+            }
+        });
+
+        match rx.recv().await.expect("request") {
+            PublishRequest::Message {
+                message, response, ..
+            } => {
+                match message {
+                    Message::PublishBatch { key, payloads, .. } => {
+                        assert!(key.is_none(), "the unkeyed fallback must not invent a key");
+                        assert_eq!(payloads, vec![b"one".to_vec()]);
+                    }
+                    other => panic!("expected a JSON publish_batch, got {other:?}"),
+                }
+                let _ = response.send(Ok(()));
+            }
+            _ => panic!("a broker without the acked binary frame must get JSON"),
+        }
+        publish.await.expect("task").expect("publish");
+    }
+
     #[tokio::test]
     async fn unacked_publish_defaults_to_binary_and_json_is_explicit() {
         let (tx, mut rx) = mpsc::channel::<PublishRequest>(2);
@@ -1566,6 +1638,10 @@ mod tests {
             .expect("binary task")
             .expect("binary publish");
 
+        // Deliberately the JSON encoding: this asserts the compatibility arm
+        // still produces a Message::Publish, which is what a broker predating
+        // the binary frames gets.
+        #[allow(deprecated)]
         let json_publish = tokio::spawn({
             let publisher = publisher.clone();
             async move {

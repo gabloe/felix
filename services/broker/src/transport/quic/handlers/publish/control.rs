@@ -354,6 +354,7 @@ pub(crate) async fn handle_publish_message(
     // The publisher's token, carried on a forward for the owner to verify.
     credential: String,
 ) -> Result<()> {
+    super::record_json_publish("publish");
     #[cfg(feature = "telemetry")]
     {
         let counters = crate::transport::quic::telemetry::frame_counters();
@@ -762,6 +763,7 @@ pub(crate) async fn handle_publish_batch_message(
     // committed, and never forwarded.
     producer: Option<(u64, u64)>,
 ) -> Result<()> {
+    super::record_json_publish("publish_batch");
     #[cfg(feature = "telemetry")]
     {
         let counters = crate::transport::quic::telemetry::frame_counters();
