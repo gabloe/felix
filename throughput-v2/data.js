@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789836998326,
+  "lastUpdate": 1789837322574,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12220,6 +12220,58 @@ window.BENCHMARK_DATA = {
             "range": "21484.99",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 765773.42\nmean: 753929.07\nstdev: 21484.99\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "63c43a2e507ed0dd2f1c4fc3c478bd2690824eef",
+          "message": "feat(wire): a forwarded publish says so on its ack, and names the owner (#536) (#570)\n\nA publish for a shard the receiving broker does not own is forwarded to\nthe owner and acknowledged once the owner has written it. Correct, and\ninvisible -- so a client keeps publishing to the same entry broker\nforever while every record is decrypted, re-encrypted and decrypted again\non the way. A perf session put that at roughly half the throughput per\ncore: ~250 MB/s per busy vCPU direct against ~140 forwarded.\n\n`FLAG_BINARY_PUBLISH_ACK_OWNER` (0x0080) is a modifier on the publish\nack, the shape 0x0040 already established. The bit's presence is the\nsignal that forwarding happened; the payload carries the owner's node id,\nthe address it serves *clients* on, and the ownership generation.\n\nThe client address comes from the endpoint registry rather than\n`ForwardTarget::advertise_addr`, which is the peer listener -- telling a\nclient to publish to the internal port would send it somewhere that does\nnot speak to clients. The same lookup `NotLeader` already does.\n\nA hint, not a refusal. The publish already succeeded, so a client that\nignores it is exactly as correct as before and only as slow, which is\nwhat makes this safe to add: nothing depends on a client acting on it.\nThe issue left that choice open -- refuse like idempotent publish does,\nor hint -- and hinting is the one that costs nothing when the client\nalready guessed right.\n\nOnly ever set for a client that advertised the bit. One that did not\nrejects the whole frame, since an unknown flag bit is refused rather than\nmasked off, and the frame it would reject acknowledges a publish that\nsucceeded. `an_ack_without_an_owner_is_unchanged` pins that an ack with\nno owner is byte-identical to one from before the bit existed, which is\nthe compatibility claim everything else rests on.\n\nClients count it as `felix_client_publish_forwarded_total`, labelled by\nowner because which broker the traffic should have gone to is the part\nthat says whether connections are spread or all on one.\n`felix_client::publishes_forwarded()` exposes the same number without the\ntelemetry feature: \"am I paying the forwarding tax\" is worth being able\nto ask of a build that was not compiled for measurement, and it is what\nthe end-to-end test reads.\n\n`a_forwarded_publish_is_labelled_and_a_local_one_is_not` asserts both\ndirections against a real three-node cluster. A hint that fired on every\npublish would be as useless as one that never fired -- it is the\ndifference that tells a client its connection is landing in the wrong\nplace. Checked it fails with the hint disabled.\n\nRouting on the hint is deliberately not here. Caching shard -> owner and\nsending the next batch straight there needs a connection per owner --\n`ClusterClient` holds exactly one today -- and a client-side\n`shard_for(key)`, which lives broker-side in `shard_routing.rs`. That is\nits own change, and this is what makes it measurable.\n\nDocs: `docs/protocol.md` gains the layout, the compatibility rule and why\nthe JSON `PublishOk` carries no owner; the docs-site flag table gains\n0x0080 and 0x0040, which it had never been told about; the status table's\nsharding row says the forwarding is now visible and the routing is not\nbuilt; the observability page gains the client counter.",
+          "timestamp": "2026-09-19T09:58:34-07:00",
+          "tree_id": "7a841d362a8cadde6726eb37898f31e6d64c6f07",
+          "url": "https://github.com/gabloe/felix/commit/63c43a2e507ed0dd2f1c4fc3c478bd2690824eef"
+        },
+        "date": 1789837321742,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 235408.15,
+            "range": "6268.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235408.15\nmean: 232587.59\nstdev: 6268.82\ncv: 2.70%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 235408.15,
+            "range": "6268.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 235408.15\nmean: 232587.59\nstdev: 6268.82\ncv: 2.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55821.01,
+            "range": "5205.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55821.01\nmean: 53617.55\nstdev: 5205.49\ncv: 9.71%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 558210.05,
+            "range": "52054.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 558210.05\nmean: 536175.51\nstdev: 52054.93\ncv: 9.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
