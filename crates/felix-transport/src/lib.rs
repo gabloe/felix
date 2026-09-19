@@ -239,12 +239,40 @@ const DEFAULT_RECEIVE_WINDOW: u64 = 64 * 1024 * 1024;
 const DEFAULT_STREAM_RECEIVE_WINDOW: u64 = 16 * 1024 * 1024;
 const DEFAULT_SEND_WINDOW: u64 = 64 * 1024 * 1024;
 const DEFAULT_INITIAL_MTU: u16 = 1200;
-// Bound MTU discovery at 16 KiB: it matches loopback (lo0 = 16384) and jumbo-frame
-// ceilings, and measured best for byte-heavy workloads. A far-away bound (e.g. the
-// QUIC max 65527) makes the search converge slower without ever finding a larger
-// path. Small-message workloads can prefer ~4096 (finer ACK clocking) via
-// FELIX_MTU_UPPER_BOUND.
-const DEFAULT_MTU_DISCOVERY_UPPER_BOUND: u16 = 16384;
+// Bound MTU discovery below Linux's UDP GSO ceiling, for the same reason
+// `LOOPBACK_PINNED_MTU_CAP` exists: a batch is one IP datagram, so
+// `mtu * segments <= 65535`, and quinn batches up to 10 -- making 6553 the true
+// ceiling. Above it the kernel rejects every batch with `EMSGSIZE`, which quinn
+// does not treat as a GSO failure (it falls back only on EIO/EINVAL), so
+// delivery stalls and stays stalled.
+//
+// This bound used to be 16384, which is above that ceiling. Loopback was
+// already capped, but a *routed* path was not -- and a jumbo-frame network,
+// which is what you buy for throughput, is exactly where discovery climbs past
+// 6553 and the stall is permanent. Every perf session set
+// `FELIX_MTU_UPPER_BOUND=4096` by hand to avoid it; that is now the default.
+//
+// 4096 rather than 6553: `MAX_TRANSMIT_SEGMENTS` is private to quinn, so the
+// ceiling cannot be derived through its API, and 4096 still holds if the batch
+// size rises to 15 where 6553 breaks the moment it moves. It is also the
+// fastest configuration measured on Linux (round 18) and converges faster than
+// a far-away bound, which never finds a larger path anyway.
+//
+// macOS has no GSO and no such limit, and 16336 is measured good there over
+// hundreds of runs -- the same split `LOOPBACK_PINNED_MTU_CAP` makes.
+const DEFAULT_MTU_DISCOVERY_UPPER_BOUND: u16 =
+    mtu_discovery_upper_bound_for(cfg!(target_os = "macos"));
+
+/// The default bound, as a function of the platform, so both branches can be
+/// tested from either one.
+///
+/// A `cfg!` expression would make the Linux value unreachable on a macOS
+/// developer machine -- and the value that matters is the Linux one, because
+/// Linux is where GSO makes it load-bearing. A test that silently passes on the
+/// host doing the editing is worth very little.
+const fn mtu_discovery_upper_bound_for(macos: bool) -> u16 {
+    if macos { 16384 } else { 4096 }
+}
 const DEFAULT_MAX_UDP_PAYLOAD_SIZE: u16 = 65527;
 const DEFAULT_UDP_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 // Three keep-alives fit inside the idle window, so a subscription survives two
@@ -521,6 +549,36 @@ fn effective_udp_buffer_bytes(socket: &std::net::UdpSocket) -> usize {
     send.min(recv)
 }
 
+/// Say so when the OS granted far less socket buffer than was asked for.
+///
+/// Linux accepts an oversized `SO_RCVBUF`/`SO_SNDBUF` and silently clamps it to
+/// `net.core.rmem_max` / `wmem_max`, which ship at around 208 KB. Against the
+/// 8 MiB Felix asks for that is a fortieth, and the consequence is not an
+/// error: bursts overflow the socket, the drops surface as QUIC retransmits,
+/// and throughput is a fraction of what the host can do. Every perf session had
+/// to raise these to 26 MiB before any other number meant anything.
+///
+/// Nothing here can fix it -- the limit belongs to the host -- so the only
+/// useful thing is to stop it being silent. Once per endpoint, at `warn`,
+/// naming the sysctls: a broker that is quietly at a fortieth of its capacity
+/// should not look identical to one that is not.
+fn warn_if_udp_buffers_were_clamped(socket: &std::net::UdpSocket, requested: usize) {
+    let granted = effective_udp_buffer_bytes(socket);
+    // Half is the threshold rather than any shortfall: the bind loop above
+    // halves on rejection, so landing one step down is the mechanism working,
+    // not the host being untuned.
+    if granted == 0 || granted >= requested / 2 {
+        return;
+    }
+    tracing::warn!(
+        requested_bytes = requested,
+        granted_bytes = granted,
+        "the OS granted far less UDP socket buffer than requested; bursts will be \
+         dropped at the socket and surface as QUIC retransmits. On Linux raise \
+         net.core.rmem_max and net.core.wmem_max (perf sessions use 26 MiB)",
+    );
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Stable connection identifier used for tracing/logging.
 ///
@@ -591,7 +649,15 @@ impl QuicServer {
         let socket = transport.bind_udp_socket(addr)?;
         let quinn_transport = transport.quinn_transport_config();
         let loopback_config = transport
-            .loopback_initial_mtu(effective_udp_buffer_bytes(&socket))
+            .loopback_initial_mtu({
+                warn_if_udp_buffers_were_clamped(
+                    &socket,
+                    transport
+                        .udp_recv_buffer_bytes
+                        .min(transport.udp_send_buffer_bytes),
+                );
+                effective_udp_buffer_bytes(&socket)
+            })
             .map(|mtu| {
                 let mut config = server_config.clone();
                 config
@@ -680,7 +746,15 @@ impl QuicClient {
         let socket = transport.bind_udp_socket(addr)?;
         let quinn_transport = transport.quinn_transport_config();
         let loopback_config = transport
-            .loopback_initial_mtu(effective_udp_buffer_bytes(&socket))
+            .loopback_initial_mtu({
+                warn_if_udp_buffers_were_clamped(
+                    &socket,
+                    transport
+                        .udp_recv_buffer_bytes
+                        .min(transport.udp_send_buffer_bytes),
+                );
+                effective_udp_buffer_bytes(&socket)
+            })
             .map(|mtu| {
                 let mut config = client_config.clone();
                 config
@@ -1317,5 +1391,61 @@ mod tests {
         let id3 = ConnectionId(43);
         assert_eq!(id1, id2);
         assert_ne!(id1, id3);
+    }
+}
+
+#[cfg(test)]
+mod gso_ceiling_tests {
+    use super::*;
+
+    /// quinn's `MAX_TRANSMIT_SEGMENTS`, which is private to quinn and so cannot
+    /// be read through its API. Restated here because the whole bound depends
+    /// on it, and a change to it upstream is exactly what would break us.
+    const QUINN_MAX_TRANSMIT_SEGMENTS: u32 = 10;
+    /// One `sendmsg` batch is one IP datagram, whatever GSO splits it into.
+    const IP_DATAGRAM_MAX: u32 = 65535;
+
+    /// **The default MTU bound must keep a GSO batch inside one IP datagram.**
+    ///
+    /// Above it Linux rejects every batch with `EMSGSIZE`, and quinn falls back
+    /// off segmentation only on `EIO`/`EINVAL` -- so the transmit is dropped
+    /// after quinn has counted it as sent, and delivery stalls permanently
+    /// rather than degrading. The bound was 16384 for a while, which is over
+    /// the line; loopback was capped separately but a routed jumbo-frame path
+    /// was not.
+    ///
+    /// The investigation that found this said no test could catch a regression
+    /// in the invariant. One can catch the part that matters: that the default
+    /// we ship still fits.
+    #[test]
+    fn the_default_mtu_bound_fits_a_gso_batch() {
+        // The non-macOS value specifically, whatever host is running this:
+        // macOS has no GSO and no aggregate limit, so its 16336 is fine and
+        // would make this vacuous on a developer's machine.
+        let bound = mtu_discovery_upper_bound_for(false);
+        let aggregate = u32::from(bound) * QUINN_MAX_TRANSMIT_SEGMENTS;
+        assert!(
+            aggregate <= IP_DATAGRAM_MAX,
+            "an MTU of {bound} batches to {aggregate} bytes, \
+             over the {IP_DATAGRAM_MAX} an IP datagram holds. Linux answers EMSGSIZE, \
+             quinn does not recognise it as a GSO failure, and delivery stalls for good.",
+        );
+    }
+
+    /// And with margin: the ceiling moves if quinn's batch size does.
+    ///
+    /// 6553 is the exact limit at 10 segments and breaks the moment that rises.
+    /// The margin is the reason the default is 4096 rather than the largest
+    /// value that happens to work today.
+    #[test]
+    fn the_default_mtu_bound_survives_a_larger_batch() {
+        let grown = QUINN_MAX_TRANSMIT_SEGMENTS + 5;
+        let aggregate = u32::from(mtu_discovery_upper_bound_for(false)) * grown;
+        assert!(
+            aggregate <= IP_DATAGRAM_MAX,
+            "the default has no margin: at {grown} segments it batches to {aggregate} bytes. \
+             Pick a bound that survives quinn changing MAX_TRANSMIT_SEGMENTS, because \
+             nothing here will notice when it does.",
+        );
     }
 }

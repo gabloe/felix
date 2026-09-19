@@ -83,6 +83,45 @@ they did before.
 
 ### Changed
 
+- **MTU discovery is bounded below Linux's UDP GSO ceiling by default**
+  (`4096`, was `16384`; macOS keeps `16384`). Linux packs a whole `sendmsg`
+  batch into one IP datagram, so `MTU × segments` must stay under 65,535, and
+  quinn batches up to 10 — putting the real ceiling at **6,553 bytes**. Above it
+  the kernel rejects every batch with `EMSGSIZE`, which quinn does not recognise
+  as a GSO failure (it falls back only on `EIO`/`EINVAL`), so the transmit is
+  dropped *after* quinn has counted it as sent and delivery stalls permanently
+  rather than degrading.
+
+  Loopback was capped at 4096 when this was diagnosed; a **routed** path was
+  not. That made the old default harmless on a 1500-byte network and fatal on a
+  jumbo-frame one — which is the network you buy for throughput. Every perf
+  session set `FELIX_MTU_UPPER_BOUND=4096` by hand; that is now the default.
+
+  `4096` rather than the exact `6553`: quinn's `MAX_TRANSMIT_SEGMENTS` is
+  private to it, so the ceiling cannot be derived through its API, and 6,553
+  breaks the moment that number rises. Two tests pin the invariant, and they
+  check the non-macOS value from either host — a check that quietly passes on
+  the machine doing the editing is worth very little.
+
+- **A broker says so when the OS clamps its UDP socket buffers.** Linux accepts
+  an oversized `SO_RCVBUF`/`SO_SNDBUF` and silently clamps it to
+  `net.core.rmem_max`/`wmem_max`, which ship at around 208 KB against the 8 MiB
+  Felix asks for. Bursts then overflow the socket and surface as QUIC
+  retransmits, so the broker runs at a fraction of the host's capacity and looks
+  healthy doing it. Nothing in Felix can raise a host limit, so the warning
+  names the sysctls instead.
+
+  **Deliberately unchanged: `publish_conn_pool` (4) and `publish_sharding`
+  (`HashStream`).** Both were swept in an Azure session and both looked
+  promising, but those runs were void — the generator was ignoring client
+  environment config (#553), so the overrides never applied and the runs
+  measured the defaults. Re-tested on a fixed generator, round-robin landed at
+  912.6 MB/s, inside the 842–926 band every valid configuration occupied, and
+  raising the broker's publish worker pool 4 → 16 measured slightly worse. The
+  reasoning is now recorded next to each default so it is not re-litigated from
+  the retracted numbers.
+
+
 - **The container images are published.** `ghcr.io/gabloe/felix-broker` and
   `ghcr.io/gabloe/felix-controlplane` went out with 0.4.1 and pull without
   credentials. Each release tags the full version, the minor series, and
