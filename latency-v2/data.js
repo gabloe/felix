@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789844843835,
+  "lastUpdate": 1789846294986,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15972,6 +15972,72 @@ window.BENCHMARK_DATA = {
             "range": "684.85",
             "unit": "us",
             "extra": "trials: 5\nmedian: 345.00\nmean: 642.20\nstdev: 684.85\ncv: 106.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "50094de1f6c8768cedda8e923093ef5d825aeda9",
+          "message": "release: 0.5.0 (#572)\n\n* release: 0.5.0\n\nVersion bumps, the changelog cut, and a guard so the next release cannot\nship what this one nearly did.\n\n39 version references across 14 files: the workspace and every path\ndependency, the npm package, and the Helm chart -- appVersion to 0.5.0\nand the chart's own version to 0.1.1, since it now points at a different\napp. pyproject.toml needs nothing; it takes the version from the crate.\n\nAll seven lockfiles refreshed with `task lock:refresh`, which is the step\n0.4.0 and 0.4.1 both forgot and #563 added for exactly this. The diff is\nversion-only, no dependency resolved differently.\n\nThree changelog problems, found by checking rather than reading:\n\nThe timing-tests entry was filed under `## [0.4.1]`, a released version --\nthe insertion had anchored on the file's first `### Fixed`, which was\n0.4.1's. Moved.\n\nTwo merged changes had no entry at all: #563, and #568, which moved two\npublished URLs (`/api/client-sdk/` -> `/clients/rust/` and\n`/api/clients/` -> `/clients/overview/`). A reader following an old link\ndeserves to find out from the changelog rather than from a 404.\n\nThe wire-protocol claim is now checked rather than asserted: the diff\nagainst v0.4.1 adds exactly FLAG_BINARY_PUBLISH_KEYED and\nFLAG_BINARY_PUBLISH_ACK_OWNER, with VERSION and INTERNAL_VERSION both\nstill 1 and no feature bit.\n\nThe image tags in the installation, Docker Compose and Kubernetes pages\nmove to 0.5.0. They become correct the moment the tag ships, which is\nwhat a release branch is for.\n\nAnd the guard. Nothing verified that a tag matched the versions in the\ntree, so `v0.5.0` on a tree still saying 0.4.1 would have shipped\nartifacts labelled with neither -- the archive is named from the tag, each\ncrate is built from its own manifest, and both succeed. Checking only the\nworkspace would have been the same mistake one level down: the wheel, the\nnpm package and the Helm chart each carry a version of their own, which is\nhow a lockfile sat at 0.4.0-preview through two releases.\n\n`scripts/check_release_version.py` reads all five and reports the ones\nthat disagree by name. CI runs it without a tag, which asserts the fields\nagree with each other -- the half a pull request can be wrong about, and\nworth catching before a branch is cut rather than when the release job\nrefuses the tag. The release job runs it with the tag, before anything is\npublished, because afterwards the tag is permanent.\n\nChecked both directions and the case that actually happens: a tree that\nagrees passes, a wrong tag is refused, and one file left behind is named.\n\n* docs: stop calling shipped capabilities unbuilt\n\nBroker-to-broker mTLS landed in M8 (#125, #126) and ten pages still listed it\nas future work -- including the README's \"What does not exist yet\", which the\nREADME itself defers to the status table over. The status table was right the\nwhole time; everything else disagreed with it, on a security control.\n\nSwept the same class of error while in there: architecture.md said no metadata\nrides the control plane's Raft group (M13 closed that), how-felix-works named\nRaft and mTLS as unbuilt, the threat model called peer connection exhaustion\nunmitigated after #504 capped it, and two pages still counted two clients.\n\nThe threat model's replay case goes the other way: #422 shipped idempotent\nproducers on the client-to-broker path only, and ForwardPublish carries no\nproducer id, so the owner has nothing to deduplicate against. Recorded as\nopen with what it needs, rather than closed by association.\n\n* docs: the Python client is not on PyPI, so stop saying pip install felix-client\n\nThe clients page told people to run a command that 404s. The TypeScript page\nnext to it says plainly that npm is behind a switch; Python says the same now,\nand points at the wheels the release actually carries.\n\n* release: carry the Node platform packages and the publish jobs into 0.5.0\n\nThe rebase onto main brought #574 and #575 under the tag, so the crates.io job\nand the npm packaging ship in this release and belong in its changelog rather\nthan the next one's.\n\nIt also brought six version sites the release commit had never seen: the five\nplatform package.json files and the optionalDependencies that name them.\ncheck_npm_packages.py caught every one against the bumped main package, which\nis what it is for.",
+          "timestamp": "2026-09-19T12:28:17-07:00",
+          "tree_id": "1a499df89ef8757b16c1ef003bed070e63a871c3",
+          "url": "https://github.com/gabloe/felix/commit/50094de1f6c8768cedda8e923093ef5d825aeda9"
+        },
+        "date": 1789846293109,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 76,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 76.00\nmean: 76.20\nstdev: 0.45\ncv: 0.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 112,
+            "range": "2.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 112.00\nmean: 111.20\nstdev: 2.05\ncv: 1.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 132,
+            "range": "3.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 132.60\nstdev: 3.71\ncv: 2.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 96,
+            "range": "3.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 96.00\nmean: 97.60\nstdev: 3.21\ncv: 3.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 217,
+            "range": "11.37",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 217.00\nmean: 209.40\nstdev: 11.37\ncv: 5.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 462,
+            "range": "310.04",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 462.00\nmean: 596.80\nstdev: 310.04\ncv: 51.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
