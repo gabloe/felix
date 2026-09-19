@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789830476176,
+  "lastUpdate": 1789831795465,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15114,6 +15114,72 @@ window.BENCHMARK_DATA = {
             "range": "405.18",
             "unit": "us",
             "extra": "trials: 5\nmedian: 998.00\nmean: 1014.40\nstdev: 405.18\ncv: 39.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9466502efd2b70e06eb9f49d84e4c01f7cdf09e7",
+          "message": "fix(build): re-lock the crates the workspace does not reach, and notice next time (#563)\n\ndemos/cross_tenant_isolation, demos/rbac-live, demos/slow-consumer,\ndemos/state-divergence and crates/felix-python each declare their own\n[workspace], so the repository workspace never touches their Cargo.lock.\nAll four demo locks still pinned 0.4.0-preview -- they missed the 0.4.0\nrelease and then 0.4.1 -- and none of them had heard of io-uring, which\n#548 added to felix-storage. felix-python pinned felix-client 0.4.0.\n\nNothing was broken by this, because cargo silently re-locks on build.\nThat is exactly why it went unnoticed for two releases: CI runs\n`task demo:check` on every Rust pull request, which rewrote these files\non every run, and nothing ever looked at what the build changed.\n\nSo the step after it looks. `git diff --quiet -- '**/Cargo.lock'` fails\nthe job if a build updated a lockfile the commit did not include, with\nthe command to fix it in the error. Checked both directions: with the\nlocks refreshed the tree is clean after `task demo:check`, and restoring\none stale lock makes the build rewrite it and the guard fire.\n\n`task lock:refresh` is that fix -- one command over all six out-of-tree\ncrates rather than six `cd`s, and it skips a directory that does not\nexist, so it works on a branch where felix-typescript is not there yet.\n\nThe diff is version pins and the io-uring addition. No dependency was\nresolved to a different version.",
+          "timestamp": "2026-09-19T08:27:16-07:00",
+          "tree_id": "a020ade6e209290e49615d35a709f5fe25031491",
+          "url": "https://github.com/gabloe/felix/commit/9466502efd2b70e06eb9f49d84e4c01f7cdf09e7"
+        },
+        "date": 1789831794100,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 162.80\nstdev: 0.84\ncv: 0.51%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 212,
+            "range": "75.97",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 212.00\nmean: 245.20\nstdev: 75.97\ncv: 30.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 249,
+            "range": "119.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 249.00\nmean: 301.80\nstdev: 119.71\ncv: 39.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "1.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 201.80\nstdev: 1.92\ncv: 0.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 407,
+            "range": "53.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 407.00\nmean: 426.00\nstdev: 53.80\ncv: 12.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 634,
+            "range": "583.93",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 634.00\nmean: 989.80\nstdev: 583.93\ncv: 58.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
