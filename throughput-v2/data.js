@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789836301374,
+  "lastUpdate": 1789836462119,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12116,6 +12116,58 @@ window.BENCHMARK_DATA = {
             "range": "9333.32",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 542462.63\nmean: 541429.92\nstdev: 9333.32\ncv: 1.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "33af27660993ab15ab3c7a2e977e5efb8f7d5a03",
+          "message": "docs: the container images are published, so stop saying they are not (#567)\n\n`vars.PUBLISH_IMAGES` is on and 0.4.1 shipped `felix-broker` and\n`felix-controlplane` to GHCR. Confirmed against the registry rather than\ntaken on trust: both are anonymously pullable and carry 0.4.1, 0.4,\nlatest and a cosign signature tag.\n\nThree pages told the reader the opposite -- \"publishing is off until\nFelix is meant to be publicly pullable, so `docker pull` will not find\nthem today\" -- and sent them to build their own. That was true when\nwritten. The docs-site page on status says outright that a stale marker\nis worse than none, and this is the shape of it: a reader follows the\ninstruction and never discovers the images exist.\n\nDocker Compose and Installation now pull, and keep the build commands\nfor running something unreleased, which is the case that still needs\nthem. Kubernetes drops the \"when they are published\" hedge and gives the\n`cosign verify` invocation, since signing is keyless and the identity is\nthe release workflow rather than a key anyone has to be given.\n\nThe digest advice is now the operative one rather than a future note.\nThe release signs `image@digest` and never `image:tag` -- a tag can be\nmoved to point at something else and a signature over a tag would follow\nit -- so `broker.image.digest` is what a production pin should use.\n\nAlso recorded that the chart's defaults now resolve: the image tag falls\nback to `appVersion`, so a default install pulls a real image with\nnothing to configure. Checked by rendering rather than by reading --\n`helm template` with the ci/ value sets produces exactly\nghcr.io/gabloe/felix-broker:0.4.1 and ghcr.io/gabloe/felix-controlplane:0.4.1,\nboth of which are published tags.\n\nThe release workflow's own comment said publishing was off too. It now\nsays the switch is on and why the gate stays: a fork building this\nworkflow should not push to a registry it did not mean to.",
+          "timestamp": "2026-09-19T09:42:34-07:00",
+          "tree_id": "80b86dee1209ca96442be68e481c5fca1d076c5f",
+          "url": "https://github.com/gabloe/felix/commit/33af27660993ab15ab3c7a2e977e5efb8f7d5a03"
+        },
+        "date": 1789836461717,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233993.92,
+            "range": "4270.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233993.92\nmean: 231864.24\nstdev: 4270.65\ncv: 1.84%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233993.92,
+            "range": "4270.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233993.92\nmean: 231864.24\nstdev: 4270.65\ncv: 1.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55383.52,
+            "range": "931.18",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55383.52\nmean: 55766.18\nstdev: 931.18\ncv: 1.67%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 553835.22,
+            "range": "9311.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 553835.22\nmean: 557661.78\nstdev: 9311.83\ncv: 1.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
