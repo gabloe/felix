@@ -113,9 +113,9 @@ worth writing code for.
 
 | | | |
 | --- | --- | --- |
-| **[Rust](/felix/clients/rust/)** | `felix-client` | The reference client, and the one the others are built from. |
+| **[Rust](/felix/clients/rust/)** | `felix-client` on crates.io | The reference client, and the one the others are built from. |
 | **[Python](/felix/clients/python/)** | `felix-client` on PyPI | A PyO3 binding, with a synchronous and an asyncio surface over the same Rust client. |
-| **[TypeScript](/felix/clients/typescript/)** | `@felix/client` | A napi-rs addon. One asynchronous surface, because blocking Node's event loop is not something a library may do. |
+| **[TypeScript](/felix/clients/typescript/)** | `felix-client` on npm | A napi-rs addon. One asynchronous surface, because blocking Node's event loop is not something a library may do. |
 
 Python and TypeScript both pass every required scenario in the catalogue, and
 CI is gated on both. Each leaves a couple of optional scenarios unclaimed

@@ -11,6 +11,21 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Changed
+
+- **The Node package is `felix-client`, unscoped.** `@felix` on npm was already
+  taken — there is an unscoped `felix` package, and the scope with it — so the
+  six packages the release publishes are `felix-client` and one per platform,
+  `felix-client-darwin-arm64` and friends. All six names were confirmed free.
+
+  Unscoped rather than hunting for another scope: it is the same name the crate
+  has on crates.io and the wheel has on PyPI, so one string covers every
+  install instruction, and an unscoped name is first-come rather than colliding
+  with a namespace someone else may hold. `publishConfig.access` went with the
+  scope — only a scoped package defaults to restricted.
+
+  Nothing had been published, so this costs nothing but the rename.
+
 ### Fixed
 
 - **The Quickstart's first command did not work**, and neither did the one it

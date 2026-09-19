@@ -508,14 +508,19 @@ jobs:
           # The binaries job owns the release body; this only adds files to it.
           append_body: false
 
-  # Same reasoning as the PyPI job below: `npm install @felix/client` is a
-  # public commitment — the scope is claimed, the version is permanent, and
-  # anyone can depend on it. Until Felix is ready for that, the addons ride the
-  # GitHub release and this stays behind an explicit switch.
+  # Same reasoning as the PyPI job below: `npm install felix-client` is a
+  # public commitment — the name is permanent and anyone can depend on it.
+  # Until Felix is ready for that, the addons ride the GitHub release and this
+  # stays behind an explicit switch.
   #
-  # To turn it on: set the repository variable PUBLISH_NPM to "true", add an
-  # NPM_TOKEN secret with publish rights to the @felix scope, and check the
-  # scope is actually available first — it is unrelated to the crate name.
+  # Unscoped, and matching the PyPI name deliberately: `@felix` was taken, and
+  # one name across both registries is worth more than a namespace here. Six
+  # names go up per release — `felix-client` and one per platform.
+  #
+  # To turn it on: set the repository variable PUBLISH_NPM to "true" and add an
+  # NPM_TOKEN secret with publish rights. It must be an automation or granular
+  # token: with 2FA on writes, an ordinary token stops for an OTP prompt that
+  # nothing in CI can answer.
   typescript-publish:
     name: Publish to npm
     needs: typescript-release-assets
@@ -583,7 +588,7 @@ jobs:
   #
   # The Rust client is what the Python and Node bindings wrap, so this is the
   # publish the other two sit on top of: `pip install felix-client` and
-  # `npm install @felix/client` ship a compiled `felix-client`, but anyone
+  # `npm install felix-client` ship a compiled `felix-client`, but anyone
   # writing Rust needs it from the registry.
   #
   # Order is not cosmetic. crates.io resolves a dependency against the registry

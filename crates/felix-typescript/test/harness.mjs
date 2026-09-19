@@ -257,7 +257,7 @@ export function writeResults() {
     // Reporting must not depend on the package manifest being readable.
   }
   const document = {
-    client: "@felix/client (TypeScript)",
+    client: "felix-client (TypeScript)",
     version,
     outcomes: [...outcomes.values()].sort((a, b) => a.id.localeCompare(b.id)),
   };

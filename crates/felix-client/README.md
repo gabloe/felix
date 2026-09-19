@@ -3,8 +3,8 @@
 The Rust client for [Felix](https://github.com/gabloe/felix): a QUIC pub/sub
 broker with durable streams, consumer groups, and a log-backed cache.
 
-The Python (`felix-client` on PyPI) and Node (`@felix/client`) packages are
-bindings over this crate rather than reimplementations, so reconnection,
+The Python and Node packages carry the same name on PyPI and npm, and both are
+bindings over this crate rather than reimplementations — so reconnection,
 redirect-following, retry classification and offset bookkeeping behave the same
 in all three.
 
