@@ -13,6 +13,29 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **The npm publish step passed an option the pinned CLI does not have.**
+  `napi prepublish -t npm --access public` is a napi 3 spelling; the CLI is
+  pinned to 2, to match the napi crate, and it refused the flag before
+  uploading anything. The flag was never needed once the packages went
+  unscoped — npm publishes an unscoped package publicly by default, and a
+  scoped one takes `publishConfig.access` in its manifest rather than a flag
+  on the command.
+
+- **The crates.io job now waits out the new-crate rate limit** instead of
+  failing the release. crates.io allows a short burst of *new* crate names and
+  then roughly one per ten minutes: publishing this workspace for the first
+  time got five up and was refused on the sixth with a `429` naming the time it
+  would accept the next.
+
+  That is a queue rather than an error, and it only applies to names that have
+  never been published — later versions of an existing crate are not bounded
+  this way. The job reads the time from the response, waits, and retries, and
+  gives up immediately on any failure that is not a rate limit. The existing
+  skip-what-is-already-published behaviour means a resumed run picks up where
+  the last one stopped rather than erroring on what already landed.
+
+### Fixed
+
 - **The Node addon's cross-compile leg could not build.** The 0.5.0 release
   pipeline failed on `x86_64-apple-darwin` with `can't find crate for core`,
   which took the npm assets with it.

@@ -568,9 +568,12 @@ jobs:
         working-directory: crates/felix-typescript
         run: ls -la *.node
 
+      # No `--access`: the napi 2 CLI has no such option, and the packages are
+      # unscoped, so npm treats them as public anyway. A scoped package would
+      # need `publishConfig.access` in its manifest rather than a flag here.
       - name: Publish
         working-directory: crates/felix-typescript
-        run: napi prepublish -t npm --access public
+        run: napi prepublish -t npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -670,6 +673,28 @@ jobs:
               echo "== ${crate} ${version} is already on crates.io, skipping"
               continue
             fi
-            echo "== publishing ${crate} ${version}"
-            cargo publish -p "$crate" --locked
+            # crates.io allows a short burst of *new* crate names and then one
+            # per ten minutes. Publishing a workspace for the first time runs
+            # straight into it -- 0.5.0 got five up and was refused on the
+            # sixth -- and it is not an error, it is a queue. Version publishes
+            # after that first release are not bounded this way, so this waits
+            # rather than failing a release nobody can retry cheaply.
+            for attempt in 1 2 3 4 5; do
+              echo "== publishing ${crate} ${version} (attempt ${attempt})"
+              if cargo publish -p "$crate" --locked 2>&1 | tee /tmp/publish.log; then
+                break
+              fi
+              if ! grep -q "429 Too Many Requests" /tmp/publish.log; then
+                echo "not a rate limit; giving up on ${crate}"
+                exit 1
+              fi
+              # The server names the time it will accept the next one.
+              until_ts=$(sed -n 's/.*try again after \(.*\) and see.*/\1/p' /tmp/publish.log | head -1)
+              now=$(date -u +%s)
+              wait=$(( $(date -u -d "$until_ts" +%s 2>/dev/null || echo $((now + 660))) - now + 15 ))
+              [ "$wait" -lt 15 ] && wait=15
+              [ "$wait" -gt 1800 ] && wait=1800
+              echo "rate limited; waiting ${wait}s"
+              sleep "$wait"
+            done
           done
