@@ -2,73 +2,117 @@
 title: "Quickstart"
 ---
 
-The shortest path to a running broker and something happening on it.
+The shortest path to a running Felix cluster with something happening on it.
+
+A broker on its own is not a working system: it authenticates every connection
+against a control plane, so it needs one to talk to and a credential to present.
+The local cluster command below starts all of that for you, which is why it is
+the first thing here rather than the last.
 
 ## Prerequisites
 
-- **Rust:** 1.97.1 or later ([install rustup](https://rustup.rs/))
-- **Git:** For cloning the repository
-- **Optional:** [Task](https://taskfile.dev/) for convenience commands
+- **Rust** 1.97.1 or later ([rustup](https://rustup.rs/))
+- **Git**
+- Optional: [Task](https://taskfile.dev/), for the shortcuts CI uses
 
-## Clone and Build
+## Build
 
 ```bash
-# Clone the repository
 git clone https://github.com/gabloe/felix.git
 cd felix
-
-# Build the entire workspace in release mode
-cargo build --workspace --release
+cargo build --release
 ```
 
-The release build is recommended for performance testing. Development builds have significantly higher overhead.
+Use the release profile for anything you intend to measure. A debug build is
+several times slower and will mislead you.
 
-## Start the Broker
+## A cluster, in one command
 
-Run the Felix broker in a terminal:
+`felix-cluster` starts a control plane, mints the credentials, and brings up as
+many brokers as you ask for:
 
 ```bash
-cargo run --release -p broker
+cargo run --release -p felix-cluster -- up --nodes 3
 ```
 
-You should see structured log output:
+```
+cluster up.
+
+control plane   http://127.0.0.1:52704
+
+node       client                 metrics
+broker-0   127.0.0.1:53348        127.0.0.1:52706
+broker-1   127.0.0.1:65027        127.0.0.1:52707
+broker-2   127.0.0.1:50410        127.0.0.1:52708
+
+placeable: broker-0, broker-1, broker-2
+shard ownership:
+  stream/t1/ns/orders/0 -> broker-2
+
+holding the cluster. press Ctrl-C to tear it down.
+```
+
+It holds until you interrupt it. In a second window, subscribe:
+
+```bash
+cargo run --release -p felix-cluster -- subscribe orders
+```
 
 ```
-2026-01-25T10:00:00.000Z INFO felix_broker: Starting Felix broker
-2026-01-25T10:00:00.001Z INFO felix_broker: QUIC listening on 0.0.0.0:5000
-2026-01-25T10:00:00.001Z INFO felix_broker: Metrics server on 0.0.0.0:8080
+subscribing to orders on broker-2 (owner)
+waiting for events. Ctrl-C to stop.
 ```
 
-The broker is now ready to accept connections!
+And in a third, publish:
 
-**Default ports:**
+```bash
+cargo run --release -p felix-cluster -- publish orders "hello"
+```
 
-- `5000`: QUIC data plane (publish, subscribe, cache)
-- `8080`: Metrics/health endpoint
+```
+published "hello" to orders via broker-0 → forwarded to broker-2 → acknowledged
+```
 
-## Run a Demo
+The subscriber prints it with its log offset:
 
-Felix includes several self-contained demos that start an in-process broker and QUIC server.
-You do not need to run the broker separately for these demos.
+```
+[broker-2] offset      1  hello
+```
+
+That line is the whole model in miniature. The stream's shard is owned by
+`broker-2`, you published through `broker-0`, and `broker-0` forwarded the
+record to the owner and waited for it to be written before acknowledging. Which
+broker you connect to is a routing detail, not a correctness one — and since
+0.5.0 the acknowledgement says when forwarding happened, so a client can see it
+is paying to relay every record.
+
+### The rest of the cluster commands
+
+```bash
+cargo run --release -p felix-cluster -- smoke        # publish through a non-owner, receive from the owner
+cargo run --release -p felix-cluster -- demo         # the cross-broker story, paced for reading
+cargo run --release -p felix-cluster -- failover     # kill the leader, keep publishing
+cargo run --release -p felix-cluster -- consistency  # what Quorum buys and Leader costs, under a fault
+cargo run --release -p felix-cluster -- status       # membership and shard ownership, then exit
+```
+
+`up` first for `subscribe` and `publish`; the others start their own cluster.
+
+## One process, no cluster
+
+If you would rather see the data path than the cluster, the demos embed a
+broker in-process and need nothing running:
 
 ```bash
 cargo run --release -p broker --bin pubsub-demo-simple
 ```
-
-This demo:
-
-1. Creates a client connection to the broker
-2. Subscribes to a test stream
-3. Publishes two messages to that stream
-4. Displays the received events
-
-**Sample output:**
 
 ```
 == Felix QUIC Pub/Sub Demo ==
 Step 1/6: booting in-process broker + QUIC server.
 Step 2/6: connecting QUIC client.
 Step 3/6: opening a subscription stream.
+Subscribe response: Subscribed
 Step 4/6: publishing two messages on the same stream.
 Step 5/6: receiving events.
 Event on demo-topic: hello
@@ -76,20 +120,39 @@ Event on demo-topic: world
 Demo complete.
 ```
 
-**More demos:**
+Others worth running: `cache-demo`, `queue-semantics-demo`,
+`durable-restart-demo`, `pubsub-demo-orders`, `latency-demo`. Each is
+self-contained and prints what it is proving as it goes.
+
+## Running a broker yourself
 
 ```bash
-cargo run --release -p broker --bin cache-demo
-cargo run --release -p broker --bin latency-demo
-cargo run --release -p broker --bin pubsub-demo-notifications
-cargo run --release -p broker --bin pubsub-demo-orders
-cargo run --manifest-path demos/rbac-live/Cargo.toml
-cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
+cargo run --release -p broker
 ```
 
-See the [Demos Overview](/felix/demos/overview/) for details on what each demo does and what to expect.
+On its own this starts and then stops:
 
-Note: the cross-tenant isolation demo uses a Postgres-backed control plane.
+```
+INFO felix_broker: broker started
+Error: FELIX_CONTROLPLANE_URL must be set for auth
+```
+
+That is deliberate. A broker validates every client token against its tenant's
+signing keys, which it fetches from the control plane, and it registers itself
+there so shards can be placed on it. There is no unauthenticated mode to fall
+back to.
+
+So running brokers yourself means running a control plane, pointing each broker
+at it, and giving each one a node credential:
+
+- **Locally**, `felix-cluster up` does all three, and the session file it writes
+  names every address it chose.
+- **On Kubernetes**, the Helm chart at `deploy/helm/felix` wires them together —
+  see [Kubernetes](/felix/deployment/kubernetes/).
+- **With containers**, the images are published on every release and pull
+  without credentials — see [Installation](/felix/getting-started/installation/#container-images)
+  and [Docker Compose](/felix/deployment/docker-compose/). The broker image
+  needs the same control-plane URL and credential as any other broker.
 
 ## Try the Cache
 
@@ -264,11 +327,9 @@ event_batch_max_delay_us: 250
 cache_conn_recv_window: 268435456
 ```
 
-Run with custom config:
-
-```bash
-FELIX_BROKER_CONFIG=/tmp/felix-config.yml cargo run --release -p broker
-```
+Point the broker at it with `FELIX_BROKER_CONFIG=/tmp/felix-config.yml`. It
+still needs `FELIX_CONTROLPLANE_URL` and a node credential — see [Running a
+broker yourself](#running-a-broker-yourself).
 
 See [Configuration Reference](/felix/reference/configuration/) for all options.
 
@@ -318,12 +379,16 @@ Now that you have Felix running:
 If port 5000 or 8080 is in use:
 
 ```bash
-# Change broker port
 export FELIX_QUIC_BIND="0.0.0.0:5001"
-export FELIX_METRICS_BIND="0.0.0.0:8081"
-
-cargo run --release -p broker
+export FELIX_BROKER_METRICS_BIND="0.0.0.0:8081"
 ```
+
+The metrics variable is prefixed because the control plane has one of its own.
+Set `FELIX_METRICS_BIND` and the broker warns that nothing reads it rather than
+silently keeping the default.
+
+`felix-cluster up` picks free ports for every process, so it has nothing to
+collide with.
 
 ### Build Errors
 
@@ -345,10 +410,10 @@ rustup update
 Make sure the broker is running and listening:
 
 ```bash
-# Check if broker is running
 lsof -i :5000
-
-# Check broker logs for errors
 ```
+
+A broker that exits right after logging `broker started` is missing its
+control-plane configuration, not failing to bind. Read the line after it.
 
 See [Troubleshooting Guide](/felix/reference/troubleshooting/) for more help.

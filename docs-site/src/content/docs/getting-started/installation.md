@@ -118,23 +118,32 @@ Running wire protocol conformance tests...
 All conformance tests passed!
 ```
 
-### Start the Broker
+### Start a cluster
 
-Run the broker service:
+A broker authenticates every connection against a control plane, so it does not
+run alone. `felix-cluster` starts a control plane, mints the credentials and
+brings up the brokers:
 
 ```bash
-cargo run --release -p broker
+cargo run --release -p felix-cluster -- up --nodes 3
 ```
 
-You should see startup logs:
-
 ```
-2026-01-25T10:00:00.000Z INFO felix_broker: Starting Felix broker
-2026-01-25T10:00:00.001Z INFO felix_broker: QUIC listening on 0.0.0.0:5000
-2026-01-25T10:00:00.001Z INFO felix_broker: Metrics server on 0.0.0.0:8080
+cluster up.
+
+control plane   http://127.0.0.1:52704
+
+node       client                 metrics
+broker-0   127.0.0.1:53348        127.0.0.1:52706
+broker-1   127.0.0.1:65027        127.0.0.1:52707
+broker-2   127.0.0.1:50410        127.0.0.1:52708
+
+holding the cluster. press Ctrl-C to tear it down.
 ```
 
-Press `Ctrl+C` to stop the broker.
+Every address is chosen free at startup, so nothing collides with what you are
+already running. The [Quickstart](/felix/getting-started/quickstart/) goes on to
+publish and subscribe against it; running brokers yourself is covered there too.
 
 ### Run a Demo
 
@@ -273,9 +282,20 @@ Native Windows support is not currently tested.
 Released images are on GHCR and pull without credentials:
 
 ```bash
-# Run the broker
-docker run -p 5000:5000/udp -p 8080:8080 ghcr.io/gabloe/felix-broker:0.4.1
+docker run -p 5000:5000/udp -p 8080:8080 \
+  -e FELIX_CONTROLPLANE_URL=http://controlplane:8443 \
+  -e FELIX_NODE_TOKEN_FILE=/etc/felix/node.token \
+  -v /path/to/node.token:/etc/felix/node.token:ro \
+  ghcr.io/gabloe/felix-broker:0.4.1
 ```
+
+A broker authenticates every client against its tenant's signing keys, which it
+fetches from the control plane, and registers itself there so shards can be
+placed on it — so it needs both a control plane to reach and a node credential
+to present. Without them it logs `broker started` and exits on the next line.
+[Docker Compose](/felix/deployment/docker-compose/) wires the pair together; for
+a local cluster with nothing to configure, `felix-cluster up` is quicker (see
+the [Quickstart](/felix/getting-started/quickstart/)).
 
 Each release publishes the full version (`0.4.1`), the minor series (`0.4`) and
 `latest`. Use a version tag in anything you keep; `latest` moves. Images are

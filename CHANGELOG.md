@@ -11,6 +11,33 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Quickstart's first command did not work**, and neither did the one it
+  became. `cargo run --release -p broker` asked which of nine binaries to run,
+  because eight of them are demos and nothing set `default-run`. Corrected to
+  `--bin felix-broker`, it starts and then exits: `FELIX_CONTROLPLANE_URL must
+  be set for auth`. The page claimed you would see `QUIC listening on
+  0.0.0.0:5000` and that "the broker is now ready to accept connections", and
+  printed that command three times.
+
+  `default-run = "felix-broker"` fixes the first half. The second half is not a
+  bug — a broker validates client tokens against keys it fetches from the
+  control plane and registers itself there for shard placement, so there is no
+  unauthenticated mode — but the docs had never said so.
+
+  The Quickstart now opens with `felix-cluster up`, which starts a control
+  plane, mints the credentials and brings up three brokers, then publishes
+  through a non-owner and receives from the owner. That command existed the
+  whole time and no getting-started page mentioned it. Every command and every
+  block of output on the page was run to produce it.
+
+  Also corrected: the landing page and Installation both told you to run the
+  broker alone; the container instructions did the same with `docker run`; and
+  Troubleshooting told you to set `FELIX_METRICS_BIND`, which nothing reads --
+  the broker warns about that exact name, and the variable is
+  `FELIX_BROKER_METRICS_BIND`.
+
 **Wire protocol:** two new frame flags, `FLAG_BINARY_PUBLISH_KEYED` (`0x0040`)
 and `FLAG_BINARY_PUBLISH_ACK_OWNER` (`0x0080`). `VERSION` remains `1` and no
 feature bit is added. Both are negotiated on the handshake, so a client and

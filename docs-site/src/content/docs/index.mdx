@@ -205,10 +205,13 @@ boundaries — including what Felix is deliberately *not*.
    task demo:state-divergence
    ```
 
-4. Or run the broker on its own.
+4. Or start a real cluster — control plane, credentials and three brokers —
+   and publish through one broker to a shard another one owns.
 
    ```bash
-   cargo run --release -p broker
+   cargo run --release -p felix-cluster -- up --nodes 3
+   cargo run --release -p felix-cluster -- subscribe orders   # second window
+   cargo run --release -p felix-cluster -- publish orders hi  # third
    ```
 
 </Steps>
