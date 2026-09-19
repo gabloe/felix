@@ -133,6 +133,8 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
     while remaining > 0 {
         let count = remaining.min(batch_size);
         let payloads = (0..count).map(|_| payload.clone()).collect::<Vec<_>>();
+        // The JSON encoding on purpose -- this test exists to measure it against the binary one, so it has to keep reaching the deprecated call.
+        #[allow(deprecated)]
         publisher
             .publish_batch_json(
                 "t1",

@@ -55,10 +55,17 @@ felix_publish_latency_ms                    # histogram
 felix_broker_ingress_queue_depth            # publish jobs waiting
 felix_broker_ingress_dropped_total          # overflow, by policy
 felix_broker_ingress_rejected_total
+felix_broker_json_publishes_total            # by frame: publishes still on JSON
 ```
 
 A rising ingress depth means publishers are outrunning the broker; drops and
 rejections say the overflow policy fired, which is deliberate and visible.
+
+`felix_broker_json_publishes_total` should be flat at zero. The data path is
+binary; a client only falls back to JSON against a broker that did not advertise
+the frame it wanted, so a non-zero rate means something in the deployment is
+older than it looks — and it is paying for it, at roughly 70% of the binary
+path's throughput.
 
 **Are subscribers keeping up?**
 

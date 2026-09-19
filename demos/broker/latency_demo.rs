@@ -1511,6 +1511,10 @@ async fn publish_batch(
     let payloads = (0..batch_size)
         .map(|_| encode_payload(payload_bytes))
         .collect::<Vec<_>>();
+    // The JSON encoding on purpose: the demo's whole point is the comparison
+    // against the binary path above, so it has to keep reaching the deprecated
+    // call rather than routing around it.
+    #[allow(deprecated)]
     if batch_size == 1 {
         publisher
             .publish_json(

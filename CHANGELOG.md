@@ -63,6 +63,29 @@ they did before.
 
 ### Changed
 
+- **The data path is binary; JSON is compatibility only** (#550). Now that
+  #549 put the routing key in the binary publish frame, the JSON encoding has
+  no remaining reason to carry data-plane traffic — it measured **645.8 MB/s
+  against 917** for the same keyed workload on the same rig, with user CPU up
+  from 20% to 28%, and it buys nothing the binary frames do not now cover.
+
+  `Publisher::publish_json` and `Publisher::publish_batch_json` are
+  **deprecated** and will be removed in 0.6.0. Nothing routes through them any
+  more: `publish_batch`'s fallback now calls the private keyed form directly, so
+  it keeps working once the public surface goes.
+
+  **The broker still accepts JSON publishes and will keep accepting them.**
+  `ORIGINAL_V1_FLAGS` is frozen, so a client older than `FLAG_BINARY_PUBLISH_ACKED`
+  or `FLAG_BINARY_PUBLISH_KEYED` is entitled to send them forever. What changed is
+  that no current Felix client emits one except as a fallback it chooses itself,
+  against a broker that did not advertise the frame it wanted.
+  `felix_broker_json_publishes_total{frame="publish"|"publish_batch"}` counts what
+  still arrives that way — the evidence a deployment would need before the arm
+  could ever be dropped.
+
+  `publish_idempotent` is unaffected. It is JSON because no binary layout carries
+  a producer id and sequence yet, not for compatibility.
+
 - **Device flushes can go through `io_uring` on Linux** (#548), behind
   `FELIX_STORAGE_IO_URING=1`, default off. `IORING_OP_FSYNC` removes the
   `spawn_blocking` hand-off rather than shrinking it, and unlike running the

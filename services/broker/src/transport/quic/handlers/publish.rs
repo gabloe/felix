@@ -62,6 +62,20 @@ pub(crate) use uni::{
     handle_binary_publish_batch_uni, handle_publish_batch_message_uni, handle_publish_message_uni,
 };
 
+/// Count a publish that arrived on the JSON encoding.
+///
+/// The data path is binary as of 0.5.0 and no Felix client emits a JSON publish
+/// unless it is talking to a broker that never advertised the binary frame. The
+/// arm cannot be removed on that reasoning alone, though: `ORIGINAL_V1_FLAGS` is
+/// frozen, so a client older than the flags is entitled to keep sending JSON
+/// forever. This counter is what turns "nothing should be sending these" into
+/// "nothing in this deployment is", which is the precondition for ever dropping
+/// it. `frame` separates the single publish from the batch, because a client
+/// still on the single form is a different (older) client.
+pub(crate) fn record_json_publish(frame: &'static str) {
+    metrics::counter!("felix_broker_json_publishes_total", "frame" => frame).increment(1);
+}
+
 // Re-exported so the test module (and its `use super::*`) reaches the internals it
 // exercises directly, without widening them for the rest of the crate.
 #[cfg(test)]
