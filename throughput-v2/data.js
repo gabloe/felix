@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789766393352,
+  "lastUpdate": 1789777916958,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11752,6 +11752,58 @@ window.BENCHMARK_DATA = {
             "range": "10681.36",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 750526.00\nmean: 752993.68\nstdev: 10681.36\ncv: 1.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f93b3289fdaab395623419af1ad804b53dcde8ad",
+          "message": "perf: a routing key in the binary publish frame, and io_uring device flushes (#551)\n\n* perf(loadgen): let ingest spread across shards with routing keys\n\nThe ingest scenario published unkeyed, and a record with no routing key\nresolves to shard 0. So every 'multi-shard' measurement taken with it was\nreally a single-shard one: a 12-shard stream and a 1-shard stream measured\nidentically (920 vs 923 MB/s) because both were exercising the same log.\n\nThat invalidated more than one conclusion. It is why a 12-shard and a 1-shard\nstream showed the same group-commit fan-in, why io_uring barely moved the\nnumber (a single log can only have one flush in flight, so there was no\nconcurrency for the ring to use), and it is the reason the two-broker session\nsaw every publish forwarded to one owner (#536) -- one shard has one leader.\n\n--keys <n> cycles batches over n routing keys, so the load reaches n logs.\nDefault 0 keeps the old unkeyed behaviour, so existing runs are unchanged and\ncomparable.\n\n* feat(wire): carry the routing key in the binary publish frame (#549)\n\nA keyed publish had to fall back to the JSON encoding: the binary publish\nlayouts were fixed and had nowhere to put a key. An Azure session put a\nnumber on that fallback -- 645.8 MB/s keyed against 917 MB/s unkeyed on\nthe same rig, with user CPU up from 20% to 28%. Routing a record cost\nroughly 30% of throughput, which made sharding something you paid for\nrather than something you got.\n\nFLAG_BINARY_PUBLISH_KEYED (0x0040) is a modifier on 0x0001, the same\nshape FLAG_BINARY_PUBLISH_ACKED already uses: the body is prefixed with a\nu16 key length and the key bytes. With both bits set the correlation\nprefix still comes first, so peek_acked_publish_prefix keeps reading\nrequest_id at offset 0 whether or not a key follows.\n\nNegotiated on the handshake like every other flag bit. A broker that\npredates it would read key_len as tenant_len, so the client sends the\nkeyed binary frame only to a broker that advertised the bit and uses JSON\notherwise -- costing throughput, not correctness.\n\nBoth broker decode paths honour the key now: the plain frame (what\nfelix-loadgen drives) and the acked one. Reverting either makes its test\nfail.\n\n* perf(storage): submit device flushes to io_uring on Linux (#548)\n\nEvery other way of issuing an fsync from async Rust hands the call to a thread\nand waits for it to come back. IORING_OP_FSYNC removes the hand-off instead of\nshrinking it: the request goes into a ring, the kernel performs it, and a\ncompletion arrives. No thread is parked, and unlike running the sync inline the\nawait is still a yield point, so background rollover and retention still get\nscheduled -- the inline experiment showed that matters.\n\nLinux-only, which costs little here: the broker and control plane ship as a\nlinux-x86_64 artifact for Kubernetes, and felix-storage reaches the client only\nthrough the optional in-process feature. The blocking pool stays as the\nfallback for macOS development and for any Linux that cannot build a ring, an\nold kernel or a container that forbids the syscall -- durability must not\ndepend on an optimisation being available.\n\nOne ring, one service thread, for the whole process. Flushes are already\nserialised per log by the group-commit lock, so the concurrency that matters is\nacross logs: fifty shards flushing is fifty blocking-pool threads today and one\nring here.\n\nOff by default behind FELIX_STORAGE_IO_URING until it has run somewhere real.\n\nOn expectations: this is not a throughput fix and should not be sold as one. On\na 4-way NVMe RAID0 the hand-off is ~9% of a flush (583us with it, 530us\nwithout), and the device sustains ~1346 MB/s against Felix's ~940 -- the flush\nis mostly the device being busy, not overhead. #547 originally claimed 17x,\nwhich came from comparing Felix under load against fio at idle, and is\nretracted there.\n\n* docs: record the keyed binary frame and the io_uring flush path",
+          "timestamp": "2026-09-18T17:29:48-07:00",
+          "tree_id": "69d6eb5c5f8a995136f9b5fdeac20641cb596204",
+          "url": "https://github.com/gabloe/felix/commit/f93b3289fdaab395623419af1ad804b53dcde8ad"
+        },
+        "date": 1789777916405,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 418633.29,
+            "range": "3300.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 418633.29\nmean: 418844.61\nstdev: 3300.87\ncv: 0.79%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 418633.29,
+            "range": "3300.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 418633.29\nmean: 418844.61\nstdev: 3300.87\ncv: 0.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 100704.12,
+            "range": "2676.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 100704.12\nmean: 99716.51\nstdev: 2676.91\ncv: 2.68%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1007041.15,
+            "range": "26769.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1007041.15\nmean: 997165.11\nstdev: 26769.08\ncv: 2.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
