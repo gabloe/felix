@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789842408466,
+  "lastUpdate": 1789843945816,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12480,6 +12480,58 @@ window.BENCHMARK_DATA = {
             "range": "5006.77",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 936701.31\nmean: 938895.01\nstdev: 5006.77\ncv: 0.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "09867315c0eb857ab6bfbbbd9cde711a7b35352f",
+          "message": "docs: make the quickstart work, and say why a broker needs a control plane (#576)\n\nThe first command on the page failed. `cargo run --release -p broker` asked\nwhich of nine binaries to run -- eight are demos and nothing set default-run --\nand once you got past that, the broker logged \"broker started\" and exited on\nFELIX_CONTROLPLANE_URL. The page said you would see it listening on 5000 and\nthat it was ready for connections. Three separate places told you to run it.\n\ndefault-run fixes the first half. The second is by design: a broker validates\nclient tokens against keys it fetches from the control plane and registers\nitself there for placement, so there is no unauthenticated mode. The docs had\nsimply never said it.\n\nfelix-cluster up starts a control plane, mints credentials and brings up as\nmany brokers as asked, and felix-cluster publish/subscribe demonstrate a record\ncrossing a node boundary -- which is the thing worth seeing first. It existed\nthe whole time and no getting-started page named it. It leads now.\n\nEvery command and every block of output on the rewritten page was run.\n\nSwept the same error elsewhere: the landing page's step 4, Installation's\n\"Start the Broker\", the bare docker run in the container section, and a\nTroubleshooting block setting FELIX_METRICS_BIND -- a name nothing reads, and\none the broker warns about by name.",
+          "timestamp": "2026-09-19T11:46:47-07:00",
+          "tree_id": "e3d3e460037a79ff3f62e7d62b09dc0d70a15974",
+          "url": "https://github.com/gabloe/felix/commit/09867315c0eb857ab6bfbbbd9cde711a7b35352f"
+        },
+        "date": 1789843944722,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 532461.43,
+            "range": "24281.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 532461.43\nmean: 523633.78\nstdev: 24281.14\ncv: 4.64%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 532461.43,
+            "range": "24281.14",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 532461.43\nmean: 523633.78\nstdev: 24281.14\ncv: 4.64%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 114313.16,
+            "range": "2283.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 114313.16\nmean: 113660.93\nstdev: 2283.48\ncv: 2.01%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1143131.65,
+            "range": "22834.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1143131.65\nmean: 1136609.30\nstdev: 22834.82\ncv: 2.01%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
