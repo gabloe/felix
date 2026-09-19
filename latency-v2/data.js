@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789846294986,
+  "lastUpdate": 1789847277394,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -16038,6 +16038,72 @@ window.BENCHMARK_DATA = {
             "range": "310.04",
             "unit": "us",
             "extra": "trials: 5\nmedian: 462.00\nmean: 596.80\nstdev: 310.04\ncv: 51.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54c36264cf413858cd29085a6ccb4c32beed0a99",
+          "message": "ci: pin the Node addon's toolchain, and assert every workflow does (#578)\n\nThe 0.5.0 release pipeline failed on x86_64-apple-darwin with \"can't find\ncrate for core\", and the Node addons never reached the release.\n\nThat job asked for dtolnay/rust-toolchain@stable; every other Rust job in the\nfile pins 1.97.1. The action installed the target on stable, rust-toolchain.toml\nthen switched cargo to 1.97.1, and the target was not there. Four legs passed\nregardless because their target is the runner's own host and already installed\n-- only the one genuine cross-compile, x86-64 on an arm64 macOS runner, had\nanything to trip over. The Python wheels were unaffected: maturin-action\ninstalls the target on the toolchain it actually uses.\n\ncheck_workflow_toolchains.py asserts the setup matches the pin, since the\nfailure mode is invisible until a matrix grows a cross-compiling leg. The fuzz\njob carries a toolchain-exempt marker with its reason: cargo-fuzz needs\nnightly. Verified by reintroducing @stable and watching it fail.",
+          "timestamp": "2026-09-19T12:45:30-07:00",
+          "tree_id": "f065399c6dcef17972eb407ab599e7fd0c62002e",
+          "url": "https://github.com/gabloe/felix/commit/54c36264cf413858cd29085a6ccb4c32beed0a99"
+        },
+        "date": 1789847276021,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 161.40\nstdev: 0.89\ncv: 0.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 200,
+            "range": "7.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 204.00\nstdev: 7.71\ncv: 3.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 232,
+            "range": "145.29",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 232.00\nmean: 294.20\nstdev: 145.29\ncv: 49.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.20\nstdev: 0.84\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 394,
+            "range": "6.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 394.00\nmean: 395.80\nstdev: 6.10\ncv: 1.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 581,
+            "range": "177.28",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 581.00\nmean: 675.00\nstdev: 177.28\ncv: 26.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
