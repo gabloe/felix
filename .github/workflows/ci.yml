@@ -160,6 +160,9 @@ jobs:
       - name: Publish-readiness and licence split
         run: task publish:check
 
+      - name: Workflow toolchains match the pin
+        run: task ci:toolchains
+
       # A doc citing a test is broken by renaming the *test*, which is a Rust
       # change on a Rust pull request -- so it is checked here rather than only
       # in the docs-site build, which runs on pushes to main that touch
@@ -373,6 +376,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # toolchain-exempt: cargo-fuzz needs nightly, so this job is the one
+      # place that deliberately does not use the pinned toolchain.
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@v1
         with:
