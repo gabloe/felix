@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789777916958,
+  "lastUpdate": 1789785470028,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11804,6 +11804,58 @@ window.BENCHMARK_DATA = {
             "range": "26769.08",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1007041.15\nmean: 997165.11\nstdev: 26769.08\ncv: 2.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1ce3fc926d226a70531b32f94e04919506efb12b",
+          "message": "fix(loadgen): read the client's environment config, and measure the generators (#554)\n\n* fix(loadgen): read the client's environment config (#553)\n\nfelix-loadgen built its client with ClientConfig::optimized_defaults,\nwhich never reads the environment, so every FELIX_PUB_* and\nFELIX_PUBLISH_* variable was silently inert.\n\nThat is a measurement bug, not a missing feature. A perf session set\nFELIX_PUB_CONN_POOL and FELIX_PUB_SHARDING across three runs to test\nwhether the client's connection fan-out was the ceiling; all three\nmeasured the default configuration, and two were initially read as\nevidence against a hypothesis they had never actually run. A knob that\nlooks set and is not is worse than one that does not exist.\n\nfrom_env_or_yaml layers the environment over the same\noptimized_defaults, so an unset environment measures exactly what a\ndefault client does and every number taken before this stays comparable.\n\nThe harness gained the other half of the same problem: it reports\ngenerator CPU now, and passes KEYS, PUB_CONNS and PUB_SHARDING through.\nWithout the generator sample, a run where the generators were saturated\nand the broker was not read as a broker result -- which is how six\nconfigurations in a row produced the same number before anyone thought\nto check the generators were only 23% busy.\n\n* fix(loadgen): announce the effective client config on startup\n\nA run that believes it swept a knob it never set is worse than one that\ndid not try. The instrument now states conn_pool, streams_per_conn,\nsharding, inflight, chunk and queue depth once, so the result log\ncarries the proof rather than the operator's assumption.",
+          "timestamp": "2026-09-18T19:35:45-07:00",
+          "tree_id": "7c30b14501b945ec664df195b7e234bd3f6207ba",
+          "url": "https://github.com/gabloe/felix/commit/1ce3fc926d226a70531b32f94e04919506efb12b"
+        },
+        "date": 1789785468802,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 417667.92,
+            "range": "14481.15",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 417667.92\nmean: 420692.72\nstdev: 14481.15\ncv: 3.44%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 417667.92,
+            "range": "14481.15",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 417667.92\nmean: 420692.72\nstdev: 14481.15\ncv: 3.44%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 100369.17,
+            "range": "4493.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 100369.17\nmean: 100537.06\nstdev: 4493.55\ncv: 4.47%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1003691.69,
+            "range": "44935.49",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1003691.69\nmean: 1005370.66\nstdev: 44935.49\ncv: 4.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
