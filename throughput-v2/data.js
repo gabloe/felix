@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789847280008,
+  "lastUpdate": 1789857112488,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12688,6 +12688,58 @@ window.BENCHMARK_DATA = {
             "range": "8838.72",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 931105.34\nmean: 933977.56\nstdev: 8838.72\ncv: 0.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b05fd8cc22872eb9788059acb6177f90a89dff9d",
+          "message": "ci: drop an option napi 2 lacks, and wait out crates.io's new-crate limit (#579)",
+          "timestamp": "2026-09-19T15:29:13-07:00",
+          "tree_id": "fe2c069172a122e64fb1e95ad2aacc68cc001aaf",
+          "url": "https://github.com/gabloe/felix/commit/b05fd8cc22872eb9788059acb6177f90a89dff9d"
+        },
+        "date": 1789857112049,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 391104.79,
+            "range": "7179.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391104.79\nmean: 391862.02\nstdev: 7179.05\ncv: 1.83%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 391104.79,
+            "range": "7179.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391104.79\nmean: 391862.02\nstdev: 7179.05\ncv: 1.83%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 90041.08,
+            "range": "3782.77",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 90041.08\nmean: 88703.00\nstdev: 3782.77\ncv: 4.26%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 900410.84,
+            "range": "37827.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 900410.84\nmean: 887030.05\nstdev: 37827.66\ncv: 4.26%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
