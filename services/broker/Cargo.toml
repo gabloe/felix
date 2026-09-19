@@ -11,6 +11,9 @@ readme.workspace = true
 # Not a library anyone consumes from a registry: service binaries and a
 # dev/CI tool with hard AGPL-3.0 dependencies.
 publish = false
+# Eight of the nine binaries here are demos, so `cargo run -p broker` asked
+# which one rather than running the broker.
+default-run = "felix-broker"
 
 [[bin]]
 name = "felix-broker"
