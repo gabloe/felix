@@ -171,7 +171,7 @@ binary linked by `cargo test --workspace`.
 
 ```bash
 task ts:check     # fmt, clippy, build — what CI runs
-task ts:build     # napi build --release (needs `npm i -g @napi-rs/cli`)
+task ts:build     # napi build --release (needs `npm i -g @napi-rs/cli@2`)
 ```
 
 Without the napi CLI you can still load the addon, because `napi build` is

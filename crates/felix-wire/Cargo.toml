@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Wire protocol, frame codec, and test vectors for the Felix messaging system"
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["felix", "protocol", "messaging", "codec", "quic"]
 categories = ["network-programming", "encoding"]
 

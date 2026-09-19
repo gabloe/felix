@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Rust client SDK for the Felix pub/sub and cache broker"
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["felix", "client", "pubsub", "messaging", "quic"]
 categories = ["network-programming", "api-bindings"]
 

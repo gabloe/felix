@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Shared identifiers, configuration, and error types for Felix crates"
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["felix", "messaging", "config"]
 categories = ["network-programming"]
 

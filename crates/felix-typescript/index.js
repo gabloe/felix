@@ -87,18 +87,51 @@ function typed(err) {
   return err;
 }
 
+/**
+ * What this machine's binary is called, in napi's naming.
+ *
+ * It names both the platform package (`@felix/client-linux-x64-gnu`) and the
+ * file inside it (`felix.linux-x64-gnu.node`), so the two cannot drift.
+ */
+function platformTag() {
+  const { platform, arch } = process;
+  if (platform === "linux") {
+    // A glibc build will not load on musl. `glibcVersionRuntime` is absent on
+    // musl, which is the only reliable check from inside Node — reading
+    // `process.report` costs nothing and is not gated on a flag.
+    let libc = "musl";
+    try {
+      if (process.report?.getReport()?.header?.glibcVersionRuntime) libc = "gnu";
+    } catch {
+      // A locked-down runtime can refuse the report. Assume glibc, which is
+      // what is published; the load below fails with a clear message if wrong.
+      libc = "gnu";
+    }
+    return `linux-${arch}-${libc}`;
+  }
+  if (platform === "win32") return `win32-${arch}-msvc`;
+  return `${platform}-${arch}`;
+}
+
 function loadAddon() {
+  const tag = platformTag();
+
   // The repository shares one target directory across every crate, this one
   // included (`.cargo/config.toml`), so a development build lands at the root
-  // rather than beside this file. Both are searched: an installed package has
-  // neither, and carries `felix.node`.
+  // rather than beside this file.
   const roots = [join(__dirname, "target"), join(__dirname, "..", "..", "target")];
   const names = [
     "libfelix_typescript.dylib",
     "libfelix_typescript.so",
     "felix_typescript.dll",
   ];
-  const candidates = [join(__dirname, "felix.node")];
+  // `napi build --platform` writes the tagged name; a plain `napi build` the
+  // bare one. Both are checked before the installed package, so a local
+  // rebuild wins over whatever npm put in node_modules.
+  const candidates = [
+    join(__dirname, `felix.${tag}.node`),
+    join(__dirname, "felix.node"),
+  ];
   // A plain `cargo build` is enough to use this package, which is what keeps it
   // usable without the napi CLI — `napi build` is mostly a rename.
   for (const profile of ["release", "debug"]) {
@@ -116,9 +149,25 @@ function loadAddon() {
     process.dlopen(shim, path);
     return shim.exports;
   }
+
+  // An installed package has none of the above: npm ships one package per
+  // platform and this package declares them all as optional dependencies, so
+  // exactly the matching one is present.
+  const pkg = `@felix/client-${tag}`;
+  try {
+    return require(pkg);
+  } catch (err) {
+    // MODULE_NOT_FOUND here means this platform has no published binary, which
+    // is worth saying plainly — the alternative is a stack trace about a
+    // package the caller never named.
+    if (err?.code !== "MODULE_NOT_FOUND") throw err;
+  }
+
   throw new Error(
-    `@felix/client: no native addon found. Build it with \`napi build --release\`, ` +
-      `or \`cargo build --release\` in crates/felix-typescript.`,
+    `@felix/client: no native addon for ${tag}. Either this platform has no ` +
+      `published binary, or the optional dependency ${pkg} did not install. ` +
+      `From a checkout, build it with \`napi build --release\` or ` +
+      `\`cargo build --release\` in crates/felix-typescript.`,
   );
 }
 

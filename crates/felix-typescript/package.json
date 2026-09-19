@@ -2,26 +2,34 @@
   "name": "@felix/client",
   "version": "0.4.1",
   "description": "Node.js/TypeScript bindings for the Felix client, over the Rust client rather than a reimplementation of it",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/gabloe/felix.git",
-    "directory": "crates/felix-typescript"
-  },
-  "homepage": "https://github.com/gabloe/felix",
   "keywords": [
     "felix",
     "quic",
     "pubsub",
     "streaming",
+    "cache",
+    "queue",
+    "napi",
     "bindings"
   ],
+  "license": "Apache-2.0",
+  "author": "Gabriel Loewen",
+  "homepage": "https://gabloe.github.io/felix/clients/typescript/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gabloe/felix.git",
+    "directory": "crates/felix-typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/gabloe/felix/issues"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
     "index.js",
     "index.d.ts",
-    "felix.node"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
@@ -29,12 +37,29 @@
   "napi": {
     "name": "felix",
     "triples": {
-      "defaults": true
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu"
+      ]
     }
   },
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "node --test test/conformance.test.mjs"
+  },
+  "optionalDependencies": {
+    "@felix/client-darwin-arm64": "0.4.1",
+    "@felix/client-darwin-x64": "0.4.1",
+    "@felix/client-linux-arm64-gnu": "0.4.1",
+    "@felix/client-linux-x64-gnu": "0.4.1",
+    "@felix/client-win32-x64-msvc": "0.4.1"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

@@ -8,20 +8,41 @@ description = "Python client for Felix — streams, queues, and cache over QUIC"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
+license-files = ["LICENSE"]
+authors = [{ name = "Gabriel Loewen" }]
 keywords = ["felix", "quic", "pubsub", "streaming", "cache"]
+# One wheel per platform covers every Python from 3.9 up (abi3-py39), so the
+# version classifiers are a claim about what is supported, not about what was
+# built -- they are listed individually because PyPI's filters read these and
+# not `requires-python`.
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Rust",
+  "Topic :: Database",
+  "Topic :: System :: Distributed Computing",
   "Topic :: System :: Networking",
+  "Typing :: Typed",
 ]
 dynamic = ["version"]
 
 [project.urls]
+Homepage = "https://gabloe.github.io/felix/"
+Documentation = "https://gabloe.github.io/felix/clients/python/"
 Repository = "https://github.com/gabloe/felix"
-Documentation = "https://gabloe.github.io/felix/"
+Issues = "https://github.com/gabloe/felix/issues"
+Changelog = "https://github.com/gabloe/felix/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
