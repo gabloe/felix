@@ -13,18 +13,29 @@ Every environment variable it wires is real and in the
 [environment reference](/felix/reference/environment-variables/); the chart
 invents none.
 
-:::caution[The images are not published yet]
 The chart names `ghcr.io/gabloe/felix-broker` and
-`ghcr.io/gabloe/felix-controlplane`, which is where releases will publish
-them. Publishing is off until Felix is meant to be publicly pullable, so those
-tags do not resolve today. Build from `docker/` and push to a registry your
-cluster can reach (the [Docker Compose page](/felix/deployment/docker-compose/)
-has the build commands), then point `image.registry` at it.
+`ghcr.io/gabloe/felix-controlplane`, which releases publish and which pull
+without credentials. The image tag defaults to the chart's `appVersion`, so a
+default install resolves to a published image with nothing to configure —
+`0.4.1` renders `ghcr.io/gabloe/felix-broker:0.4.1`. To run something you have not released, build from
+`docker/` and push to a registry your cluster can reach (the
+[Docker Compose page](/felix/deployment/docker-compose/) has the build
+commands), then point `image.registry` at it.
 
-When they are published, **pin by digest**: images are signed by digest, and a
-tag can be moved. `broker.image.digest` and `controlplane.image.digest` take
-precedence over the tag.
-:::
+**Pin by digest.** `broker.image.digest` and `controlplane.image.digest` take
+precedence over the tag, and the digest is what the signature covers — the
+release signs `image@digest` and never `image:tag`, because a tag can be moved
+to point at something else and a signature over a tag would follow it.
+
+Signing is keyless: cosign takes a short-lived certificate from the release
+workflow's OIDC identity, so there is no key to store or rotate and the
+signature names the workflow that produced the image. Verify before you pin:
+
+```bash
+cosign verify ghcr.io/gabloe/felix-broker:0.4.1 \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp='^https://github.com/gabloe/felix/\.github/workflows/release\.yml@refs/tags/v'
+```
 
 ## What the chart decides for you
 

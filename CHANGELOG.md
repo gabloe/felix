@@ -63,6 +63,23 @@ they did before.
 
 ### Changed
 
+- **The container images are published.** `ghcr.io/gabloe/felix-broker` and
+  `ghcr.io/gabloe/felix-controlplane` went out with 0.4.1 and pull without
+  credentials. Each release tags the full version, the minor series, and
+  `latest` on non-prereleases.
+
+  The docs said they were not published and told you to build your own; that
+  was true when written and is not now. The Docker Compose, Kubernetes and
+  installation pages now pull instead, and keep the build commands for running
+  something unreleased.
+
+  Images are signed with cosign, keyless, **over the digest and never the tag**
+  — a tag can be moved and a signature over one would follow it. The Kubernetes
+  page carries the `cosign verify` invocation. The chart's image tag defaults to
+  its `appVersion`, so a default install resolves to a published image with
+  nothing to configure.
+
+
 - **The data path is binary; JSON is compatibility only** (#550). Now that
   #549 put the routing key in the binary publish frame, the JSON encoding has
   no remaining reason to carry data-plane traffic — it measured **645.8 MB/s
