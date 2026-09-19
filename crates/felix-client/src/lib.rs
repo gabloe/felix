@@ -88,7 +88,9 @@ pub use client::sharded::{ShardEvent, ShardOffsets, ShardedSubscription};
 pub use client::sharding::PublishSharding;
 pub use client::subscription::{Event, Subscription};
 pub use config::{ClientConfig, ClientSubQueuePolicy};
-pub use counters::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
+pub use counters::{
+    FrameCountersSnapshot, frame_counters_snapshot, publishes_forwarded, reset_frame_counters,
+};
 pub use felix_wire::{CursorErrorReason, PublishRefusalReason, StartPosition};
 
 /// The broker would not append an idempotent publish, and said why.

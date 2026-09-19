@@ -48,6 +48,33 @@ pub(crate) async fn read_ack_message_with_timing(
     // path regardless of which encoding the publish went out in.
     let message = if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACK != 0 {
         let ack = felix_wire::binary::decode_publish_ack(&frame).context("decode publish ack")?;
+        if let Some(owner) = &ack.forwarded_to {
+            // The batch was written by another broker, and this one paid to
+            // decrypt and re-encrypt it on the way -- roughly half the
+            // throughput per core (#536). Counted rather than acted on: routing
+            // to the owner is the next piece of work, and until it lands this
+            // is what turns "are we forwarding?" from a guess into a number a
+            // client can answer about itself.
+            //
+            // Labelled by owner because the cardinality is the cluster's size,
+            // and *which* broker the traffic should have gone to is the part
+            // that says whether the connections are spread or all on one.
+            t_counter!(
+                "felix_client_publish_forwarded_total",
+                "owner" => owner.node_id.clone()
+            )
+            .increment(1);
+            // And on the always-on counter, which is what a build without the
+            // telemetry feature -- and a test, and the perf harness -- can read
+            // without installing a metrics recorder.
+            crate::counters::record_publish_forwarded();
+            tracing::debug!(
+                owner = %owner.node_id,
+                addr = owner.addr.as_deref().unwrap_or("<unpublished>"),
+                generation = owner.generation,
+                "publish was forwarded to the shard's owner",
+            );
+        }
         match ack.error {
             None => Message::PublishOk {
                 request_id: ack.request_id,

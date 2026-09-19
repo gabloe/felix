@@ -1980,6 +1980,7 @@ async fn ack_waiter_loop_branches() -> Result<()> {
     let (tx_batch_ok, rx_batch_ok) = oneshot::channel();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 5,
             payload_bytes: vec![1, 2],
@@ -1992,6 +1993,7 @@ async fn ack_waiter_loop_branches() -> Result<()> {
     let (tx_batch_err, rx_batch_err) = oneshot::channel();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 6,
             payload_bytes: vec![1, 2],
@@ -2004,6 +2006,7 @@ async fn ack_waiter_loop_branches() -> Result<()> {
     let (_tx_batch_drop, rx_batch_drop) = oneshot::channel::<Result<()>>();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 7,
             payload_bytes: vec![1, 2],
@@ -2015,6 +2018,7 @@ async fn ack_waiter_loop_branches() -> Result<()> {
     let (tx_batch_timeout, rx_batch_timeout) = oneshot::channel::<Result<()>>();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 8,
             payload_bytes: vec![1, 2],
@@ -2626,6 +2630,7 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
     let (tx_batch_ok, rx_batch_ok) = oneshot::channel();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 14,
             payload_bytes: vec![1, 2],
@@ -2638,6 +2643,7 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
     let (tx_batch_err, rx_batch_err) = oneshot::channel();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 15,
             payload_bytes: vec![1, 2],
@@ -2650,6 +2656,7 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
     let (_tx_batch_drop, rx_batch_drop) = oneshot::channel::<Result<()>>();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 16,
             payload_bytes: vec![1, 2],
@@ -2661,6 +2668,7 @@ async fn ack_waiter_loop_logs_on_enqueue_failure() -> Result<()> {
     let (tx_batch_timeout, rx_batch_timeout) = oneshot::channel::<Result<()>>();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 17,
             payload_bytes: vec![1, 2],
@@ -2752,6 +2760,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_ok() -> Result<()> {
     let (tx_ok, rx_ok) = oneshot::channel();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 24,
             payload_bytes: vec![1],
@@ -2774,6 +2783,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_error() -> Result<()> {
     let (tx_err, rx_err) = oneshot::channel();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 25,
             payload_bytes: vec![1],
@@ -2796,6 +2806,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_dropped() -> Result<()> {
     let (_tx_drop, rx_drop) = oneshot::channel::<Result<()>>();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 26,
             payload_bytes: vec![1],
@@ -2817,6 +2828,7 @@ async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
     let (tx_timeout, rx_timeout) = oneshot::channel::<Result<()>>();
     ack_waiter_tx
         .send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 27,
             payload_bytes: vec![1],

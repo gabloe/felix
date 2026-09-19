@@ -113,7 +113,9 @@ Bit field for optional features:
 | 3   | 0x0008 | Acked binary publish batch (modifier on bit 0) |
 | 4   | 0x0010 | Binary publish acknowledgement (broker → client) |
 | 5   | 0x0020 | Event batch carries a `base_offset` (modifier on bits 1/2) |
-| 6-15| -      | Reserved (must be 0) |
+| 6   | 0x0040 | Batch carries a routing key prefix (modifier on bit 0) |
+| 7   | 0x0080 | Batch was forwarded; the ack names the shard's owner (modifier on bit 4) |
+| 8-15| -      | Reserved (must be 0) |
 
 Receivers must **reject** a frame carrying a flag bit they do not recognise, rather
 than ignoring the bit. These bits select how the payload is parsed, so ignoring an

@@ -40,6 +40,28 @@ pub const FLAG_EVENT_BATCH_OFFSETS: u16 = 0x0020;
 /// unkeyed frame.
 pub const FLAG_BINARY_PUBLISH_KEYED: u16 = 0x0040;
 
+/// Modifier on `FLAG_BINARY_PUBLISH_ACK`: the batch was *forwarded*, and the
+/// ack names the broker that owns the shard.
+///
+/// A publish for a shard this broker does not own is sent on to the owner and
+/// acknowledged once the owner has written it. That is correct and invisible,
+/// and the invisibility is the problem: the client keeps publishing to the same
+/// entry broker forever, and every record is decrypted, re-encrypted and
+/// decrypted again on the way. A perf session measured the cost at roughly half
+/// the throughput per core — ~250 MB/s per busy vCPU direct against ~140
+/// forwarded (#536).
+///
+/// So the ack says so. The bit's *presence* is the signal that forwarding
+/// happened; the payload carries who to send to instead. It is a hint, not a
+/// refusal — the publish already succeeded, so a client that ignores it is
+/// exactly as correct as before, just as slow.
+///
+/// Only ever set for a client that advertised this bit in `Auth.client_flags`.
+/// A client that did not would reject the whole frame, since an unknown flag
+/// bit is refused rather than masked off — and it would be rejecting an
+/// acknowledgement for a publish that succeeded.
+pub const FLAG_BINARY_PUBLISH_ACK_OWNER: u16 = 0x0080;
+
 /// Every flag bit this version understands.
 ///
 /// Frames carrying bits outside this mask are rejected rather than parsed with
@@ -56,7 +78,8 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_BINARY_PUBLISH_ACKED
     | FLAG_BINARY_PUBLISH_ACK
     | FLAG_EVENT_BATCH_OFFSETS
-    | FLAG_BINARY_PUBLISH_KEYED;
+    | FLAG_BINARY_PUBLISH_KEYED
+    | FLAG_BINARY_PUBLISH_ACK_OWNER;
 
 /// The flag bits that existed before capability negotiation.
 ///

@@ -193,6 +193,11 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
     cancel_tx: &watch::Sender<bool>,
     ack_waiters: &Arc<Semaphore>,
     ack_waiter_tx: &mpsc::Sender<AckWaiterMessage>,
+    // Frame-flag bits this client advertised. Read only to decide whether the
+    // ack may name a forwarding owner: that sets a flag bit, and a client that
+    // did not advertise it rejects the whole frame rather than masking the bit
+    // off -- rejecting an acknowledgement for a publish that worked.
+    peer_flags: u16,
 ) -> Result<()> {
     // Read the correlation prefix before the body, so even an undecodable batch
     // can be answered with an ack the client is able to match to its request.
@@ -267,6 +272,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
     }
 
     handle_publish_batch_message(
+        peer_flags,
         broker,
         publish_ctx,
         stream_cache,
@@ -734,6 +740,10 @@ pub(crate) async fn handle_publish_message(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_publish_batch_message(
+    // Frame-flag bits the client advertised, so the ack may name a forwarding
+    // owner only when the client can parse one. Zero from the JSON path, which
+    // has no ack frame to put it in.
+    peer_flags: u16,
     broker: &Broker,
     publish_ctx: &PublishContext,
     stream_cache: &mut StreamHandleCache,
@@ -948,6 +958,36 @@ pub(crate) async fn handle_publish_batch_message(
     // has answered, whatever `ack_on_commit` says, and a `Quorum` publish only
     // once a majority holds it.
     let forwarding = matches!(target, Some(PublishTarget::Forward { .. }));
+    // Who to tell the client about, when this batch is being forwarded.
+    //
+    // Resolved here because this is where the routing decision is: by the time
+    // the ack is written the target has been consumed. The client address comes
+    // from the endpoint registry rather than `ForwardTarget::advertise_addr`,
+    // which is the *peer* listener -- telling a client to publish to the
+    // internal port would send it somewhere that does not speak to clients.
+    //
+    // Only for a client that advertised the bit. Setting a flag it did not
+    // offer makes it reject the frame, and the frame acknowledges a publish
+    // that already succeeded.
+    let hint_owner = matches!(encoding, AckEncoding::Binary)
+        && felix_wire::supports(peer_flags, felix_wire::FLAG_BINARY_PUBLISH_ACK_OWNER);
+    let forwarded_to = match (&target, hint_owner) {
+        (Some(PublishTarget::Forward { target, .. }), true) => {
+            let addr = publish_ctx.client_endpoints.as_ref().and_then(|endpoints| {
+                endpoints
+                    .snapshot()
+                    .iter()
+                    .find(|endpoint| endpoint.node_id == target.node_id)
+                    .map(|endpoint| endpoint.addr.clone())
+            });
+            Some(felix_wire::binary::PublishOwner {
+                node_id: target.node_id.clone(),
+                addr,
+                generation: target.generation,
+            })
+        }
+        _ => None,
+    };
     let quorum = super::needs_quorum(&target);
     let Some(target) = target else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
@@ -1121,6 +1161,7 @@ pub(crate) async fn handle_publish_batch_message(
         }
     };
     let msg = AckWaiterMessage::PublishBatch {
+        forwarded_to,
         request_id,
         encoding,
         payload_bytes: payload_bytes_for_metrics,

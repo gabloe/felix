@@ -55,6 +55,7 @@ felix_publish_latency_ms                    # histogram
 felix_broker_ingress_queue_depth            # publish jobs waiting
 felix_broker_ingress_dropped_total          # overflow, by policy
 felix_broker_ingress_rejected_total
+felix_client_publish_forwarded_total        # client: publishes the broker had to relay
 felix_broker_json_publishes_total            # by frame: publishes still on JSON
 felix_client_publish_cancelled_after_enqueue_total  # client: publishes whose caller went away
 ```
@@ -68,6 +69,13 @@ happen*, and this is the number that says how often that happened.
 
 A rising ingress depth means publishers are outrunning the broker; drops and
 rejections say the overflow policy fired, which is deliberate and visible.
+
+`felix_client_publish_forwarded_total` is a client metric, labelled by the
+owner the batch went to. Non-zero means this client is publishing to a broker
+that does not own the shard, and each of those records is decrypted,
+re-encrypted and decrypted again on the way — roughly half the throughput per
+core. It is the client-side half of `felix_broker_forwards_total`, and the one
+that says *which* client is mis-aimed.
 
 `felix_broker_json_publishes_total` should be flat at zero. The data path is
 binary; a client only falls back to JSON against a broker that did not advertise

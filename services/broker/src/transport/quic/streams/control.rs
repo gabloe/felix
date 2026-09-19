@@ -197,6 +197,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &cancel_tx,
                     &ack_waiters,
                     &ack_waiter_tx,
+                    peer_flags,
                 )
                 .await?;
             } else {
@@ -454,6 +455,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     return Ok(false);
                 }
                 handle_publish_batch_message(
+                    peer_flags,
                     &broker,
                     &publish_ctx,
                     &mut stream_cache,
@@ -507,6 +509,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     return Ok(false);
                 }
                 handle_publish_batch_message(
+                    peer_flags,
                     &broker,
                     &publish_ctx,
                     &mut stream_cache,

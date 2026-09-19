@@ -1755,3 +1755,84 @@ mod idempotent_producer {
         assert_eq!(plain, "\"unknown_producer\"");
     }
 }
+
+/// An ack with no owner is byte-identical to one from before the hint existed.
+///
+/// The compatibility claim the whole design rests on: a broker that has nothing
+/// to hint, or a client that did not ask, exchange exactly the bytes they
+/// always did. If this ever differs, every peer predating `0x0080` breaks on an
+/// acknowledgement for a publish that succeeded.
+#[test]
+fn an_ack_without_an_owner_is_unchanged() {
+    for error in [None, Some("stream not found")] {
+        let plain = crate::binary::encode_publish_ack_bytes(42, error).expect("plain");
+        let owned = crate::binary::encode_publish_ack_bytes_owned(42, error, None).expect("owned");
+        assert_eq!(
+            plain, owned,
+            "the no-owner encoding drifted from the original"
+        );
+    }
+}
+
+#[test]
+fn a_forwarded_ack_round_trips_its_owner() {
+    let owner = crate::binary::PublishOwner {
+        node_id: "broker-2".to_string(),
+        addr: Some("10.0.0.2:5000".to_string()),
+        generation: 7,
+    };
+    let bytes =
+        crate::binary::encode_publish_ack_bytes_owned(9, None, Some(&owner)).expect("encode");
+    let frame = crate::Frame::decode(bytes).expect("frame");
+    // The flag is the signal that forwarding happened, so it has to be set.
+    assert_ne!(frame.header.flags & crate::FLAG_BINARY_PUBLISH_ACK_OWNER, 0);
+    let ack = crate::binary::decode_publish_ack(&frame).expect("decode");
+    assert_eq!(ack.request_id, 9);
+    assert_eq!(ack.error, None);
+    assert_eq!(ack.forwarded_to, Some(owner));
+}
+
+/// An owner whose client address the cluster has not published.
+///
+/// The same gap `NotLeader` has: the client learns *who* owns the shard but has
+/// nowhere to send to, so it keeps publishing where it is. Empty on the wire
+/// decodes to `None` rather than to an empty string, because there is no such
+/// address and a caller must not try to parse one.
+#[test]
+fn an_owner_without_a_published_address_decodes_as_absent() {
+    let owner = crate::binary::PublishOwner {
+        node_id: "broker-3".to_string(),
+        addr: None,
+        generation: 1,
+    };
+    let bytes =
+        crate::binary::encode_publish_ack_bytes_owned(1, None, Some(&owner)).expect("encode");
+    let frame = crate::Frame::decode(bytes).expect("frame");
+    let ack = crate::binary::decode_publish_ack(&frame).expect("decode");
+    let decoded = ack.forwarded_to.expect("owner");
+    assert_eq!(decoded.node_id, "broker-3");
+    assert_eq!(decoded.addr, None);
+}
+
+/// A truncated owner is an error, not a half-read one.
+#[test]
+fn a_truncated_owner_is_refused() {
+    let owner = crate::binary::PublishOwner {
+        node_id: "broker-2".to_string(),
+        addr: Some("10.0.0.2:5000".to_string()),
+        generation: 7,
+    };
+    let bytes =
+        crate::binary::encode_publish_ack_bytes_owned(9, None, Some(&owner)).expect("encode");
+    // Every prefix that still parses as a frame must fail to decode rather than
+    // inventing an owner from whatever bytes happen to be there.
+    for cut in 1..12 {
+        let short = bytes.slice(..bytes.len() - cut);
+        if let Ok(frame) = crate::Frame::decode(short) {
+            assert!(
+                crate::binary::decode_publish_ack(&frame).is_err(),
+                "a truncated owner decoded instead of erroring (cut {cut})"
+            );
+        }
+    }
+}
