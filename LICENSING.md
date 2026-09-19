@@ -83,6 +83,13 @@ the default `felix-client` dependency graph stays 100% Apache-2.0. Only
 enable `in-process` if you're comfortable with that (Felix's own demos and
 test suite do).
 
+It is also why `felix-broker` and `felix-storage` are on crates.io despite
+being AGPL-3.0. crates.io resolves an optional dependency like any other, so
+`felix-client` cannot be published while they are absent. Their presence in
+the registry changes nothing here: the default `felix-client` build still
+pulls no AGPL-3.0 code, and a crate's licence is what governs its use, not
+where it is hosted.
+
 ## Contributions
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the CLA process. Because of the
