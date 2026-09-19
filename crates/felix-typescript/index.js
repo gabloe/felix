@@ -90,7 +90,7 @@ function typed(err) {
 /**
  * What this machine's binary is called, in napi's naming.
  *
- * It names both the platform package (`@felix/client-linux-x64-gnu`) and the
+ * It names both the platform package (`felix-client-linux-x64-gnu`) and the
  * file inside it (`felix.linux-x64-gnu.node`), so the two cannot drift.
  */
 function platformTag() {
@@ -153,7 +153,7 @@ function loadAddon() {
   // An installed package has none of the above: npm ships one package per
   // platform and this package declares them all as optional dependencies, so
   // exactly the matching one is present.
-  const pkg = `@felix/client-${tag}`;
+  const pkg = `felix-client-${tag}`;
   try {
     return require(pkg);
   } catch (err) {
@@ -164,7 +164,7 @@ function loadAddon() {
   }
 
   throw new Error(
-    `@felix/client: no native addon for ${tag}. Either this platform has no ` +
+    `felix-client: no native addon for ${tag}. Either this platform has no ` +
       `published binary, or the optional dependency ${pkg} did not install. ` +
       `From a checkout, build it with \`napi build --release\` or ` +
       `\`cargo build --release\` in crates/felix-typescript.`,

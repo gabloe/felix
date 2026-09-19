@@ -1,4 +1,4 @@
-# @felix/client for Node.js and TypeScript
+# felix-client for Node.js and TypeScript
 
 Node bindings for Felix, built as a wrapper over the Rust client rather than a
 reimplementation of the protocol.
@@ -19,7 +19,7 @@ and settles the promise from there, which keeps the event loop free while a
 publish is in flight.
 
 ```ts
-import { Client } from "@felix/client";
+import { Client } from "felix-client";
 
 const client = await Client.connect("127.0.0.1:5000", "t1", token, "localhost", caFile);
 

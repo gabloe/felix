@@ -1,8 +1,8 @@
-# `@felix/client-darwin-x64`
+# `felix-client-darwin-x64`
 
-The darwin-x64 binary for [`@felix/client`](https://www.npmjs.com/package/@felix/client).
+The darwin-x64 binary for [`felix-client`](https://www.npmjs.com/package/felix-client).
 
-Install `@felix/client` instead — it declares this package as an optional
+Install `felix-client` instead — it declares this package as an optional
 dependency and npm fetches only the one matching your platform.
 
 Documentation: https://gabloe.github.io/felix/clients/typescript/

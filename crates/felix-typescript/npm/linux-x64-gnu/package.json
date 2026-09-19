@@ -1,7 +1,7 @@
 {
-  "name": "@felix/client-linux-x64-gnu",
+  "name": "felix-client-linux-x64-gnu",
   "version": "0.4.1",
-  "description": "The linux-x64-gnu binary for @felix/client. Installed automatically; do not depend on it directly.",
+  "description": "The linux-x64-gnu binary for felix-client. Installed automatically; do not depend on it directly.",
   "main": "felix.linux-x64-gnu.node",
   "files": [
     "felix.linux-x64-gnu.node",

@@ -4,7 +4,7 @@
 Run via `task ts:packages`.
 
 # Why this exists
-`@felix/client` publishes as six packages: a JavaScript one that declares five
+`felix-client` publishes as six packages: a JavaScript one that declares five
 platform binaries as optional dependencies, and the five that carry them. The
 version appears in every one of them, the file name inside each has to match
 what `index.js` looks for, and the set has to match the targets the release
@@ -85,7 +85,7 @@ def check() -> list[str]:
         )
 
     tags = sorted(TARGET_TAGS[t] for t in declared if t in TARGET_TAGS)
-    expected_optional = {f"@felix/client-{tag}": version for tag in tags}
+    expected_optional = {f"felix-client-{tag}": version for tag in tags}
     actual_optional = main.get("optionalDependencies", {})
     if actual_optional != expected_optional:
         failures.append(
@@ -108,7 +108,7 @@ def check() -> list[str]:
             continue
         pkg = json.loads(path.read_text())
         node = f"{binary}.{tag}.node"
-        if pkg.get("name") != f"@felix/client-{tag}":
+        if pkg.get("name") != f"felix-client-{tag}":
             failures.append(f"npm/{tag}/package.json: name is {pkg.get('name')!r}.")
         if pkg.get("version") != version:
             failures.append(

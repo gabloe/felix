@@ -1,5 +1,5 @@
 {
-  "name": "@felix/client",
+  "name": "felix-client",
   "version": "0.4.1",
   "description": "Node.js/TypeScript bindings for the Felix client, over the Rust client rather than a reimplementation of it",
   "keywords": [
@@ -53,13 +53,10 @@
     "test": "node --test test/conformance.test.mjs"
   },
   "optionalDependencies": {
-    "@felix/client-darwin-arm64": "0.4.1",
-    "@felix/client-darwin-x64": "0.4.1",
-    "@felix/client-linux-arm64-gnu": "0.4.1",
-    "@felix/client-linux-x64-gnu": "0.4.1",
-    "@felix/client-win32-x64-msvc": "0.4.1"
-  },
-  "publishConfig": {
-    "access": "public"
+    "felix-client-darwin-arm64": "0.4.1",
+    "felix-client-darwin-x64": "0.4.1",
+    "felix-client-linux-arm64-gnu": "0.4.1",
+    "felix-client-linux-x64-gnu": "0.4.1",
+    "felix-client-win32-x64-msvc": "0.4.1"
   }
 }

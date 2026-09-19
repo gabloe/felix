@@ -3,10 +3,11 @@ title: "TypeScript Client"
 description: "Installing and using the Felix Node.js client: promises, typed errors, disposal, streams, queues, cache watches, multi-shard consumption, and the failure modes worth writing code for."
 ---
 
-`@felix/client` is a napi-rs addon over the Rust client, not a reimplementation.
-Reconnection, redirect-following, retry classification and offset bookkeeping
-live in `felix-client` and are shared; Node gets the same failover behaviour
-Rust does rather than its own approximation. See
+`felix-client` on npm is a napi-rs addon over the Rust crate of the same name,
+not a reimplementation. Reconnection, redirect-following, retry classification
+and offset bookkeeping live in the crate and are shared; Node gets the same
+failover behaviour Rust does rather than its own approximation. The name is
+deliberately identical on crates.io, PyPI and npm. See
 [Choosing a Client](/felix/clients/overview/) for why that choice was made.
 
 ## Installing
@@ -40,7 +41,7 @@ runtime and settles the promise from there, which keeps the event loop free
 while a publish is in flight.
 
 ```ts
-import { Client } from "@felix/client";
+import { Client } from "felix-client";
 
 const client = await Client.connect("127.0.0.1:5000", "t1", token, "localhost", caFile);
 await client.publish("t1", "default", "events", Buffer.from("hello"));
@@ -223,7 +224,7 @@ async function run(client, checkpoint) {
 ## Errors you can act on
 
 ```ts
-import { ConnectionError, AuthError, NotFoundError, CursorError } from "@felix/client";
+import { ConnectionError, AuthError, NotFoundError, CursorError } from "felix-client";
 
 try {
   await client.publish("t1", "default", "orders", payload);
