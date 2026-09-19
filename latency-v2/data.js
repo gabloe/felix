@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789836298795,
+  "lastUpdate": 1789836459493,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15378,6 +15378,72 @@ window.BENCHMARK_DATA = {
             "range": "644.67",
             "unit": "us",
             "extra": "trials: 5\nmedian: 697.00\nmean: 1041.80\nstdev: 644.67\ncv: 61.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "33af27660993ab15ab3c7a2e977e5efb8f7d5a03",
+          "message": "docs: the container images are published, so stop saying they are not (#567)\n\n`vars.PUBLISH_IMAGES` is on and 0.4.1 shipped `felix-broker` and\n`felix-controlplane` to GHCR. Confirmed against the registry rather than\ntaken on trust: both are anonymously pullable and carry 0.4.1, 0.4,\nlatest and a cosign signature tag.\n\nThree pages told the reader the opposite -- \"publishing is off until\nFelix is meant to be publicly pullable, so `docker pull` will not find\nthem today\" -- and sent them to build their own. That was true when\nwritten. The docs-site page on status says outright that a stale marker\nis worse than none, and this is the shape of it: a reader follows the\ninstruction and never discovers the images exist.\n\nDocker Compose and Installation now pull, and keep the build commands\nfor running something unreleased, which is the case that still needs\nthem. Kubernetes drops the \"when they are published\" hedge and gives the\n`cosign verify` invocation, since signing is keyless and the identity is\nthe release workflow rather than a key anyone has to be given.\n\nThe digest advice is now the operative one rather than a future note.\nThe release signs `image@digest` and never `image:tag` -- a tag can be\nmoved to point at something else and a signature over a tag would follow\nit -- so `broker.image.digest` is what a production pin should use.\n\nAlso recorded that the chart's defaults now resolve: the image tag falls\nback to `appVersion`, so a default install pulls a real image with\nnothing to configure. Checked by rendering rather than by reading --\n`helm template` with the ci/ value sets produces exactly\nghcr.io/gabloe/felix-broker:0.4.1 and ghcr.io/gabloe/felix-controlplane:0.4.1,\nboth of which are published tags.\n\nThe release workflow's own comment said publishing was off too. It now\nsays the switch is on and why the gate stays: a fork building this\nworkflow should not push to a registry it did not mean to.",
+          "timestamp": "2026-09-19T09:42:34-07:00",
+          "tree_id": "80b86dee1209ca96442be68e481c5fca1d076c5f",
+          "url": "https://github.com/gabloe/felix/commit/33af27660993ab15ab3c7a2e977e5efb8f7d5a03"
+        },
+        "date": 1789836458165,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "3.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 160.60\nstdev: 3.71\ncv: 2.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 205,
+            "range": "8.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 209.40\nstdev: 8.76\ncv: 4.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 284,
+            "range": "105.51",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 284.00\nmean: 307.20\nstdev: 105.51\ncv: 34.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 200.60\nstdev: 0.55\ncv: 0.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 405,
+            "range": "12.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 405.00\nmean: 407.40\nstdev: 12.76\ncv: 3.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 713,
+            "range": "321.96",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 713.00\nmean: 889.80\nstdev: 321.96\ncv: 36.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
