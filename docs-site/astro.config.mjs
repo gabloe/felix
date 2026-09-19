@@ -91,13 +91,21 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Clients',
+          collapsed: true,
+          items: [
+            { label: 'Choosing a Client', slug: 'clients/overview' },
+            { label: 'Rust', slug: 'clients/rust' },
+            { label: 'Python', slug: 'clients/python' },
+            { label: 'TypeScript', slug: 'clients/typescript' },
+          ],
+        },
+        {
           label: 'API Documentation',
           collapsed: true,
           items: [
             { label: 'Broker API', slug: 'api/broker-api' },
             { label: 'Control Plane API', slug: 'api/control-plane-api' },
-            { label: 'Client SDK', slug: 'api/client-sdk' },
-            { label: 'Clients in Other Languages', slug: 'api/clients' },
           ],
         },
         {

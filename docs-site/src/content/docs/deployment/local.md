@@ -485,7 +485,7 @@ FELIX_DISABLE_TIMINGS=1 cargo run --release -p broker
 
 ## Next Steps
 
-- **Learn the client API**: [Client SDK Guide](/felix/api/client-sdk/)
+- **Learn the client API**: [Client SDK Guide](/felix/clients/rust/)
 - **Deploy with Docker**: [Docker Compose Setup](/felix/deployment/docker-compose/)
 - **Production deployment**: [Kubernetes Guide](/felix/deployment/kubernetes/)
 - **Tune performance**: [Performance Guide](/felix/features/performance/)

@@ -8,7 +8,7 @@ working reference — setup, configuration, and the patterns that matter in
 practice.
 
 It is also what every other language binds to rather than reimplementing —
-see [Clients in Other Languages](/felix/api/clients/) for Python and for how
+see [Clients in Other Languages](/felix/clients/overview/) for Python and for how
 new languages are gated on a conformance suite.
 
 ## Installation
@@ -178,6 +178,46 @@ publisher
     .await?;
 ```
 
+### The routing key decides the shard
+
+**Without a key every record lands on shard 0**, so a multi-shard stream
+behaves like a single-shard one. If you created a stream with several shards to
+get throughput and are not passing a key, you are not getting it.
+
+```rust
+cluster
+    .publish_keyed(
+        "acme", "prod", "orders",
+        payload,
+        bytes::Bytes::from(customer_id),
+        AckMode::PerMessage,
+    )
+    .await?;
+```
+
+Records sharing a key share a shard and stay ordered with respect to each
+other. Records with different keys do not, once a stream has more than one
+shard. A consumer needing total order wants a single-shard stream.
+
+### At-least-once duplicates, and says so
+
+By default a publish whose outcome was ambiguous — the broker may or may not
+have written it before the connection went — is **reported, not re-sent**,
+because nothing downstream can tell two copies apart.
+
+```rust
+cluster
+    .publish_at_least_once("acme", "prod", "orders", payload, AckMode::PerMessage)
+    .await?;
+```
+
+That is the opt-in: the record is then certain to land and **may land twice**.
+It does not carry a routing key — the re-send path has nowhere to put one — so
+it is `publish_keyed` or `publish_at_least_once`, not both.
+
+For at-least-once *without* the duplication, see
+[`IdempotentProducer`](#idempotent-producers).
+
 ### Batch Publishing
 
 Publish multiple messages efficiently:
@@ -237,31 +277,109 @@ PublishSharding::HashStream
 - **RoundRobin**: Default, good for single stream, evenly distributes load
 - **HashStream**: Publishing to multiple streams, keeps stream-specific ordering
 
-### Error Handling
+### Errors you can act on
+
+Calls return `anyhow::Result`, and the cases worth branching on are carried as
+typed errors inside it. Recover them with `downcast_ref` — matching on the
+message would break the first time one is reworded.
 
 ```rust
-use felix_common::Error;
+use felix_client::{PublishRefused, PublishRefusalReason, SubscribeCursorError};
 
-use felix_wire::AckMode;
-let publisher = client.publisher().await?;
-match publisher
-    .publish("acme", "prod", "events", b"data".to_vec(), AckMode::PerMessage)
-    .await
-{
-    Ok(()) => println!("Published successfully"),
-    Err(Error::UnknownStream { .. }) => {
-        eprintln!("Stream doesn't exist");
+match cluster.publish("acme", "prod", "events", payload, AckMode::PerMessage).await {
+    Ok(()) => {}
+    Err(err) => {
+        if let Some(refused) = err.downcast_ref::<PublishRefused>() {
+            match refused.reason {
+                // Routing, not a failure: the client already followed it.
+                PublishRefusalReason::NotLeader { .. } => {}
+                // The producer's sequence cannot be mended by retrying.
+                _ => return Err(err),
+            }
+        }
+        // Everything else: the cluster client has already tried the other
+        // brokers, so arriving here means none of them answered.
+        return Err(err);
     }
-    Err(Error::Timeout { .. }) => {
-        eprintln!("Publish timed out, broker overloaded");
-    }
-    Err(Error::ConnectionLost) => {
-        eprintln!("Connection lost, reconnecting...");
-        // Implement retry logic
-    }
-    Err(e) => eprintln!("Other error: {:?}", e),
 }
 ```
+
+| Type | Recover with | What it means |
+| --- | --- | --- |
+| `SubscribeCursorError` | `downcast_ref` | the start offset is gone, or ahead of the tail |
+| `NotLeaderError` | `downcast_ref` | the broker does not own the shard — routing, not failure |
+| `PublishRefused` | `downcast_ref` | an idempotent publish the broker would not append, with the reason |
+
+`SubscribeCursorError` carries more than the other clients get:
+
+```rust
+if let Some(cursor) = err.downcast_ref::<SubscribeCursorError>() {
+    // `available` is the nearest offset that would have worked — the oldest
+    // retained for TooOld, the current tail for InFuture. Resuming from it is
+    // the smallest gap you can take rather than restarting at `earliest`.
+    eprintln!("asked for {}, nearest is {}", cursor.requested, cursor.available);
+    start = StartPosition::Offset(cursor.available);
+}
+```
+
+## Idempotent producers
+
+At-least-once *without* the duplication. The producer numbers its batches, the
+shard's leader remembers the last few, and a batch carrying a sequence it
+already holds is answered from memory rather than appended — so a re-send after
+a lost acknowledgement lands once.
+
+Rust only: neither binding wraps this yet.
+
+```rust
+let producer = cluster.idempotent_producer().await?;
+
+producer
+    .publish("acme", "prod", "orders", payload)
+    .await?;
+```
+
+The sequence is the mechanism, so the failures are about the sequence and are
+worth branching on:
+
+```rust
+use felix_client::{PublishRefused, PublishRefusalReason};
+
+if let Err(err) = producer.publish("acme", "prod", "orders", payload).await
+    && let Some(refused) = err.downcast_ref::<PublishRefused>()
+{
+    match &refused.reason {
+        // Something was skipped and is lost to this broker. Do not carry on
+        // past it; the gap will not close by retrying.
+        PublishRefusalReason::SequenceGap { expected } => bail!("gap at {expected}"),
+        // A new leader knows no producers. Take a fresh id and start again.
+        PublishRefusalReason::UnknownProducer => reinitialise().await?,
+        // Older than the window the broker keeps, so whether it was appended
+        // cannot be told any more.
+        PublishRefusalReason::SequenceExpired => bail!("outside the dedup window"),
+        // Routing, not failure: the client follows it itself.
+        PublishRefusalReason::NotLeader { .. } => {}
+        _ => return Err(err),
+    }
+}
+```
+
+The producer's state is the **leader's and in memory**. It survives everything
+but the leader itself: a new leader answers `UnknownProducer`, and the producer
+starts again under a new id rather than being told a batch landed that nobody
+can vouch for.
+
+:::caution[Do not race this against a timeout]
+`publish_batch` is not cancel-safe, and the consequence is specific rather than
+vague. Dropping the future mid-send leaves the sequence in doubt: the batch may
+have been appended under it, and the cursor still points at it. Because the
+broker answers a remembered sequence *without appending*, reusing it would
+discard a different batch and report success.
+
+So a cancelled publish **stops the producer** — the next call refuses and says
+why, and you take a fresh id. A producer is cheap to re-initialise; silently
+dropped records are not cheap at all.
+:::
 
 ## Subscribing
 
@@ -287,8 +405,87 @@ pub struct Event {
     pub namespace: Arc<str>,
     pub stream: Arc<str>,
     pub payload: Bytes,
+    /// The log offset on a durable stream. `None` on an in-memory one, and
+    /// against a broker that did not negotiate offsets.
+    pub offset: Option<u64>,
 }
 ```
+
+### Offsets are how you notice a drop
+
+Subscriber queues shed under the default policy rather than blocking the
+publisher, so a subscriber can silently miss records. Offsets are contiguous,
+so **a jump between consecutive events is exactly a drop**:
+
+```rust
+let mut expected: Option<u64> = None;
+while let Some(event) = subscription.next_event().await? {
+    if let (Some(want), Some(got)) = (expected, event.offset)
+        && got != want
+    {
+        tracing::warn!(dropped = got - want, "subscriber queue overflowed");
+    }
+    expected = event.offset.map(|offset| offset + 1);
+    handle(&event.payload);
+}
+```
+
+Worth writing even if you never resume from offsets. It is the only signal the
+queue overflowed.
+
+### A consumer that survives a restart
+
+Checkpoint what you handled and resume at the next one. `start` is the first
+record you have **not** seen, so a resuming consumer passes `offset + 1`.
+
+```rust
+use felix_client::{SubscribeCursorError, StartPosition};
+
+let mut start = match checkpoint.load()? {
+    Some(offset) => StartPosition::Offset(offset + 1),
+    None => StartPosition::Earliest,
+};
+
+loop {
+    let (_client, mut subscription) = cluster
+        .subscribe_from("acme", "prod", "events", Some(start))
+        .await?;
+
+    loop {
+        match subscription.next_event().await {
+            Ok(Some(event)) => {
+                handle(&event.payload).await?;
+                if let Some(offset) = event.offset {
+                    checkpoint.save(offset)?;
+                    start = StartPosition::Offset(offset + 1);
+                }
+            }
+            Ok(None) => break,                     // the broker ended it; resubscribe
+            Err(err) => {
+                if let Some(cursor) = err.downcast_ref::<SubscribeCursorError>() {
+                    // Retention discarded it. `available` is the nearest offset
+                    // that would have worked, so this takes the smallest gap
+                    // rather than restarting at the beginning -- and says so,
+                    // because a silent restart at the tail loses records with
+                    // nothing reported.
+                    tracing::error!(
+                        requested = cursor.requested,
+                        resuming_at = cursor.available,
+                        "checkpoint is past retention",
+                    );
+                    start = StartPosition::Offset(cursor.available);
+                    break;
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+```
+
+`next_event` is **cancel-safe**: it awaits an `mpsc` receive, so racing it in a
+`tokio::select!` consumes nothing when another branch wins. You can put a
+timeout around it without losing a record.
 
 ### Multiple Subscriptions
 
