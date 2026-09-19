@@ -166,6 +166,20 @@ jobs:
       - name: Standalone demo crates
         run: task demo:check
 
+      # Each of those crates owns a Cargo.lock the repository workspace does not
+      # touch, so a version bump or a new dependency never reaches it and the
+      # step above silently rewrites it on every run. Both demo locks sat at
+      # 0.4.0-preview through two releases, and had not heard of `io-uring`,
+      # because nothing ever looked at what the build changed. This looks.
+      - name: The demo lockfiles were already up to date
+        run: |
+          if ! git diff --quiet -- '**/Cargo.lock'; then
+            echo "::error::a build updated a lockfile the commit did not include."
+            echo "Run 'task demo:check' (and 'task lock:refresh') and commit the result."
+            git diff --stat -- '**/Cargo.lock'
+            exit 1
+          fi
+
       - name: RSA dependency check (non-controlplane crates)
         run: task deny:rsa:default
 

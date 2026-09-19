@@ -426,6 +426,23 @@ tasks:
     dir: crates/felix-python
     cmds:
       - maturin develop {{.CLI_ARGS}}
+  lock:refresh:
+    desc: >
+      Re-lock every crate that declares its own [workspace]. The repository
+      workspace does not reach them, so a version bump or a new dependency
+      never lands in their Cargo.lock until someone builds them -- which is
+      how both demo locks sat at 0.4.0-preview through two releases. CI fails
+      if a build changes one, and this is the fix for that failure.
+    cmds:
+      - for:
+          - demos/cross_tenant_isolation
+          - demos/rbac-live
+          - demos/slow-consumer
+          - demos/state-divergence
+          - crates/felix-python
+          - crates/felix-typescript
+        cmd: test -d {{.ITEM}} && cd {{.ITEM}} && cargo update -q --workspace || true
+
   python:test:
     desc: Run the Python suite against a conformance fixture (needs python:develop first).
     dir: crates/felix-python

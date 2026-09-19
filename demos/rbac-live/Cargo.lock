@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "broker"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "controlplane"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1076,7 +1076,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "felix-authz"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "felix-broker"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "ahash",
  "arc-swap",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "felix-client"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "felix-common"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "metrics",
  "serde",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "felix-router"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "arc-swap",
  "felix-common",
@@ -1144,11 +1144,12 @@ dependencies = [
 
 [[package]]
 name = "felix-storage"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "bytes",
  "crc32fast",
+ "io-uring",
  "libc",
  "metrics",
  "parking_lot",
@@ -1158,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "felix-transport"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -1171,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "felix-wire"
-version = "0.4.0-preview"
+version = "0.4.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1791,6 +1792,17 @@ dependencies = [
  "hashbrown 0.16.1",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "io-uring"
+version = "0.7.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3bd0ecfbb87805f538bb7b32e5239ca0763890c623e349860ecba69469f2bb"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]
