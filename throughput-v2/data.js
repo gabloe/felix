@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789830478983,
+  "lastUpdate": 1789831797551,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11908,6 +11908,58 @@ window.BENCHMARK_DATA = {
             "range": "12162.69",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 544781.12\nmean: 543273.62\nstdev: 12162.69\ncv: 2.24%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9466502efd2b70e06eb9f49d84e4c01f7cdf09e7",
+          "message": "fix(build): re-lock the crates the workspace does not reach, and notice next time (#563)\n\ndemos/cross_tenant_isolation, demos/rbac-live, demos/slow-consumer,\ndemos/state-divergence and crates/felix-python each declare their own\n[workspace], so the repository workspace never touches their Cargo.lock.\nAll four demo locks still pinned 0.4.0-preview -- they missed the 0.4.0\nrelease and then 0.4.1 -- and none of them had heard of io-uring, which\n#548 added to felix-storage. felix-python pinned felix-client 0.4.0.\n\nNothing was broken by this, because cargo silently re-locks on build.\nThat is exactly why it went unnoticed for two releases: CI runs\n`task demo:check` on every Rust pull request, which rewrote these files\non every run, and nothing ever looked at what the build changed.\n\nSo the step after it looks. `git diff --quiet -- '**/Cargo.lock'` fails\nthe job if a build updated a lockfile the commit did not include, with\nthe command to fix it in the error. Checked both directions: with the\nlocks refreshed the tree is clean after `task demo:check`, and restoring\none stale lock makes the build rewrite it and the guard fire.\n\n`task lock:refresh` is that fix -- one command over all six out-of-tree\ncrates rather than six `cd`s, and it skips a directory that does not\nexist, so it works on a branch where felix-typescript is not there yet.\n\nThe diff is version pins and the io-uring addition. No dependency was\nresolved to a different version.",
+          "timestamp": "2026-09-19T08:27:16-07:00",
+          "tree_id": "a020ade6e209290e49615d35a709f5fe25031491",
+          "url": "https://github.com/gabloe/felix/commit/9466502efd2b70e06eb9f49d84e4c01f7cdf09e7"
+        },
+        "date": 1789831797127,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 228103.61,
+            "range": "1750.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228103.61\nmean: 227190.18\nstdev: 1750.87\ncv: 0.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 228103.61,
+            "range": "1750.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228103.61\nmean: 227190.18\nstdev: 1750.87\ncv: 0.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54717.59,
+            "range": "1224.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54717.59\nmean: 54996.12\nstdev: 1224.60\ncv: 2.23%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 547175.85,
+            "range": "12245.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 547175.85\nmean: 549961.22\nstdev: 12245.96\ncv: 2.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
