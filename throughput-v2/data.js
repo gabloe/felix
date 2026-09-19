@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789843945816,
+  "lastUpdate": 1789844847067,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12532,6 +12532,58 @@ window.BENCHMARK_DATA = {
             "range": "22834.82",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1143131.65\nmean: 1136609.30\nstdev: 22834.82\ncv: 2.01%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dbaefda36ed3d4b0cb2a0d045fb936d79ca5e09f",
+          "message": "fix(ts): publish as felix-client, unscoped (#577)\n\n@felix on npm is taken -- there is an unscoped felix package and the scope with\nit -- so the six packages are felix-client and one per platform. All six names\nwere confirmed free against the registry.\n\nUnscoped rather than hunting for another scope. It is the name the crate has on\ncrates.io and the wheel has on PyPI, so one string covers every install\ninstruction in every doc, and an unscoped name is first-come rather than\ncolliding with a namespace someone else may already hold. publishConfig.access\ngoes away with the scope: only a scoped package defaults to restricted.\n\nOne name across three registries does make prose ambiguous, so the places that\nsaid felix-client twice meaning two different things now name the registry.\n\nNothing was published, so this costs nothing. Conformance still 42/42.",
+          "timestamp": "2026-09-19T12:00:52-07:00",
+          "tree_id": "03405590cff391584b8483234a60b02082ff7355",
+          "url": "https://github.com/gabloe/felix/commit/dbaefda36ed3d4b0cb2a0d045fb936d79ca5e09f"
+        },
+        "date": 1789844846301,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 539367.86,
+            "range": "16766.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 539367.86\nmean: 532368.64\nstdev: 16766.05\ncv: 3.15%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 539367.86,
+            "range": "16766.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 539367.86\nmean: 532368.64\nstdev: 16766.05\ncv: 3.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 116742.07,
+            "range": "3496.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 116742.07\nmean: 116310.06\nstdev: 3496.94\ncv: 3.01%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1167420.72,
+            "range": "34969.36",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1167420.72\nmean: 1163100.61\nstdev: 34969.36\ncv: 3.01%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
