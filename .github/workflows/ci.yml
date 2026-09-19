@@ -142,7 +142,16 @@ jobs:
       - name: Lint
         run: task lint
 
+      # Setup waits in the cluster and chaos suites are wall-clock constants
+      # chosen against a developer machine. A shared runner takes longer to
+      # elect a leader or bring an instance up for reasons that say nothing
+      # about the code, and the failure then reports as the semantic having
+      # broken -- which has cost real investigation more than once. Scaled here
+      # rather than raised in the source, so a developer's run still fails fast
+      # on a genuine hang.
       - name: Test
+        env:
+          FELIX_TEST_TIMEOUT_SCALE: "3"
         run: task test
 
       - name: cargo-deny

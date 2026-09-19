@@ -146,6 +146,25 @@ than the owner, so the routing path is covered by start-up itself.
 
 A wait that times out says what it was still waiting for.
 
+### Budgets, and where they are wrong
+
+The deadlines are wall-clock constants chosen against a developer machine, and
+what they wait for is almost always setup — a leader elected, a replica caught
+up — rather than the thing under test. On a shared CI runner, and especially
+under coverage instrumentation, that setup takes longer for reasons that say
+nothing about the code, and the failure then reports as the semantic having
+broken. That has cost real investigation more than once.
+
+`FELIX_TEST_TIMEOUT_SCALE` multiplies every deadline in `wait::until`. Unset
+means 1, so a developer's run is unchanged and still fails fast on a genuine
+hang; CI sets `3` and the coverage job `5`. Raising the constants instead would
+have bought the same green at the cost of never noticing a hang on the machines
+that are fast enough to.
+
+It does not apply to a wait that *is* the subject. `losing_quorum_fails_writes_loudly_not_silently`
+waits on a leader noticing it has not heard a quorum, and widening that would
+only make the test slower at noticing nothing; it is serialised instead.
+
 ## Two tokens
 
 The harness mints two credentials, and they are not interchangeable:

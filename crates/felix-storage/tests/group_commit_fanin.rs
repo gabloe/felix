@@ -76,11 +76,13 @@ async fn concurrent_durable_appends_share_a_flush() {
     // Warm the segment so the first flush does not pay creation costs.
     durable_append(&serial_log).await;
 
+    let serial_flushes_before = serial_log.flushes();
     let serial_start = Instant::now();
     for _ in 0..APPENDS {
         durable_append(&serial_log).await;
     }
     let serial = serial_start.elapsed();
+    let serial_flushes = serial_log.flushes() - serial_flushes_before;
 
     let concurrent_log = Arc::new(
         provider
@@ -90,6 +92,7 @@ async fn concurrent_durable_appends_share_a_flush() {
     durable_append(&concurrent_log).await;
 
     let per_task = APPENDS / CONCURRENCY;
+    let concurrent_flushes_before = concurrent_log.flushes();
     let concurrent_start = Instant::now();
     let mut tasks = Vec::with_capacity(CONCURRENCY);
     for _ in 0..CONCURRENCY {
@@ -105,26 +108,36 @@ async fn concurrent_durable_appends_share_a_flush() {
     }
     let concurrent = concurrent_start.elapsed();
 
+    let concurrent_flushes = concurrent_log.flushes() - concurrent_flushes_before;
     let speedup = serial.as_secs_f64() / concurrent.as_secs_f64().max(f64::EPSILON);
     eprintln!(
-        "{APPENDS} durable appends: serial {serial:?}, {CONCURRENCY}-way concurrent \
-         {concurrent:?} -> speedup {speedup:.2}x"
-    );
-    eprintln!(
-        "  per append: serial {:?}, concurrent {:?}",
-        serial / APPENDS as u32,
-        concurrent / APPENDS as u32
+        "{APPENDS} appends: serial {serial_flushes} flushes in {serial:?}, \
+         {CONCURRENCY}-way concurrent {concurrent_flushes} flushes in {concurrent:?} \
+         (wall-clock speedup {speedup:.2}x, for information only)"
     );
 
-    // Deliberately loose. This is not a latency budget -- it is the difference
-    // between "the flushes coalesced" and "they did not". Anything below ~2x
-    // with 16 publishers in flight means group commit is not grouping.
+    // Flushes, not wall clock. The property is that one flush serves many
+    // waiting appends, and counting them sees that directly. A speedup ratio
+    // sees it only through the machine: on a runner that cannot put sixteen
+    // appends in flight at once, perfectly good group commit measures no faster
+    // than serial -- which is how this test read 0.70x on CI and was taken for a
+    // regression twice.
+    //
+    // Serial is the control. Each of those appends waits alone, so it pays its
+    // own flush and the count should track the appends.
     assert!(
-        speedup > 2.0,
-        "concurrent durable appends were not meaningfully cheaper than serial ones \
-         (speedup {speedup:.2}x with {CONCURRENCY} publishers in flight). Group commit \
-         is not coalescing: see the fan-in measured in the Azure sessions."
+        serial_flushes >= APPENDS as u64 / 2,
+        "the serial run coalesced ({serial_flushes} flushes for {APPENDS} appends), \
+         so it is not a control for the concurrent one -- something overlapped that \
+         was supposed to be sequential"
     );
+    assert!(
+        concurrent_flushes * 2 <= serial_flushes,
+        "concurrent appends did not share flushes: {concurrent_flushes} flushes for \
+         {APPENDS} appends against {serial_flushes} when serial. Group commit is not \
+         coalescing -- see the fan-in measured in the Azure sessions."
+    );
+
     assert!(
         concurrent < Duration::from_secs(120),
         "the concurrent run did not finish in a sane time"

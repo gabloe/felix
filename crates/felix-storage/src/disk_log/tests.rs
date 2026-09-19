@@ -1022,12 +1022,15 @@ async fn an_inline_rollover_does_not_park_every_worker() {
     stop.store(true, Ordering::Release);
     ticker.await.expect("ticker");
 
-    // A fifth of one rollover: far above the scheduling noise a yielding task
-    // sees even on a loaded box, and far below the full-length stall that
-    // parking every worker produces.
+    // Half of one rollover. The bug parks every worker for the *whole* rollover,
+    // so the signal is ~500ms and the noise is a yielding task losing its slot
+    // on a busy box. A fifth was chosen as "far above the scheduling noise even
+    // on a loaded box"; CI has since falsified that twice, measuring 137ms on a
+    // shared runner with nothing wrong. Half keeps a 2x margin on both sides
+    // rather than sitting next to the noise floor.
     let stall = Duration::from_micros(max_stall_micros.load(Ordering::Acquire));
     assert!(
-        stall < Duration::from_millis(ROLL_MILLIS / 5),
+        stall < Duration::from_millis(ROLL_MILLIS / 2),
         "an unrelated task stalled for {stall:?} during a {ROLL_MILLIS}ms rollover: \
          appends parked their workers on the synchronous segment lock",
     );

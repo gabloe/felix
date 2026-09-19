@@ -635,6 +635,18 @@ impl DiskLog {
         self.inner.durability.durable_upto()
     }
 
+    /// How many flushes this log has issued.
+    ///
+    /// Group commit means one flush serves many waiting appends, so N appends
+    /// that coalesce produce far fewer than N flushes. That ratio is the
+    /// property, and counting is the only way to see it that does not also
+    /// measure the machine: a wall-clock speedup cannot tell "the flushes
+    /// coalesced" from "this box could not put enough appends in flight for
+    /// them to".
+    pub fn flushes(&self) -> u64 {
+        self.inner.durability.flushes()
+    }
+
     /// Bytes written but not yet flushed — the data a crash would lose now.
     pub fn unsynced_bytes(&self) -> u64 {
         self.inner.segments.read().active().unsynced_bytes()

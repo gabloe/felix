@@ -132,6 +132,37 @@ Also fixes the release job that shipped 0.4.0 with no Python wheels.
 
 ### Fixed
 
+- **Four timing-sensitive tests stopped reporting a slow machine as a broken
+  invariant.** Each was a wall-clock assertion on a shared runner, each failed
+  on a branch that could not have caused it, and between them they cost several
+  investigations.
+
+  `concurrent_durable_appends_share_a_flush` asserted a **wall-clock speedup**
+  from group commit. A ratio cannot tell "the flushes coalesced" from "this
+  machine could not put sixteen appends in flight for them to", which is how it
+  read 0.70x on a two-core runner with nothing wrong. `DiskLog::flushes()` now
+  exposes the flush count — one relaxed increment against an `fsync` — and the
+  test asserts the thing itself: 64 appends produce 64 flushes serially and 5
+  concurrently. Counting does not measure the machine.
+
+  `an_inline_rollover_does_not_park_every_worker` allowed a fifth of one
+  rollover for scheduling noise, described as "far above the scheduling noise
+  even on a loaded box". CI falsified that twice, measuring 137 ms. The bug it
+  catches parks every worker for the *whole* rollover, so half keeps a 2x margin
+  on both sides instead of sitting next to the noise floor.
+
+  `FELIX_TEST_TIMEOUT_SCALE` multiplies the setup deadlines in the cluster
+  harness and the Raft chaos suite. Unset means 1, so a developer's run is
+  unchanged and still fails fast on a genuine hang; CI sets `3` and the coverage
+  job `5`. Raising the constants instead would have bought the same green while
+  never noticing a hang on the machines fast enough to.
+
+  Deliberately untouched: `losing_quorum_fails_writes_loudly_not_silently`
+  waits on a leader noticing it has lost quorum, and that wait *is* the subject
+  — widening it would only make the test slower at noticing nothing. It is
+  serialised instead, which is what its module already says.
+
+
 - **Concurrent publishes share a device flush again** (#535). Publishes for a
   shard queued to a single worker, and that worker awaited each one to
   completion -- including the `fsync` -- before taking the next. One publish was
