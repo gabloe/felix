@@ -31,7 +31,14 @@ pub(crate) fn client_config(tenant_id: &str, token: &str) -> Result<ClientConfig
     let quinn = quinn::ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(tls).context("client crypto")?,
     ));
-    let mut config = ClientConfig::optimized_defaults(quinn);
+    // Env-aware, not `optimized_defaults`: the instrument has to be able to
+    // sweep the client's own knobs. Built on the defaults, so an unset
+    // environment measures exactly what a default client does -- but
+    // FELIX_PUB_CONN_POOL, FELIX_PUB_SHARDING and FELIX_PUBLISH_INFLIGHT_BYTES
+    // silently did nothing here before, which made three runs of a perf
+    // session measure the configuration they were meant to be varying (#553).
+    let mut config =
+        ClientConfig::from_env_or_yaml(quinn, None).context("build the loadgen's client config")?;
     config.auth_tenant_id = Some(tenant_id.to_string());
     config.auth_token = Some(token.to_string());
     Ok(config)
@@ -74,5 +81,46 @@ impl ServerCertVerifier for AcceptAnyBroker {
         rustls::crypto::ring::default_provider()
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_config;
+
+    /// **The instrument must respond to the knobs it documents.**
+    ///
+    /// `optimized_defaults` ignores the environment, so every `FELIX_PUB_*`
+    /// variable was inert here and a run that set one measured the default
+    /// instead -- silently, which is how a perf session drew two conclusions
+    /// from configurations it had never actually run (#553).
+    #[test]
+    fn the_client_config_reads_the_environment() {
+        // Serialised by the env mutation, so both assertions live in one test.
+        unsafe { std::env::remove_var("FELIX_PUB_CONN_POOL") };
+        let default_pool = client_config("t1", "token")
+            .expect("config")
+            .publish_conn_pool;
+
+        unsafe { std::env::set_var("FELIX_PUB_CONN_POOL", "17") };
+        let configured = client_config("t1", "token").expect("config");
+        unsafe { std::env::remove_var("FELIX_PUB_CONN_POOL") };
+
+        assert_ne!(
+            default_pool, 17,
+            "pick a probe value the default is not, or this proves nothing"
+        );
+        assert_eq!(
+            configured.publish_conn_pool, 17,
+            "FELIX_PUB_CONN_POOL did not reach the client"
+        );
+        // An unset environment must still measure a default client, so every
+        // number taken before this change stays comparable.
+        assert_eq!(
+            client_config("t1", "token")
+                .expect("config")
+                .publish_conn_pool,
+            default_pool
+        );
     }
 }
