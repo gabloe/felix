@@ -552,31 +552,63 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      # Into `artifacts/`, which is where `napi artifacts` looks. Downloading
+      # them beside the manifest instead leaves every platform package empty
+      # and `prepublish` publishing nothing, which it reports as success.
       - uses: actions/download-artifact@v8
         with:
           pattern: napi-*
           merge-multiple: true
-          path: crates/felix-typescript
+          path: crates/felix-typescript/artifacts
 
       - name: Install the napi CLI
         run: npm install -g @napi-rs/cli@2
 
-      # `napi prepublish` turns the per-platform .node files into the platform
-      # packages the main package declares as optional dependencies, so a
-      # consumer installs only the one their machine needs.
+      # Three separate things, and only the middle one is `prepublish`:
+      # `artifacts` moves each .node into the platform package that carries it,
+      # `prepublish` publishes those platform packages, and `npm publish` sends
+      # the JavaScript package that declares them as optional dependencies.
+      - name: Move each binary into its platform package
+        working-directory: crates/felix-typescript
+        run: napi artifacts
+
       - name: What is about to be published
         working-directory: crates/felix-typescript
-        run: ls -la *.node
+        run: ls -la npm/*/
 
       # No `--access`: the napi 2 CLI has no such option, and the packages are
       # unscoped, so npm treats them as public anyway. A scoped package would
       # need `publishConfig.access` in its manifest rather than a flag here.
-      - name: Publish
+      - name: Publish the platform packages
         working-directory: crates/felix-typescript
-        run: napi prepublish -t npm
+        run: napi prepublish -t npm --skip-gh-release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish felix-client
+        working-directory: crates/felix-typescript
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Because the job reported success while publishing nothing at all, and
+      # the only way to know a publish happened is to go and look.
+      - name: The registry must actually have them
+        working-directory: crates/felix-typescript
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          missing=0
+          for pkg in felix-client $(node -p "Object.keys(require('./package.json').optionalDependencies).join(' ')"); do
+            if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+              echo "ok      ${pkg}@${version}"
+            else
+              echo "MISSING ${pkg}@${version}"
+              missing=1
+            fi
+          done
+          exit "$missing"
 
   python-publish:
     name: Publish to PyPI
@@ -597,9 +629,14 @@ jobs:
       - name: What is about to be published
         run: ls -la dist
 
+      # A rerun must not fail on what a previous attempt already uploaded.
+      # PyPI refuses a duplicate file outright, and this release is reruns all
+      # the way down: the other two registries publish at different rates, so
+      # the run that finishes them will always find PyPI already done.
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          skip-existing: true
 
   # --- crates.io -----------------------------------------------------------
   #
