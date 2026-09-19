@@ -11,7 +11,10 @@ flag (#548). Sharding on a single broker is established as *not* a throughput
 lever and is documented as horizontal-only (#552). What remains unexplained is
 a per-broker plateau at **~900 MB/s** with roughly a third of the broker's CPU
 idle, the generators three-quarters idle, and the device at ~67% of its
-measured capability.
+measured capability. Ten hypotheses were eliminated; the leading surviving
+candidate — a single saturated task at the quinn endpoint, upstream of
+everything measured — is **untested**, because the cluster was torn down before
+it was formed.
 
 Map of this document: section 1 is the rig. Sections 2–3 are the two shipped
 changes and their measurements. Section 4 is the run matrix. Section 5 is the
@@ -245,7 +248,16 @@ arithmetic.
 **A single saturated core.** Aggregate CPU of 60% can hide one core pegged at
 100%, and QUIC softirq is exactly the kind of work that concentrates. Per-core
 sampling under load: **all eight cores at 67–71%**, softirq spread evenly at
-9–17%. No hot core. Killed.
+9–17%. No hot core.
+
+**This eliminates less than it appears to, and the doc originally overstated
+it.** Tokio is a work-stealing runtime: a single continuously-runnable task
+migrates between worker threads, so at 1 Hz it smears across all eight cores as
+moderate even load — the exact 67–71% signature measured. Per-core sampling can
+separate "one pegged CPU" from "work spread across cores"; it *cannot* separate
+"work spread across cores" from "one saturated task being migrated." The
+single-serialisation-point family is therefore **untested, not eliminated**.
+`tokio-console` would settle it directly by showing one task's busy time.
 
 **The generators.** Sampled at **22–31% busy**. A single generator running
 alone reached 594.7 MB/s, and an earlier campaign recorded one generator
@@ -284,6 +296,50 @@ receives a quarter of a broker-side ceiling. The 1.63 GB/s figure was a
 
 There is no per-generator limit. There is one broker ceiling near 900 MB/s,
 divided by however many generators are pointed at it.
+
+### The leading live hypothesis: one socket, one endpoint driver
+
+Everything eliminated above sits **downstream** of QUIC packet intake. What
+sits upstream of all of it is the quinn endpoint. `QuicServer::bind` binds one
+UDP socket and constructs one `Endpoint` from it, so 256 connections are 256
+consumers behind a single feeder — the socket reads and datagram routing are
+one task's work.
+
+This fits every observation on record:
+
+- **Invariant to shards, workers, admission, flush mechanism** — all downstream
+  of intake.
+- **Invariant to connection count** — connections share the socket.
+- **Generators idle at 22–31%** — blocked on a broker that cannot drain faster.
+- **Device at ~67%** — never asked for more.
+- **No hot core** — per the work-stealing note above, a saturated task does not
+  produce one.
+- **Scales with brokers and nothing else** — each broker has its own socket,
+  which is exactly the two-broker 1.63 GB/s.
+
+It is also continuous with this repository's own prior finding.
+`docs/perf-investigation-throughput.md` concluded that quinn driver re-poll
+latency becomes the pipeline's clock; the transport module still says so in
+prose. Same component, one level up. Note that the mitigation from that
+investigation is **not active here**: the I/O runtime pool defaults to 2 on
+macOS and **0 on Linux**, deliberately, because isolating drivers measured
+worse on Linux at the time.
+
+Cheap diagnostics, before any code:
+
+- `netstat -su` / `/proc/net/snmp` for `RcvbufErrors` and `InErrors`. Non-zero
+  means the socket reader is behind and QUIC is retransmitting — which caps
+  throughput while leaving CPU moderate.
+- `ss -uanm` for receive-queue depth on the listening socket under load.
+- Whether GRO is active on the receive path. Without it, 900 MB/s at a
+  1500-byte MTU is roughly 600K syscalls/s.
+
+The structural test is `SO_REUSEPORT` with N sockets and N quinn endpoints,
+letting the kernel hash flows across them. If throughput scales with endpoint
+count, that is the ceiling.
+
+**None of this was run.** The cluster was torn down before the hypothesis was
+formed, and these diagnostics need a broker under load.
 
 ---
 
@@ -411,25 +467,32 @@ One broker plateaus at ~900 MB/s with ~31% of its CPU idle evenly across all
 eight cores, generators 70–78% idle, the device at roughly 67% of its measured
 `fdatasync` capability, twelve independent commit paths available and unused,
 and admission budgets raised 16–64× with no effect. Every structural
-explanation offered so far has been tested and eliminated. The ceiling
+explanation offered so far has been tested and eliminated except one:
+a single saturated task upstream of everything measured, at the quinn endpoint.
+That is now the leading candidate and it is untested. The ceiling
 reproduces across ten runs here and matches what the previous campaign
 recorded (~950–977 MB/s) before any of this work.
 
-Recommended next:
+Recommended next, in this order:
 
-1. **Hash the routing key, not the stream name,** where a key is present.
+1. **Two brokers.** The cheapest run, and it answers whether the ceiling even
+   matters before more days go into it: the reframe predicts throughput scales
+   with brokers, and the prior two-broker session's 1.63 GB/s (~815 each)
+   already suggests it does. It also directly tests the endpoint hypothesis,
+   since each broker has its own socket.
+2. **Test the endpoint hypothesis.** The socket diagnostics above cost nothing.
+   The structural test is `SO_REUSEPORT` with N endpoints.
+3. **`tokio-console`, not just a flamegraph.** A flamegraph shows a hot
+   *function*; the open question is whether a single *task* is saturated, which
+   per-core sampling provably cannot answer. Look for one task's busy time
+   dominating rather than for a hot symbol.
+4. **Hash the routing key, not the stream name,** where a key is present.
    Ordering on a sharded stream is per key, so hashing the stream name funnels
    traffic that is free to spread. Wrong as written, independent of this
    ceiling.
-2. **Profile rather than bisect.** Ten configuration sweeps have eliminated ten
-   hypotheses without finding the constraint. A flamegraph of the broker under
-   load is likely worth more than an eleventh sweep.
-3. **Two brokers.** The reframe predicts throughput scales with brokers, not
-   shards; the prior two-broker session's 1.63 GB/s supports it. Confirming it
-   turns the reframe from an argument into a measurement.
-4. **Correct the prior findings.** The commit-sequencer conclusion should not
+5. **Correct the prior findings.** The commit-sequencer conclusion should not
    outlive this session.
-5. **Re-examine published numbers.** Any figure produced by `felix-loadgen`
+6. **Re-examine published numbers.** Any figure produced by `felix-loadgen`
    before #554 came from a generator that ignored its own configuration and
    published unkeyed. Aggregate broker numbers are probably sound; anything
    characterising sharding or client tuning is not.
