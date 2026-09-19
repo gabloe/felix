@@ -113,6 +113,20 @@ broker that disagree about either exchange the same bytes they did before.
 
 ### Changed
 
+- **The loopback MTU guarantee's buffer gate no longer moves with the MTU
+  knobs.** It asks one question — was this host tuned? — as a proxy, because
+  Linux clamps `SO_RCVBUF` to a stock ~208 KB and an untuned host cannot absorb
+  the bursts the pin exists to survive. It was measured against the size about
+  to be pinned, so when the discovery bound's default dropped to 4096 below the
+  requirement fell from ~1 MiB of socket buffer to 256 KiB and **every stock
+  Linux host silently started pinning the loopback MTU**. A routed-path hazard
+  fix had no business changing who gets a loopback pin. The gate now reads the
+  jumbo payload and nothing configurable.
+
+  One behaviour goes with it: setting `FELIX_MTU_UPPER_BOUND` low on an
+  *untuned* host no longer buys the guarantee. Asking for a smaller pin is not
+  evidence of headroom.
+
 - **MTU discovery is bounded below Linux's UDP GSO ceiling by default**
   (`4096`, was `16384`; macOS keeps `16384`). Linux packs a whole `sendmsg`
   batch into one IP datagram, so `MTU × segments` must stay under 65,535, and
