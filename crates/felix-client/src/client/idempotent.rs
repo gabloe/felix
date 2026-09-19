@@ -22,6 +22,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::client::Client;
 use super::cluster::{ClusterClient, is_terminal};
 use crate::{PublishRefusalReason, PublishRefused};
@@ -31,6 +33,43 @@ use crate::{PublishRefusalReason, PublishRefused};
 enum Source<'a> {
     Single(&'a Client),
     Cluster(&'a ClusterClient),
+}
+
+/// Marks the producer in doubt unless the publish that armed it finished.
+///
+/// A cancelled publish is the one case the sequence mechanism cannot absorb.
+/// Everything else about it is built so a re-send is safe *because the number
+/// did not move* — but that holds only while the client knows whether the
+/// number was used. Drop the future mid-send and it does not: the batch may
+/// have been appended under that sequence, and the cursor still points at it.
+///
+/// The next batch would then go out under a spent number, and the broker's
+/// contract is to answer a remembered sequence from memory *without appending*
+/// — so a caller publishing different records would be told `Ok` and lose them
+/// with nothing reported anywhere. Refusing afterwards is the only honest
+/// answer, and this is what notices.
+struct InDoubtOnCancel<'p> {
+    flag: &'p AtomicBool,
+    armed: bool,
+}
+
+impl<'p> InDoubtOnCancel<'p> {
+    fn armed(flag: &'p AtomicBool) -> Self {
+        Self { flag, armed: true }
+    }
+
+    /// The publish was answered, so the cursor is right either way.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for InDoubtOnCancel<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(true, Ordering::Release);
+        }
+    }
 }
 
 /// The next sequence on one stream, or the refusal that ended it.
@@ -49,6 +88,13 @@ enum Cursor {
 pub struct IdempotentProducer<'a> {
     source: Source<'a>,
     producer_id: u64,
+    /// Set when a publish future was dropped between sending a batch and
+    /// learning what happened to it. See [`Self::publish_batch`].
+    ///
+    /// Producer-wide rather than per stream, which is exactly as coarse as the
+    /// cursor lock already is: publishes on this producer serialise behind that
+    /// lock whatever stream they are for.
+    in_doubt: AtomicBool,
     cursors: Mutex<HashMap<(String, String, String), Cursor>>,
     /// The broker a refusal named as the leader of a stream, kept so the next
     /// batch goes straight there rather than being refused again.
@@ -68,6 +114,7 @@ impl<'a> IdempotentProducer<'a> {
         Self {
             source,
             producer_id,
+            in_doubt: AtomicBool::new(false),
             cursors: Mutex::new(HashMap::new()),
             leaders: Mutex::new(HashMap::new()),
         }
@@ -98,6 +145,14 @@ impl<'a> IdempotentProducer<'a> {
     /// cannot duplicate it. A [`PublishRefused`] ends this producer on the
     /// stream: every later call fails with the same reason, because the
     /// broker no longer knows where this producer is.
+    /// **Cancelling this stops the producer.** Dropping the future between
+    /// sending a batch and learning what happened to it leaves the sequence in
+    /// doubt: the batch may have been appended under it, and the cursor still
+    /// points at it. Since the broker answers a remembered sequence from memory
+    /// *without appending*, reusing it would discard a different batch and
+    /// report success — so the next call refuses instead, and the producer has
+    /// to be replaced. Do not race this against a timeout; a producer is cheap
+    /// to re-initialise and silently dropped records are not cheap at all.
     pub async fn publish_batch(
         &self,
         tenant_id: &str,
@@ -110,6 +165,16 @@ impl<'a> IdempotentProducer<'a> {
             namespace.to_string(),
             stream.to_string(),
         );
+        if self.in_doubt.load(Ordering::Acquire) {
+            anyhow::bail!(
+                "a publish on this producer was cancelled before the broker answered, \
+                 so its sequence may or may not have been appended. Reusing that \
+                 sequence would have the broker answer the new batch from memory \
+                 without appending it, and report success — so this producer will not \
+                 publish again. Call producer_init for a fresh producer id; the batch \
+                 in doubt is the only one whose fate is unknown.",
+            );
+        }
         // Held for the whole publish: the sequence is only meaningful if the
         // batches carrying consecutive numbers are sent in that order.
         let mut cursors = self.cursors.lock().await;
@@ -120,9 +185,14 @@ impl<'a> IdempotentProducer<'a> {
                 return Err(refused.clone()).context("this producer was ended on the stream");
             }
         };
+        // Armed across the send and disarmed the instant it answers: between
+        // those two points the caller's future may be dropped, and that is the
+        // window where the cursor and the broker can disagree.
+        let cancelled = InDoubtOnCancel::armed(&self.in_doubt);
         let result = self
             .send(tenant_id, namespace, stream, payloads, sequence, &key)
             .await;
+        cancelled.disarm();
         match result {
             Ok(()) => {
                 cursors.insert(key, Cursor::Next(sequence + 1));
