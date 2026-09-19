@@ -134,6 +134,50 @@ same bytes they did before.
   (920 vs 923 MB/s) because both exercised the same log. Default `0` keeps the
   old behaviour, so existing runs stay comparable.
 
+
+- **A crates.io publish job** (#574), behind `PUBLISH_CRATES` like the PyPI and
+  npm ones. The Rust client is what the other two bindings wrap, and it was the
+  one registry with no job at all.
+
+  The order is the mechanism: crates.io resolves each dependency against the
+  registry as the crate uploads, so a crate published ahead of something it
+  depends on fails *halfway*, with the earlier crates already permanent. The
+  job walks a topological sort of the workspace's internal edges and skips any
+  version already on the registry, so a re-run after a partial failure
+  completes rather than erroring on what already landed. `task publish:check`
+  asserts that list is every publishable crate and is genuinely topological,
+  because nothing about adding a crate to the workspace forces anyone to
+  revisit a workflow file.
+
+  `felix-broker` and `felix-storage` are published too, AGPL-3.0 and all:
+  `felix-client`'s `in-process` feature declares them optional, and crates.io
+  resolves an optional dependency like any other — `cargo publish --dry-run`
+  refuses `felix-client` without them. The licence split is unchanged; a
+  default `felix-client` build still pulls no AGPL-3.0 code.
+
+
+- **The npm publish can actually run** (#575). napi ships one package per
+  platform — the main package declares them as optional dependencies and npm
+  installs the matching one — and none of that existed: no `npm/` directory, no
+  `optionalDependencies`, and a loader that only looked for a file beside
+  itself. `napi prepublish` had nothing to publish.
+
+  Five platform packages now cover exactly the five targets the release builds,
+  and the loader resolves the installed one, detecting musl rather than
+  assuming glibc. A checkout is unaffected: a local build still wins, which is
+  what the conformance suite runs against. `check_npm_packages.py` ties the
+  build matrix, the declared triples and the packages on disk together, because
+  drift between them publishes cleanly and fails at `npm install` on someone
+  else's machine, against a version that is permanent. The napi CLI is pinned
+  to `@2`, matching the napi crate, whose v3 renamed the config keys this
+  package uses.
+
+  Registry metadata went with it: neither binding shipped a `LICENSE` despite
+  both declaring Apache-2.0, the Python package had no `py.typed` so type
+  checkers ignored the stubs beside it, and every crate inherited the workspace
+  readme — the repository README, roadmap and all, rendered on eight library
+  pages. Each publishable crate has its own now.
+
 ### Fixed
 
 - **The Quickstart's first command did not work**, and neither did the one it
