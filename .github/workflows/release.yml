@@ -469,7 +469,7 @@ jobs:
           node-version: "22"
 
       - name: Install the napi CLI
-        run: npm install -g @napi-rs/cli
+        run: npm install -g @napi-rs/cli@2
 
       - name: Build the addon
         working-directory: crates/felix-typescript
@@ -540,7 +540,7 @@ jobs:
           path: crates/felix-typescript
 
       - name: Install the napi CLI
-        run: npm install -g @napi-rs/cli
+        run: npm install -g @napi-rs/cli@2
 
       # `napi prepublish` turns the per-platform .node files into the platform
       # packages the main package declares as optional dependencies, so a

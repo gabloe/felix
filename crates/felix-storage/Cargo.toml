@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Storage backends and ephemeral cache implementation for the Felix broker"
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["felix", "storage", "cache"]
 categories = ["network-programming", "caching"]
 

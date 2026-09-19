@@ -1,0 +1,36 @@
+{
+  "name": "@felix/client-win32-x64-msvc",
+  "version": "0.4.1",
+  "description": "The win32-x64-msvc binary for @felix/client. Installed automatically; do not depend on it directly.",
+  "main": "felix.win32-x64-msvc.node",
+  "files": [
+    "felix.win32-x64-msvc.node",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gabloe/felix.git",
+    "directory": "crates/felix-typescript"
+  },
+  "homepage": "https://github.com/gabloe/felix",
+  "author": "Gabriel Loewen",
+  "bugs": {
+    "url": "https://github.com/gabloe/felix/issues"
+  },
+  "keywords": [
+    "felix",
+    "napi",
+    "win32-x64-msvc"
+  ]
+}

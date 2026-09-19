@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Request routing and placement logic for multi-node Felix deployments"
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["felix", "routing"]
 categories = ["network-programming"]
 

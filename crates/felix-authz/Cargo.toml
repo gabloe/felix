@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Tenant-scoped token issuance and authorization for Felix"
 repository.workspace = true
 homepage.workspace = true
-readme.workspace = true
+readme = "README.md"
 keywords = ["felix", "authorization", "jwt"]
 categories = ["network-programming", "authentication"]
 

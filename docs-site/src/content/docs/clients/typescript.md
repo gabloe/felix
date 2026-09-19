@@ -19,7 +19,7 @@ To build it from the repository:
 
 ```bash
 cd crates/felix-typescript
-napi build --platform --release      # needs: npm i -g @napi-rs/cli
+napi build --platform --release      # needs: npm i -g @napi-rs/cli@2
 ```
 
 Without the napi CLI, `napi build` is mostly a rename — a plain `cargo build`
