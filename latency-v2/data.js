@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789785466968,
+  "lastUpdate": 1789830476176,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15048,6 +15048,72 @@ window.BENCHMARK_DATA = {
             "range": "239.36",
             "unit": "us",
             "extra": "trials: 5\nmedian: 283.00\nmean: 383.00\nstdev: 239.36\ncv: 62.50%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "844c814e5cd7ade302a50e13647c259b485c66f4",
+          "message": "feat(typescript): a Node client, gated on the conformance suite (#561)\n\nNode bindings for Felix as a napi-rs addon over felix-client, not a\nreimplementation of the protocol -- the same reasoning as felix-python,\nand the same surface. Reconnection, redirect-following, retry\nclassification and offset accounting exist once and every language binds\nto them; a TypeScript-native client would be a second place for those to\nbe subtly wrong, in exactly the areas -- failover and delivery accounting\n-- where subtly wrong is most expensive.\n\nThe suite is the part that makes it a client rather than a wrapper. It\ndrives a real three-node fixture cluster (`felix-cluster client-fixture`),\nnames the catalogue scenario each test demonstrates, and writes the\nresults document `felix-conformance verify` checks: 42 tests, 41\nscenarios passing, 0 required missing or skipped. CI and the release\npipeline gate on the verdict rather than on the test exit code, because a\ngreen run that quietly skipped a required scenario is not conformance.\nTwo optional scenarios are recorded as skipped with reasons -- idempotent\nproducers are not wrapped, and `error.bad_offset_is_typed` needs a\ntrimmed log a client has no way to produce.\n\nWriting it found three defects that no unit test would have caught.\n\n`close()` deadlocked against a read in flight. `next_event` held the\nhandle's mutex while parked waiting for a record, so `close()` waited for\nthe read it was cancelling -- and a Node consumer shutting down is\npractically always parked on a read. `close` now cancels through a watch\nchannel, and the reader drops the subscription as it unwinds.\n\n`watch::Sender::send` reports an error and leaves the value alone when no\nreceiver is subscribed, which is exactly the case when nothing is\nreading. So `closed` stayed false on a handle nobody was reading.\n`send_replace` writes either way.\n\n`index.js` proxied every resolved value, not only handles. A returned\nBuffer was a Proxy around a Buffer and a returned array a Proxy around an\narray: `deepStrictEqual` saw through to the handler, brand checks could\nreject it, and a caller had no way to unwrap. Only the addon's own\nclasses are wrapped now, which is all the typed-error layer ever needed.\n\nThe surface gained what the catalogue asks for: at-least-once publishing\n(refused together with a routing key, since the re-send path does not\ncarry one), per-shard resume for sharded subscriptions, `retainedCount`\nand `resumeOffset` on a cache watch, `start` and `retained` refused\ntogether rather than one being ignored, and a `Client.close()` that\nactually releases. Errors arrive as typed classes mirroring the Python\nbinding's exceptions, so an application branches on identity rather than\non message text.\n\nThose codes travel as `FELIX_*` string literals, which the two env-var\ncheckers match as variable names. They are named in both scripts as what\nthey are rather than renamed to dodge the heuristic.",
+          "timestamp": "2026-09-19T08:05:09-07:00",
+          "tree_id": "a721196e5398a309ff28e93392f56a8148cbec03",
+          "url": "https://github.com/gabloe/felix/commit/844c814e5cd7ade302a50e13647c259b485c66f4"
+        },
+        "date": 1789830474298,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 162,
+            "range": "4.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 162.00\nmean: 160.60\nstdev: 4.34\ncv: 2.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 209,
+            "range": "31.21",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 209.00\nmean: 222.60\nstdev: 31.21\ncv: 14.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 245,
+            "range": "1140.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 245.00\nmean: 758.80\nstdev: 1140.64\ncv: 150.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 200.60\nstdev: 1.14\ncv: 0.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 411,
+            "range": "7.36",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 411.00\nmean: 413.20\nstdev: 7.36\ncv: 1.78%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 998,
+            "range": "405.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 998.00\nmean: 1014.40\nstdev: 405.18\ncv: 39.94%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
