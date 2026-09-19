@@ -11,6 +11,23 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Node addon's cross-compile leg could not build.** The 0.5.0 release
+  pipeline failed on `x86_64-apple-darwin` with `can't find crate for core`,
+  which took the npm assets with it.
+
+  The job asked for `dtolnay/rust-toolchain@stable` while every other Rust job
+  in the file pins `1.97.1`. The action added the target to *stable*, and then
+  `rust-toolchain.toml` switched cargo to the pinned toolchain, which did not
+  have it. Four of the five legs passed anyway, because their target is the
+  runner's own and was already installed — only the leg that genuinely
+  cross-compiles, x86-64 on an arm64 macOS runner, had anything to notice.
+
+  `task ci:toolchains` now asserts every workflow's Rust setup asks for the
+  pinned channel, with an explicit `toolchain-exempt:` marker for the fuzz job,
+  which needs nightly for `cargo-fuzz` and says so.
+
 ## [0.5.0] - 2026-09-19
 
 A third client, and the release where the data path stopped paying for

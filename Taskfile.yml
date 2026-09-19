@@ -181,6 +181,10 @@ tasks:
     desc: "Assert the LICENSING.md licence split and crates.io publish-readiness"
     cmds:
       - "python3 scripts/check_publish_metadata.py"
+  ci:toolchains:
+    desc: "Assert every workflow's Rust setup matches rust-toolchain.toml"
+    cmds:
+      - "python3 scripts/check_workflow_toolchains.py"
   ts:packages:
     desc: "Assert the Node client's platform packages match what the release builds"
     cmds:
