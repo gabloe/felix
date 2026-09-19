@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789831795465,
+  "lastUpdate": 1789831958571,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15180,6 +15180,72 @@ window.BENCHMARK_DATA = {
             "range": "583.93",
             "unit": "us",
             "extra": "trials: 5\nmedian: 634.00\nmean: 989.80\nstdev: 583.93\ncv: 58.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d2d6c15e82ae0155880726def58d5042bc3fa73",
+          "message": "perf(client): the data path is binary; JSON is compatibility only (#550) (#564)\n\n#549 put the routing key in the binary publish frame, which removed the\nlast reason JSON had to carry data-plane traffic. It is strictly more\nexpensive -- 645.8 MB/s against 917 for the same keyed workload on the\nsame rig, user CPU up from 20% to 28% -- and it now buys nothing the\nbinary frames do not cover.\n\n`Publisher::publish_json` and `publish_batch_json` are deprecated, for\nremoval in 0.6.0, and nothing routes through them any more. The one\ninternal caller was `publish_batch`'s fallback for a broker that never\nadvertised the acked binary frame; it now calls the private keyed form\nwith `key: None` directly, so the fallback keeps working after the public\nsurface goes.\n\nThat rewiring is the part worth a test. An empty key is a key -- it\nhashes to a shard rather than resolving to shard 0 -- so a fallback that\nquietly started passing `Some(Bytes::new())` would move records to a\ndifferent shard and nothing would report it.\n`an_acked_batch_falls_back_to_keyless_json_without_the_binary_flag`\npins `key: None`, and fails if the argument changes.\n\nThe broker still accepts JSON publishes and will keep accepting them:\n`ORIGINAL_V1_FLAGS` is frozen, so a client older than the flags is\nentitled to send them forever. Deleting the arm needs evidence, not\nreasoning, so all four JSON entry points -- control and uni, single and\nbatch -- now count into\n`felix_broker_json_publishes_total{frame=\"publish\"|\"publish_batch\"}`.\nThe label separates them because a client still on the single form is an\nolder one than a client on the batch. The metric is documented under the\npublish-path questions in the observability page, where the answer is\nthat it should be flat at zero.\n\n`docs/protocol.md` folds Message::Publish and PublishBatch into one\ncompatibility section rather than presenting them as a co-equal\nencoding, and the Binary PublishBatch section stops offering JSON as\nsomething a client selects -- it is what a client falls back to.\n\n`publish_idempotent` is untouched and stays JSON: it carries a producer\nid and sequence that no binary layout has room for yet. That is its own\npiece of work, not compatibility.\n\nThe three deliberate JSON call sites -- a client unit test, the latency\ndemo's encoding comparison, and the broker's latency_text test -- keep\nreaching the deprecated calls behind #[allow(deprecated)], since\nmeasuring the old encoding is the point of each.",
+          "timestamp": "2026-09-19T08:27:35-07:00",
+          "tree_id": "13c2016c770f17a9a12f86329df5d3e7d7c95167",
+          "url": "https://github.com/gabloe/felix/commit/5d2d6c15e82ae0155880726def58d5042bc3fa73"
+        },
+        "date": 1789831957208,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 163,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 163.20\nstdev: 0.45\ncv: 0.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "3.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 209.00\nstdev: 3.00\ncv: 1.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 239,
+            "range": "15.44",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 239.00\nmean: 249.40\nstdev: 15.44\ncv: 6.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "6.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 203.60\nstdev: 6.39\ncv: 3.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 410,
+            "range": "332.44",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 410.00\nmean: 553.60\nstdev: 332.44\ncv: 60.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 727,
+            "range": "885.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 727.00\nmean: 1048.60\nstdev: 885.24\ncv: 84.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
