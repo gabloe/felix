@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789837322574,
+  "lastUpdate": 1789837559969,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12272,6 +12272,58 @@ window.BENCHMARK_DATA = {
             "range": "52054.93",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 558210.05\nmean: 536175.51\nstdev: 52054.93\ncv: 9.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c29c2cae912fe61ef9c40b7ba4f26900e7c79ecd",
+          "message": "perf: bound MTU discovery below the GSO ceiling, and say when buffers are clamped (#571)\n\nTwo defaults from yesterday's Azure analysis, and two deliberately left\nalone.\n\nLinux UDP GSO packs a whole `sendmsg` batch into one IP datagram, so\n`MTU * segments <= 65535`, and quinn batches up to 10 -- the real ceiling\nis 6553 bytes. Above it the kernel rejects every batch with `EMSGSIZE`,\nwhich quinn does not recognise as a GSO failure (it falls back only on\nEIO/EINVAL), so the transmit is dropped after quinn has counted it as\nsent and delivery stalls permanently rather than degrading.\n\n`LOOPBACK_PINNED_MTU_CAP` was capped at 4096 when this was diagnosed in\nround 18. The *discovery* bound was not: it stayed 16384 for every path.\nThat is harmless on a 1500-byte network, where discovery never reaches\nit, and fatal on a jumbo-frame one -- which is the network you buy for\nthroughput. Every perf session set FELIX_MTU_UPPER_BOUND=4096 by hand,\nwhich is the tell.\n\n4096 rather than the exact 6553: `MAX_TRANSMIT_SEGMENTS` is private to\nquinn, so the ceiling cannot be derived through its API, and 6553 breaks\nthe moment that number rises. 4096 survives it reaching 15 and was also\nthe fastest configuration measured on Linux. macOS has no GSO and keeps\n16336, the same split the loopback cap already makes.\n\nThe investigation said no test could catch a regression in the\ninvariant. One can catch the part that matters -- that the value we ship\nstill fits -- and the first version of that test was wrong in an\ninstructive way: it used `cfg!`, so it silently passed on the macOS\nmachine writing it. The default is now a `const fn` of the platform, so\nboth branches are checked from either host. Verified by putting 16384\nback and watching both tests fail.\n\nSecond: Linux accepts an oversized SO_RCVBUF/SO_SNDBUF and silently\nclamps it to net.core.rmem_max/wmem_max, ~208 KB against the 8 MiB Felix\nasks for. Bursts then overflow the socket and surface as QUIC\nretransmits, so a broker runs at a fraction of the host's capacity and\nlooks healthy doing it. Every perf session raised these to 26 MiB before\nany other number meant anything. Nothing here can raise a host limit, so\nthe warning names the sysctls. Half the request is the threshold, not any\nshortfall: the bind loop halves on rejection, so one step down is the\nmechanism working.\n\nLeft alone, with the reasoning recorded next to each default so it is not\nre-litigated: `publish_conn_pool` (4) and `publish_sharding`\n(`HashStream`). Both were swept and both looked promising, but those runs\nwere void -- the generator ignored client environment config (#553), so\nthe overrides never applied and the runs measured the defaults. Re-tested\non a fixed generator, round-robin landed at 912.6 MB/s, inside the\n842-926 band every valid configuration occupied, and raising the broker's\npublish worker pool 4 -> 16 measured slightly worse. Changing either\nwould be acting on numbers that have since been retracted.\n\nThe env reference claimed the discovery bound was \"safe on any network\".\nThat is the specific thing round 18 falsified, so it now says what\nhappens above 6553 and why.",
+          "timestamp": "2026-09-19T09:59:39-07:00",
+          "tree_id": "55d83cea9a93c495f13c697e03ad235decdee58a",
+          "url": "https://github.com/gabloe/felix/commit/c29c2cae912fe61ef9c40b7ba4f26900e7c79ecd"
+        },
+        "date": 1789837559147,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 395798.87,
+            "range": "20325.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 395798.87\nmean: 402909.64\nstdev: 20325.98\ncv: 5.04%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 395798.87,
+            "range": "20325.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 395798.87\nmean: 402909.64\nstdev: 20325.98\ncv: 5.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94753.63,
+            "range": "442.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94753.63\nmean: 94716.42\nstdev: 442.19\ncv: 0.47%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 947536.34,
+            "range": "4421.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 947536.34\nmean: 947164.17\nstdev: 4421.91\ncv: 0.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
