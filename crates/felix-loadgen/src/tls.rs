@@ -41,6 +41,23 @@ pub(crate) fn client_config(tenant_id: &str, token: &str) -> Result<ClientConfig
         ClientConfig::from_env_or_yaml(quinn, None).context("build the loadgen's client config")?;
     config.auth_tenant_id = Some(tenant_id.to_string());
     config.auth_token = Some(token.to_string());
+    // Say what was actually configured, once. A run that believes it swept a
+    // knob it never set is worse than one that did not try, and that is exactly
+    // what #553 produced -- so the instrument states its own configuration and
+    // the result log carries the proof.
+    static ANNOUNCED: std::sync::Once = std::sync::Once::new();
+    ANNOUNCED.call_once(|| {
+        eprintln!(
+            "loadgen client config: conn_pool={} streams_per_conn={} sharding={:?} \
+             inflight_bytes={} chunk_bytes={} queue_depth={}",
+            config.publish_conn_pool,
+            config.publish_streams_per_conn,
+            config.publish_sharding,
+            config.publish_inflight_bytes,
+            config.publish_chunk_bytes,
+            config.publish_queue_depth,
+        );
+    });
     Ok(config)
 }
 
