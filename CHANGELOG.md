@@ -61,6 +61,26 @@ they did before.
   (920 vs 923 MB/s) because both exercised the same log. Default `0` keeps the
   old behaviour, so existing runs stay comparable.
 
+### Fixed
+
+- **A cancelled idempotent publish no longer loses records silently.**
+  `IdempotentProducer::publish_batch` advanced its sequence only after the
+  broker answered. Dropping the future in between — a `timeout`, a losing
+  `select!` branch — left the cursor pointing at a sequence the batch may
+  already have been appended under. The next batch then went out under that
+  spent number, and the broker's contract is to answer a remembered sequence
+  *from memory without appending it*: the caller was told `Ok` and its records
+  were discarded, with nothing reported anywhere.
+
+  The producer now notices the cancellation and refuses to publish again,
+  naming the reason and telling the caller to take a fresh producer id. The
+  batch in doubt is the only one whose fate is unknown, and that is recoverable;
+  silently dropping the ones after it was not. Covered by a cluster test that
+  cancels a real publish and fails without the fix.
+
+  Only reachable from Rust: neither the Python nor the TypeScript binding wraps
+  idempotent producers.
+
 ### Changed
 
 - **The data path is binary; JSON is compatibility only** (#550). Now that

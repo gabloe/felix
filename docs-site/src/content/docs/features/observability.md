@@ -56,7 +56,15 @@ felix_broker_ingress_queue_depth            # publish jobs waiting
 felix_broker_ingress_dropped_total          # overflow, by policy
 felix_broker_ingress_rejected_total
 felix_broker_json_publishes_total            # by frame: publishes still on JSON
+felix_client_publish_cancelled_after_enqueue_total  # client: publishes whose caller went away
 ```
+
+`felix_client_publish_cancelled_after_enqueue_total` is a client metric, and
+non-zero is not an error. Cancelling a publish after it reaches the worker does
+not cancel the publish — the record is sent and very likely lands, and only the
+caller learning so is lost. It is here because those records have to be
+explicable: a timeout around a publish means *do not know*, not *did not
+happen*, and this is the number that says how often that happened.
 
 A rising ingress depth means publishers are outrunning the broker; drops and
 rejections say the overflow policy fired, which is deliberate and visible.

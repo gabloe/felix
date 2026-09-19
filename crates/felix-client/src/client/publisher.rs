@@ -246,6 +246,39 @@ fn estimate_text_publish_bytes(message: &Message) -> usize {
         .saturating_add(1024)
 }
 
+/// Counts a publish whose caller went away between the enqueue and the answer.
+///
+/// Cancelling a publish -- a `timeout`, a losing `select!` branch -- after it
+/// has been handed to the worker does not cancel the publish. The record is
+/// sent, and very likely lands; the only thing lost is the caller learning so.
+/// That is inherent to any cancelled network call and not a defect, but it does
+/// mean a timeout must not be read as "it did not happen": the outcome is
+/// unknown, which is the same position a failed acknowledgement leaves you in.
+///
+/// Nothing can report this to the caller -- their future is gone -- so it is
+/// reported to the operator instead. A publisher that cancels under load shows
+/// up here, and records nobody thinks they published have somewhere to be
+/// explained from.
+struct CancelledAfterEnqueue(bool);
+
+impl CancelledAfterEnqueue {
+    fn armed() -> Self {
+        Self(true)
+    }
+
+    fn answered(mut self) {
+        self.0 = false;
+    }
+}
+
+impl Drop for CancelledAfterEnqueue {
+    fn drop(&mut self) {
+        if self.0 {
+            t_counter!("felix_client_publish_cancelled_after_enqueue_total").increment(1);
+        }
+    }
+}
+
 impl Publisher {
     fn select_worker(
         &self,
@@ -283,6 +316,15 @@ impl Publisher {
     /// Acked and unacked publishes both take the binary path: an unacked publish is
     /// a plain `FLAG_BINARY_PUBLISH_BATCH` frame, and an acked one adds
     /// `FLAG_BINARY_PUBLISH_ACKED` and waits for the broker's binary ack.
+    ///
+    /// **Not cancel-safe.** Dropping this future — a `timeout`, a losing
+    /// `select!` branch — after the record reaches the worker does not stop the
+    /// publish. The record is sent and very likely lands; what is lost is
+    /// learning so, which leaves the outcome exactly as unknown as a failed
+    /// acknowledgement does. A timeout here means *do not know*, not *did not
+    /// happen*, and re-sending on one may duplicate the record. Cancellations
+    /// past that point are counted as
+    /// `felix_client_publish_cancelled_after_enqueue_total`.
     ///
     /// JSON is reached only as a compatibility fallback, against a broker that
     /// never advertised the binary frame this call needs. There is no longer a
@@ -441,7 +483,10 @@ impl Publisher {
             timings::record_publish_enqueue_wait_ns(enqueue_ns);
             t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
         }
-        response_rx.await.context("publish response dropped")?
+        let cancelled = CancelledAfterEnqueue::armed();
+        let answer = response_rx.await.context("publish response dropped")?;
+        cancelled.answered();
+        answer
     }
 
     /// Publish a batch.
@@ -555,9 +600,12 @@ impl Publisher {
             timings::record_publish_enqueue_wait_ns(enqueue_ns);
             t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
         }
-        response_rx
+        let cancelled = CancelledAfterEnqueue::armed();
+        let answer = response_rx
             .await
-            .context("acked binary batch response dropped")?
+            .context("acked binary batch response dropped")?;
+        cancelled.answered();
+        answer
     }
 
     /// Publish a batch using the JSON compatibility encoding.
@@ -723,9 +771,12 @@ impl Publisher {
             timings::record_publish_enqueue_wait_ns(enqueue_ns);
             t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
         }
-        response_rx
+        let cancelled = CancelledAfterEnqueue::armed();
+        let answer = response_rx
             .await
-            .context("publish batch response dropped")?
+            .context("publish batch response dropped")?;
+        cancelled.answered();
+        answer
     }
 
     pub async fn publish_batch_binary(
@@ -808,7 +859,10 @@ impl Publisher {
             timings::record_publish_enqueue_wait_ns(enqueue_ns);
             t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
         }
-        response_rx.await.context("binary batch response dropped")?
+        let cancelled = CancelledAfterEnqueue::armed();
+        let answer = response_rx.await.context("binary batch response dropped")?;
+        cancelled.answered();
+        answer
     }
 
     pub async fn publish_batch_binary_bytes(
@@ -869,7 +923,10 @@ impl Publisher {
             timings::record_publish_enqueue_wait_ns(enqueue_ns);
             t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
         }
-        response_rx.await.context("binary batch response dropped")?
+        let cancelled = CancelledAfterEnqueue::armed();
+        let answer = response_rx.await.context("binary batch response dropped")?;
+        cancelled.answered();
+        answer
     }
 
     pub async fn finish(&self) -> Result<()> {
