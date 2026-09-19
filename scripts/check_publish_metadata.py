@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -150,8 +151,67 @@ def check() -> list[str]:
     return failures
 
 
+RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release.yml"
+
+
+def check_publish_order(packages: list[dict]) -> list[str]:
+    """The release workflow's publish list must be every publishable crate, in
+    an order crates.io can actually resolve.
+
+    crates.io resolves each dependency against the registry as the crate is
+    uploaded, so a crate published before something it depends on fails — and
+    it fails halfway through a release, with some crates already permanent.
+    The workflow's sequence is the only thing preventing that, and nothing
+    about adding a crate to the workspace forces anyone to revisit it.
+    """
+    failures: list[str] = []
+    text = RELEASE_WORKFLOW.read_text()
+    match = re.search(r"for crate in (.*?); do", text, re.S)
+    if not match:
+        return [
+            f"{RELEASE_WORKFLOW.relative_to(REPO_ROOT)}: no `for crate in ...; do` "
+            f"publish loop found. This check reads the order out of it."
+        ]
+
+    listed = match.group(1).replace("\\\n", " ").split()
+    by_name = {p["name"]: p for p in packages}
+    expected = {n for n in by_name if n not in NOT_PUBLISHABLE}
+
+    for name in sorted(expected - set(listed)):
+        failures.append(
+            f"{name}: publishable but missing from the release workflow's crates.io "
+            f"publish list."
+        )
+    for name in sorted(set(listed) - expected):
+        failures.append(
+            f"{name}: in the release workflow's crates.io publish list but is not a "
+            f"publishable workspace member."
+        )
+    if failures:
+        return failures
+
+    published: set[str] = set()
+    for name in listed:
+        needs = {
+            d["name"]
+            for d in by_name[name]["dependencies"]
+            # `kind` is null for a normal dependency; dev- and build-dependencies
+            # do not have to be on crates.io ahead of it.
+            if d["kind"] is None and d["name"] in expected
+        }
+        for missing in sorted(needs - published):
+            failures.append(
+                f"{name}: published before {missing}, which it depends on. The list "
+                f"in {RELEASE_WORKFLOW.relative_to(REPO_ROOT)} must be a topological "
+                f"sort of the workspace's internal dependencies."
+            )
+        published.add(name)
+    return failures
+
+
 def main() -> int:
-    failures = check()
+    packages = workspace_members()
+    failures = check() + check_publish_order(packages)
     if failures:
         print("Publish-readiness check FAILED:\n", file=sys.stderr)
         for failure in failures:
@@ -161,8 +221,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    count = len(workspace_members())
-    print(f"Publish-readiness check passed for {count} workspace members.")
+    print(
+        f"Publish-readiness check passed for {len(packages)} workspace members, "
+        f"and the crates.io publish order resolves."
+    )
     return 0
 
 
