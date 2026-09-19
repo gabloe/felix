@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789834600909,
+  "lastUpdate": 1789836301374,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12064,6 +12064,58 @@ window.BENCHMARK_DATA = {
             "range": "15645.96",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 557584.67\nmean: 558428.86\nstdev: 15645.96\ncv: 2.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "99c7b71c13a16da795ef0df7abf6ba0d88255e3a",
+          "message": "fix(client): a cancelled idempotent publish must not reuse its sequence (#566)\n\nAudit of felix-client's async lifecycle, prompted by the deadlock the\nTypeScript binding hit. Most of it came back clean, and the one real\ndefect is this.\n\n`IdempotentProducer::publish_batch` advanced its cursor only in the `Ok`\narm, after the send resolved. Drop the future in between -- a `timeout`,\na losing `select!` branch -- and the cursor still points at a sequence\nthe batch may already have been appended under.\n\nThe next batch then goes out under that spent number, and the broker's\ncontract is to answer a remembered sequence *from memory without\nappending it* (`felix-broker/src/producers.rs`). So a caller publishing\ndifferent records was told `Ok` and had them discarded, with nothing\nreported anywhere. The mechanism that makes a re-send safe is exactly\nwhat makes this unsafe: the broker cannot tell a genuine retry from a\nnew batch wearing a spent number.\n\nA drop guard, armed across the send and disarmed the instant it answers,\nmarks the producer in doubt. The next publish refuses and says why, and\nthe caller takes a fresh producer id. The batch in doubt is the only one\nwhose fate is unknown, which is recoverable; silently dropping every\nbatch after it was not.\n\nProducer-wide rather than per stream, which is exactly as coarse as the\ncursor lock already is -- publishes on one producer serialise behind that\nlock whatever stream they are for.\n\n`crates/felix-cluster/tests/idempotent.rs` covers it against a real\nthree-node cluster: publish, cancel a publish, publish different records,\nand assert the refusal rather than a false `Ok`. Checked it fails without\nthe fix, against the genuine pre-fix code rather than a hand-disabled\nversion -- it reports \"publishing after a cancelled batch must not report\nsuccess\".\n\nThe ordinary publish path has the same cancellation window and it is not\na defect: cancelling after the record reaches the worker does not cancel\nthe publish, and only the caller learning the outcome is lost. That is\ninherent to any cancelled network call, but nothing said so, and a\ntimeout read as \"it did not happen\" is wrong -- it means \"do not know\".\nNow documented on `publish`, and counted as\n`felix_client_publish_cancelled_after_enqueue_total` so records nobody\nbelieves they published have somewhere to be explained from. Nothing can\nreport it to the caller, whose future is gone, so it is reported to the\noperator.\n\nWhat the audit found clean, checked rather than assumed: `next_event` is\ncancel-safe (it awaits `mpsc::Receiver::recv`, which guarantees no\nmessage is consumed when another select branch wins -- the TypeScript\ndeadlock was that binding's own mutex, not this crate); `Publisher::\nfinish` takes the join handle out of the lock before awaiting; all three\n`Drop` impls are non-blocking and abort their tasks; `ClusterClient::\nreconnect` holds the write lock across a connect deliberately and\ndocumented, which is a convoy and not a deadlock; and a cancelled publish\nreleases its admission permit, because the permit rides inside the\nrequest rather than being held by the caller.",
+          "timestamp": "2026-09-19T09:42:18-07:00",
+          "tree_id": "819d37b23ad9046c3358e0711e7d49ed1518e12e",
+          "url": "https://github.com/gabloe/felix/commit/99c7b71c13a16da795ef0df7abf6ba0d88255e3a"
+        },
+        "date": 1789836300439,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 229804.52,
+            "range": "4159.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229804.52\nmean: 228818.53\nstdev: 4159.24\ncv: 1.82%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 229804.52,
+            "range": "4159.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 229804.52\nmean: 228818.53\nstdev: 4159.24\ncv: 1.82%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54246.26,
+            "range": "933.33",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54246.26\nmean: 54142.99\nstdev: 933.33\ncv: 1.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 542462.63,
+            "range": "9333.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 542462.63\nmean: 541429.92\nstdev: 9333.32\ncv: 1.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
