@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789846297900,
+  "lastUpdate": 1789847280008,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12636,6 +12636,58 @@ window.BENCHMARK_DATA = {
             "range": "15327.39",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1158019.53\nmean: 1153303.31\nstdev: 15327.39\ncv: 1.33%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "54c36264cf413858cd29085a6ccb4c32beed0a99",
+          "message": "ci: pin the Node addon's toolchain, and assert every workflow does (#578)\n\nThe 0.5.0 release pipeline failed on x86_64-apple-darwin with \"can't find\ncrate for core\", and the Node addons never reached the release.\n\nThat job asked for dtolnay/rust-toolchain@stable; every other Rust job in the\nfile pins 1.97.1. The action installed the target on stable, rust-toolchain.toml\nthen switched cargo to 1.97.1, and the target was not there. Four legs passed\nregardless because their target is the runner's own host and already installed\n-- only the one genuine cross-compile, x86-64 on an arm64 macOS runner, had\nanything to trip over. The Python wheels were unaffected: maturin-action\ninstalls the target on the toolchain it actually uses.\n\ncheck_workflow_toolchains.py asserts the setup matches the pin, since the\nfailure mode is invisible until a matrix grows a cross-compiling leg. The fuzz\njob carries a toolchain-exempt marker with its reason: cargo-fuzz needs\nnightly. Verified by reintroducing @stable and watching it fail.",
+          "timestamp": "2026-09-19T12:45:30-07:00",
+          "tree_id": "f065399c6dcef17972eb407ab599e7fd0c62002e",
+          "url": "https://github.com/gabloe/felix/commit/54c36264cf413858cd29085a6ccb4c32beed0a99"
+        },
+        "date": 1789847279593,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 397990.9,
+            "range": "20902.51",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 397990.90\nmean: 395586.93\nstdev: 20902.51\ncv: 5.28%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 397990.9,
+            "range": "20902.51",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 397990.90\nmean: 395586.93\nstdev: 20902.51\ncv: 5.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93110.53,
+            "range": "883.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93110.53\nmean: 93397.75\nstdev: 883.87\ncv: 0.95%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 931105.34,
+            "range": "8838.72",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 931105.34\nmean: 933977.56\nstdev: 8838.72\ncv: 0.95%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
