@@ -14,6 +14,17 @@ set -uo pipefail
 # on shard 0 however many shards the stream has -- so a multi-shard stream is
 # only actually exercised when this is set.
 : "${KEYS:=0}"
+# QUIC connections each loadgen opens for publishing. The client default is 4,
+# so `--concurrency 16` is 16 publishers multiplexed over 4 connections -- and a
+# connection is one driver task doing that connection's packet processing and
+# AEAD on the broker. Sharding cannot add drivers, so this is the knob that
+# moves a receive-path ceiling when shard count does not.
+: "${PUB_CONNS:=}"
+# How the client picks which publish stream a batch goes down. The default is
+# `hash_stream`, which sends every publish for one stream down ONE worker -- one
+# QUIC stream on one connection -- however many connections the pool opened.
+# `rr` spreads them across the pool. See #552.
+: "${PUB_SHARDING:=}"
 # Sourcing the inventory below would clobber a LOADGENS given on the command
 # line, and sweeping the generator count is the whole point of this script --
 # one, two, then three against the same broker. Remember the caller's value and
@@ -50,6 +61,25 @@ echo __RUNOK__" >/dev/null 2>&1 || true
   done
 }
 
+# The same sampler on the generators. Without it a run where the generators are
+# saturated and the broker is at 55% reads as a broker result, which is how six
+# configurations in a row produced the same number (#552).
+arm_loadgen_cpu_sampling() {
+  for lg in ${LOADGENS}; do
+    run_on_str "$lg" "rm -f /tmp/cpu-samples.txt
+nohup sh -c 'i=0; while [ \$i -lt 600 ]; do awk \"/^cpu /{print \\\$2,\\\$3,\\\$4,\\\$5,\\\$6,\\\$7,\\\$8}\" /proc/stat >> /tmp/cpu-samples.txt; i=\$((i+1)); sleep 1; done' >/dev/null 2>&1 &
+echo __RUNOK__" >/dev/null 2>&1 || true
+  done
+}
+
+report_loadgen_cpu() {
+  for lg in ${LOADGENS}; do
+    line=$(run_on_str "$lg" "awk 'NR>1{du=\$1-pu;dn=\$2-pn;ds=\$3-ps;di=\$4-pi;dw=\$5-pw;dq=\$6-pq;dsq=\$7-psq;tot=du+dn+ds+di+dw+dq+dsq; if(tot>0){b=100*(tot-di)/tot; if(b>15){n++;B+=b;U+=100*du/tot;S+=100*ds/tot;I+=100*dsq/tot}}} {pu=\$1;pn=\$2;ps=\$3;pi=\$4;pw=\$5;pq=\$6;psq=\$7} END{if(n>0) printf \"busy=%.0f%% us=%.0f sy=%.0f si=%.0f (%d busy samples)\\n\", B/n,U/n,S/n,I/n,n; else print \"no busy samples\"}' /tmp/cpu-samples.txt
+echo __RUNOK__" 2>/dev/null | grep -E "busy=|no busy samples" | head -1 || true)
+    echo "      ${lg}: ${line:-n/a}"
+  done
+}
+
 report_cpu() {
   for i in "${!brokers[@]}"; do
     line=$(run_on_str "$(broker_vm "${i}")" "awk 'NR>1{du=\$1-pu;dn=\$2-pn;ds=\$3-ps;di=\$4-pi;dw=\$5-pw;dq=\$6-pq;dsq=\$7-psq;tot=du+dn+ds+di+dw+dq+dsq; if(tot>0){b=100*(tot-di)/tot; if(b>15){n++;B+=b;U+=100*du/tot;S+=100*ds/tot;I+=100*dsq/tot;W+=100*dw/tot}}} {pu=\$1;pn=\$2;ps=\$3;pi=\$4;pw=\$5;pq=\$6;psq=\$7} END{if(n>0) printf \"busy=%.0f%% us=%.0f sy=%.0f si=%.0f wa=%.0f (%d busy samples)\\n\", B/n,U/n,S/n,I/n,W/n,n; else print \"no busy samples\"}' /tmp/cpu-samples.txt
@@ -76,15 +106,16 @@ done
 run_agg() {
   conc="$1"; total=$(( conc * 400000 ))
   ncount=$(echo ${LOADGENS} | wc -w)
-  echo ">> aggregate ingest: ${conc} pubs/loadgen x ${ncount} loadgens = $(( conc * ncount )) publishers, stream=${STREAM}"
+  echo ">> aggregate ingest: ${conc} pubs/loadgen x ${ncount} loadgens = $(( conc * ncount )) publishers, stream=${STREAM}, keys=${KEYS}, conns/loadgen=${PUB_CONNS:-default(4)}, sharding=${PUB_SHARDING:-default(hash_stream)}"
   rm -f /tmp/agg-felixperf-loadgen*.txt
   # Armed before the load, not dispatched into it: run-command takes seconds to
   # reach a VM, which is a large fraction of a case and the reason the old
   # mid-run sample so often caught an idle machine.
   arm_cpu_sampling
+  arm_loadgen_cpu_sampling
   pids=""
   for lg in ${LOADGENS}; do
-    ( run_on_str "$lg" "export FELIX_MTU_UPPER_BOUND=4096; ulimit -n 1048576 || true
+    ( run_on_str "$lg" "export FELIX_MTU_UPPER_BOUND=4096; ${PUB_CONNS:+export FELIX_PUB_CONN_POOL=${PUB_CONNS};} ${PUB_SHARDING:+export FELIX_PUB_SHARDING=${PUB_SHARDING};} ulimit -n 1048576 || true
 felix-loadgen --brokers '${broker_addrs}' --tenant perf --token-file '${TOKEN_FILE}' --environment 'azure-nvme-multi' --scenario ingest --stream '${STREAM}' --payload-bytes 4096 --batch 64 --concurrency ${conc} --total ${total} --keys ${KEYS}
 echo __RUNOK__" > "/tmp/agg-${lg}.txt" 2>&1 ) &
     pids="$pids $!"
@@ -92,6 +123,8 @@ echo __RUNOK__" > "/tmp/agg-${lg}.txt" 2>&1 ) &
   wait $pids 2>/dev/null || true
   echo "   -- broker CPU at load --"
   report_cpu
+  echo "   -- generator CPU at load --"
+  report_loadgen_cpu
   echo "   -- per-loadgen results --"
   total_mb=0; total_ms=0; n=0
   for lg in ${LOADGENS}; do
