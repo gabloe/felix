@@ -6,7 +6,7 @@ This page traces exactly what happens, function by function, when a client
 publishes a message — from `Publisher::publish()` to the message landing in
 every subscriber's queue. It's written for contributors who need to change
 or debug this path, not as an API reference (see the
-[Client SDK](/felix/api/client-sdk/) for that).
+[Client SDK](/felix/clients/rust/) for that).
 
 Every code reference below is `path/to/file.rs:function_name` as of this
 writing — line numbers drift, function names are stable, use your editor's
