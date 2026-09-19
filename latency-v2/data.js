@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789836459493,
+  "lastUpdate": 1789836995897,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15444,6 +15444,72 @@ window.BENCHMARK_DATA = {
             "range": "321.96",
             "unit": "us",
             "extra": "trials: 5\nmedian: 713.00\nmean: 889.80\nstdev: 321.96\ncv: 36.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9903a7813a49aab55340fbd24ae7868669dc2501",
+          "message": "test: measure the property, not the machine, in four timing-sensitive tests (#569)\n\nEach was a wall-clock assertion on a shared runner; each has failed on a\nbranch that could not have caused it; between them they have cost several\ninvestigations. Two were hit in one session.\n\n`concurrent_durable_appends_share_a_flush` asserted a speedup ratio. A\nratio cannot separate \"the flushes coalesced\" from \"this machine could\nnot put sixteen appends in flight for them to\" -- on a two-core runner it\nmeasured 0.70x, concurrency slower than serial, with nothing wrong. The\nserial per-append cost in that run was 1.54ms, a real flush, so the\ndevice was fine; what was missing was the overlap.\n\nSo count the flushes instead. `Durability` gains an `AtomicU64` bumped\nonce per flush -- one relaxed increment against a syscall, so it is always\non rather than behind a feature -- and `DiskLog::flushes()` exposes it.\n64 appends produce 64 flushes serially and 5 concurrently here. That\nratio is the property, and counting does not measure the machine: the\ntasks still interleave at their await points on a slow box, so they still\ncoalesce, they merely take longer doing it.\n\nThe serial run doubles as the control, and it is exactly the regression\nshape: if the concurrent run behaved like it, the assertion rejects it.\n\n`an_inline_rollover_does_not_park_every_worker` allowed a fifth of one\nrollover, its comment claiming that was \"far above the scheduling noise a\nyielding task sees even on a loaded box\". CI has falsified that twice,\nmeasuring 137ms. The bug parks every worker for the *whole* rollover, so\nthe signal is ~500ms; half the rollover keeps a 2x margin on both sides\nrather than sitting next to the noise floor.\n\n`FELIX_TEST_TIMEOUT_SCALE` multiplies the setup deadlines in\n`felix_cluster::wait::until` and the Raft chaos suite's `wait_ready` and\n`wait_exit`. What those wait for is setup -- a leader elected, an instance\nup -- not the subject, which is that no acknowledged write is lost. Unset\nmeans 1, so a developer's run is unchanged and still fails fast on a real\nhang; CI sets 3 and the coverage job 5, coverage being where the failover\nsuite's replication waits were seen to expire.\n\nTunable rather than simply larger, because a bigger constant buys the\nsame green at the cost of never noticing a hang on the machines that are\nfast enough to notice it.\n\nLeft alone deliberately:\n`losing_quorum_fails_writes_loudly_not_silently` waits on a leader\nnoticing it has not heard a quorum, and that wait *is* the subject. Its\nown module says widening it \"would only make the test slower at noticing\nnothing\", and it is serialised for the same reason. Not every flake has a\nfix that leaves the test meaning what it meant.",
+          "timestamp": "2026-09-19T09:54:25-07:00",
+          "tree_id": "94d1ab88c67ebb6b1b49924e2c983c70286f6b71",
+          "url": "https://github.com/gabloe/felix/commit/9903a7813a49aab55340fbd24ae7868669dc2501"
+        },
+        "date": 1789836993728,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 95,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 95.00\nmean: 95.20\nstdev: 0.84\ncv: 0.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 128,
+            "range": "2.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 129.00\nstdev: 2.35\ncv: 1.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 151,
+            "range": "9.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 151.00\nmean: 152.60\nstdev: 9.40\ncv: 6.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 127,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 126.80\nstdev: 0.45\ncv: 0.35%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 257,
+            "range": "14.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 257.00\nmean: 261.00\nstdev: 14.27\ncv: 5.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 346,
+            "range": "1356.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 346.00\nmean: 937.80\nstdev: 1356.40\ncv: 144.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
