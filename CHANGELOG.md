@@ -13,6 +13,31 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **The npm job published nothing and reported success.** `napi prepublish`
+  publishes the platform packages, but it does not assemble them: the binaries
+  were downloaded beside the manifest, so every `npm/<triple>/` directory was
+  empty, and each one was skipped with `[...felix.darwin-arm64.node] doesn't
+  exist` — on stdout, not as a failure. The job went green having uploaded
+  nothing.
+
+  Three steps now, because it is three things: `napi artifacts` moves each
+  binary into the platform package that carries it, `napi prepublish` publishes
+  those, and `npm publish` sends the JavaScript package that declares them as
+  optional dependencies. The last was missing outright — `prepublish` never
+  publishes the main package.
+
+  And the job now asks the registry whether each of the six is really there,
+  failing if any is not. A publish step that cannot fail is not a publish step,
+  and this one proved it twice.
+
+- **The PyPI step no longer fails on a rerun.** PyPI refuses a duplicate file
+  rather than ignoring it, so once 0.5.0 was up, every later run failed on it —
+  and later runs are the norm here, because the three registries finish at
+  different rates and whichever run completes the slowest one will always find
+  PyPI already done. `skip-existing` makes it idempotent.
+
+### Fixed
+
 - **The npm publish step passed an option the pinned CLI does not have.**
   `napi prepublish -t npm --access public` is a napi 3 spelling; the CLI is
   pinned to 2, to match the napi crate, and it refused the flag before
