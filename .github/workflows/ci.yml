@@ -305,8 +305,10 @@ jobs:
       # Cheap, and the failure it catches is expensive: a platform package that
       # does not match what the release builds publishes fine and breaks at
       # `npm install` on someone else's machine, against a permanent version.
+      # Called directly: this job has no `task` binary, and setting one up to
+      # run one Python script would be the more surprising choice.
       - name: Platform packages match the release matrix
-        run: task ts:packages
+        run: python3 scripts/check_npm_packages.py
 
       - name: Build the addon
         working-directory: crates/felix-typescript
