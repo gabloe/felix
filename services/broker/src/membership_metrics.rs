@@ -36,6 +36,22 @@ pub const REGISTRATIONS_TOTAL: &str = "felix_broker_membership_registrations_tot
 /// it leaves the cluster. The failures are the only warning.
 pub const CREDENTIAL_REFRESHES_TOTAL: &str = "felix_broker_credential_refreshes_total";
 
+/// Node credentials adopted from a rotated token file, by `outcome`:
+/// `ok`, `rejected`.
+pub const CREDENTIAL_ROTATIONS_TOTAL: &str = "felix_broker_credential_rotations_total";
+
+/// Seconds until the node credential expires, or `-1` when it does not say.
+///
+/// The number to alert on, and the one the refresh and rotation counters cannot
+/// give you: they say whether renewal is *failing*, not how long is left before
+/// that matters. Crossing zero is not a degraded broker -- the heartbeat
+/// carries this token and the heartbeat is the lease renewal, so an expired
+/// credential is a broker that stops serving the shards it leads.
+///
+/// `-1` rather than absent for a token with no `exp`, so the series exists and
+/// a missing series stays unambiguous: it means the broker is not reporting.
+pub const CREDENTIAL_EXPIRES_IN_SECONDS: &str = "felix_broker_credential_expires_in_seconds";
+
 /// Why a membership call did not succeed.
 pub const KIND_REJECTED: &str = "rejected";
 pub const KIND_UNAVAILABLE: &str = "unavailable";
@@ -66,4 +82,18 @@ pub fn record_registration(outcome: &'static str) {
 /// Track whether the cluster still counts this broker as placeable.
 pub fn record_membership_live(live: bool) {
     metrics::gauge!(MEMBERSHIP_LIVE).set(if live { 1.0 } else { 0.0 });
+}
+
+pub fn record_credential_rotation(outcome: &'static str) {
+    metrics::counter!(CREDENTIAL_ROTATIONS_TOTAL, "outcome" => outcome).increment(1);
+}
+
+/// Publish how long the credential has left. Negative means already expired.
+pub fn record_credential_expiry(remaining_secs: i64) {
+    metrics::gauge!(CREDENTIAL_EXPIRES_IN_SECONDS).set(remaining_secs as f64);
+}
+
+/// Publish that the credential does not say when it expires.
+pub fn record_credential_expiry_unknown() {
+    metrics::gauge!(CREDENTIAL_EXPIRES_IN_SECONDS).set(-1.0);
 }

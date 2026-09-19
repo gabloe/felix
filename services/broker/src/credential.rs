@@ -112,7 +112,34 @@ pub fn refresh_delay(now_secs: i64, exp_secs: i64) -> Duration {
     Duration::from_secs((remaining as u64) * 2 / 3).max(FLOOR)
 }
 
+/// Seconds since the epoch, or 0 if the clock is before it.
+///
+/// Shared by the refresh loop and the rotation watcher: both compare a token's
+/// `exp` against now, and two readings of the clock that could disagree would
+/// be worse than one that is occasionally coarse.
+pub(crate) fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Publish how long `credential` has left, for the metric an operator alerts on.
+///
+/// Called at startup so the series exists before the refresh loop's first pass,
+/// which on a long-lived token is hours away — a gauge that only appears once
+/// something has already happened is not one you can alert on.
+pub fn report_expiry(credential: &NodeCredential) {
+    match read_claims(&credential.bearer()) {
+        Some(claims) => {
+            crate::membership_metrics::record_credential_expiry(claims.exp - now_secs())
+        }
+        None => crate::membership_metrics::record_credential_expiry_unknown(),
+    }
+}
+
 pub mod refresh;
+pub mod rotate;
 
 #[cfg(test)]
 #[path = "credential_tests.rs"]

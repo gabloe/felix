@@ -1823,6 +1823,14 @@ fn spawn_broker(
         .with_context(|| format!("create data dir {}", data_dir.display()))?;
 
     let token = control_plane.node_token(&config.tenant_id, &node_id)?;
+    // Through a file rather than the environment, which is how a deployment
+    // supplies it -- and what the broker requires of an expiring credential,
+    // since a file is a seam something can rewrite and a value is not. The
+    // harness mints a one-hour token and never rotates it; no test runs that
+    // long, and the point here is to exercise the path production uses.
+    let node_token_file = data_dir.join("node.token");
+    std::fs::write(&node_token_file, &token)
+        .with_context(|| format!("write node token to {}", node_token_file.display()))?;
     // Its own certificate, issued to its node id by the cluster's CA, so the
     // peer transport runs authenticated the way a deployment does.
     let cert = pki::issue(root, &node_id)?;
@@ -1835,7 +1843,7 @@ fn spawn_broker(
         // The advertised address is the internal listener's: it is what peers
         // forward to, not what clients connect to.
         .env("FELIX_NODE_ADVERTISE_ADDR", internal_addr.to_string())
-        .env("FELIX_NODE_TOKEN", &token)
+        .env("FELIX_NODE_TOKEN_FILE", &node_token_file)
         .env("FELIX_CONTROLPLANE_URL", &control_plane.base_url)
         .env("FELIX_REGION_ID", "local")
         .env("FELIX_QUIC_BIND", client_addr.to_string())

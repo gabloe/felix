@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use super::{NodeCredential, read_claims, refresh_delay};
+use super::{NodeCredential, now_secs, read_claims, refresh_delay};
 use crate::membership_metrics as mm;
 
 /// What `/token/refresh` answers with.
@@ -48,6 +48,7 @@ pub async fn run(config: RefreshConfig, shutdown: CancellationToken) {
     let base_url = base_url.trim_end_matches('/').to_string();
 
     let Some(claims) = read_claims(&credential.bearer()) else {
+        mm::record_credential_expiry_unknown();
         tracing::warn!(
             "the node credential is not a Felix token, so it cannot be \
              refreshed; this broker will fall out of the cluster when the \
@@ -60,6 +61,10 @@ pub async fn run(config: RefreshConfig, shutdown: CancellationToken) {
 
     let mut failures: u32 = 0;
     loop {
+        // Published every pass, including the failing ones. A broker whose
+        // refreshes are failing looks healthy right up to expiry, and this is
+        // the number that says how long that has left to run.
+        mm::record_credential_expiry(expires_at - now_secs());
         let delay = if failures == 0 {
             refresh_delay(now_secs(), expires_at)
         } else {
@@ -112,6 +117,7 @@ pub async fn run(config: RefreshConfig, shutdown: CancellationToken) {
                 credential.replace(access);
                 failures = 0;
                 mm::record_credential_refresh(mm::KIND_OK);
+                mm::record_credential_expiry(expires_at - now_secs());
                 tracing::info!(expires_at, "refreshed the node credential");
             }
             Err(err) => {
@@ -198,13 +204,6 @@ fn backoff(failures: u32) -> Duration {
     const BASE: Duration = Duration::from_secs(1);
     const CEILING: Duration = Duration::from_secs(60);
     BASE.saturating_mul(1u32 << failures.min(6)).min(CEILING)
-}
-
-fn now_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

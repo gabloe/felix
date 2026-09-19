@@ -113,7 +113,23 @@ felix_broker_replication_rebuilds_total     # by outcome: started, completed, re
 felix_broker_replica_reports_per_request    # shards per control-plane report; 1 on a busy broker means batching found nothing
 felix_broker_lease_held
 felix_broker_lease_refusals_total           # writes refused after a lease lapsed
+felix_broker_credential_expires_in_seconds  # counts down; -1 when the token carries no exp
+felix_broker_credential_refreshes_total     # by outcome: ok, unavailable
+felix_broker_credential_rotations_total     # by outcome: ok, rejected — a token file rewritten from outside
 ```
+
+**Alert on `felix_broker_credential_expires_in_seconds` crossing a threshold**,
+not only on the refresh and rotation counters. The counters say renewal is
+failing; the gauge says how long that has left to matter. It matters a lot: the
+heartbeat carries this credential and the heartbeat *is* the lease renewal, so a
+token that expires is not a degraded broker — it is one that stops serving the
+shards it leads once the lease lapses. That is the safe outcome, and still an
+outage.
+
+A broker joining a cluster refuses to start when the credential expires and
+neither `FELIX_NODE_REFRESH_TOKEN_FILE` nor `FELIX_NODE_TOKEN_FILE` is set, so
+the commonest way to reach that state is caught at rollout rather than an hour
+in.
 
 ### Which replica stopped
 

@@ -85,6 +85,26 @@ they did before.
 
   `publish_idempotent` is unaffected. It is JSON because no binary layout carries
   a producer id and sequence yet, not for compatibility.
+- **A broker refuses to start when its credential will expire with nothing able
+  to renew it.** The broker's control-plane calls all read one token, and the
+  heartbeat is among them — and the heartbeat *is* the lease renewal. So an
+  expired credential is not a degraded broker: it is one that stops serving the
+  shards it leads once the lease lapses. Correct, and an outage nobody chose.
+
+  Joining a cluster (`FELIX_NODE_ID` set) with a token that carries an `exp` and
+  neither `FELIX_NODE_REFRESH_TOKEN_FILE` nor `FELIX_NODE_TOKEN_FILE` now fails
+  startup, naming both ways out. Previously it logged at `info` and ran fine
+  until the token died. **Upgrade note:** a deployment passing an expiring
+  `FELIX_NODE_TOKEN` by value must set one of the two files.
+
+- **`FELIX_NODE_TOKEN_FILE` is re-read**, so a credential rotated by something
+  outside the broker — a Vault agent, SPIRE, a sidecar — takes effect without a
+  restart. It was read once at startup and never again, while the *refresh*
+  token file was deliberately re-read every time; the asymmetry was the
+  surprising half. A replacement that has already expired is declined rather
+  than adopted, because swapping a working credential for a dead one turns
+  someone else's rotation bug into this broker's outage.
+
 
 - **Device flushes can go through `io_uring` on Linux** (#548), behind
   `FELIX_STORAGE_IO_URING=1`, default off. `IORING_OP_FSYNC` removes the
