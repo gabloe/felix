@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789831960540,
+  "lastUpdate": 1789834600909,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12012,6 +12012,58 @@ window.BENCHMARK_DATA = {
             "range": "4972.65",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 549777.16\nmean: 550959.79\nstdev: 4972.65\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7c37db98db38af4fbaa6c1f618bee72d26f047ed",
+          "message": "feat(broker): refuse a credential nothing can renew, and pick up a rotated one (#565)\n\nThe broker's control-plane calls all read one token, and the heartbeat is\namong them -- and the heartbeat *is* the lease renewal. So an expired\ncredential is not a degraded broker: it is one that stops serving the\nshards it leads once the lease lapses. That is the safe outcome and still\nan outage, and the configuration that guarantees it was announced in a\nsingle `info` line at startup.\n\nTwo ways a token stays alive: the refresh loop, or something outside the\nbroker rewriting the token file. A broker joining a cluster with a token\nthat carries an `exp` and neither file configured now fails startup,\nnaming both ways out. This follows `Config::validate`'s existing\nrationale -- a broker that will not do what its configuration says should\nsay so while someone is watching (#416). A token passed by value is not a\nseam anything can write, which is why the file is what counts rather than\nmerely having a token.\n\n`FELIX_NODE_TOKEN_FILE` is now re-read, every 30s, so an external\nrotator's write takes effect without a restart. It was read once at\nstartup and never again, while the *refresh* token file was deliberately\nre-read every time \"so an operator who re-provisions the file by hand is\npicked up without a restart\" -- the asymmetry was the surprising half,\nand closing it is also what makes the startup check fair: the escape\nhatch is a configuration that now works rather than one that silently\ndoes not.\n\nA replacement that has already expired is declined rather than adopted.\nSwapping a working credential for a dead one turns someone else's\nrotation bug into an outage this broker caused, and it cannot undo it --\nthe token it was running on is not written anywhere it can read back.\n\nPolling rather than inotify: the file is usually a projected secret or a\nbind mount, where the write that matters is a rename or symlink swap that\nfilesystem notifications report inconsistently across platforms and\ncontainer runtimes.\n\n`felix_broker_credential_expires_in_seconds` is the number to alert on.\nThe refresh counter says renewal is failing; it cannot say how long that\nhas left to matter. Published at startup so the series exists before the\nfirst refresh, which on a long-lived token is hours away, and on every\npass of the loop including the failing ones. `-1` for a token with no\n`exp`, so a missing series still unambiguously means the broker is not\nreporting.\n\nThe cluster harness now supplies its token through a file, which is both\nwhat the check requires and what a deployment does -- it was the only\nthing in the tree passing an expiring token by value.\n\nChecked both directions against a real broker: inline expiring token and\nno files is refused with the message above, and the same token through\nFELIX_NODE_TOKEN_FILE starts and serves.",
+          "timestamp": "2026-09-19T09:13:56-07:00",
+          "tree_id": "b9d934e04171a512b8f5db69dd46602b6280fdd0",
+          "url": "https://github.com/gabloe/felix/commit/7c37db98db38af4fbaa6c1f618bee72d26f047ed"
+        },
+        "date": 1789834599627,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 233886.66,
+            "range": "2245.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233886.66\nmean: 232784.38\nstdev: 2245.75\ncv: 0.96%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 233886.66,
+            "range": "2245.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 233886.66\nmean: 232784.38\nstdev: 2245.75\ncv: 0.96%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 55758.47,
+            "range": "1564.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 55758.47\nmean: 55842.89\nstdev: 1564.60\ncv: 2.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 557584.67,
+            "range": "15645.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 557584.67\nmean: 558428.86\nstdev: 15645.96\ncv: 2.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
