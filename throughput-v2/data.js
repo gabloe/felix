@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789837559969,
+  "lastUpdate": 1789839487067,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12324,6 +12324,58 @@ window.BENCHMARK_DATA = {
             "range": "4421.91",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 947536.34\nmean: 947164.17\nstdev: 4421.91\ncv: 0.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2b7590a73a72f2a206613459b19679a5cf895426",
+          "message": "fix(transport): the loopback buffer gate must not move with the MTU knobs (#573)\n\nCI and coverage both failed on main with\n`loopback_initial_mtu_respects_configured_bounds`, and the test was\nright.\n\nThe gate asks one question -- was this host tuned? -- as a proxy, because\nLinux clamps SO_RCVBUF to a stock ~208 KB and an untuned host cannot\nabsorb the bursts the loopback pin exists to survive. It was measured\nagainst the size about to be pinned, which included\n`mtu_discovery_upper_bound`. When #571 dropped that default to 4096 on\nLinux, the requirement fell from ~1 MiB to 256 KiB, a stock host (~416\nKiB) newly qualified, and every untuned Linux host silently began pinning\nthe loopback MTU instead of taking the RFC-safe path.\n\nThe comment on that gate said exactly this must not happen: \"lowering the\npinned size cannot newly enable this path on a host that is working\ntoday\". #571's change was about a *routed*-path hazard and had no\nbusiness deciding who gets a loopback pin.\n\nSo the gate now reads `LOOPBACK_UDP_PAYLOAD` and nothing configurable.\nThe proxy means one thing and stops tracking an unrelated knob.\n\nOne behaviour goes with it, deliberately: setting FELIX_MTU_UPPER_BOUND\nlow on an untuned host no longer buys the guarantee, where it used to.\nAsking for a smaller pin is not evidence of headroom, and the case is an\nexplicit override on a host that has not been tuned -- more conservative,\nnever less safe. The test says so rather than being quietly adjusted.\n\nWhy this was not caught before merging: the existing test is\nplatform-sensitive by construction. On macOS the discovery bound stays\n16384, so the gate never moved and the test passed locally while failing\non Linux CI -- the same trap the GSO invariant tests fell into earlier\nthat day, where a `cfg!` made them vacuous on the machine doing the\nediting. The two new tests construct the config explicitly, so they check\nboth platforms' behaviour from either one. Verified by reintroducing the\nregression and watching them fail on macOS.",
+          "timestamp": "2026-09-19T10:35:33-07:00",
+          "tree_id": "127f1de8a4dddc17ecca18935f642ee1da0a6f0c",
+          "url": "https://github.com/gabloe/felix/commit/2b7590a73a72f2a206613459b19679a5cf895426"
+        },
+        "date": 1789839486508,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 380512.67,
+            "range": "14276.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 380512.67\nmean: 383677.42\nstdev: 14276.44\ncv: 3.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 380512.67,
+            "range": "14276.44",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 380512.67\nmean: 383677.42\nstdev: 14276.44\ncv: 3.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93168.19,
+            "range": "749.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93168.19\nmean: 93092.98\nstdev: 749.48\ncv: 0.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 931681.94,
+            "range": "7494.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 931681.94\nmean: 930929.86\nstdev: 7494.79\ncv: 0.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
