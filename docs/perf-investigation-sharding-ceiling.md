@@ -293,8 +293,15 @@ total, ~220 each: aggregate halved while generator count doubled.
 The resolution is in the prior campaign's own notes — *adding a second or third
 loadgen does not go faster*. One generator hit 950–1151 MB/s by itself; four
 today sum to ~890. The aggregate is unchanged, and each generator simply
-receives a quarter of a broker-side ceiling. The 1.63 GB/s figure was a
-**two-broker** session: ~815 per broker, the same per-broker number again.
+receives a quarter of a broker-side ceiling.
+
+The 1.63 GB/s figure is a different rig and does not contradict this: per
+`docs-site`'s real-network page it is **two load generators against three
+`D4as_v5` brokers** — a `D4` contributing 1,084 MB/s and a `D2` adding 549 —
+so ~544 MB/s per *broker*. (An earlier revision of this document read it as a
+two-broker session at ~815 per broker. That was wrong twice over: generators
+and brokers were conflated, and the two generators were different sizes, so
+there is no meaningful per-generator average to quote either.)
 
 There is no per-generator limit. There is one broker ceiling near 900 MB/s,
 divided by however many generators are pointed at it.
@@ -316,8 +323,7 @@ This fits every observation on record:
 - **Device at ~67%** — never asked for more.
 - **No hot core** — per the work-stealing note above, a saturated task does not
   produce one.
-- **Scales with brokers and nothing else** — each broker has its own socket,
-  which is exactly the two-broker 1.63 GB/s.
+- **Scales with brokers and nothing else** — each broker has its own socket.
 
 It is also continuous with this repository's own prior finding.
 `docs/perf-investigation-throughput.md` concluded that quinn driver re-poll
@@ -478,9 +484,8 @@ Recommended next, in this order:
 
 1. **Two brokers.** The cheapest run, and it answers whether the ceiling even
    matters before more days go into it: the reframe predicts throughput scales
-   with brokers, and the prior two-broker session's 1.63 GB/s (~815 each)
-   already suggests it does. It also directly tests the endpoint hypothesis,
-   since each broker has its own socket.
+   with brokers. It also directly tests the endpoint hypothesis, since each
+   broker has its own socket.
 2. **Test the endpoint hypothesis.** The socket diagnostics above cost nothing.
    The structural test is `SO_REUSEPORT` with N endpoints.
 3. **`tokio-console`, not just a flamegraph.** A flamegraph shows a hot
