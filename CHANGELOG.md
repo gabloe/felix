@@ -11,52 +11,37 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
-### Changed
+## [0.5.0] - 2026-09-19
 
-- **The Node package is `felix-client`, unscoped.** `@felix` on npm was already
-  taken — there is an unscoped `felix` package, and the scope with it — so the
-  six packages the release publishes are `felix-client` and one per platform,
-  `felix-client-darwin-arm64` and friends. All six names were confirmed free.
+A third client, and the release where the data path stopped paying for
+compatibility.
 
-  Unscoped rather than hunting for another scope: it is the same name the crate
-  has on crates.io and the wheel has on PyPI, so one string covers every
-  install instruction, and an unscoped name is first-come rather than colliding
-  with a namespace someone else may hold. `publishConfig.access` went with the
-  scope — only a scoped package defaults to restricted.
+**A Node.js / TypeScript client**, a napi-rs addon over the same Rust client
+the Python binding wraps, passing every required scenario in the conformance
+catalogue with CI and the release pipeline both gated on it.
 
-  Nothing had been published, so this costs nothing but the rename.
+**The data path is binary.** A routing key now rides in the binary publish
+frame, so a keyed publish stops falling back to JSON — it measured 645.8 MB/s
+against 917 for the same workload — and the JSON publish surface is deprecated
+for removal in 0.6.0. A forwarded publish now says so on its ack and names the
+shard's owner, which makes the cost of publishing to the wrong broker visible
+for the first time.
 
-### Fixed
+**Two defaults changed on measurement.** MTU discovery is bounded below Linux's
+UDP GSO ceiling, where the old bound could stall delivery outright on a
+jumbo-frame network; and a broker joining a cluster refuses to start with a
+credential nothing can renew, rather than running fine until the token expires
+and the lease lapses under it.
 
-- **The Quickstart's first command did not work**, and neither did the one it
-  became. `cargo run --release -p broker` asked which of nine binaries to run,
-  because eight of them are demos and nothing set `default-run`. Corrected to
-  `--bin felix-broker`, it starts and then exits: `FELIX_CONTROLPLANE_URL must
-  be set for auth`. The page claimed you would see `QUIC listening on
-  0.0.0.0:5000` and that "the broker is now ready to accept connections", and
-  printed that command three times.
-
-  `default-run = "felix-broker"` fixes the first half. The second half is not a
-  bug — a broker validates client tokens against keys it fetches from the
-  control plane and registers itself there for shard placement, so there is no
-  unauthenticated mode — but the docs had never said so.
-
-  The Quickstart now opens with `felix-cluster up`, which starts a control
-  plane, mints the credentials and brings up three brokers, then publishes
-  through a non-owner and receives from the owner. That command existed the
-  whole time and no getting-started page mentioned it. Every command and every
-  block of output on the page was run to produce it.
-
-  Also corrected: the landing page and Installation both told you to run the
-  broker alone; the container instructions did the same with `docker run`; and
-  Troubleshooting told you to set `FELIX_METRICS_BIND`, which nothing reads --
-  the broker warns about that exact name, and the variable is
-  `FELIX_BROKER_METRICS_BIND`.
+**Upgrade notes.** A deployment passing an expiring `FELIX_NODE_TOKEN` by value
+must now set `FELIX_NODE_REFRESH_TOKEN_FILE` or `FELIX_NODE_TOKEN_FILE`. Two
+docs URLs moved, listed below.
 
 **Wire protocol:** two new frame flags, `FLAG_BINARY_PUBLISH_KEYED` (`0x0040`)
-and `FLAG_BINARY_PUBLISH_ACK_OWNER` (`0x0080`). `VERSION` remains `1` and no
-feature bit is added. Both are negotiated on the handshake, so a client and
-broker that disagree about either exchange the same bytes they did before.
+and `FLAG_BINARY_PUBLISH_ACK_OWNER` (`0x0080`). `VERSION` remains `1`,
+`INTERNAL_VERSION` remains `1`, and no feature bit is added. Both are negotiated
+on the handshake, so a client and broker that disagree about either exchange the
+same bytes they did before.
 
 ### Added
 
@@ -126,6 +111,22 @@ broker that disagree about either exchange the same bytes they did before.
   release, with the npm step behind `PUBLISH_NPM` for the same reason PyPI is
   behind `PUBLISH_PYPI`.
 
+- **`task release:check`**, and the release refuses a tag that disagrees with
+  the tree. A tag and a version that disagree ship artifacts labelled with
+  neither, and nothing else notices: the archive is named from the tag, each
+  crate is built from its own manifest, and both succeed. The wheel, the npm
+  package and the Helm chart each carry a version of their own, so bumping the
+  workspace was never enough. CI asserts the fields agree with each other, which
+  is the half a pull request can be wrong about; the release job additionally
+  asserts they match the tag, before anything is published.
+
+- **`task lock:refresh`**, and CI fails when a build updates a lockfile the
+  commit did not include. Six crates declare their own `[workspace]` — the four
+  under `demos/`, plus the Python and TypeScript bindings — so the repository
+  workspace never touches their `Cargo.lock`. All four demo locks had sat at
+  `0.4.0-preview` through two releases and had never heard of `io-uring`,
+  because CI regenerated them on every run and nothing looked at what changed.
+
 - **`felix-loadgen --keys <n>`** spreads the ingest scenario's batches over `n`
   routing keys. The scenario published unkeyed, and an unkeyed record resolves
   to shard 0, so every "multi-shard" measurement taken with it was really a
@@ -134,6 +135,62 @@ broker that disagree about either exchange the same bytes they did before.
   old behaviour, so existing runs stay comparable.
 
 ### Fixed
+
+- **The Quickstart's first command did not work**, and neither did the one it
+  became. `cargo run --release -p broker` asked which of nine binaries to run,
+  because eight of them are demos and nothing set `default-run`. Corrected to
+  `--bin felix-broker`, it starts and then exits: `FELIX_CONTROLPLANE_URL must
+  be set for auth`. The page claimed you would see `QUIC listening on
+  0.0.0.0:5000` and that "the broker is now ready to accept connections", and
+  printed that command three times.
+
+  `default-run = "felix-broker"` fixes the first half. The second half is not a
+  bug — a broker validates client tokens against keys it fetches from the
+  control plane and registers itself there for shard placement, so there is no
+  unauthenticated mode — but the docs had never said so.
+
+  The Quickstart now opens with `felix-cluster up`, which starts a control
+  plane, mints the credentials and brings up three brokers, then publishes
+  through a non-owner and receives from the owner. That command existed the
+  whole time and no getting-started page mentioned it. Every command and every
+  block of output on the page was run to produce it.
+
+  Also corrected: the landing page and Installation both told you to run the
+  broker alone; the container instructions did the same with `docker run`; and
+  Troubleshooting told you to set `FELIX_METRICS_BIND`, which nothing reads --
+  the broker warns about that exact name, and the variable is
+  `FELIX_BROKER_METRICS_BIND`.
+
+
+- **Four timing-sensitive tests stopped reporting a slow machine as a broken
+  invariant.** Each was a wall-clock assertion on a shared runner, each failed
+  on a branch that could not have caused it, and between them they cost several
+  investigations.
+
+  `concurrent_durable_appends_share_a_flush` asserted a **wall-clock speedup**
+  from group commit. A ratio cannot tell "the flushes coalesced" from "this
+  machine could not put sixteen appends in flight for them to", which is how it
+  read 0.70x on a two-core runner with nothing wrong. `DiskLog::flushes()` now
+  exposes the flush count — one relaxed increment against an `fsync` — and the
+  test asserts the thing itself: 64 appends produce 64 flushes serially and 5
+  concurrently. Counting does not measure the machine.
+
+  `an_inline_rollover_does_not_park_every_worker` allowed a fifth of one
+  rollover for scheduling noise, described as "far above the scheduling noise
+  even on a loaded box". CI falsified that twice, measuring 137 ms. The bug it
+  catches parks every worker for the *whole* rollover, so half keeps a 2x margin
+  on both sides instead of sitting next to the noise floor.
+
+  `FELIX_TEST_TIMEOUT_SCALE` multiplies the setup deadlines in the cluster
+  harness and the Raft chaos suite. Unset means 1, so a developer's run is
+  unchanged and still fails fast on a genuine hang; CI sets `3` and the coverage
+  job `5`. Raising the constants instead would have bought the same green while
+  never noticing a hang on the machines fast enough to.
+
+  Deliberately untouched: `losing_quorum_fails_writes_loudly_not_silently`
+  waits on a leader noticing it has lost quorum, and that wait *is* the subject
+  — widening it would only make the test slower at noticing nothing. It is
+  serialised instead, which is what its module already says.
 
 - **A cancelled idempotent publish no longer loses records silently.**
   `IdempotentProducer::publish_batch` advanced its sequence only after the
@@ -154,6 +211,20 @@ broker that disagree about either exchange the same bytes they did before.
   idempotent producers.
 
 ### Changed
+
+- **The Node package is `felix-client`, unscoped.** `@felix` on npm was already
+  taken — there is an unscoped `felix` package, and the scope with it — so the
+  six packages the release publishes are `felix-client` and one per platform,
+  `felix-client-darwin-arm64` and friends. All six names were confirmed free.
+
+  Unscoped rather than hunting for another scope: it is the same name the crate
+  has on crates.io and the wheel has on PyPI, so one string covers every
+  install instruction, and an unscoped name is first-come rather than colliding
+  with a namespace someone else may hold. `publishConfig.access` went with the
+  scope — only a scoped package defaults to restricted.
+
+  Nothing had been published, so this costs nothing but the rename.
+
 
 - **The loopback MTU guarantee's buffer gate no longer moves with the MTU
   knobs.** It asks one question — was this host tuned? — as a proxy, because
@@ -207,6 +278,14 @@ broker that disagree about either exchange the same bytes they did before.
   reasoning is now recorded next to each default so it is not re-litigated from
   the retracted numbers.
 
+
+- **A Clients section in the docs, with a page per client.** Rust had its own
+  page and everything else shared one, where TypeScript got two paragraphs.
+  **Two URLs moved:** `/api/client-sdk/` is now `/clients/rust/`, and
+  `/api/clients/` is now `/clients/overview/`. The Rust page also lost an error
+  handling example that could never have compiled — it matched on
+  `felix_common::Error` variants that do not exist, in a crate that is not one
+  of `felix-client`'s dependencies.
 
 - **The container images are published.** `ghcr.io/gabloe/felix-broker` and
   `ghcr.io/gabloe/felix-controlplane` went out with 0.4.1 and pull without
@@ -293,37 +372,6 @@ Also fixes the release job that shipped 0.4.0 with no Python wheels.
 `INTERNAL_VERSION` remains `1`, and no feature bit is added.
 
 ### Fixed
-
-- **Four timing-sensitive tests stopped reporting a slow machine as a broken
-  invariant.** Each was a wall-clock assertion on a shared runner, each failed
-  on a branch that could not have caused it, and between them they cost several
-  investigations.
-
-  `concurrent_durable_appends_share_a_flush` asserted a **wall-clock speedup**
-  from group commit. A ratio cannot tell "the flushes coalesced" from "this
-  machine could not put sixteen appends in flight for them to", which is how it
-  read 0.70x on a two-core runner with nothing wrong. `DiskLog::flushes()` now
-  exposes the flush count — one relaxed increment against an `fsync` — and the
-  test asserts the thing itself: 64 appends produce 64 flushes serially and 5
-  concurrently. Counting does not measure the machine.
-
-  `an_inline_rollover_does_not_park_every_worker` allowed a fifth of one
-  rollover for scheduling noise, described as "far above the scheduling noise
-  even on a loaded box". CI falsified that twice, measuring 137 ms. The bug it
-  catches parks every worker for the *whole* rollover, so half keeps a 2x margin
-  on both sides instead of sitting next to the noise floor.
-
-  `FELIX_TEST_TIMEOUT_SCALE` multiplies the setup deadlines in the cluster
-  harness and the Raft chaos suite. Unset means 1, so a developer's run is
-  unchanged and still fails fast on a genuine hang; CI sets `3` and the coverage
-  job `5`. Raising the constants instead would have bought the same green while
-  never noticing a hang on the machines fast enough to.
-
-  Deliberately untouched: `losing_quorum_fails_writes_loudly_not_silently`
-  waits on a leader noticing it has lost quorum, and that wait *is* the subject
-  — widening it would only make the test slower at noticing nothing. It is
-  serialised instead, which is what its module already says.
-
 
 - **Concurrent publishes share a device flush again** (#535). Publishes for a
   shard queued to a single worker, and that worker awaited each one to

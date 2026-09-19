@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
-felix-common = { path = "../../crates/felix-common", version = "0.4.1", features = ["lifecycle", "openapi"] }
+felix-common = { path = "../../crates/felix-common", version = "0.5.0", features = ["lifecycle", "openapi"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 opentelemetry = { workspace = true }

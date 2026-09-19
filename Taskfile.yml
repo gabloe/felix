@@ -484,6 +484,15 @@ tasks:
       # Absolute, because the suite runs from the crate directory and the
       # verifier runs from the repository root.
       RESULTS: '{{.ROOT_DIR}}/ts-conformance.json'
+  release:check:
+    desc: >
+      Assert every version field agrees, and matches a tag if one is given.
+      The wheel, the npm package and the Helm chart each carry a version of
+      their own, so bumping the workspace is not enough -- and a tag is
+      permanent by the time the release job would notice.
+    cmds:
+      - "python3 scripts/check_release_version.py {{.CLI_ARGS}}"
+
   conformance:scenarios:
     desc: Print the client conformance catalogue — what a client in any language must implement.
     cmds: ["cargo run -q -p felix-conformance -- scenarios"]

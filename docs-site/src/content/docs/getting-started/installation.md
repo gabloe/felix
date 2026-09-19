@@ -286,7 +286,7 @@ docker run -p 5000:5000/udp -p 8080:8080 \
   -e FELIX_CONTROLPLANE_URL=http://controlplane:8443 \
   -e FELIX_NODE_TOKEN_FILE=/etc/felix/node.token \
   -v /path/to/node.token:/etc/felix/node.token:ro \
-  ghcr.io/gabloe/felix-broker:0.4.1
+  ghcr.io/gabloe/felix-broker:0.5.0
 ```
 
 A broker authenticates every client against its tenant's signing keys, which it
@@ -297,7 +297,7 @@ to present. Without them it logs `broker started` and exits on the next line.
 a local cluster with nothing to configure, `felix-cluster up` is quicker (see
 the [Quickstart](/felix/getting-started/quickstart/)).
 
-Each release publishes the full version (`0.4.1`), the minor series (`0.4`) and
+Each release publishes the full version (`0.5.0`), the minor series (`0.5`) and
 `latest`. Use a version tag in anything you keep; `latest` moves. Images are
 signed by digest — see [Kubernetes](/felix/deployment/kubernetes/) for the
 `cosign verify` invocation.
@@ -322,7 +322,7 @@ The same, for the control plane:
 # Run the control plane (example uses a local Postgres)
 docker run -p 8443:8443 \
   -e FELIX_CONTROLPLANE_POSTGRES_URL=postgres://postgres:postgres@host.docker.internal:55432/postgres \
-  ghcr.io/gabloe/felix-controlplane:0.4.1
+  ghcr.io/gabloe/felix-controlplane:0.5.0
 ```
 
 See [Docker Compose Guide](/felix/deployment/docker-compose/) for orchestrated deployments.
