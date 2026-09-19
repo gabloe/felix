@@ -103,8 +103,8 @@ the test behind every claim, [`docs/projections.md`](docs/projections.md).
 - Control-plane availability and resiliency: readiness that reflects real
   dependencies, drains that a load balancer can act on, and surviving a rolling
   restart
-- Hardening the multi-node story — chaos testing, cluster-scale latency budgets,
-  and authenticating the broker-to-broker surface
+- Hardening the multi-node story — chaos testing and cluster-scale latency
+  budgets
 - Fanout, backpressure, and isolation as core product behavior
 - Protocol and conformance
 
@@ -147,6 +147,10 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   negotiation on the wire. Its metadata store is Postgres or an embedded Raft
   group (`FELIX_CONTROLPLANE_STORAGE_BACKEND=raft`), so availability need not
   rest on an external database
+- Mutually authenticated broker-to-broker QUIC, with each certificate's name
+  checked against the node id in both directions
+  (`FELIX_INTERNAL_TLS_CERT` / `_KEY` / `_CA`). Left unset, the peer link is
+  encrypted but not authenticated, and startup says so
 
 ## What does not exist yet
 
@@ -156,7 +160,7 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   default a log grows until the disk does
 - Rebalancing: a shard whose leader is alive is never moved, however uneven that
   leaves the cluster
-- mTLS between brokers, tiered storage, and cross-region bridges
+- Tiered storage, cross-region bridges, encryption at rest, and audit logging
 - Clients beyond Rust, Python and TypeScript. All three wrap the same
   implementation, and the conformance catalogue is what the next language is
   gated on
@@ -257,17 +261,17 @@ If a feature cannot be enforced in code, it is considered incomplete.
 
 Done: QUIC transport with backpressure, the durable log, the control plane and
 placement, intra-region clustering with replication and failover, the log-backed
-cache, consumer groups, tenant-scoped RBAC, and control-plane high availability
-over either Postgres or an embedded Raft group.
+cache, consumer groups, tenant-scoped RBAC, control-plane high availability
+over either Postgres or an embedded Raft group, broker-to-broker mTLS, a Helm
+chart, and Python and TypeScript clients over the Rust one.
 
 Next, roughly in order:
 
 - Per-stream retention, so a stream's declared policy is the one enforced
-- mTLS between brokers, and the rest of the security hardening
-- Rebalancing and Kubernetes packaging
+- Rebalancing
 - Tiered storage and cold-tier reads
 - Explicit cross-region bridges
-- Compliance features and auditing
+- Encryption at rest, audit logging, and the compliance surface around them
 
 Detailed plans live in `docs/`, and the per-capability status table on the docs
 site is the authority.

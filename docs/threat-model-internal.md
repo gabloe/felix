@@ -109,9 +109,10 @@ tail. Those are accepted, because that is replication. A reachable attacker can
 therefore inject records into any shard this broker is a replica of, and they
 will be indistinguishable from the leader's.
 
-**Mitigation: #125.** Unlike case 1, mTLS is close to sufficient here: the role
-and generation checks already narrow a peer's authority to shards it is a
-replica of, so proving the peer *is* that broker closes most of the gap.
+**Mitigated under mTLS (#125).** Unlike case 1, peer identity is close to
+sufficient here: the role and generation checks already narrow a peer's
+authority to shards it is a replica of, so proving the peer *is* that broker
+closes most of the gap. Without certificates it stands open.
 
 ### 3. Discard a follower's log, through bootstrap — **mitigated**
 
@@ -132,22 +133,20 @@ tenant, namespace and stream names.
 
 The fuzz target added in #480 exercises exactly this and found nothing.
 
-### 5. Resource exhaustion through connections — **partly mitigated**
+### 5. Resource exhaustion through connections — **mitigated**
 
 Per connection, QUIC caps concurrent streams at `max_streams` (default 1024) and
 applies flow-control windows.
 
-**The number of connections is not capped.** `PeerServer::serve` accepts in a
-loop with no limit, no per-source accounting, and no backpressure. A reachable
-attacker can open connections until the process runs out of file descriptors or
-memory; the ceiling is 64 MiB × 1024 streams × unbounded connections.
+The connection count is bounded too, since #504: `PeerServer::serve` admits at
+most `FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS` (512) in total and
+`FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE` (16) from any one address, so neither a
+hostile caller nor a peer looping on a reconnect bug can take the listener.
+The total alone would not do it — one source would still starve every other
+broker before anyone noticed.
 
-`max_inflight_per_peer` does not help: it is an *outbound* shed, applied by this
-broker's pool to requests it is sending, not a bound on what it will accept.
-
-**Mitigation: #504.** An accept-side connection cap and per-peer accounting,
-useful even after mTLS because an authenticated peer looping on a bug is still
-unbounded.
+`max_inflight_per_peer` is a separate control and does not help here: it is an
+*outbound* shed, applied by this broker's pool to requests it is sending.
 
 ### 6. Amplification — **low**
 
@@ -163,10 +162,11 @@ operations are close to idempotent: a replayed `ReplicateRecords` is compared
 against stored bytes and answered as a retry; a replayed `ForwardPublish`
 **is not** — it appends again, because publishes are not deduplicated.
 
-Idempotent producers (**#422**) would close the forwarding case. Until then, a
-replayed forwarded publish duplicates records, which is within the delivery
-guarantee Felix documents (`AtLeastOnce`) but is a capability an attacker has
-for free.
+Idempotent producers (#422) shipped, but on the client-to-broker path only:
+`ForwardPublish` carries no producer id or sequence, so the owner has nothing to
+deduplicate against and a replayed forwarded publish still duplicates records.
+That is within the delivery guarantee Felix documents (`AtLeastOnce`) but is a
+capability an attacker has for free.
 
 ### 8. Stream exhaustion and malformed payloads — **mitigated**
 
@@ -178,13 +178,13 @@ the connection. Neither leaves the reader mid-frame.
 
 | # | Abuse case | Status | Owner |
 |---|---|---|---|
-| 1 | Publish to any tenant via forwarding | Mitigated: the owner verifies the client's credential (#503), and mTLS proves which broker forwarded it (#125) | #126 for the broker's relationship with the control plane |
+| 1 | Publish to any tenant via forwarding | Mitigated: the owner verifies the client's credential (#503), and mTLS proves which broker forwarded it (#125) | — |
 | 2 | Inject records via replication | Mitigated under mTLS (peer identity) plus role + generation | — |
 | 3 | Truncate a follower via bootstrap | Mitigated | — |
 | 4 | Memory exhaustion via lengths | Mitigated | — |
-| 5 | Connection exhaustion | **Unmitigated** | #504 |
+| 5 | Connection exhaustion | Mitigated: accept-side caps, total and per source (#504) | — |
 | 6 | Amplification | Low | — |
-| 7 | Replay of a forwarded publish | Unmitigated | #422 |
+| 7 | Replay of a forwarded publish | **Unmitigated**: #422 covers the client-to-broker path only | Producer identity on `ForwardPublish` |
 | 8 | Malformed frames | Mitigated | — |
 
 ## Residual risk and operating assumptions

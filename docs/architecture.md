@@ -145,9 +145,11 @@ Delivery guarantees:
 
 ### Transport Security
 - TLS 1.3 for client connections, with no unencrypted mode — QUIC has none
-- Broker-to-broker QUIC is encrypted but **not** mutually authenticated. mTLS
-  between brokers is #125, and until it lands the internal listener accepts any
-  client certificate
+- Broker-to-broker QUIC is mutually authenticated when
+  `FELIX_INTERNAL_TLS_CERT`, `_KEY` and `_CA` are set: every peer connection is
+  verified against that CA and the certificate's name is checked against the
+  node id in both directions. Left unset, the internal listener accepts any
+  certificate — encrypted, unauthenticated, and warned about at startup
 - All encryption uses modern, configurable cipher suites
 
 The rest of this section is the intended design, not what ships today. The
@@ -228,10 +230,10 @@ That rejection is about replicating *records*. Making the control plane's own
 metadata highly available is a separate problem, and Raft is the decided
 answer there — designed in
 [`metadata-raft-design.md`](metadata-raft-design.md) and tracked as milestone
-M13 under [#333](https://github.com/gabloe/felix/issues/333). The consensus
-core is in place (`services/controlplane/src/raft/`), but no metadata rides
-it yet; until the rest of M13 lands, control-plane availability rests on
-Postgres: any number of stateless instances over one HA database, whose
+M13 under [#333](https://github.com/gabloe/felix/issues/333), and shipped:
+`FELIX_CONTROLPLANE_STORAGE_BACKEND=raft` selects it and the instances hold
+the metadata themselves, with no external database. Postgres remains fully
+supported — any number of stateless instances over one HA database, whose
 required properties are spelled out in [`ha-postgres.md`](ha-postgres.md).
 
 Resolving an owner is an atomic load of a routing snapshot the broker already

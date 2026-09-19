@@ -17,7 +17,7 @@ The chart names `ghcr.io/gabloe/felix-broker` and
 `ghcr.io/gabloe/felix-controlplane`, which releases publish and which pull
 without credentials. The image tag defaults to the chart's `appVersion`, so a
 default install resolves to a published image with nothing to configure —
-`0.4.1` renders `ghcr.io/gabloe/felix-broker:0.4.1`. To run something you have not released, build from
+`0.5.0` renders `ghcr.io/gabloe/felix-broker:0.5.0`. To run something you have not released, build from
 `docker/` and push to a registry your cluster can reach (the
 [Docker Compose page](/felix/deployment/docker-compose/) has the build
 commands), then point `image.registry` at it.
@@ -32,7 +32,7 @@ workflow's OIDC identity, so there is no key to store or rotate and the
 signature names the workflow that produced the image. Verify before you pin:
 
 ```bash
-cosign verify ghcr.io/gabloe/felix-broker:0.4.1 \
+cosign verify ghcr.io/gabloe/felix-broker:0.5.0 \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   --certificate-identity-regexp='^https://github.com/gabloe/felix/\.github/workflows/release\.yml@refs/tags/v'
 ```

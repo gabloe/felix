@@ -70,6 +70,15 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
 
+      # A tag and a version that disagree ship artifacts labelled with neither,
+      # and nothing else notices: the archive is named from the tag, each crate
+      # is built from its own manifest, and both succeed. The wheel, the npm
+      # package and the Helm chart each carry a version of their own, so this
+      # checks all of them rather than only the workspace. Before anything is
+      # published, because after that the tag is permanent.
+      - name: The tag matches every version in the tree
+        run: python3 scripts/check_release_version.py "${RELEASE_TAG}"
+
       # The changelog entry, not auto-generated notes. A release spanning months
       # generates a list that is mostly dependency bumps: accurate about commits,
       # poor about what changed. Fails closed if the entry is missing.

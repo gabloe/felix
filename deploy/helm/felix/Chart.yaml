@@ -7,10 +7,10 @@ description: >-
   from taking a shard's replicas with it.
 type: application
 # The chart's own version; bump on any change to the templates or defaults.
-version: 0.1.0
+version: 0.1.1
 # The Felix release the defaults were written against. Image tags default to
 # this; pin by digest in production.
-appVersion: "0.4.1"
+appVersion: "0.5.0"
 kubeVersion: ">=1.25.0-0"
 home: https://gabloe.github.io/felix/
 sources:

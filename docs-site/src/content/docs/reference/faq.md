@@ -145,9 +145,10 @@ questions is the whole point of the
 
 TLS 1.3 on every connection; OIDC token exchange at the control plane;
 tenant-scoped EdDSA tokens; RBAC enforced at the broker with delegation
-rules that prevent privilege escalation. Not built: encryption at rest,
-broker-to-broker mTLS, audit logging. The [security page](/felix/features/security/)
-states each plainly.
+rules that prevent privilege escalation; broker-to-broker mTLS, bound to the
+node id, when certificates are configured. Not built: encryption at rest,
+end-to-end payload encryption, audit logging. The
+[security page](/felix/features/security/) states each plainly.
 
 ## Can I grant stream access by IdP group instead of per-user?
 

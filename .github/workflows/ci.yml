@@ -167,6 +167,13 @@ jobs:
       - name: Documentation evidence
         run: task docs:evidence
 
+      # Without a tag this only asserts the version fields agree with each
+      # other. That is the half a pull request can be wrong about: a bump that
+      # misses the npm package or the chart looks fine until the release job
+      # refuses the tag, by which point the branch is already cut.
+      - name: Version fields agree
+        run: python3 scripts/check_release_version.py
+
       # Demos under demos/ that declare their own [workspace] are excluded from the
       # repository workspace, so `task lint` and `task test` never reach them and
       # they can break silently. Build all three, and run the slow-consumer demo's

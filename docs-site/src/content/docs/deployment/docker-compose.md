@@ -7,11 +7,11 @@ Running Felix under Docker Compose, for local development and testing.
 The images are published to GHCR and are pullable without credentials:
 
 ```bash
-docker pull ghcr.io/gabloe/felix-broker:0.4.1
-docker pull ghcr.io/gabloe/felix-controlplane:0.4.1
+docker pull ghcr.io/gabloe/felix-broker:0.5.0
+docker pull ghcr.io/gabloe/felix-controlplane:0.5.0
 ```
 
-Each release publishes three tags — the full version (`0.4.1`), the minor
+Each release publishes three tags — the full version (`0.5.0`), the minor
 series (`0.4`), and `latest` on non-prereleases. Prefer a version tag in
 anything you deploy: `latest` moves.
 

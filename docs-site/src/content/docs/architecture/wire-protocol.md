@@ -479,7 +479,7 @@ Error response.
 **Common error conditions**:
 - Unknown tenant/namespace/stream
 - Malformed frame
-- Authorization failure (future)
+- Authorization failure (`forbidden`)
 - Resource exhaustion
 
 ## Binary Publish Batch Encoding

@@ -177,7 +177,7 @@ Window sizes multiply with pool sizes. An event connection pool of 8 with 256 Mi
 The transport layer enforces encryption by default:
 
 - **TLS 1.3** for all connections
-- **mTLS** for broker-to-broker communication (future)
+- **mTLS** for broker-to-broker communication, when `FELIX_INTERNAL_TLS_CERT`, `_KEY` and `_CA` are set
 - **Certificate validation** with configurable policies
 - **Cipher suite configuration** for compliance requirements
 

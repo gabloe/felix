@@ -136,7 +136,7 @@ types as `felix_broker::<Name>` regardless of which module defines them.
 - Durable WAL and log segments
 - TTL management
 - Retention policies
-- Compaction (future)
+- Compaction for the cache and counter logs; stream logs are not compacted
 
 **Storage types**:
 - `EphemeralStore`: In-memory with TTL
@@ -213,7 +213,7 @@ publisher
 - Token-based auth (OIDC exchange + Felix JWTs)
 - RBAC policies and permission matching
 - Tenant isolation enforcement
-- mTLS authentication (planned)
+- Broker-to-broker mTLS, when certificates are configured
 
 #### felix-conformance
 
