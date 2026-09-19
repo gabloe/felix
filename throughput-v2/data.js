@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789836462119,
+  "lastUpdate": 1789836998326,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12168,6 +12168,58 @@ window.BENCHMARK_DATA = {
             "range": "9311.83",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 553835.22\nmean: 557661.78\nstdev: 9311.83\ncv: 1.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9903a7813a49aab55340fbd24ae7868669dc2501",
+          "message": "test: measure the property, not the machine, in four timing-sensitive tests (#569)\n\nEach was a wall-clock assertion on a shared runner; each has failed on a\nbranch that could not have caused it; between them they have cost several\ninvestigations. Two were hit in one session.\n\n`concurrent_durable_appends_share_a_flush` asserted a speedup ratio. A\nratio cannot separate \"the flushes coalesced\" from \"this machine could\nnot put sixteen appends in flight for them to\" -- on a two-core runner it\nmeasured 0.70x, concurrency slower than serial, with nothing wrong. The\nserial per-append cost in that run was 1.54ms, a real flush, so the\ndevice was fine; what was missing was the overlap.\n\nSo count the flushes instead. `Durability` gains an `AtomicU64` bumped\nonce per flush -- one relaxed increment against a syscall, so it is always\non rather than behind a feature -- and `DiskLog::flushes()` exposes it.\n64 appends produce 64 flushes serially and 5 concurrently here. That\nratio is the property, and counting does not measure the machine: the\ntasks still interleave at their await points on a slow box, so they still\ncoalesce, they merely take longer doing it.\n\nThe serial run doubles as the control, and it is exactly the regression\nshape: if the concurrent run behaved like it, the assertion rejects it.\n\n`an_inline_rollover_does_not_park_every_worker` allowed a fifth of one\nrollover, its comment claiming that was \"far above the scheduling noise a\nyielding task sees even on a loaded box\". CI has falsified that twice,\nmeasuring 137ms. The bug parks every worker for the *whole* rollover, so\nthe signal is ~500ms; half the rollover keeps a 2x margin on both sides\nrather than sitting next to the noise floor.\n\n`FELIX_TEST_TIMEOUT_SCALE` multiplies the setup deadlines in\n`felix_cluster::wait::until` and the Raft chaos suite's `wait_ready` and\n`wait_exit`. What those wait for is setup -- a leader elected, an instance\nup -- not the subject, which is that no acknowledged write is lost. Unset\nmeans 1, so a developer's run is unchanged and still fails fast on a real\nhang; CI sets 3 and the coverage job 5, coverage being where the failover\nsuite's replication waits were seen to expire.\n\nTunable rather than simply larger, because a bigger constant buys the\nsame green at the cost of never noticing a hang on the machines that are\nfast enough to notice it.\n\nLeft alone deliberately:\n`losing_quorum_fails_writes_loudly_not_silently` waits on a leader\nnoticing it has not heard a quorum, and that wait *is* the subject. Its\nown module says widening it \"would only make the test slower at noticing\nnothing\", and it is serialised for the same reason. Not every flake has a\nfix that leaves the test meaning what it meant.",
+          "timestamp": "2026-09-19T09:54:25-07:00",
+          "tree_id": "94d1ab88c67ebb6b1b49924e2c983c70286f6b71",
+          "url": "https://github.com/gabloe/felix/commit/9903a7813a49aab55340fbd24ae7868669dc2501"
+        },
+        "date": 1789836997494,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 323301.86,
+            "range": "6337.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 323301.86\nmean: 321149.34\nstdev: 6337.08\ncv: 1.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 323301.86,
+            "range": "6337.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 323301.86\nmean: 321149.34\nstdev: 6337.08\ncv: 1.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 76577.34,
+            "range": "2148.50",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 76577.34\nmean: 75392.91\nstdev: 2148.50\ncv: 2.85%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 765773.42,
+            "range": "21484.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 765773.42\nmean: 753929.07\nstdev: 21484.99\ncv: 2.85%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
