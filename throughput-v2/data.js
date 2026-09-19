@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789831797551,
+  "lastUpdate": 1789831960540,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -11960,6 +11960,58 @@ window.BENCHMARK_DATA = {
             "range": "12245.96",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 547175.85\nmean: 549961.22\nstdev: 12245.96\ncv: 2.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5d2d6c15e82ae0155880726def58d5042bc3fa73",
+          "message": "perf(client): the data path is binary; JSON is compatibility only (#550) (#564)\n\n#549 put the routing key in the binary publish frame, which removed the\nlast reason JSON had to carry data-plane traffic. It is strictly more\nexpensive -- 645.8 MB/s against 917 for the same keyed workload on the\nsame rig, user CPU up from 20% to 28% -- and it now buys nothing the\nbinary frames do not cover.\n\n`Publisher::publish_json` and `publish_batch_json` are deprecated, for\nremoval in 0.6.0, and nothing routes through them any more. The one\ninternal caller was `publish_batch`'s fallback for a broker that never\nadvertised the acked binary frame; it now calls the private keyed form\nwith `key: None` directly, so the fallback keeps working after the public\nsurface goes.\n\nThat rewiring is the part worth a test. An empty key is a key -- it\nhashes to a shard rather than resolving to shard 0 -- so a fallback that\nquietly started passing `Some(Bytes::new())` would move records to a\ndifferent shard and nothing would report it.\n`an_acked_batch_falls_back_to_keyless_json_without_the_binary_flag`\npins `key: None`, and fails if the argument changes.\n\nThe broker still accepts JSON publishes and will keep accepting them:\n`ORIGINAL_V1_FLAGS` is frozen, so a client older than the flags is\nentitled to send them forever. Deleting the arm needs evidence, not\nreasoning, so all four JSON entry points -- control and uni, single and\nbatch -- now count into\n`felix_broker_json_publishes_total{frame=\"publish\"|\"publish_batch\"}`.\nThe label separates them because a client still on the single form is an\nolder one than a client on the batch. The metric is documented under the\npublish-path questions in the observability page, where the answer is\nthat it should be flat at zero.\n\n`docs/protocol.md` folds Message::Publish and PublishBatch into one\ncompatibility section rather than presenting them as a co-equal\nencoding, and the Binary PublishBatch section stops offering JSON as\nsomething a client selects -- it is what a client falls back to.\n\n`publish_idempotent` is untouched and stays JSON: it carries a producer\nid and sequence that no binary layout has room for yet. That is its own\npiece of work, not compatibility.\n\nThe three deliberate JSON call sites -- a client unit test, the latency\ndemo's encoding comparison, and the broker's latency_text test -- keep\nreaching the deprecated calls behind #[allow(deprecated)], since\nmeasuring the old encoding is the point of each.",
+          "timestamp": "2026-09-19T08:27:35-07:00",
+          "tree_id": "13c2016c770f17a9a12f86329df5d3e7d7c95167",
+          "url": "https://github.com/gabloe/felix/commit/5d2d6c15e82ae0155880726def58d5042bc3fa73"
+        },
+        "date": 1789831960170,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 228455.15,
+            "range": "2476.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228455.15\nmean: 229376.85\nstdev: 2476.55\ncv: 1.08%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 228455.15,
+            "range": "2476.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 228455.15\nmean: 229376.85\nstdev: 2476.55\ncv: 1.08%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 54977.72,
+            "range": "497.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 54977.72\nmean: 55095.98\nstdev: 497.27\ncv: 0.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 549777.16,
+            "range": "4972.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 549777.16\nmean: 550959.79\nstdev: 4972.65\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
