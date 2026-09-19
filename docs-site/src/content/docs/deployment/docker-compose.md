@@ -4,11 +4,19 @@ title: "Docker Compose Deployment"
 
 Running Felix under Docker Compose, for local development and testing.
 
-:::caution[The images are not published yet]
-The examples here name `ghcr.io/gabloe/felix-broker` and
-`ghcr.io/gabloe/felix-controlplane`, which is where releases will publish them
-— but publishing is off until Felix is meant to be publicly pullable, so
-`docker pull` will not find them today. Build locally in the meantime:
+The images are published to GHCR and are pullable without credentials:
+
+```bash
+docker pull ghcr.io/gabloe/felix-broker:0.4.1
+docker pull ghcr.io/gabloe/felix-controlplane:0.4.1
+```
+
+Each release publishes three tags — the full version (`0.4.1`), the minor
+series (`0.4`), and `latest` on non-prereleases. Prefer a version tag in
+anything you deploy: `latest` moves.
+
+To build them yourself instead — a change you have not released, or an
+architecture the release does not build:
 
 ```bash
 docker build -f docker/broker.Dockerfile -t ghcr.io/gabloe/felix-broker:latest .
@@ -17,7 +25,6 @@ docker build -f docker/controlplane.Dockerfile -t ghcr.io/gabloe/felix-controlpl
 
 Both build from the repository root — the binaries are workspace members, so
 cargo needs the workspace to resolve them.
-:::
 
 ## Overview
 

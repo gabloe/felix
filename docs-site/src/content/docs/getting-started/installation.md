@@ -270,28 +270,39 @@ Native Windows support is not currently tested.
 
 ## Docker (Alternative)
 
-Docker images can be built locally for quick testing (not recommended for production):
+Released images are on GHCR and pull without credentials:
+
+```bash
+# Run the broker
+docker run -p 5000:5000/udp -p 8080:8080 ghcr.io/gabloe/felix-broker:0.4.1
+```
+
+Each release publishes the full version (`0.4.1`), the minor series (`0.4`) and
+`latest`. Use a version tag in anything you keep; `latest` moves. Images are
+signed by digest — see [Kubernetes](/felix/deployment/kubernetes/) for the
+`cosign verify` invocation.
+
+To build one instead, for a change you have not released:
 
 ```bash
 # Build the broker image
 docker build -t felix-broker -f docker/broker.Dockerfile .
 
-# Run the broker
+# Run what you built
 docker run -p 5000:5000/udp -p 8080:8080 felix-broker
 ```
 
 ### Control Plane Container
 
-Build and run the control plane in a separate container:
+The same, for the control plane:
 
 ```bash
-# Build the control plane image
-docker build -t felix-controlplane -f docker/controlplane.Dockerfile .
+# Or build it: docker build -t felix-controlplane -f docker/controlplane.Dockerfile .
 
 # Run the control plane (example uses a local Postgres)
 docker run -p 8443:8443 \
   -e FELIX_CONTROLPLANE_POSTGRES_URL=postgres://postgres:postgres@host.docker.internal:55432/postgres \
-  felix-controlplane
+  ghcr.io/gabloe/felix-controlplane:0.4.1
 ```
 
 See [Docker Compose Guide](/felix/deployment/docker-compose/) for orchestrated deployments.

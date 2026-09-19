@@ -102,9 +102,10 @@ jobs:
   # --- Container images ----------------------------------------------------
   #
   # Built on every tag so a release is proof the Dockerfiles still work, and
-  # pushed only when the registry is meant to have them. Same gate as the PyPI
-  # job below: `vars.PUBLISH_IMAGES`, off until Felix is meant to be publicly
-  # pullable.
+  # pushed when `vars.PUBLISH_IMAGES` says the registry should have them. That
+  # switch is on: 0.4.1 published `felix-broker` and `felix-controlplane`, and
+  # they pull without credentials. The gate stays so a fork building this
+  # workflow does not push to a registry it did not mean to.
   #
   # Registry: GHCR under the repository owner. It needs no credential beyond
   # the workflow's own token, the namespace follows the repository rather than
