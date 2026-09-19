@@ -67,7 +67,12 @@ jobs:
           echo "Postgres did not become ready in time" >&2
           exit 1
 
+      # Larger than the test job's: coverage instrumentation slows everything
+      # it measures, and this is the job where the failover suite's replication
+      # waits were seen to expire with nothing wrong.
       - name: Generate code coverage (lcov)
+        env:
+          FELIX_TEST_TIMEOUT_SCALE: "5"
         run: |
           set -euxo pipefail
           task coverage

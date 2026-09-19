@@ -140,7 +140,29 @@ fn spawn_instance(
         .expect("spawn controlplane")
 }
 
+/// Multiplier applied to the setup waits here, from `FELIX_TEST_TIMEOUT_SCALE`.
+///
+/// What these wait for -- an instance to come up, a process to exit -- is setup,
+/// not the thing under test. The subject is that no acknowledged write is lost
+/// across restart, kill, freeze and wipe. On a shared runner the setup takes
+/// longer for reasons that say nothing about the code, and the failure reports
+/// as the durability claim having broken.
+///
+/// Tunable rather than simply larger: a bigger constant would hide a genuine
+/// hang behind a longer wait on machines fast enough to notice. Unset means 1.
+fn scale() -> f64 {
+    static SCALE: std::sync::LazyLock<f64> = std::sync::LazyLock::new(|| {
+        std::env::var("FELIX_TEST_TIMEOUT_SCALE")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|scale| scale.is_finite() && *scale >= 1.0)
+            .unwrap_or(1.0)
+    });
+    *SCALE
+}
+
 fn wait_ready(instance: &mut Instance, timeout: Duration) {
+    let timeout = timeout.mul_f64(scale());
     let deadline = Instant::now() + timeout;
     loop {
         if let Some((200, _)) = http(instance.api, "GET", "/v1/system/ready", None, None) {
@@ -159,6 +181,7 @@ fn wait_ready(instance: &mut Instance, timeout: Duration) {
 }
 
 fn wait_exit(child: &mut std::process::Child, timeout: Duration) {
+    let timeout = timeout.mul_f64(scale());
     let deadline = Instant::now() + timeout;
     while child.try_wait().expect("try_wait").is_none() {
         assert!(Instant::now() < deadline, "instance did not exit");

@@ -40,6 +40,7 @@ NOT_OPERATIONAL = {
     "FELIX_PEER_PARTITION_FILE",
     "FELIX_TEST_BROKER_OUTPUT",
     "FELIX_TEST_DATABASE_URL",
+    "FELIX_TEST_TIMEOUT_SCALE",
 }
 
 # Not variables at all. The detector matches any quoted FELIX_* literal in Rust,

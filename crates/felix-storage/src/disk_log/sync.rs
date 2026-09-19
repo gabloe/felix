@@ -51,6 +51,13 @@ pub struct Durability {
     flush_lock: Mutex<()>,
     /// Appends currently waiting for durability, sampled to report fan-in.
     waiting: AtomicU64,
+    /// Flushes actually issued. One relaxed increment against a syscall that
+    /// costs microseconds at best, so it is always on rather than behind a
+    /// feature -- and it is the only machine-independent way to see group
+    /// commit working. Wall-clock speedup cannot tell "the flushes coalesced"
+    /// from "this machine could not put enough appends in flight to coalesce",
+    /// which is how a CI runner with two cores reads as a regression.
+    flushes: AtomicU64,
 }
 
 impl Durability {
@@ -62,6 +69,7 @@ impl Durability {
             durable_tx: watch::channel(durable_upto).0,
             flush_lock: Mutex::new(()),
             waiting: AtomicU64::new(0),
+            flushes: AtomicU64::new(0),
         }
     }
 
@@ -93,6 +101,14 @@ impl Durability {
 
     /// Lower the durable bound after truncation.
     ///
+    /// How many flushes have actually been issued.
+    ///
+    /// The direct measure of group commit: N appends that coalesce produce far
+    /// fewer than N flushes, whatever the machine's timing looks like.
+    pub fn flushes(&self) -> u64 {
+        self.flushes.load(Ordering::Relaxed)
+    }
+
     /// The caller must hold [`Self::lock_flushes`] and the segment write lock,
     /// so no flush can publish stale progress and no append can observe the
     /// truncated tail before this reset.
@@ -162,6 +178,7 @@ impl Durability {
             // Sampled inside the lock so it reflects the appends this one flush
             // is about to satisfy.
             let fan_in = self.waiting.load(Ordering::Relaxed);
+            self.flushes.fetch_add(1, Ordering::Relaxed);
             let outcome = flush().await;
             drop(guard);
 
