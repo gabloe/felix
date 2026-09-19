@@ -67,6 +67,15 @@ pub struct MembershipConfig {
     /// falls out of the cluster when that expires, which is the behaviour every
     /// deployment had before refresh existed.
     pub refresh_token_file: Option<std::path::PathBuf>,
+    /// Where the *access* token was read from, when it came from a file.
+    ///
+    /// Two jobs. It is the path re-read when something outside the broker
+    /// rotates the credential -- a Vault agent, SPIRE, a sidecar -- so that
+    /// rotation takes effect without a restart, the way the refresh token file
+    /// already does. And it is what makes an expiring credential legitimate
+    /// without `refresh_token_file`: a file is a seam something else can write,
+    /// where a token passed by value is not.
+    pub node_token_file: Option<std::path::PathBuf>,
 }
 
 /// Warn when peers would be told to connect somewhere nothing is listening.
@@ -490,9 +499,16 @@ fn membership_from_env(
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from);
 
+    let node_token_file = std::env::var("FELIX_NODE_TOKEN_FILE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+
     Ok(Some(MembershipConfig {
         node_id,
         refresh_token_file,
+        node_token_file,
         advertise_addr,
         client_advertise_addr: std::env::var("FELIX_CLIENT_ADVERTISE_ADDR")
             .ok()
@@ -987,7 +1003,52 @@ impl BrokerConfig {
                 self.cache_conn_recv_window,
             );
         }
+        self.validate_credential_can_outlive_itself()?;
         Ok(())
+    }
+
+    /// Refuse a credential that will expire with nothing able to renew it.
+    ///
+    /// The broker's control-plane calls all read one token, and the heartbeat is
+    /// among them -- and the heartbeat *is* the lease renewal. So an expired
+    /// credential is not a degraded broker, it is one that stops serving the
+    /// shards it led once the lease lapses. That is the correct, safe outcome;
+    /// what is not correct is finding out about it an hour into a deployment
+    /// nobody touched.
+    ///
+    /// Two things can keep a token alive: the refresh loop
+    /// (`FELIX_NODE_REFRESH_TOKEN_FILE`), or something outside the broker
+    /// rewriting `FELIX_NODE_TOKEN_FILE`, which is re-read. With neither, and a
+    /// token that says when it expires, the outage is already scheduled.
+    ///
+    /// A token passed by value is not a seam anything can write, which is why
+    /// the file is what counts rather than merely having a token.
+    fn validate_credential_can_outlive_itself(&self) -> Result<()> {
+        let Some(membership) = self.membership.as_ref() else {
+            // Not joining a cluster: no heartbeat, no lease, nothing to lose.
+            return Ok(());
+        };
+        if membership.refresh_token_file.is_some() || membership.node_token_file.is_some() {
+            return Ok(());
+        }
+        // Only a token that says when it expires. One this broker cannot read
+        // the claims of is someone else's format, and guessing is worse than
+        // letting it run.
+        let Some(expires_at) =
+            crate::credential::read_claims(&self.controlplane_token).map(|claims| claims.exp)
+        else {
+            return Ok(());
+        };
+        anyhow::bail!(
+            "the node credential expires (exp {expires_at}) and nothing can renew it: \
+             FELIX_NODE_TOKEN was passed by value, and neither \
+             FELIX_NODE_REFRESH_TOKEN_FILE nor FELIX_NODE_TOKEN_FILE is set. The \
+             heartbeat carries this token and the heartbeat is the lease renewal, so \
+             when it expires this broker stops serving the shards it leads. Set \
+             FELIX_NODE_REFRESH_TOKEN_FILE to refresh it, or write the token to \
+             FELIX_NODE_TOKEN_FILE and have whatever mints it rewrite that path -- \
+             the broker re-reads it.",
+        );
     }
 
     /// Fold a parsed config file over the values already taken from the
@@ -1995,6 +2056,96 @@ subscriber_single_writer_per_conn: false
         /// Equal is fine everywhere. The limits bound each other; they do not
         /// have to differ, and refusing equality would fail a configuration
         /// that behaves exactly as written.
+        use base64::Engine;
+
+        fn expiring_token(exp: i64) -> String {
+            let encode = |value: &serde_json::Value| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+            };
+            format!(
+                "{}.{}.{}",
+                encode(&serde_json::json!({"alg": "EdDSA", "typ": "JWT"})),
+                encode(&serde_json::json!({"tid": "acme", "exp": exp, "sub": "node-1"})),
+                "not-a-real-signature",
+            )
+        }
+
+        fn joining_with(token: &str, refresh: bool, token_file: bool) -> BrokerConfig {
+            BrokerConfig {
+                controlplane_token: token.to_string(),
+                membership: Some(MembershipConfig {
+                    node_id: "broker-a".to_string(),
+                    advertise_addr: "10.0.0.1:5000".to_string(),
+                    client_advertise_addr: None,
+                    refresh_token_file: refresh.then(|| "/run/felix/refresh".into()),
+                    node_token_file: token_file.then(|| "/run/felix/node.token".into()),
+                    region: "us-west-2".to_string(),
+                }),
+                ..BrokerConfig::default()
+            }
+        }
+
+        /// The outage this check exists to move forward in time.
+        ///
+        /// The heartbeat carries this token and the heartbeat is the lease
+        /// renewal, so an expiring credential nothing can renew is a broker
+        /// that stops serving its shards at a time already determined. Saying
+        /// so at startup costs a failed rollout; not saying so costs an
+        /// incident an hour later with no change to blame.
+        #[test]
+        fn an_expiring_credential_with_no_way_to_renew_it_is_refused() {
+            let config = joining_with(&expiring_token(1_700_000_900), false, false);
+            let err = config.validate().expect_err("should refuse");
+            let message = err.to_string();
+            assert!(message.contains("nothing can renew it"), "{message}");
+            // Names both ways out, because the error is the only place an
+            // operator meets this.
+            assert!(
+                message.contains("FELIX_NODE_REFRESH_TOKEN_FILE"),
+                "{message}"
+            );
+            assert!(message.contains("FELIX_NODE_TOKEN_FILE"), "{message}");
+        }
+
+        #[test]
+        fn a_refresh_file_makes_an_expiring_credential_fine() {
+            joining_with(&expiring_token(1_700_000_900), true, false)
+                .validate()
+                .expect("refresh renews it");
+        }
+
+        /// A file is a seam something else can write; a value is not. That is
+        /// the whole distinction the check turns on, so it is asserted rather
+        /// than implied.
+        #[test]
+        fn a_token_file_makes_an_expiring_credential_fine() {
+            joining_with(&expiring_token(1_700_000_900), false, true)
+                .validate()
+                .expect("an external rotator can renew it");
+        }
+
+        #[test]
+        fn a_credential_that_never_expires_is_left_alone() {
+            // Not a Felix token, so there is no `exp` to act on. Guessing would
+            // refuse a deployment whose credential this broker cannot read and
+            // has no business judging.
+            joining_with("opaque-token", false, false)
+                .validate()
+                .expect("nothing to schedule against");
+        }
+
+        #[test]
+        fn a_broker_not_joining_a_cluster_is_left_alone() {
+            // No membership means no heartbeat and no lease, so an expiring
+            // credential costs it nothing.
+            let config = BrokerConfig {
+                controlplane_token: expiring_token(1_700_000_900),
+                membership: None,
+                ..BrokerConfig::default()
+            };
+            config.validate().expect("no cluster to fall out of");
+        }
+
         #[test]
         fn equal_limits_are_allowed() {
             let config = BrokerConfig {
@@ -2022,6 +2173,7 @@ subscriber_single_writer_per_conn: false
                     advertise_addr: "10.0.0.1:5000".to_string(),
                     client_advertise_addr: None,
                     refresh_token_file: None,
+                    node_token_file: None,
                     region: "us-west-2".to_string(),
                 }),
                 ..BrokerConfig::default()

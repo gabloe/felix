@@ -579,6 +579,23 @@ where
                      expires",
                 ),
             }
+
+            // The other way a credential stays current: something outside the
+            // broker rewrites the token file. Watched whenever the token came
+            // from one, refresh loop or not -- the two are not alternatives, and
+            // a deployment that runs both is a deployment where either can win.
+            if let Some(node_token_file) = membership_config.node_token_file.clone() {
+                tokio::spawn(credential::rotate::run(
+                    node_token_file,
+                    node_credential.clone(),
+                    credential::rotate::POLL_INTERVAL,
+                    sync_shutdown.clone(),
+                ));
+            }
+
+            // Published once at startup so the series exists before the first
+            // refresh or rotation, which on a long-lived token is hours away.
+            credential::report_expiry(&node_credential);
             Some(membership::spawn(
                 membership_client.clone(),
                 base_url.clone(),
