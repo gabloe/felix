@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789843942924,
+  "lastUpdate": 1789844843835,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -15906,6 +15906,72 @@ window.BENCHMARK_DATA = {
             "range": "60.42",
             "unit": "us",
             "extra": "trials: 5\nmedian: 309.00\nmean: 333.80\nstdev: 60.42\ncv: 18.10%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dbaefda36ed3d4b0cb2a0d045fb936d79ca5e09f",
+          "message": "fix(ts): publish as felix-client, unscoped (#577)\n\n@felix on npm is taken -- there is an unscoped felix package and the scope with\nit -- so the six packages are felix-client and one per platform. All six names\nwere confirmed free against the registry.\n\nUnscoped rather than hunting for another scope. It is the name the crate has on\ncrates.io and the wheel has on PyPI, so one string covers every install\ninstruction in every doc, and an unscoped name is first-come rather than\ncolliding with a namespace someone else may already hold. publishConfig.access\ngoes away with the scope: only a scoped package defaults to restricted.\n\nOne name across three registries does make prose ambiguous, so the places that\nsaid felix-client twice meaning two different things now name the registry.\n\nNothing was published, so this costs nothing. Conformance still 42/42.",
+          "timestamp": "2026-09-19T12:00:52-07:00",
+          "tree_id": "03405590cff391584b8483234a60b02082ff7355",
+          "url": "https://github.com/gabloe/felix/commit/dbaefda36ed3d4b0cb2a0d045fb936d79ca5e09f"
+        },
+        "date": 1789844841474,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 98,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 98.00\nmean: 98.20\nstdev: 0.84\ncv: 0.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 132,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 132.80\nstdev: 1.64\ncv: 1.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 167,
+            "range": "7.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 166.40\nstdev: 7.80\ncv: 4.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 130,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 130.40\nstdev: 0.55\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 259,
+            "range": "11.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 259.00\nmean: 260.80\nstdev: 11.92\ncv: 4.57%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 345,
+            "range": "684.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 345.00\nmean: 642.20\nstdev: 684.85\ncv: 106.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
