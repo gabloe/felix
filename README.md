@@ -157,8 +157,9 @@ latency/backpressure behavior early to keep p99/p999 predictable.
 - Rebalancing: a shard whose leader is alive is never moved, however uneven that
   leaves the cluster
 - mTLS between brokers, tiered storage, and cross-region bridges
-- Clients beyond Rust and Python. Both wrap the same implementation, and the
-  conformance catalogue is what the next language is gated on
+- Clients beyond Rust, Python and TypeScript. All three wrap the same
+  implementation, and the conformance catalogue is what the next language is
+  gated on
 
 The [status table](https://gabloe.github.io/felix/getting-started/what-felix-is-for/)
 is kept current per capability and is the page to trust when another disagrees.
@@ -177,6 +178,8 @@ crates/
   felix-router      # region-aware routing
   felix-authz       # authentication and authorization
   felix-client      # Rust client SDK
+  felix-python      # Python bindings over the Rust client
+  felix-typescript  # Node.js/TypeScript bindings over the Rust client
   felix-conformance # shared wire protocol conformance runner
 
 services/

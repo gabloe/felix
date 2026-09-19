@@ -431,6 +431,38 @@ tasks:
     dir: crates/felix-python
     cmds:
       - pytest -q {{.CLI_ARGS}}
+  ts:check:
+    desc: Build and lint the Node/TypeScript binding (its own workspace, like felix-python).
+    dir: crates/felix-typescript
+    cmds:
+      - cargo fmt -- --check
+      - cargo clippy --all-targets -- -D warnings
+      - cargo build
+  ts:build:
+    desc: Build the Node addon with napi (needs `npm i -g @napi-rs/cli`).
+    dir: crates/felix-typescript
+    cmds:
+      - napi build --platform --release {{.CLI_ARGS}}
+  ts:test:
+    desc: Run the Node conformance suite against a fixture cluster it starts itself.
+    dir: crates/felix-typescript
+    cmds:
+      - node --test test/conformance.test.mjs {{.CLI_ARGS}}
+  ts:conformance:
+    desc: Build what the Node suite needs, run it, and check the verdict against the catalogue.
+    cmds:
+      # The suite spawns these; `cargo build` does not do it on its behalf.
+      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-cluster --bin felix-cluster
+      - cd crates/felix-typescript && cargo build
+      - cd crates/felix-typescript && FELIX_CONFORMANCE_RESULTS={{.RESULTS}} node --test test/conformance.test.mjs
+      # The verdict, not the exit code: a suite that passed while skipping a
+      # required scenario is not conformance.
+      - cargo run -q -p felix-conformance -- verify {{.RESULTS}}
+    vars:
+      # Absolute, because the suite runs from the crate directory and the
+      # verifier runs from the repository root.
+      RESULTS: '{{.ROOT_DIR}}/ts-conformance.json'
   conformance:scenarios:
     desc: Print the client conformance catalogue — what a client in any language must implement.
     cmds: ["cargo run -q -p felix-conformance -- scenarios"]

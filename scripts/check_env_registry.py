@@ -20,6 +20,21 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 REGISTRY = REPO / "crates/felix-common/src/env_registry.rs"
 
+# Not variables at all. The detector matches any quoted FELIX_* literal in Rust,
+# and these are the TypeScript binding's error codes (`crates/felix-typescript`),
+# which ride on an error message and reach JavaScript as `err.code`. They are
+# public API, documented in that package's `index.d.ts` and README, so they are
+# named here rather than renamed to dodge a heuristic. Kept in step with the
+# same set in `check_env_reference.py`.
+NOT_VARIABLES = {
+    "FELIX_AUTH",
+    "FELIX_CONNECTION",
+    "FELIX_CURSOR",
+    "FELIX_ERROR",
+    "FELIX_INVALID",
+    "FELIX_NOT_FOUND",
+}
+
 
 def read_by_code() -> set[str]:
     out = subprocess.run(
@@ -56,7 +71,7 @@ def main() -> int:
     # `read_by_code` finds them too. That is what makes the two sets directly
     # comparable: a name in the registry is "read by the code" by construction,
     # and anything else in that set is read by something real.
-    expected = read_by_code()
+    expected = read_by_code() - NOT_VARIABLES
     listed = registered()
 
     missing = sorted(expected - listed)

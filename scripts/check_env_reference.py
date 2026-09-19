@@ -42,6 +42,20 @@ NOT_OPERATIONAL = {
     "FELIX_TEST_DATABASE_URL",
 }
 
+# Not variables at all. The detector matches any quoted FELIX_* literal in Rust,
+# and these are the TypeScript binding's error codes (`crates/felix-typescript`),
+# which ride on an error message and reach JavaScript as `err.code`. They are
+# public API, documented in that package's `index.d.ts` and README, so they are
+# named here rather than renamed to dodge a heuristic.
+NOT_VARIABLES = {
+    "FELIX_AUTH",
+    "FELIX_CONNECTION",
+    "FELIX_CURSOR",
+    "FELIX_ERROR",
+    "FELIX_INVALID",
+    "FELIX_NOT_FOUND",
+}
+
 
 def read_by_code() -> set[str]:
     out = subprocess.run(
@@ -85,11 +99,12 @@ def documented() -> set[str]:
 
 
 def main() -> int:
-    expected = read_by_code() - NOT_OPERATIONAL
+    read = read_by_code() - NOT_VARIABLES
+    expected = read - NOT_OPERATIONAL
     missing = sorted(expected - documented())
     # A variable that was renamed away leaves a stale entry, which sends an
     # operator to set something nothing reads.
-    stale = sorted(documented() - read_by_code() - NOT_OPERATIONAL)
+    stale = sorted(documented() - read - NOT_OPERATIONAL)
 
     for name in missing:
         print(f"\033[31mFAIL\033[0m {name} is read by the code and not documented")

@@ -160,9 +160,10 @@ claims to those subjects and evaluates role permissions:
 
 ## Will there be clients for other languages?
 
-Rust and Python ship today; Python is a binding over the Rust client rather
-than a reimplementation, and passes every required scenario in the client
-conformance catalogue. TypeScript, Go and C# are not started.
+Rust, Python and TypeScript ship today, the latter two as bindings over the
+Rust client rather than reimplementations. Both pass every required scenario in
+the client conformance catalogue, and CI is gated on it. Go and C# are not
+started.
 The wire protocol is language-neutral and documented precisely for this
 reason — see [Wire Protocol](/felix/architecture/wire-protocol/) — and a
 conformance runner exists to check an implementation against it.
