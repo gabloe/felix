@@ -34,6 +34,14 @@ pub(crate) enum Outgoing {
         request_id: u64,
         /// `None` acknowledges success; `Some` reports failure.
         error: Option<String>,
+        /// Set when the batch was forwarded, naming the shard's owner so the
+        /// client can send the next one straight there.
+        ///
+        /// Only ever populated for a client that advertised
+        /// `FLAG_BINARY_PUBLISH_ACK_OWNER`: the bit changes the ack's payload
+        /// layout, and a client that cannot parse it rejects the whole frame --
+        /// an acknowledgement for a publish that succeeded.
+        forwarded_to: Option<felix_wire::binary::PublishOwner>,
     },
 }
 
@@ -58,6 +66,20 @@ pub(crate) enum AckEncoding {
 impl AckEncoding {
     /// Build a success ack in this encoding.
     pub(crate) fn ok(self, request_id: u64) -> Outgoing {
+        self.ok_forwarded(request_id, None)
+    }
+
+    /// A success ack that names where the batch was forwarded, when it was.
+    ///
+    /// Only the binary encoding carries it. A JSON `PublishOk` has nowhere to
+    /// put it without changing a message every client parses, and the JSON path
+    /// is compatibility traffic that is not worth optimising -- a client on it
+    /// is already paying more than forwarding costs.
+    pub(crate) fn ok_forwarded(
+        self,
+        request_id: u64,
+        forwarded_to: Option<felix_wire::binary::PublishOwner>,
+    ) -> Outgoing {
         match self {
             AckEncoding::Json | AckEncoding::Idempotent => {
                 Outgoing::Message(Message::PublishOk { request_id })
@@ -65,6 +87,7 @@ impl AckEncoding {
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
                 error: None,
+                forwarded_to,
             },
         }
     }
@@ -82,6 +105,10 @@ impl AckEncoding {
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
                 error: Some(message),
+                // A failed publish has no owner worth caching: the batch did
+                // not land anywhere, so where it would have gone is not a
+                // route the client should adopt.
+                forwarded_to: None,
             },
         }
     }
@@ -166,6 +193,10 @@ pub(crate) enum AckWaiterResult {
         encoding: AckEncoding,
         payload_bytes: Vec<usize>,
         response: Result<Result<()>, oneshot::error::RecvError>,
+        /// Carried from the enqueue so a successful ack can name the owner a
+        /// forwarded batch went to. Resolved there rather than here because
+        /// that is where the routing decision was made.
+        forwarded_to: Option<felix_wire::binary::PublishOwner>,
     },
     PublishBatchTimeout {
         request_id: u64,
@@ -193,6 +224,9 @@ pub(crate) enum AckWaiterMessage {
         payload_bytes: Vec<usize>,
         response_rx: oneshot::Receiver<Result<()>>,
         permit: tokio::sync::OwnedSemaphorePermit,
+        /// The shard's owner, when this batch was forwarded to one and the
+        /// client advertised the flag bit that carries it.
+        forwarded_to: Option<felix_wire::binary::PublishOwner>,
     },
 }
 

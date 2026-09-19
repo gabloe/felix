@@ -116,7 +116,11 @@ pub(super) async fn run_writer_loop(
                             }
                         }
                     }
-                    Outgoing::PublishAck { request_id, error } => {
+                    Outgoing::PublishAck {
+                        request_id,
+                        error,
+                        forwarded_to,
+                    } => {
                         let sample = t_should_sample();
                         let write_start = t_now_if(sample);
                         // The ack's message field is u16-length on the wire. Bound it
@@ -124,8 +128,10 @@ pub(super) async fn run_writer_loop(
                         // ack unencodable — dropping an ack strands a client that is
                         // synchronously waiting for it.
                         let error = error.as_deref().map(truncate_ack_message);
-                        let bytes = match felix_wire::binary::encode_publish_ack_bytes(
-                            request_id, error,
+                        let bytes = match felix_wire::binary::encode_publish_ack_bytes_owned(
+                            request_id,
+                            error,
+                            forwarded_to.as_ref(),
                         ) {
                             Ok(bytes) => bytes,
                             Err(err) => {

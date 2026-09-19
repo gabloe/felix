@@ -11,12 +11,42 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
-**Wire protocol:** one new frame flag, `FLAG_BINARY_PUBLISH_KEYED` (`0x0040`).
-`VERSION` remains `1` and no feature bit is added. The bit is negotiated on the
-handshake, so a client and broker that disagree about it exchange the same bytes
-they did before.
+**Wire protocol:** two new frame flags, `FLAG_BINARY_PUBLISH_KEYED` (`0x0040`)
+and `FLAG_BINARY_PUBLISH_ACK_OWNER` (`0x0080`). `VERSION` remains `1` and no
+feature bit is added. Both are negotiated on the handshake, so a client and
+broker that disagree about either exchange the same bytes they did before.
 
 ### Added
+
+- **A forwarded publish says so on its ack, and names the shard's owner**
+  (#536). A publish for a shard the receiving broker does not own is forwarded
+  to the owner and acknowledged once the owner has written it. That is correct,
+  and it was invisible — so a client kept publishing to the same entry broker
+  forever while every record was decrypted, re-encrypted and decrypted again on
+  the way. A perf session put the cost at roughly half the throughput per core:
+  **~250 MB/s per busy vCPU direct against ~140 forwarded**.
+
+  `FLAG_BINARY_PUBLISH_ACK_OWNER` (`0x0080`) is a modifier on the publish ack,
+  the shape `FLAG_BINARY_PUBLISH_KEYED` established. The bit's presence is the
+  signal that forwarding happened; the payload carries the owner's `node_id`,
+  the address it serves *clients* on, and the ownership generation.
+
+  A hint, not a refusal: the publish already succeeded, so a client that ignores
+  it is exactly as correct as before, only as slow. That is what makes it safe
+  to add — nothing depends on a client acting on it. Only ever set for a client
+  that advertised the bit, and an ack with no owner is byte-identical to one
+  from before the bit existed.
+
+  Clients count it as `felix_client_publish_forwarded_total`, labelled by owner,
+  and `felix_client::publishes_forwarded()` exposes the same number without the
+  telemetry feature — the question "am I paying the forwarding tax" is worth
+  being able to ask of a build that was not compiled for measurement.
+
+  **Routing on the hint is not built yet.** Caching shard → owner and sending
+  the next batch straight there needs a connection per owner and a client-side
+  `shard_for(key)`, neither of which exists; that is its own change, and this is
+  what makes it measurable.
+
 
 - **A routing key rides in the binary publish frame** (#549). A keyed publish
   used to force the JSON encoding — the binary layouts were fixed and had

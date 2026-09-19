@@ -1885,6 +1885,9 @@ async fn handle_publish_batch_missing_request_id_returns_error() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -1937,6 +1940,9 @@ async fn handle_publish_batch_stream_not_found_sends_error() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2009,6 +2015,9 @@ async fn handle_publish_batch_enqueue_full_reports_error() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2080,6 +2089,9 @@ async fn handle_publish_batch_enqueue_ok_sends_ack() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2148,6 +2160,9 @@ async fn handle_publish_batch_message_drop_when_queue_full_and_ack_none() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2211,6 +2226,9 @@ async fn handle_publish_batch_message_enqueue_error_reports_publish_error() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2282,6 +2300,9 @@ async fn handle_publish_batch_message_ack_on_commit_sends_waiter_message() {
     let (ack_waiter_tx, mut ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2312,7 +2333,11 @@ async fn handle_publish_batch_message_ack_on_commit_sends_waiter_message() {
 
     let msg = ack_waiter_rx.recv().await.expect("waiter msg");
     match msg {
-        AckWaiterMessage::PublishBatch { request_id, .. } => {
+        AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
+            request_id,
+            ..
+        } => {
             assert_eq!(request_id, 46);
         }
         _ => panic!("unexpected waiter message"),
@@ -2334,6 +2359,9 @@ async fn handle_publish_batch_message_throttled_with_request_id_sends_error() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2390,6 +2418,9 @@ async fn handle_publish_batch_message_throttled_without_request_id_sends_error()
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2457,6 +2488,9 @@ async fn handle_publish_batch_message_ack_waiters_exhausted() {
     let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2530,6 +2564,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
     let permit = ack_waiters.clone().acquire_owned().await.expect("permit");
     ack_waiter_tx
         .try_send(AckWaiterMessage::PublishBatch {
+            forwarded_to: None,
             encoding: AckEncoding::Json,
             request_id: 99,
             payload_bytes: vec![1],
@@ -2539,6 +2574,9 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
         .expect("fill queue");
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -2611,6 +2649,9 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
     drop(ack_waiter_rx);
 
     handle_publish_batch_message(
+        // No client flags in a unit test: the ack owner hint is covered end to
+        // end against a real cluster, where there is a forward to hint about.
+        0,
         &broker,
         &publish_ctx,
         &mut cache,
@@ -3210,6 +3251,7 @@ mod idempotent_acks {
         assert!(matches!(
             AckEncoding::Binary.refuse(3, &err),
             Outgoing::PublishAck {
+                forwarded_to: _,
                 request_id: 3,
                 error: Some(_)
             }

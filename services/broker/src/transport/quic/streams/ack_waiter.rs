@@ -125,6 +125,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     payload_bytes,
                                     response_rx,
                                     permit,
+                                    forwarded_to,
                                 } => {
                                     // Wait for either:
                                     // - cancellation (return None), or
@@ -141,6 +142,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             encoding,
                                             payload_bytes,
                                             response,
+                                            forwarded_to,
                                         }),
                                         Err(_) => Some(AckWaiterResult::PublishBatchTimeout {
                                             request_id,
@@ -296,6 +298,7 @@ pub(super) async fn run_ack_waiter_loop(
                             request_id,
                             encoding,
                             payload_bytes,
+                            forwarded_to,
                             response,
                         } => {
                             // Batch variant: similar to Publish, but records bytes per message in the batch.
@@ -316,7 +319,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            encoding.ok(request_id),
+                                            encoding.ok_forwarded(request_id, forwarded_to),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,

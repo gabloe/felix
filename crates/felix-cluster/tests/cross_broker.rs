@@ -126,3 +126,50 @@ async fn a_stopped_broker_leaves_the_cluster() {
 
     cluster.shutdown().await;
 }
+
+/// **A forwarded publish says so on its ack, and a local one does not.**
+///
+/// Forwarding is correct and was invisible, and the invisibility is what cost:
+/// a client kept publishing to the same entry broker forever, and every record
+/// was decrypted, re-encrypted and decrypted again on the way -- roughly half
+/// the throughput per core (#536). The ack now names the owner, so a client can
+/// tell.
+///
+/// Both directions are asserted. A hint that fired on every publish would be as
+/// useless as one that never fired: it is the *difference* that tells a client
+/// its connection is landing in the wrong place.
+#[serial]
+#[tokio::test]
+async fn a_forwarded_publish_is_labelled_and_a_local_one_is_not() {
+    let cluster = Cluster::start(config()).await.expect("start cluster");
+    let (owner, non_owner) = cluster
+        .owner_and_non_owner(STREAM)
+        .await
+        .expect("resolve owner");
+
+    // Publishing to the owner: nothing was forwarded, so nothing to hint.
+    let before = felix_client::publishes_forwarded();
+    cluster
+        .publish_via(&owner, STREAM, b"local".to_vec())
+        .await
+        .expect("publish to the owner");
+    assert_eq!(
+        felix_client::publishes_forwarded(),
+        before,
+        "a publish the owner served itself was reported as forwarded, so the hint \
+         says nothing about where to send the next one",
+    );
+
+    // Through a broker that does not own the shard: forwarded, and said so.
+    cluster
+        .publish_via(&non_owner, STREAM, b"forwarded".to_vec())
+        .await
+        .expect("publish through a non-owner");
+    assert!(
+        felix_client::publishes_forwarded() > before,
+        "a publish forwarded from {non_owner} to {owner} was not labelled: the \
+         client cannot tell it is paying to relay every record",
+    );
+
+    cluster.shutdown().await;
+}

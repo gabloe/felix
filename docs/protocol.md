@@ -57,6 +57,7 @@ Field definitions:
   | `0x0010` | `BINARY_PUBLISH_ACK` | Payload is a binary publish acknowledgement (broker → client) |
   | `0x0020` | `EVENT_BATCH_OFFSETS` | Modifier on `0x0002` or `0x0004`: the batch carries a `base_offset` |
   | `0x0040` | `BINARY_PUBLISH_KEYED` | Modifier on `0x0001`: the batch carries a routing key prefix |
+  | `0x0080` | `BINARY_PUBLISH_ACK_OWNER` | Modifier on `0x0010`: the batch was forwarded, and the ack names the shard's owner |
 
   Because these bits change how the payload is parsed, a receiver MUST reject a
   frame carrying any bit it does not recognise rather than masking it off — see
@@ -607,6 +608,52 @@ This is the encoding for client publishes. JSON is reached only as the
 compatibility fallback described under
 [Publish / PublishBatch](#publish--publishbatch-compatibility-only) — a client
 does not choose it, it falls back to it.
+
+## Forwarded publish acks
+
+A publish for a shard the receiving broker does not own is **forwarded** to the
+owner and acknowledged once the owner has written it. That is correct, and it
+used to be invisible — so a client kept publishing to the same entry broker
+forever while every record was decrypted, re-encrypted and decrypted again on
+the way. A perf session put the cost at roughly half the throughput per core:
+~250 MB/s per busy vCPU direct against ~140 forwarded (#536).
+
+When `flags & 0x0080 != 0` (always together with `0x0010`), the ack names the
+owner, appended after the fields above:
+
+```
+u16 node_id_len
+u8[node_id_len] node_id
+u16 addr_len      (0 when the owner's client address is not published)
+u8[addr_len] addr
+u64 generation
+```
+
+The bit's **presence** is the signal that forwarding happened; the payload says
+where to send instead. It is a hint and not a refusal — the publish already
+succeeded, so a client that ignores it is exactly as correct as before, only as
+slow. That is what makes it safe to add: nothing depends on the client acting
+on it.
+
+An empty `addr` decodes as *absent*, not as an empty address. It means the
+cluster has not been told where clients reach that broker — the same gap
+`NotLeader` has, with the same consequence: the client learns who owns the shard
+but has nowhere to route to.
+
+`generation` is the ownership generation the answer was true for, so a client
+holding a cached owner can tell a newer answer from an older one rather than
+letting two brokers mid-rebalance overwrite each other.
+
+**Compatibility:** `0x0080` is only ever set for a client that advertised it in
+`Auth.client_flags`. A client that did not would reject the whole frame — an
+unknown flag bit is refused rather than masked off — and the frame it rejects
+acknowledges a publish that *succeeded*. An ack with no owner is byte-identical
+to one from before the bit existed.
+
+The JSON `PublishOk` carries no owner. It has nowhere to put one without
+changing a message every client parses, and the JSON path is compatibility
+traffic that is not worth optimising — a client on it is already paying more
+than forwarding costs.
 
 ## Binary keyed PublishBatch
 When `flags & 0x0040 != 0` (always together with `0x0001`), the publish batch body
