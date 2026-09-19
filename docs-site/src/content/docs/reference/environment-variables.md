@@ -846,15 +846,19 @@ Process-wide levers read by every Felix QUIC endpoint (broker, client, demos). S
 
 ### `FELIX_MTU_UPPER_BOUND`
 
-**Description**: Upper bound for QUIC path-MTU discovery. Probes are loss-tolerant, so the bound is safe on any network; discovery converges to the real path MTU at or below it. The default matches loopback/jumbo ceilings; small-message-dominated workloads may prefer `4096` (finer ACK clocking).
+**Description**: Upper bound for QUIC path-MTU discovery. Discovery converges to the real path MTU at or below it, so on a 1500-byte network the bound never binds.
+
+**Raising it above 6,553 on Linux will stall delivery.** Linux UDP GSO packs a whole `sendmsg` batch into one IP datagram, so `MTU × segments` must stay under 65,535, and quinn batches up to 10. Above that the kernel rejects every batch with `EMSGSIZE`, which quinn does not recognise as a GSO failure — it falls back only on `EIO`/`EINVAL` — so the transmit is dropped *after* quinn has counted it as sent, and the stall is permanent rather than degrading. This is not a throughput preference; it is the difference between working and not.
+
+The default was `16384` until 0.5.0, which is above that ceiling. It was harmless on a 1500-byte path and fatal on a jumbo-frame one, where discovery climbs past 6,553 — which is exactly the network you would buy for throughput. `4096` rather than the exact 6,553 because quinn's batch size is private to it and 6,553 breaks the moment it rises; 4,096 also measured fastest on Linux. macOS has no GSO and no such limit.
 
 **Type**: Positive integer (bytes, clamped to 1200–65527)
 
-**Default**: `16384`
+**Default**: `4096` (`16384` on macOS)
 
 ```bash
-export FELIX_MTU_UPPER_BOUND="16384"
-export FELIX_MTU_UPPER_BOUND="4096"   # small-message optimized
+export FELIX_MTU_UPPER_BOUND="4096"
+export FELIX_MTU_UPPER_BOUND="16384"  # macOS, or any path with no GSO
 ```
 
 ### `FELIX_INITIAL_MTU`
