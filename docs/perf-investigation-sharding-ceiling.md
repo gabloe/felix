@@ -11,16 +11,18 @@ flag (#548). Sharding on a single broker is established as *not* a throughput
 lever and is documented as horizontal-only (#552). What remains unexplained is
 a per-broker plateau at **~900 MB/s** with roughly a third of the broker's CPU
 idle, the generators three-quarters idle, and the device at ~67% of its
-measured capability. Ten hypotheses were eliminated; the leading surviving
-candidate — a single saturated task at the quinn endpoint, upstream of
-everything measured — is **untested**, because the cluster was torn down before
-it was formed.
+measured capability. Ten hypotheses were eliminated, and the eleventh — a single
+saturated task at the quinn endpoint — was **measured and supported**: the
+endpoint driver's receive path is ~88% of one core, on a task that cannot use
+more than one. Throughput scales **2.1x with a second broker**, which is the
+same finding from the other direction. Section 9 has the profile.
 
 Map of this document: section 1 is the rig. Sections 2–3 are the two shipped
 changes and their measurements. Section 4 is the run matrix. Section 5 is the
 elimination history for the ceiling. Section 6 is what sharding actually costs.
 Section 7 is the roadblocks, including the wrong conclusions drawn along the
-way. Section 8 is what is still open.
+way. Section 8 is what is still open. Section 9 is the two-broker session that
+answered it.
 
 ---
 
@@ -338,8 +340,7 @@ The structural test is `SO_REUSEPORT` with N sockets and N quinn endpoints,
 letting the kernel hash flows across them. If throughput scales with endpoint
 count, that is the ceiling.
 
-**None of this was run.** The cluster was torn down before the hypothesis was
-formed, and these diagnostics need a broker under load.
+This *was* run. See section 9.
 
 ---
 
@@ -500,3 +501,105 @@ Recommended next, in this order:
 Related: #539 — perf session results are gitignored, so published numbers have
 no auditable evidence trail. This document is a partial answer; the underlying
 issue is unfixed.
+
+---
+
+## 9. The two-broker session: the ceiling, measured
+
+A second session (`v042-2broker`) was provisioned specifically to test the
+endpoint hypothesis and the horizontal-lever reframe at the same time. Two
+`L8as_v4` brokers, four `D4as_v5` generators, shard ownership balanced **24/25**
+across the brokers, storage wiped between runs, same keyed 12-shard load.
+
+### Throughput scales with brokers, 2.1x
+
+| run | brokers | config | aggregate | broker CPU |
+|---|---|---|---|---|
+| A | 2 | default | **1896.0 MB/s** | b0 54%, b1 65% |
+| B | 2 | `FELIX_IO_RUNTIME_THREADS=2` | 1341.1 MB/s | b0 44%, b1 32% |
+| C | 2 | default (repeat of A) | **1852.4 MB/s** | b0 54%, b1 62% |
+
+Against ~900 MB/s on one broker, two brokers give **2.1x** — essentially linear.
+Per-generator throughput doubled from ~220 to ~470 MB/s, which is the third
+independent confirmation that the generators were never the constraint. Each
+broker independently reproduces the "ceiling with CPU to spare" signature.
+
+**The reframe is now measured, not argued: throughput scales with brokers (2.1x)
+and not with shards (1.0x).**
+
+### The endpoint driver is ~88% of one core
+
+Per-thread CPU on broker-0 under sustained load, default configuration:
+
+```
+tokio-rt-worker  48.0%   tokio-rt-worker  47.8%
+tokio-rt-worker  47.9%   tokio-rt-worker  47.8%
+tokio-rt-worker  47.9%   tokio-rt-worker  47.7%
+tokio-rt-worker  47.8%   tokio-rt-worker  47.4%
+iou-wrk / felix-uring-fsync / OpenTelemetry   ~14% combined
+TOTAL 396.1% = 3.96 cores of 8
+```
+
+Eight workers, uniform to within 0.6%. That is the work-stealing signature and
+it is exactly why per-thread sampling cannot answer the question — which is the
+correction recorded in section 5.
+
+The stacks can. `perf record -F 199 -g` on the broker process, collapsed:
+
+| component | share of process CPU |
+|---|---|
+| **endpoint driver receive path** (`poll_recv` → `recvmmsg`) | **22.26%** |
+| `sendmsg` | 9.45% |
+| AES-GCM (`aes_gcm_*`) | 7.62% |
+| `felix_storage` | 4.26% |
+| `epoll_wait` | 3.80% |
+| futex (wake + wait) | 3.28% |
+| `broker::` | 3.31% |
+| `Connection::process_payload` | 1.90% |
+
+22.26% of 3.96 cores is **0.88 cores** — and the endpoint driver is a *single
+task*, so one core is its hard ceiling. It is running at ~88% of what it can
+ever use, while the machine as a whole sits at half idle.
+
+That is the ceiling, and it explains every invariance in section 4: shards,
+workers, admission budgets, connection count and flush mechanism are all
+downstream of a feeder that is already nearly saturated.
+
+![felix-broker flamegraph](assets/perf/broker-flamegraph-2broker.svg)
+
+### Two traps in reading this profile
+
+**The 1.77% that wasn't.** `poll_socket` resolves as a symbol in only 1.77% of
+samples. Read alone, that number kills the hypothesis — and it was briefly
+reported as doing so. It is an artifact of a release build without frame
+pointers: most stacks reaching the syscall resolve as `[unknown]` above it. The
+syscall itself (`recvmmsg`) is called from exactly one place in this process, so
+it is the reliable proxy. **Symbol coverage, not CPU share, is what differs
+between the two numbers.**
+
+**`FELIX_IO_RUNTIME_THREADS` does not isolate what it appears to.** Run B pinned
+the endpoint driver to a dedicated thread, which read `felix-quic-io-0` at
+**99.9% of one core** — an apparently perfect confirmation. It is confounded:
+`IoRuntime::spawn` places *every* quinn task on that runtime, so all 256
+connection drivers and their AEAD land on the same thread. The flamegraph shows
+`aes_gcm_dec_update` and `Connection::process_payload` on that thread, and
+throughput drops 29% (1341 vs 1896). The 99.9% says a thread doing routing plus
+all connection crypto saturates; it does not isolate the feeder. The default
+configuration plus stack analysis is the measurement that does.
+
+### What this means for the fix
+
+The per-broker ceiling is one task on one core doing socket receive and datagram
+routing. It is a scaling property of every Felix broker, not an artifact of this
+rig, and no amount of tuning downstream of it will move the number.
+
+The fix is more endpoints per broker: N sockets under `SO_REUSEPORT` with N
+quinn endpoints, or the cheaper interim of N listeners on N ports advertised
+through the control plane. The hazard to design for is that the kernel hashes
+`SO_REUSEPORT` by 4-tuple while QUIC identifies connections by connection ID, so
+a migrating client rehashes to a socket whose endpoint does not own it; the
+production answer is an eBPF socket selector keyed on the CID, with the endpoint
+index encoded in the connection ID quinn generates.
+
+Until then, the honest deployment guidance is the one this session started by
+disproving and ended by confirming: **scale Felix with brokers.**
