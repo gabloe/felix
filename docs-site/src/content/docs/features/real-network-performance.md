@@ -532,22 +532,67 @@ Three things came out of it:
 - **The wall is never the disk.** Every broker-CPU breakdown under load showed
   **iowait ~0–1.7%**. The cost is user + system + **softirq** — QUIC/UDP packet
   processing and AEAD — never I/O wait. The NVMe always had headroom.
-- **The per-broker durable ceiling is the commit path, not cores.** Driven hard
-  against a single broker, durable OnCommit tops out at **~977 MB/s while the
-  broker sits at ~48% CPU** — more load just backs up behind the commit sequencer
-  (`publish queue full`), it does not use the idle cores. So durable throughput
-  scales by adding **brokers** (more commit paths), not by adding cores per
-  broker — consistent with the in-memory match above, where each of three brokers
-  ran well under that ceiling.
+- **The per-broker durable ceiling is the transport, not cores and not the
+  commit path.** Driven hard against a single broker, durable OnCommit tops out
+  with the broker at ~50% CPU — more load does not use the idle cores. That much
+  held up. The *reason* first published here did not: it was attributed to the
+  commit sequencer, and a later session killed that (see below). So durable
+  throughput scales by adding **brokers**, but not for the reason originally
+  given, and the difference matters — "more commit paths" implies more *shards*
+  would help, and they do not.
 
-Two honest limits surfaced with it. **Cross-broker forwarding is expensive:** a
-publish that lands on a non-owner broker is decrypted, re-encrypted to the owner,
-and decrypted again, so round-robin clients spend roughly **twice** the CPU per
-byte of clients that connect to the shard owner (~140 vs ~250 MB/s per vCPU). And
-**shard assignment did not balance** — the control plane put 48/0 of the shards on
-one of two brokers (and 11/5/8 on three), leaving brokers idle and capping any
-clean multi-broker aggregate. Fixing that assignment is the prerequisite for a
-balanced cluster-ceiling number, and is the honest reason one isn't quoted here.
+Two honest limits surfaced with it, both since addressed. **Cross-broker
+forwarding is expensive:** a publish that lands on a non-owner broker is
+decrypted, re-encrypted to the owner, and decrypted again, so round-robin clients
+spent roughly **twice** the CPU per byte of clients connected to the shard owner
+(~140 vs ~250 MB/s per vCPU). The ack now names the owner and `ClusterClient`
+routes the next batch straight there, so a client pays that once per shard rather
+than on every record. And **shard assignment did not balance** — the control
+plane put 48/0 of the shards on one of two brokers (and 11/5/8 on three), which
+is why no balanced multi-broker number was quoted here at the time. One has since
+been measured; it is in the next section.
+
+## Sizing: add brokers, not shards
+
+One broker holds 842–926 MB/s durable. A second takes it to 1,896. Twelve
+shards on one broker change nothing.
+
+Those numbers come from a session that drove the broker with four generators.
+Earlier sessions used one, and a `D4as_v5` generator tops out near 1,050 MB/s.
+That is close enough to the broker's own limit that neither could be separated
+from the other, and the ~977 MB/s quoted above is one of those figures.
+
+| axis | measured | |
+|---|---|---|
+| one broker | 842–926 MB/s across every valid run | broker ≤69% busy, generators ≤31% |
+| a second broker | 1,896 MB/s (repeat: 1,852) | 2.1x |
+| more shards on one broker | within run-to-run spread of one shard | 1.0x |
+
+Shard count, connection count, flush mechanism, worker count and admission
+budget all moved the single-broker number by less than the 3% that two
+identical runs differed by.
+
+Shards spread work across brokers. On one broker they share a socket, a CPU and
+a filesystem, so there is nothing for them to win.
+
+Size on ~900 MB/s durable per broker (8 vCPU, local NVMe, `on_commit`) and add
+brokers from there. A faster disk or more cores per node will not move it. At
+the ceiling the broker used 3.96 of 8 cores, iowait sat at 2%, and the device
+was running at two-thirds of its `fdatasync` capability.
+
+The limit is one task. Every inbound datagram goes through a single `quinn`
+endpoint driver that reads the socket and routes by connection id, and it
+measured at 88% of one core. A second broker brings its own socket and its own
+driver. Shards do not.
+
+One warning before you reach for a knob: `FELIX_IO_RUNTIME_THREADS=2` measured
+1,341 MB/s where the default gave 1,896, on the same two brokers. Isolating the
+drivers helps on macOS and hurts on Linux, which is why Linux defaults it off.
+
+Method, the hypotheses that were tested and discarded, and the flamegraph are
+in [`docs/perf-investigation-sharding-ceiling.md`](https://github.com/gabloe/felix/blob/main/docs/perf-investigation-sharding-ceiling.md).
+The raw session output is under
+[`scripts/perf/azure/sessions/`](https://github.com/gabloe/felix/tree/main/scripts/perf/azure/sessions).
 
 ## What we found and fixed
 

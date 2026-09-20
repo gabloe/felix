@@ -12,6 +12,17 @@ against the published D4ads number.
 
 **1. Did the commit path stop being the ceiling?**
 
+> **Corrected 2026-09-20.** It was never the ceiling. `CommitSequencer` is
+> keyed per (stream, shard), so twelve shards is twelve independent commit
+> paths, and throughput does not move with shard count. The wall is one `quinn`
+> endpoint driver at ~88% of one core (#557, and
+> `docs/perf-investigation-sharding-ceiling.md`). The ~977 MB/s figure was also
+> taken with a single generator that tops out near 1,050 MB/s, so it could not
+> separate the broker's limit from the instrument's; with four generators the
+> band is 842–926 MB/s. The question is left as it was asked. #511 was a real
+> improvement and the reasoning still reads, but it was answering the wrong
+> question.
+
 The NVMe session recorded a hard wall: driven against a single broker, durable
 `OnCommit` topped out at **~977 MB/s while the broker sat at ~48% CPU**. More
 load backed up behind the commit sequencer as `publish queue full` rather than

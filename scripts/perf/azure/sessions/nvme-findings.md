@@ -33,6 +33,25 @@ disk (0.75-1.5 GB/s write/broker) always had headroom.
 
 ## 3. Per-broker durable ceiling = the group-commit path, ~977 MB/s at ~48% CPU
 
+> **Corrected 2026-09-20.** Both halves of the conclusion below are wrong. The
+> section is left as it was written; the reasoning is part of the record.
+>
+> It is not the commit sequencer. `CommitSequencer` lives on `StreamState`,
+> keyed per (stream, shard), so twelve shards is twelve independent commit
+> paths and throughput did not move. Discarded in
+> `docs/perf-investigation-sharding-ceiling.md` (#552). The ceiling is one
+> `quinn` endpoint driver, a single task at ~88% of one core (#557).
+>
+> The number was the instrument. A `D4as_v5` generator tops out near
+> 1,050 MB/s, so one generator could not tell the broker's limit from its own.
+> With four generators the band is 842–926 MB/s, broker ≤69% busy, generators
+> ≤31%.
+>
+> The prediction held anyway: throughput does scale with brokers. It scales
+> because each broker has its own socket and its own endpoint driver, not
+> because each has its own commit path. "More commit paths" would mean more
+> shards help. They measure at 1.0x.
+
 nvme2, all shards on one L8as_v4 broker (see #5), single loadgen direct:
 
 | Concurrency | 1 | 4 | 8 | 16 | 24 | 32 |

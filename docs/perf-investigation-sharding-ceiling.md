@@ -503,9 +503,10 @@ Recommended next, in this order:
    published unkeyed. Aggregate broker numbers are probably sound; anything
    characterising sharding or client tuning is not.
 
-Related: #539 — perf session results are gitignored, so published numbers have
-no auditable evidence trail. This document is a partial answer; the underlying
-issue is unfixed.
+Related: #539 — perf session results were gitignored, so published numbers had
+no auditable evidence trail. Fixed: the ignore rule was narrowed to
+`sessions/*.env`, and the session output behind these numbers is committed
+under `scripts/perf/azure/sessions/`.
 
 ---
 
