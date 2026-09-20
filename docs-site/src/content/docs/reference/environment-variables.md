@@ -31,6 +31,42 @@ export FELIX_QUIC_BIND="10.0.1.5:5000"   # Specific interface
 - Must be a valid IP:Port combination
 - UDP port for QUIC transport
 - Use `0.0.0.0` to bind all interfaces
+- With `FELIX_QUIC_LISTENERS` above 1, this is the **first** port of a
+  consecutive run
+
+### `FELIX_QUIC_LISTENERS`
+
+**Description**: How many client-facing QUIC listeners to bind, on consecutive
+ports starting at `FELIX_QUIC_BIND`.
+
+**Type**: Integer (at least 1)
+
+**Default**: `1`
+
+**Example**:
+```bash
+export FELIX_QUIC_BIND="0.0.0.0:5000"
+export FELIX_QUIC_LISTENERS=4          # binds 5000, 5001, 5002, 5003
+```
+
+**Notes**:
+- **Why it exists**: one UDP socket is one QUIC endpoint, and that endpoint's
+  driver is a single task that reads every inbound datagram and routes it by
+  connection id. It cannot use more than one core, and it is the per-broker
+  throughput ceiling — measured at ~88% of one core while the rest of the
+  machine idled. Separate ports are separate sockets, which are separate
+  drivers.
+- The broker advertises the port set during authentication, and a client
+  spreads its connection pools across it. A client that predates this ignores
+  the advertisement and keeps using the single address it dialled.
+- Every port in the range must be open in firewalls, security groups and
+  service definitions — not just `FELIX_QUIC_BIND`.
+- `FELIX_INTERNAL_BIND` must sit outside the range. Startup fails if it does
+  not, since peer traffic and client traffic must not share a listener.
+- Startup also fails if the range would run past port 65535, rather than
+  binding fewer listeners than asked for.
+- Adding brokers remains the horizontal lever; this raises what one broker can
+  do before you need another.
 
 ### `FELIX_TLS_CERT_EXPORT`
 

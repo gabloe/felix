@@ -55,6 +55,11 @@ param brokerDataDiskGib int = 128
 @description('Put the broker durable log on the SKU\'s ephemeral local disk instead of a Premium managed disk. For a Dadsv5-class SKU (e.g. Standard_D4ads_v5) this bypasses the managed-disk throughput cap that makes durable ingest disk-bound at ~170 MB/s on Premium SSD. Ephemeral, which is fine for a benchmark. When true, no managed data disk is attached and the broker mounts /dev/disk/azure/resource at /data.')
 param useLocalNvme bool = false
 
+@description('How many client-facing QUIC listeners each broker binds, on consecutive ports from 5000. One socket is one quinn endpoint driver, and that driver is a single task on a single core -- the per-broker throughput ceiling. More listeners spread inbound datagrams across more drivers. The internal listener is at 7000 and is clear of any sane range.')
+@minValue(1)
+@maxValue(64)
+param brokerListeners int = 1
+
 var prefix = 'felixperf'
 var vnetCidr = '10.60.0.0/24'
 
@@ -77,9 +82,11 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '22'
         }
       }
-      // Intra-VNet traffic (QUIC 5000/udp, internal 7000/udp, CP 8080/tcp,
+      // Intra-VNet traffic (QUIC 5000/udp and up -- a broker may bind a run of
+      // consecutive client listeners -- internal 7000/udp, CP 8080/tcp,
       // metrics 9<xx>) rides the default AllowVnetInBound rule; nothing else
-      // is opened. The operator drives the session with `az vm run-command`
+      // is opened. That rule is port-agnostic, so widening the listener range
+      // needs no NSG change. The operator drives the session with `az vm run-command`
       // (HTTPS to the Azure control plane), so no inbound port is needed for
       // orchestration; this SSH rule exists only so a human CAN open a shell
       // for debugging from their own address (never 0.0.0.0/0).
@@ -117,7 +124,8 @@ var brokerInit = base64(format(
   loadTextContent('cloudinit/broker.yaml'),
   releaseUrl,
   controlPlaneNic.properties.ipConfigurations[0].properties.privateIPAddress,
-  useLocalNvme ? '1' : '0'
+  useLocalNvme ? '1' : '0',
+  string(brokerListeners)
 ))
 var controlPlaneInit = base64(format(
   loadTextContent('cloudinit/controlplane.yaml'),

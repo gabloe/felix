@@ -89,6 +89,25 @@ pub enum Message {
         /// so a client must never send one speculatively.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server_features: Option<u32>,
+        /// Every port this broker's client-facing listeners are bound to,
+        /// when it has more than one.
+        ///
+        /// A broker binds N UDP sockets to lift the single endpoint-driver
+        /// ceiling: one socket is one `quinn` endpoint, and its driver is a
+        /// single task reading every datagram for that socket. Spreading a
+        /// client's connection pool across the ports spreads it across
+        /// drivers, which is the whole point of binding more than one.
+        ///
+        /// Absent for a broker with a single listener -- which is the default,
+        /// so the common case stays byte-identical on the wire. A client that
+        /// does not understand this field ignores it and keeps using the one
+        /// address it dialled, which is exactly what it does today.
+        ///
+        /// Ports only: the host is the one the client already connected to.
+        /// Sending addresses would let a broker redirect a client elsewhere
+        /// during auth, which is a much larger claim than "I also listen here".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        listener_ports: Option<Vec<u16>>,
     },
     /// This broker does not own the shard; the owner is named here.
     ///

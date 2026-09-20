@@ -79,6 +79,7 @@ deployment=$(az deployment group create \
     loadgenCount="${LOADGEN_COUNT:-1}" \
     brokerVmSize="${BROKER_VM_SIZE:-Standard_D4as_v5}" \
     useLocalNvme="${USE_LOCAL_NVME:-false}" \
+    brokerListeners="${BROKER_LISTENERS:-1}" \
     sshPublicKey="$(cat "${SSH_KEY_FILE}")" \
     allowedSshCidr="${my_ip}/32" \
     bootstrapToken="${bootstrap_token}" \

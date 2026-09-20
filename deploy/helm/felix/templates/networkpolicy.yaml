@@ -36,8 +36,10 @@ spec:
         {{- end }}
       {{- end }}
       ports:
+        {{- range $offset := until (int (default 1 $b.ports.listeners)) }}
         - protocol: UDP
-          port: {{ int $b.ports.client }}
+          port: {{ add (int $b.ports.client) $offset }}
+        {{- end }}
     # Scrapers and probes.
     - {{- if $np.metricsNamespaceSelectors }}
       from:

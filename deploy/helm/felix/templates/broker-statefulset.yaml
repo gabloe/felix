@@ -6,6 +6,14 @@
 {{- $image := include "felix.image" (dict "root" . "image" $b.image) }}
 {{- $clientPort := int $b.ports.client }}
 {{- $internalPort := int $b.ports.internal }}
+{{- $listeners := int (default 1 $b.ports.listeners) }}
+{{- if lt $listeners 1 }}
+  {{- fail "broker.ports.listeners must be at least 1" }}
+{{- end }}
+{{- $lastClientPort := add $clientPort $listeners -1 }}
+{{- if and (ge $internalPort $clientPort) (le $internalPort $lastClientPort) }}
+  {{- fail (printf "broker.ports.internal (%d) falls inside the client listener range %d-%d; move it outside" $internalPort $clientPort $lastClientPort) }}
+{{- end }}
 {{- $metricsPort := int $b.ports.metrics }}
 {{- /*
 A broker's pod name is its node id: the identity it registers with, the name
@@ -65,9 +73,11 @@ spec:
           image: {{ $image | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: quic
-              containerPort: {{ $clientPort }}
+            {{- range $offset := until $listeners }}
+            - name: {{ if eq $offset 0 }}quic{{ else }}quic-{{ $offset }}{{ end }}
+              containerPort: {{ add $clientPort $offset }}
               protocol: UDP
+            {{- end }}
             - name: internal
               containerPort: {{ $internalPort }}
               protocol: UDP
@@ -93,6 +103,8 @@ spec:
               value: {{ $b.region | quote }}
             - name: FELIX_QUIC_BIND
               value: "0.0.0.0:{{ $clientPort }}"
+            - name: FELIX_QUIC_LISTENERS
+              value: {{ $listeners | quote }}
             - name: FELIX_INTERNAL_BIND
               value: "0.0.0.0:{{ $internalPort }}"
             # Peers are told an IP: the broker requires one, and a replaced

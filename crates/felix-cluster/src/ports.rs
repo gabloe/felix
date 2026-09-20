@@ -20,3 +20,27 @@ pub fn free_udp() -> Result<SocketAddr> {
     let socket = UdpSocket::bind("127.0.0.1:0").context("bind ephemeral UDP port")?;
     socket.local_addr().context("read UDP port")
 }
+
+/// A run of `count` consecutive free UDP ports on loopback.
+///
+/// A broker with several client listeners binds consecutive ports, so the
+/// harness has to hand it a base with room after it. The OS will not allocate a
+/// run, so this probes: take an ephemeral port as the base and try to bind the
+/// rest, starting over if any is taken. The same close-then-rebind window as
+/// [`free_udp`] applies, which is why start-up retries.
+pub fn free_udp_run(count: usize) -> Result<SocketAddr> {
+    const ATTEMPTS: usize = 50;
+    for _ in 0..ATTEMPTS {
+        let base = free_udp()?;
+        let Some(last) = base.port().checked_add(count as u16 - 1) else {
+            continue;
+        };
+        let held: Vec<_> = (base.port()..=last)
+            .map_while(|port| UdpSocket::bind(("127.0.0.1", port)).ok())
+            .collect();
+        if held.len() == count {
+            return Ok(base);
+        }
+    }
+    anyhow::bail!("no run of {count} consecutive free UDP ports after {ATTEMPTS} attempts")
+}
