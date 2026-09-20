@@ -71,6 +71,15 @@ pub struct BrokerNode {
 }
 
 impl BrokerNode {
+    /// This broker's process id, while it is running.
+    ///
+    /// For measurement: attributing CPU to the broker rather than to the
+    /// process driving it is the difference between "the broker is the
+    /// bottleneck" and "the generator is".
+    pub fn pid(&self) -> Option<u32> {
+        self.process.as_ref().map(|child| child.id())
+    }
+
     pub fn is_running(&self) -> bool {
         self.process.is_some()
     }
