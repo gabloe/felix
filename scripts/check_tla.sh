@@ -64,7 +64,8 @@ expectations=(
   "FelixShardLogOrder pass"
   "FelixShardThinMargin violates AtMostOneServing"
   "FelixShardNoCommitCheck violates NoStaleCommit"
-  "FelixShard violates AckedSurvive"
+  "FelixShardNoReportOrder violates AckedSurvive"
+  "FelixShard pass"
 )
 
 fetch_tools
