@@ -202,6 +202,31 @@ pub(crate) async fn require_cluster_action(
     }
 }
 
+/// This instance cannot say whether the token is good.
+///
+/// Distinct from `401 invalid token` on purpose. A 401 is a statement about
+/// the caller's credential and sends whoever reads it to re-mint, re-auth, or
+/// suspect their identity provider. This says the *server* cannot verify right
+/// now, which is a different remedy: try another instance, or try again.
+///
+/// 503 rather than 500 for the same reason `/v1/system/ready` answers 503 --
+/// it is a statement about this instance at this moment, and a load balancer
+/// taking it out of rotation is the correct response rather than something to
+/// alert on.
+pub(crate) fn cannot_verify(detail: &str) -> ApiError {
+    metrics::counter!(AUTH_REJECTED_TOTAL, "reason" => "cannot_verify").increment(1);
+    tracing::warn!(
+        detail,
+        "cannot verify a credential: this instance does not hold the tenant's \
+         signing keys and is not ready to serve",
+    );
+    crate::api::error::api_error(
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "cannot_verify",
+        &format!("this instance cannot verify credentials right now: {detail}"),
+    )
+}
+
 async fn verify_against(
     state: &AppState,
     tenant_id: &str,
@@ -209,9 +234,21 @@ async fn verify_against(
 ) -> Result<FelixClaims, ApiError> {
     let keys = match state.store.get_tenant_signing_keys(tenant_id).await {
         Ok(keys) => keys,
-        // No keys means nothing could have signed this token.
+        // No keys means nothing could have signed this token -- *if* this
+        // instance holds the cluster's state. On one that does not, it means
+        // "I do not know yet", and the token may be perfectly good: a member
+        // whose volume was replaced holds no keys until they replicate in,
+        // and answering 401 there tells a caller to fix a credential that is
+        // not broken (#601).
+        //
+        // So the answer depends on whether this instance can serve at all.
+        // Asked only here, on a path that is already failing, and the check is
+        // cached and bounded -- a probe must not cost a round trip.
         Err(StoreError::NotFound(_)) => {
-            return Err(refused(Refusal::InvalidToken, "invalid token"));
+            return Err(match state.readiness.check().await {
+                Ok(()) => refused(Refusal::InvalidToken, "invalid token"),
+                Err(reason) => cannot_verify(&reason.to_string()),
+            });
         }
         Err(ref err) => return Err(api_internal("failed to load signing keys", err)),
     };
@@ -239,4 +276,89 @@ fn unverified_tenant(token: &str) -> Result<String, ApiError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| refused(Refusal::MalformedToken, "token has no tenant claim"))
+}
+
+#[cfg(test)]
+mod not_ready_tests {
+    use super::*;
+    use crate::api::types::{FeatureFlags, Region};
+    use crate::readiness::{HealthProbe, Readiness};
+    use crate::store::memory::InMemoryStore;
+    use crate::store::{ControlPlaneStore, StoreConfig};
+    use std::sync::Arc;
+
+    /// A store that is up but holds nothing the group holds -- a member whose
+    /// volume was replaced and has not caught up.
+    struct NeverReady;
+
+    #[async_trait::async_trait]
+    impl HealthProbe for NeverReady {
+        async fn health_check(&self) -> crate::store::StoreResult<()> {
+            Err(crate::store::StoreError::Unexpected(anyhow::anyhow!(
+                "joined an established group; nothing replicated into this member yet"
+            )))
+        }
+    }
+
+    fn state_with(probe: Arc<dyn HealthProbe>) -> AppState {
+        let store = InMemoryStore::new(StoreConfig {
+            changes_limit: crate::config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: Some(crate::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+        });
+        AppState {
+            region: Region {
+                region_id: "local".to_string(),
+                display_name: "Local".to_string(),
+            },
+            api_version: "v1".to_string(),
+            features: FeatureFlags {
+                durable_storage: store.is_durable(),
+                tiered_storage: false,
+                bridges: false,
+            },
+            store: Arc::new(store),
+            oidc_validator: crate::auth::oidc::UpstreamOidcValidator::default(),
+            bootstrap_enabled: false,
+            bootstrap_tokens: Vec::new(),
+            node_liveness: Default::default(),
+            readiness: Arc::new(Readiness::new(probe)),
+            in_flight: Default::default(),
+        }
+    }
+
+    /// **A member that cannot verify says so, rather than blaming the token.**
+    ///
+    /// The tenant's signing keys are missing because this instance holds none
+    /// of the group's state yet. The credential may be perfectly good, and
+    /// answering 401 sends whoever reads it after a fault that is not there.
+    #[tokio::test]
+    async fn a_member_that_has_not_caught_up_cannot_verify_rather_than_refusing() {
+        let state = state_with(Arc::new(NeverReady));
+        let err = verify_against(&state, "acme", "not-a-real-token")
+            .await
+            .expect_err("no keys for this tenant");
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "a member that cannot verify must not answer 401",
+        );
+    }
+
+    /// **A ready member still refuses an unknown tenant.** The fix must not
+    /// turn a genuine authentication failure into a retryable one, or a bad
+    /// credential becomes an infinite retry loop.
+    #[tokio::test]
+    async fn a_ready_member_still_refuses_a_token_it_cannot_verify() {
+        let state = state_with(Arc::new(crate::readiness::AlwaysReady));
+        let err = verify_against(&state, "acme", "not-a-real-token")
+            .await
+            .expect_err("no keys for this tenant");
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::UNAUTHORIZED,
+            "an instance holding the group's state knows this token is bad",
+        );
+    }
 }

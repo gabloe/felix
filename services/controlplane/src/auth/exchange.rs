@@ -86,7 +86,14 @@ pub async fn exchange_token(
         .await
         .map_err(|err| api_internal("failed to load issuers", &err))?;
     if issuers.is_empty() {
-        return Err(api_forbidden("no issuers configured"));
+        // Same ambiguity as a missing signing key on the bearer path: a tenant
+        // with no issuers and a tenant this instance has not learned about yet
+        // look identical from here. "No issuers configured" sends an operator
+        // to the tenant's IdP settings, which are fine (#601).
+        return Err(match state.readiness.check().await {
+            Ok(()) => api_forbidden("no issuers configured"),
+            Err(reason) => crate::auth::bearer::cannot_verify(&reason.to_string()),
+        });
     }
 
     let validated = match state.oidc_validator.validate(bearer, &issuers).await {
