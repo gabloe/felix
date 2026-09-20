@@ -12,18 +12,16 @@ what the conformance suite does about it.
 
 ## Installing
 
-Not published to PyPI yet. The release pipeline builds a wheel for each
-platform and attaches it to the GitHub release, so installing needs no Rust
-toolchain — point `pip` at the wheel for your platform:
-
 ```bash
-pip install https://github.com/gabloe/felix/releases/download/v0.5.0/felix_client-0.5.0-<tag>.whl
+pip install felix-client
 ```
 
-The PyPI step is written and behind an explicit switch, for the same reason the
-npm one is: the name is permanent once claimed.
+Wheels ship compiled, one per platform, for every Python from 3.9 up — so
+installing needs no Rust toolchain. Linux (x86-64 and arm64), macOS (Intel and
+Apple silicon) and Windows x86-64 are covered; anything else builds from the
+sdist and does need one.
 
-Building from the repository needs a Rust toolchain:
+Building from the repository needs a Rust toolchain either way:
 
 ```bash
 pip install ./crates/felix-python

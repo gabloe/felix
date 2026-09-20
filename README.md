@@ -162,8 +162,9 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   leaves the cluster
 - Tiered storage, cross-region bridges, encryption at rest, and audit logging
 - Clients beyond Rust, Python and TypeScript. All three wrap the same
-  implementation, and the conformance catalogue is what the next language is
-  gated on
+  implementation and publish under the same name — `felix-client` on
+  crates.io, PyPI and npm — and the conformance catalogue is what the next
+  language is gated on
 
 The [status table](https://gabloe.github.io/felix/getting-started/what-felix-is-for/)
 is kept current per capability and is the page to trust when another disagrees.

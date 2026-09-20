@@ -13,24 +13,31 @@ new languages are gated on a conformance suite.
 
 ## Installation
 
-Add Felix client to your `Cargo.toml`:
+```bash
+cargo add felix-client
+```
+
+Or in `Cargo.toml`:
 
 ```toml
 [dependencies]
-felix-client = "0.1"
-felix-common = "0.1"  # For error types and shared utilities
+felix-client = "0.5"
+felix-common = "0.5"  # error types and shared identifiers
 ```
 
 Optional features:
 
 ```toml
 [dependencies]
-felix-client = { version = "0.1", features = ["telemetry"] }
+felix-client = { version = "0.5", features = ["telemetry"] }
 ```
 
 **Features**:
 
-- `telemetry`: Enable per-operation timing and frame counters (adds overhead)
+- `telemetry`: per-operation timing and frame counters (adds overhead)
+- `in-process`: embeds a broker directly, for tests without a network. Pulls in
+  AGPL-3.0 code; the default build does not. See
+  [LICENSING.md](https://github.com/gabloe/felix/blob/main/LICENSING.md)
 
 ## Quick Start
 
@@ -929,7 +936,7 @@ Compile with telemetry feature:
 
 ```toml
 [dependencies]
-felix-client = { version = "0.1", features = ["telemetry"] }
+felix-client = { version = "0.5", features = ["telemetry"] }
 ```
 
 ### Collecting Metrics

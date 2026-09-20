@@ -13,6 +13,23 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **The docs said the clients were not installable.** They are: `felix-client`
+  is on crates.io, PyPI and npm, the same name on all three. The client pages
+  still told readers to point `pip` at a release asset, to build the Node addon
+  from a checkout, and to depend on `felix-client = "0.1"` — a version that was
+  never published.
+
+  Now `cargo add felix-client`, `pip install felix-client`, `npm install
+  felix-client`, with the platform coverage each one actually has. The status
+  table's client row said TypeScript "is not published to npm", which mattered
+  more than the rest: that table is the page every other page defers to.
+
+  The binding READMEs gained an install section too. They are what npm and PyPI
+  render on the package page, and neither said how to install the package it
+  was describing.
+
+### Fixed
+
 - **`npm stage publish` cannot claim a name either**, so the staging path added
   for that purpose does not work for a package that has never been published:
 
