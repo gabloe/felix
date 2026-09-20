@@ -44,19 +44,48 @@
 //!   with ~13 idle. The ceiling this lifts is a *single task pegged at one
 //!   core*; a broker at 2.5 cores spread across many is not hitting it, so
 //!   adding drivers has nothing to relieve.
-//! - **The generator is the limiter, and it is in this process.** Client CPU
-//!   pins at 1.08 cores and throughput at ~770 MiB/s whether 4 publishers or 32
-//!   are running -- an 8x load increase moving neither. #557's session used
-//!   three separate generator VMs for exactly this reason.
+//! - **The generator is the limiter, and one thread of it.** `io_runtime_index`
+//!   sends *every* client endpoint to `pool_len - 1`, a runtime built with
+//!   `worker_threads(1)`. So all 16 clients here, each with its own socket,
+//!   funnel their QUIC drivers onto one thread -- measured at **99.7%** while
+//!   the next busiest client thread is 3.4%. That is why 4 publishers and 32
+//!   publishers give identical throughput and identical 1.08 cores: the
+//!   measurement was one saturated client thread throughout. More load in this
+//!   process cannot help; #557's session used three separate generator VMs.
+//!
+//!   `FELIX_IO_RUNTIME_THREADS=0` moves those drivers to the app runtime, where
+//!   they spread but pay the cross-thread wakeup cost documented on
+//!   `io_runtime_handle` -- net *lower* throughput (542 vs 774 MiB/s), still
+//!   client-bound.
 //! - **`AckMode::None` makes the client-side counter an enqueue rate, not a
 //!   throughput.** `client-sent` reads ~770 MiB/s while the broker's own
 //!   `felix_storage_append_bytes_total` reads ~543 MiB/s over the same window.
 //!   Only the broker-side number is real; that gap is work the client handed
 //!   off and the broker never stored.
 //!
+//! Ruled out on the way: storage bandwidth (the temp device does 4.19 GB/s, 7x
+//! the observed rate), broker admission (a 1 GiB `FELIX_BROKER_PUBLISH_INFLIGHT_BYTES`
+//! changed nothing -- 511 vs 520 MiB/s stored) and fsync (`none` is worth ~25%,
+//! not the wall).
+//!
 //! So the honest reading is that this host cannot discriminate. To settle #558
 //! the load has to come from separate machines, on Linux, against a broker
 //! driven hard enough that one endpoint driver is actually the constraint.
+//!
+//! # The finding that does matter
+//!
+//! For servers `io_runtime_index` is `sequence % (pool_len - 1)`, and the macOS
+//! default pool is 2 -- so `sequence % 1`, which is **always 0**. Every listener
+//! a broker binds lands on the same I/O thread, measured here as the broker's
+//! 79.5% thread while its others sat at ~35%. The pool defeats the feature
+//! before it can help.
+//!
+//! Linux defaults the pool to 0, so drivers go to the app runtime and tokio
+//! spreads them, which is why this does not invalidate the design. But any
+//! deployment setting `FELIX_IO_RUNTIME_THREADS` >= 1 with a pool of 2 gets one
+//! driver thread however many ports it binds. Tracked separately; the Azure
+//! session should measure `FELIX_IO_RUNTIME_THREADS` in {0, N+1} rather than
+//! discover it as a null result.
 //!
 //! One thing worth carrying into that session: broker-stored throughput drifted
 //! *down* slightly as listeners rose (543 -> 527 -> 499 -> 485 MiB/s). Within
