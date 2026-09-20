@@ -46,6 +46,11 @@ for what the current release actually guarantees.
   platform package carry an `.npmrc` naming the public registry, the way
   `docs-site` already did for resolution.
 
+  It falls back to plain HTTPS when `gh` is absent, so it runs in Azure Cloud
+  Shell and other minimal environments — which is where publishing is likely to
+  happen, since a corporate network cannot reach npm at all. The release is
+  public, so there is nothing to authenticate to.
+
   The script also checks, before it downloads or packs anything, that the
   public registry is reachable and that you are logged in to *it* rather than
   to a mirror. A corporate network usually cannot reach npm at all, and finding
