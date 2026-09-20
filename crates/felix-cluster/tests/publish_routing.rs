@@ -106,3 +106,69 @@ async fn a_forwarded_publish_teaches_the_client_where_to_send_the_next_one() {
 
     cluster.shutdown().await;
 }
+
+/// **Keyed publishes across a multi-shard stream stop forwarding too.**
+///
+/// A key's shard is a hash the client now computes with the same function the
+/// broker routes with, so each shard's owner gets its own cache entry. Twelve
+/// shards over three brokers means most keys start off forwarded; once every
+/// shard in play has been learned, none are.
+#[serial]
+#[tokio::test]
+async fn keyed_publishes_learn_each_shard_owner() {
+    const KEYED: &str = "keyed";
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::new(KEYED, 12)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+
+    let (_owner, non_owner) = cluster
+        .owner_and_non_owner(KEYED)
+        .await
+        .expect("owner and non-owner");
+    let node = cluster.node(&non_owner).expect("node");
+    let client = felix_cluster::client::connect_cluster(
+        &[node.client_addr],
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await
+    .expect("connect");
+
+    let keys: Vec<String> = (0..12).map(|i| format!("customer-{i}")).collect();
+    let publish = async |key: &str, body: String| {
+        client
+            .publish_keyed(
+                &cluster.tenant_id,
+                &cluster.namespace,
+                KEYED,
+                body.into_bytes(),
+                bytes::Bytes::from(key.to_string().into_bytes()),
+                AckMode::PerMessage,
+            )
+            .await
+    };
+
+    // First pass: every shard is cold, so these are the ones that teach.
+    for key in &keys {
+        publish(key, format!("warm-{key}")).await.expect("warm");
+    }
+    let after_warm = felix_client::publishes_forwarded();
+
+    // Second pass: the same keys, so the same shards, all now known.
+    for key in &keys {
+        publish(key, format!("hot-{key}")).await.expect("hot");
+    }
+    let after_hot = felix_client::publishes_forwarded();
+
+    assert_eq!(
+        after_hot, after_warm,
+        "keyed publishes were still forwarded after their shard owners were \
+         learned ({after_warm} -> {after_hot})",
+    );
+
+    cluster.shutdown().await;
+}

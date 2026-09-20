@@ -444,6 +444,33 @@ impl Publisher {
     /// Binary against a broker that advertised `FLAG_BINARY_PUBLISH_KEYED`, JSON
     /// against one that did not. A single keyed publish is a one-item keyed
     /// batch on the wire, exactly as `publish` is for the unkeyed case.
+    /// [`Publisher::publish_keyed`], reporting the shard's owner when this
+    /// broker forwarded the batch rather than owning it.
+    pub(crate) async fn publish_keyed_reporting_owner(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> AckOutcome {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(Some(&key), tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            Some(&key),
+            tenant_id,
+            namespace,
+            stream,
+            vec![payload],
+            ack,
+        )
+        .await
+    }
+
     pub async fn publish_keyed(
         &self,
         tenant_id: &str,
