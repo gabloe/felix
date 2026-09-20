@@ -70,7 +70,8 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardLogOrder.cfg` | both lease checks, `Quorum`, two writes, promotion by log order | pass every invariant (3.0M states) |
 | `FelixShardThinMargin.cfg` | drifting clocks with `Margin = 0` and `Eps = 0` | violate `AtMostOneServing` |
 | `FelixShardNoCommitCheck.cfg` | commit-time lease check removed | violate `NoStaleCommit` |
-| `FelixShard.cfg` | the design as written: promotion from the leader's report | violate `AckedSurvive` |
+| `FelixShardNoReportOrder.cfg` | the design *before* #268: a `Quorum` ack released before the report describing it lands | violate `AckedSurvive` |
+| `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.4M states) |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -78,6 +79,33 @@ clocks is affordable; the replication configurations carry writes and
 synchronised clocks, because nothing about which replica holds which record
 depends on what time a broker thinks it is. One configuration with both ran
 past four hundred million states without finishing.
+
+### What ties this to the code, and what does not
+
+A spec and an implementation are two artifacts in two languages. Nothing in the
+toolchain makes one follow the other, and the gap is not hypothetical: the
+broker gained the report-before-mark ordering in #268, this model went on
+describing the design without it, and `check_tla.sh` pinned the resulting
+`AckedSurvive` violation as *expected* — asserting for three weeks that Felix
+loses acknowledged records, for a design it no longer had. An issue was then
+filed against the model's finding, proposing work the code did not need.
+
+So every configuration carries an `Evidence:` block naming the tests that
+establish what it assumes of the implementation, and
+`scripts/check_spec_evidence.py` (run by `task docs:evidence`) fails when a
+cited test no longer exists or a configuration cites nothing. Rename the test
+for a behaviour and the spec is put in front of you.
+
+A configuration that deliberately models something the code does *not* do says
+`Evidence: none` and why — the counterexample configurations instead cite the
+test proving the check they remove is really there.
+
+**What this does not do.** A cited test can keep its name while its assertions
+change, and the spec can model a behaviour wrongly while every citation
+resolves. This makes drift harder to introduce silently; it does not detect it.
+Checking that the implementation *conforms* to the spec needs trace validation —
+emitting protocol events and checking recorded runs are behaviours of the
+spec — which is a different and much larger mechanism. Tracked in #598.
 
 ### The interval that is load-bearing
 
@@ -94,9 +122,9 @@ lease is valid, is paused while the lease lapses and the next generation is
 granted, and then commits. That is the "process suspension" case the design
 names, and the second check is what closes it.
 
-### The finding
+### The ordering that is load-bearing
 
-With promotion as the design writes it, TLC finds this in a second:
+With `ReportBeforeAck = FALSE`, TLC finds this in a second:
 
 1. The leader reports its two followers level with it.
 2. It admits and commits a write, ships it to one follower, and acknowledges it
@@ -109,9 +137,24 @@ With promotion as the design writes it, TLC finds this in a second:
 
 Report expiry does not close this. The design's expiry is about reports older
 than the time it takes to notice a leader is gone; this report is fresh, it is
-just older than the last acknowledgement — and the acknowledgement is released
-the moment the quorum mark moves, while the report describing that same pass is
-still on its way.
+just older than the last acknowledgement.
+
+**What closes it is ordering, not freshness**, and the broker does it: the
+leader reports who holds the record, waits for that report to land, and only
+then moves the quorum mark that releases the acknowledgement. That is
+`publish_mark` in `services/broker/src/replication/driver.rs`, which moves the
+mark only `if reported`, and `await_quorum`, which blocks the publish on the
+mark. With `ReportBeforeAck = TRUE` — `FelixShard.cfg`, the implemented design
+— TLC explores 2.4M distinct states and finds no violation.
+
+So the pair is the point. The ordering is not merely present in the code; the
+model shows the guarantee fails without it.
+
+> A caution on reading a pass. `FelixShard.cfg` passing is only meaningful if
+> acknowledgements actually happen under the added precondition — a
+> precondition nothing can satisfy would make `AckedSurvive` vacuously true.
+> Checked by hand with a temporary `acked = {}` invariant, which TLC violates
+> in 7,107 states: acknowledgements are released, and the pass is about them.
 
 Promotion by log order finds no trace, in the same bounds. A replica holding an
 acknowledged `Quorum` record is in every majority that could acknowledge one

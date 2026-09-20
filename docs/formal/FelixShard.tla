@@ -48,9 +48,11 @@ CONSTANTS
     MaxWrites,      \* how many client writes the run admits
     CheckAtCommit,  \* re-check the lease before committing, or only at admission
     Quorum,         \* acknowledge on a majority (TRUE) or on the leader alone (FALSE)
-    Promotion       \* "leader-report" or "log-order"
+    Promotion,      \* "leader-report" or "log-order"
+    ReportBeforeAck \* whether a Quorum ack waits for the report describing it
 
 ASSUME Promotion \in {"leader-report", "log-order"}
+ASSUME ReportBeforeAck \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -59,7 +61,7 @@ VARIABLES
     gen,        \* the assignment generation at the control plane
     leader,     \* who the control plane assigned at gen
     cpExpiry,   \* when the lease at gen lapses, on the control plane's clock (real time)
-    report,     \* the followers the last leader report named as caught up
+    report,     \* what the control plane was last told: [holders, len]
     inflight,   \* a leader report on its way to the control plane, or <<>>
     bgen,       \* the generation each broker believes it leads; 0 means it does not
     bexpiry,    \* each broker's own belief of its lease expiry, on its own clock
@@ -97,7 +99,7 @@ Init ==
     /\ gen = 1
     /\ leader \in Brokers
     /\ cpExpiry = L
-    /\ report = {}
+    /\ report = [holders |-> {}, len |-> 0]
     /\ inflight = <<>>
     /\ bgen = [b \in Brokers |-> IF b = leader THEN 1 ELSE 0]
     /\ bexpiry = [b \in Brokers |-> IF b = leader THEN L ELSE 0]
@@ -232,11 +234,23 @@ Ship(b, f) ==
 
 \* Under `Quorum`, a record is acknowledged once a majority including the
 \* leader holds it, and the leader's mark moves up to it.
+\*
+\* With `ReportBeforeAck`, the mark may not move past what the control plane
+\* has already been told: the leader reports who holds the record, waits for
+\* that report to land, and only then releases the acknowledgement. This is
+\* `publish_mark` in `services/broker/src/replication/driver.rs`, which moves
+\* the mark only `if reported`, and `await_quorum`, which blocks the publish on
+\* the mark. Without it a leader can tell a client its record is on a majority
+\* while the control plane knows nothing about which replica holds it, and a
+\* leader dying in that window is replaced from a report that predates the
+\* acknowledgement.
 AckQuorum(b) ==
     /\ Quorum
     /\ Serving(b)
     /\ \E i \in (hwm[b] + 1)..Len(log[b]) :
         /\ Majority({ m \in Brokers : Len(log[m]) >= i /\ log[m][i] = log[b][i] } \cup {b})
+        /\ ReportBeforeAck => /\ i <= report.len
+                              /\ Majority(report.holders \cup {b})
         /\ acked' = acked \cup { log[b][j].id : j \in 1..i }
         /\ hwm' = [hwm EXCEPT ![b] = i]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
@@ -260,7 +274,9 @@ LearnHwm(b, f) ==
 Report(b) ==
     /\ Serving(b)
     /\ inflight = <<>>
-    /\ inflight' = << { f \in Brokers \ {b} : log[f] = log[b] /\ f \notin halted } >>
+    /\ inflight' = << [holders |-> { f \in Brokers \ {b} :
+                                        log[f] = log[b] /\ f \notin halted },
+                       len     |-> Len(log[b])] >>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
 
@@ -284,7 +300,7 @@ LoseReport ==
 
 \* A candidate under the design as written: reported caught up by the last
 \* report the control plane has, and not halted.
-ByLeaderReport(f) == f \in report /\ f \notin halted
+ByLeaderReport(f) == f \in report.holders /\ f \notin halted
 
 \* A candidate under the log-order rule: among the live replicas, one whose
 \* (last generation, length) is greatest.
@@ -304,7 +320,7 @@ Promote(f) ==
     /\ bgen' = [bgen EXCEPT ![f] = gen + 1]
     /\ bexpiry' = [bexpiry EXCEPT ![f] = clock[f] + L]
     /\ pending' = [pending EXCEPT ![f] = 0]
-    /\ report' = {}
+    /\ report' = [holders |-> {}, len |-> 0]
     /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit >>
 
 -----------------------------------------------------------------------------
