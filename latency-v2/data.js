@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789935534473,
+  "lastUpdate": 1789936068797,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -17028,6 +17028,72 @@ window.BENCHMARK_DATA = {
             "range": "744.04",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1351.00\nmean: 1314.80\nstdev: 744.04\ncv: 56.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "afda5e5987612b5b845668809f66de6507789943",
+          "message": "fix(controlplane): say \"cannot verify\" rather than \"invalid token\" (#603)\n\nA member whose volume was replaced holds none of the tenant's signing keys\nuntil they replicate in. The bearer path read that as proof:\n\n    // No keys means nothing could have signed this token.\n    Err(StoreError::NotFound(_)) => refused(Refusal::InvalidToken, \"invalid token\")\n\nwhich holds only on an instance that has the group's state. On one that does\nnot it means \"I do not know yet\", and the token may be perfectly good. A\ncaller gets 401 for a credential that is correct, and 401 is not a neutral\nfailure -- it sends whoever reads it to re-mint, re-auth, or suspect their\nidentity provider, none of which is the problem.\n\nThe two cases are distinguishable, just not from the missing key alone: an\ninstance that cannot serve at all already knows it. So the answer now depends\non readiness, which is cached and bounded and asked only on a path that is\nalready failing. Ready and no keys is still 401 -- the fix must not turn a\ngenuine authentication failure into a retryable one, or a bad credential\nbecomes an infinite retry loop, and a test pins that direction too.\n\n503 rather than 500, for the same reason `/v1/system/ready` answers 503: it\nis a statement about this instance at this moment, and a load balancer taking\nit out of rotation is the correct response rather than something to alert on.\n\nThe exchange path had the same ambiguity -- a tenant with no issuers and a\ntenant this instance has not learned about are identical from there, and \"no\nissuers configured\" sends an operator to IdP settings that are fine.\n\nSeen as a CI failure on #600, which touches no control-plane code: a wiped\nfollower answered 401 for a token the other two members accepted.\n\nThis does not close #601. The readiness gap that let the instance report\nready in the first place is still open, and needs a decision rather than a\npatch -- its guard is `last_log == 0`, which a member escapes as soon as it\naccepts one entry, while its store may still be empty. This makes the\nresulting answer honest; it does not stop the window existing, which is why\nit is worth having either way.\n\nRefs #601",
+          "timestamp": "2026-09-20T13:25:19-07:00",
+          "tree_id": "7aa98e4ae7822521ee55179000bb88d3479828f6",
+          "url": "https://github.com/gabloe/felix/commit/afda5e5987612b5b845668809f66de6507789943"
+        },
+        "date": 1789936066372,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 164.80\nstdev: 1.30\ncv: 0.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "3.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 209.20\nstdev: 3.42\ncv: 1.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 266,
+            "range": "76.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 266.00\nmean: 296.20\nstdev: 76.87\ncv: 25.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 200.80\nstdev: 1.30\ncv: 0.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 415,
+            "range": "17.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 415.00\nmean: 418.00\nstdev: 17.18\ncv: 4.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 678,
+            "range": "423.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 678.00\nmean: 898.40\nstdev: 423.30\ncv: 47.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
