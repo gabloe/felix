@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789935537968,
+  "lastUpdate": 1789936071863,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13416,6 +13416,58 @@ window.BENCHMARK_DATA = {
             "range": "3964.12",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 949583.73\nmean: 949804.58\nstdev: 3964.12\ncv: 0.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "afda5e5987612b5b845668809f66de6507789943",
+          "message": "fix(controlplane): say \"cannot verify\" rather than \"invalid token\" (#603)\n\nA member whose volume was replaced holds none of the tenant's signing keys\nuntil they replicate in. The bearer path read that as proof:\n\n    // No keys means nothing could have signed this token.\n    Err(StoreError::NotFound(_)) => refused(Refusal::InvalidToken, \"invalid token\")\n\nwhich holds only on an instance that has the group's state. On one that does\nnot it means \"I do not know yet\", and the token may be perfectly good. A\ncaller gets 401 for a credential that is correct, and 401 is not a neutral\nfailure -- it sends whoever reads it to re-mint, re-auth, or suspect their\nidentity provider, none of which is the problem.\n\nThe two cases are distinguishable, just not from the missing key alone: an\ninstance that cannot serve at all already knows it. So the answer now depends\non readiness, which is cached and bounded and asked only on a path that is\nalready failing. Ready and no keys is still 401 -- the fix must not turn a\ngenuine authentication failure into a retryable one, or a bad credential\nbecomes an infinite retry loop, and a test pins that direction too.\n\n503 rather than 500, for the same reason `/v1/system/ready` answers 503: it\nis a statement about this instance at this moment, and a load balancer taking\nit out of rotation is the correct response rather than something to alert on.\n\nThe exchange path had the same ambiguity -- a tenant with no issuers and a\ntenant this instance has not learned about are identical from there, and \"no\nissuers configured\" sends an operator to IdP settings that are fine.\n\nSeen as a CI failure on #600, which touches no control-plane code: a wiped\nfollower answered 401 for a token the other two members accepted.\n\nThis does not close #601. The readiness gap that let the instance report\nready in the first place is still open, and needs a decision rather than a\npatch -- its guard is `last_log == 0`, which a member escapes as soon as it\naccepts one entry, while its store may still be empty. This makes the\nresulting answer honest; it does not stop the window existing, which is why\nit is worth having either way.\n\nRefs #601",
+          "timestamp": "2026-09-20T13:25:19-07:00",
+          "tree_id": "7aa98e4ae7822521ee55179000bb88d3479828f6",
+          "url": "https://github.com/gabloe/felix/commit/afda5e5987612b5b845668809f66de6507789943"
+        },
+        "date": 1789936071147,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 388544.09,
+            "range": "24353.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 388544.09\nmean: 389045.46\nstdev: 24353.95\ncv: 6.26%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 388544.09,
+            "range": "24353.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 388544.09\nmean: 389045.46\nstdev: 24353.95\ncv: 6.26%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94518.41,
+            "range": "692.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94518.41\nmean: 94157.92\nstdev: 692.12\ncv: 0.74%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 945184.06,
+            "range": "6921.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 945184.06\nmean: 941579.21\nstdev: 6921.24\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
