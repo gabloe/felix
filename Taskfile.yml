@@ -204,6 +204,10 @@ tasks:
       # Belongs here for the same reason: a feature bit or a message variant is
       # added in Rust, and that is the moment the docs fall behind.
       - "python3 scripts/check_capability_docs.py"
+      # The spec's configurations are claims about how the code behaves, and
+      # nothing else connects the two artifacts. A cited test that no longer
+      # exists is how that drift starts showing (#598).
+      - "python3 scripts/check_spec_evidence.py"
       # A milestone label in a published page is wrong the day it is written —
       # it names a project-board row the reader has never seen — so unlike the
       # status-claim report this one can fail.

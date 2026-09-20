@@ -80,6 +80,33 @@ synchronised clocks, because nothing about which replica holds which record
 depends on what time a broker thinks it is. One configuration with both ran
 past four hundred million states without finishing.
 
+### What ties this to the code, and what does not
+
+A spec and an implementation are two artifacts in two languages. Nothing in the
+toolchain makes one follow the other, and the gap is not hypothetical: the
+broker gained the report-before-mark ordering in #268, this model went on
+describing the design without it, and `check_tla.sh` pinned the resulting
+`AckedSurvive` violation as *expected* — asserting for three weeks that Felix
+loses acknowledged records, for a design it no longer had. An issue was then
+filed against the model's finding, proposing work the code did not need.
+
+So every configuration carries an `Evidence:` block naming the tests that
+establish what it assumes of the implementation, and
+`scripts/check_spec_evidence.py` (run by `task docs:evidence`) fails when a
+cited test no longer exists or a configuration cites nothing. Rename the test
+for a behaviour and the spec is put in front of you.
+
+A configuration that deliberately models something the code does *not* do says
+`Evidence: none` and why — the counterexample configurations instead cite the
+test proving the check they remove is really there.
+
+**What this does not do.** A cited test can keep its name while its assertions
+change, and the spec can model a behaviour wrongly while every citation
+resolves. This makes drift harder to introduce silently; it does not detect it.
+Checking that the implementation *conforms* to the spec needs trace validation —
+emitting protocol events and checking recorded runs are behaviours of the
+spec — which is a different and much larger mechanism. Tracked in #598.
+
 ### The interval that is load-bearing
 
 With no margin on either side, TLC finds a leader whose clock runs slow still
