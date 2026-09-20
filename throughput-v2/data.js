@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789873430640,
+  "lastUpdate": 1789916738252,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13000,6 +13000,58 @@ window.BENCHMARK_DATA = {
             "range": "9702.01",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 942301.72\nmean: 940726.08\nstdev: 9702.01\ncv: 1.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9c2519afa7f5f0bbba9037d01408b8bdf7c224f3",
+          "message": "release: 0.6.0-preview (#591)\n\nEleven Cargo manifests -- the workspace version and every intra-workspace pin\nthat Cargo requires to match it -- the Node package and its five platform\npackages, and the Helm chart's appVersion. The chart's own version is\ndeliberately untouched: it versions the chart, not the app.\n\nPEP 440 normalises 0.6.0-preview to 0.6.0rc0, since preview is one of its\nspellings of rc. So the wheel's version differs from the crate's and the npm\npackage's, which is worth knowing before someone reads it as a bug. It sorts\nbefore 0.6.0 everywhere, and pip will not install it without --pre.",
+          "timestamp": "2026-09-20T08:03:08-07:00",
+          "tree_id": "020e787c984fdeefeccc3afc5ee723059161ecfd",
+          "url": "https://github.com/gabloe/felix/commit/9c2519afa7f5f0bbba9037d01408b8bdf7c224f3"
+        },
+        "date": 1789916737279,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 382724.42,
+            "range": "8560.33",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 382724.42\nmean: 381989.21\nstdev: 8560.33\ncv: 2.24%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 382724.42,
+            "range": "8560.33",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 382724.42\nmean: 381989.21\nstdev: 8560.33\ncv: 2.24%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93272.15,
+            "range": "619.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93272.15\nmean: 93466.58\nstdev: 619.47\ncv: 0.66%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 932721.47,
+            "range": "6194.67",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 932721.47\nmean: 934665.78\nstdev: 6194.67\ncv: 0.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
