@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789916738252,
+  "lastUpdate": 1789922861361,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13052,6 +13052,58 @@ window.BENCHMARK_DATA = {
             "range": "6194.67",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 932721.47\nmean: 934665.78\nstdev: 6194.67\ncv: 0.66%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "23bf8735815018a1012c311fcfa0cf125c630731",
+          "message": "fix: re-lock the demo crates after the 0.6.0-preview bump (#594)\n\n`demos/` are separate crates, not workspace members, so the repository\nworkspace never reaches their lockfiles. The 0.6.0-preview version bump\nupdated the path dependencies they name and left all four `Cargo.lock`\nfiles pinning 0.5.0, so the first build that touched them rewrote the lock\nand CI failed -- on main and on every PR branched from it.\n\n`task lock:refresh` is the fix the Taskfile already documents for exactly\nthis, and the failure it warns about: the demo locks sat at 0.4.0-preview\nthrough two releases the same way.\n\nPurely the version bump: 38 lines, every one `0.5.0` -> `0.6.0-preview`.\n`crates/felix-python` and `crates/felix-typescript` are refreshed by the\nsame task and were already current.\n\nVerified with `task demo:check` afterwards -- it passes and leaves the\nlockfiles untouched, which is the condition CI asserts.",
+          "timestamp": "2026-09-20T09:43:05-07:00",
+          "tree_id": "85aaa43f116d731df0096c31515a07364b7df2cc",
+          "url": "https://github.com/gabloe/felix/commit/23bf8735815018a1012c311fcfa0cf125c630731"
+        },
+        "date": 1789922860910,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 396791,
+            "range": "16702.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 396791.00\nmean: 399140.93\nstdev: 16702.89\ncv: 4.18%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 396791,
+            "range": "16702.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 396791.00\nmean: 399140.93\nstdev: 16702.89\ncv: 4.18%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 95273.79,
+            "range": "941.05",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 95273.79\nmean: 94847.36\nstdev: 941.05\ncv: 0.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 952737.93,
+            "range": "9410.51",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 952737.93\nmean: 948473.60\nstdev: 9410.51\ncv: 0.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
