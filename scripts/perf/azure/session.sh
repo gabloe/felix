@@ -36,14 +36,16 @@ bootstrap_token="$(openssl rand -hex 24)"
 if [ -z "${IDP_TOKEN:-}" ] && [ -n "${IDP_TENANT_ID:-}" ]; then
   : "${IDP_CLIENT_ID:?set IDP_CLIENT_ID with IDP_TENANT_ID}"
   : "${IDP_CLIENT_SECRET:?set IDP_CLIENT_SECRET with IDP_TENANT_ID}"
-  : "${IDP_AUDIENCE:?set IDP_AUDIENCE (the app Application ID URI)}"
-  # JWKS is version-agnostic (validates both v1 and v2 tokens). The issuer is
-  # NOT: an app-only credential issues a v1 token (iss=sts.windows.net/<tenant>/)
-  # even from the v2 endpoint, so seed.sh derives the issuer from the token
-  # itself rather than assuming one here.
+  export IDP_SCOPE="${IDP_SCOPE:-${IDP_AUDIENCE:-}}"
+  : "${IDP_SCOPE:?set IDP_SCOPE (the app Application ID URI, or the bare client id)}"
+  # JWKS is version-agnostic (validates both v1 and v2 tokens). The issuer and
+  # the audience are NOT: an app-only credential issues a v1 token
+  # (iss=sts.windows.net/<tenant>/, aud=api://<client-id>) even from the v2
+  # endpoint, where a v2 token carries the bare client-id GUID. seed-remote.sh
+  # derives both from the token rather than assuming them here.
   export IDP_JWKS_URL="${IDP_JWKS_URL:-https://login.microsoftonline.com/${IDP_TENANT_ID}/discovery/v2.0/keys}"
   export IDP_TOKEN="$("${here}/idp-token.sh")"
-  echo ">> minted an IdP token for audience ${IDP_AUDIENCE}"
+  echo ">> minted an IdP token for scope ${IDP_SCOPE}"
 fi
 
 echo ">> session ${SESSION}: tier ${TIER}, ${LOCATION}, release ${RELEASE_TAG}"

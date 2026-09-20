@@ -43,8 +43,8 @@ az login                                    # the Azure account
 ./teardown.sh                  # ALWAYS. ~$1/hour while it exists.
 ```
 
-(The manual path still works: set `IDP_TOKEN` plus `IDP_ISSUER` /
-`IDP_JWKS_URL` / `IDP_AUDIENCE` yourself and skip the three secrets.)
+(The manual path still works: set `IDP_TOKEN` plus `IDP_JWKS_URL` yourself
+and skip the three secrets. The issuer and audience are read off the token.)
 
 - **Tiers**: `t1` one-zone proximity-placed baseline; `t2` brokers across
   zones 1/2/3 (set `REPLICATION_FACTOR=3` in the environment before
@@ -59,10 +59,16 @@ az login                                    # the Azure account
 - **IdP**: an Entra **app registration** (no user — a perf harness wants a
   non-interactive credential), used through the **client-credentials** grant.
   `idp-token.sh` turns `IDP_TENANT_ID` + `IDP_CLIENT_ID` + `IDP_CLIENT_SECRET`
-  + `IDP_AUDIENCE` into an access token; the app-only token's `sub`/`oid` is
-  the service-principal identity Felix authorizes. The Application ID URI is
-  often forced to `api://<client-id>` by tenant policy — that is fine, the
-  audience is just a string. Measuring the real exchange is the point, so the
+  + `IDP_SCOPE` into an access token; the app-only token's `sub`/`oid` is
+  the service-principal identity Felix authorizes. `IDP_SCOPE` says what to
+  *request* — the Application ID URI or the bare client id, both work — and is
+  not the audience the token comes back with: the same credential issues a v1
+  token (`aud=api://<client-id>`) or a v2 one (`aud=<client-id>`) depending on
+  the app, so `seed-remote.sh` registers the `aud` and `iss` it reads off the
+  minted token rather than either being assumed. Registering a requested value
+  the token does not carry is a `401 invalid token` on every exchange, and
+  bootstrap-initialize is exactly-once, so correcting it afterwards needs the
+  control plane's store cleared. Measuring the real exchange is the point, so the
   seed and the exchange-latency scenario both run against this, never demo
   auth.
 - **What runs where**: brokers and the control plane run the release
@@ -92,3 +98,9 @@ so adding a run's output is just `git add`.
 Results are loadgen stdout, a JSONL of `LOADGEN_JSON` rows, and the
 `session.json` describing the hardware. No script writes a credential there —
 keep it that way, and check before committing a session that used a new script.
+
+### Script modes
+
+Every script meant to be *run* is executable. `lib.sh` and `seed-remote.sh` are
+deliberately not: the first is sourced, and the second is read and piped into a
+shell on the remote VM by `seed.sh`. Neither is ever invoked directly.
