@@ -22,6 +22,7 @@ mod message;
 
 pub mod binary;
 pub mod internal;
+pub mod routing;
 pub mod text;
 
 pub use error::{Error, Result};

@@ -20,11 +20,23 @@ use crate::wire::frame_io::read_frame_into_with_limit;
 /// all, not a competing deadline.
 const ACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// What a publish's ack says, beyond success or failure.
+///
+/// `forwarded_to` is the shard's owner when this broker was not it and passed
+/// the batch on. A client that routes to the owner next time stops paying the
+/// decrypt/re-encrypt/decrypt a forward costs -- roughly half the throughput
+/// per core (#536).
+#[derive(Debug)]
+pub(crate) struct AckRead {
+    pub(crate) message: Message,
+    pub(crate) forwarded_to: Option<felix_wire::binary::PublishOwner>,
+}
+
 pub(crate) async fn read_ack_message_with_timing(
     recv: &mut RecvStream,
     frame_scratch: &mut BytesMut,
     max_frame_bytes: usize,
-) -> Result<Option<Message>> {
+) -> Result<Option<AckRead>> {
     #[cfg(feature = "telemetry")]
     let sample = crate::t_should_sample();
     #[cfg(feature = "telemetry")]
@@ -46,15 +58,16 @@ pub(crate) async fn read_ack_message_with_timing(
     // so normalise it into those variants here. Everything downstream — the
     // request_id correlation, the error mapping, the counters — then has a single
     // path regardless of which encoding the publish went out in.
+    let mut forwarded_to = None;
     let message = if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACK != 0 {
         let ack = felix_wire::binary::decode_publish_ack(&frame).context("decode publish ack")?;
         if let Some(owner) = &ack.forwarded_to {
             // The batch was written by another broker, and this one paid to
             // decrypt and re-encrypt it on the way -- roughly half the
-            // throughput per core (#536). Counted rather than acted on: routing
-            // to the owner is the next piece of work, and until it lands this
-            // is what turns "are we forwarding?" from a guess into a number a
-            // client can answer about itself.
+            // throughput per core (#536). Counted *and* returned: `ClusterClient`
+            // routes the next publish for this shard straight to the owner, and
+            // the counter is what says whether that is working -- a number a
+            // client can answer about itself without a metrics recorder.
             //
             // Labelled by owner because the cardinality is the cluster's size,
             // and *which* broker the traffic should have gone to is the part
@@ -75,6 +88,7 @@ pub(crate) async fn read_ack_message_with_timing(
                 "publish was forwarded to the shard's owner",
             );
         }
+        forwarded_to = ack.forwarded_to;
         match ack.error {
             None => Message::PublishOk {
                 request_id: ack.request_id,
@@ -93,7 +107,10 @@ pub(crate) async fn read_ack_message_with_timing(
         timings::record_ack_decode_ns(decode_ns);
         t_histogram!("client_ack_decode_ns").record(decode_ns as f64);
     }
-    Ok(Some(message))
+    Ok(Some(AckRead {
+        message,
+        forwarded_to,
+    }))
 }
 
 #[cfg(test)]
@@ -127,7 +144,9 @@ pub(crate) async fn maybe_wait_for_ack_with_limit(
     }
     let request_id =
         request_id.ok_or_else(|| anyhow::anyhow!("missing request_id for acked publish"))?;
-    wait_for_ack(recv, request_id, frame_scratch, max_frame_bytes).await
+    wait_for_ack(recv, request_id, frame_scratch, max_frame_bytes)
+        .await
+        .map(|_| ())
 }
 
 /// Wait for the broker's ack to the publish sent as `request_id`.
@@ -140,7 +159,7 @@ pub(crate) async fn wait_for_ack(
     request_id: u64,
     frame_scratch: &mut BytesMut,
     max_frame_bytes: usize,
-) -> Result<()> {
+) -> Result<Option<felix_wire::binary::PublishOwner>> {
     // Bound the wait. The ack reader blocks here, so an ack that never
     // arrives wedges that stream's publishes indefinitely rather than failing.
     // This is a real possibility whenever the broker cannot answer — it is
@@ -161,7 +180,11 @@ pub(crate) async fn wait_for_ack(
             ));
         }
     };
-    match response {
+    let (message, forwarded_to) = match response {
+        Some(read) => (Some(read.message), read.forwarded_to),
+        None => (None, None),
+    };
+    match message {
         Some(Message::PublishOk { request_id: ack_id }) if ack_id == request_id => {
             #[cfg(feature = "telemetry")]
             {
@@ -173,7 +196,7 @@ pub(crate) async fn wait_for_ack(
                     .ack_items_in_ok
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            Ok(())
+            Ok(forwarded_to)
         }
         Some(Message::PublishError {
             request_id: ack_id,

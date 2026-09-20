@@ -73,45 +73,11 @@ impl std::fmt::Display for Reason {
 
 /// Map a request to a shard number.
 ///
-/// Deterministic, and a pure function of its inputs, so the same key lands on
-/// the same shard on every broker and across restarts.
-///
-/// **The wire protocol carries no routing key today**, so `routing_key` is
-/// always `None` and every record of a stream lands on shard 0. That makes a
-/// stream's configured `shards` count metadata the data path does not yet use.
-/// Adding a negotiated key field is what makes `shards > 1` mean anything; this
-/// function is the place it plugs in, and the rest of the path is already
-/// shard-aware.
-pub fn shard_for(shards: u32, routing_key: Option<&[u8]>) -> u32 {
-    if shards <= 1 {
-        return 0;
-    }
-    match routing_key {
-        // Same construction as placement's: FNV-1a with a finalizer, written
-        // out so the mapping cannot shift with a toolchain change.
-        Some(key) => (finalize(fnv1a(key)) % u64::from(shards)) as u32,
-        None => 0,
-    }
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
-}
-
-fn finalize(mut hash: u64) -> u64 {
-    hash ^= hash >> 30;
-    hash = hash.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    hash ^= hash >> 27;
-    hash = hash.wrapping_mul(0x94d0_49bb_1331_11eb);
-    hash ^ (hash >> 31)
-}
+/// Re-exported from `felix_wire::routing` rather than defined here: a client
+/// that routes its publishes to the shard's owner has to reach the same answer
+/// this broker does, and two copies of a hash are two things that can drift.
+/// The wire crate is where both sides already meet.
+pub use felix_wire::routing::shard_for;
 
 /// Shards this broker has opened, and the generation each was opened at.
 ///

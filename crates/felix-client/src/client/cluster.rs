@@ -30,6 +30,7 @@
 //! up with fewer ways in than it was given, however wrong or stale the
 //! cluster's answer turns out to be -- which is what makes it safe to take the
 //! answer at all.
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -217,6 +218,45 @@ pub struct ClusterClient {
     /// reconnect must exclude the publishes that would otherwise keep using the
     /// client being replaced.
     client: RwLock<Arc<Client>>,
+    /// Where a shard's publishes should go, learned from the acks of the ones
+    /// that were forwarded.
+    ///
+    /// A forward is correct but costs a decrypt at the entry broker, a
+    /// re-encrypt to the owner and a decrypt there -- roughly half the
+    /// throughput per core (#536). The owner rides back on the ack, so the
+    /// next batch for that shard can skip the hop.
+    ///
+    /// Keyed by shard, not by stream: a multi-shard stream has an owner per
+    /// shard, and one entry for the whole stream would send every key to
+    /// shard 0's owner. An unkeyed publish resolves to shard 0, a keyed one to
+    /// `felix_wire::routing::shard_for` -- the function the broker routes
+    /// with, shared so the two cannot drift.
+    owners: RwLock<HashMap<ShardKey, Owner>>,
+    /// How many shards each stream was placed with, as the cluster last said.
+    ///
+    /// Asked once per stream rather than per publish. A stale width is not a
+    /// correctness problem: the shard number is only a cache key for an owner
+    /// learned from an ack, so a client that computes a different number than
+    /// the broker still routes to the right broker -- it just keys the entry
+    /// differently. What the width buys is a cache bounded by shard count
+    /// instead of by the number of distinct routing keys.
+    shards: RwLock<HashMap<StreamKey, u32>>,
+}
+
+/// A stream.
+type StreamKey = (String, String, String);
+
+/// One shard of one stream, as the owner cache keys it.
+type ShardKey = (String, String, String, u32);
+
+/// The broker that owns a stream's shard 0, and a client connected to it.
+struct Owner {
+    node_id: String,
+    /// The ownership epoch this was true for. A lower one is an older answer
+    /// arriving late, and must not overwrite a newer one -- two brokers
+    /// mid-rebalance would otherwise take turns replacing each other.
+    generation: u64,
+    client: Arc<Client>,
 }
 
 impl ClusterClient {
@@ -243,6 +283,8 @@ impl ClusterClient {
             config,
             policy,
             client: RwLock::new(Arc::new(client)),
+            owners: RwLock::new(HashMap::new()),
+            shards: RwLock::new(HashMap::new()),
         };
         cluster.discover().await;
         Ok(cluster)
@@ -514,9 +556,41 @@ impl ClusterClient {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
-        let client = self.client().await;
+        // The owner of this stream's shard 0, when a previous publish was
+        // forwarded and the ack said who to use. Falls back to the client in
+        // hand, which forwards -- correct, just slower.
+        // An unkeyed publish has nothing to hash, so it always resolves to
+        // shard 0 -- no width lookup needed.
+        let key: ShardKey = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+            0,
+        );
+        let (client, routed_to_owner) = match self.owners.read().await.get(&key) {
+            Some(owner) => (Arc::clone(&owner.client), Some(owner.node_id.clone())),
+            None => (self.client().await, None),
+        };
         match publish_once(&client, tenant_id, namespace, stream, payload, ack).await {
-            Ok(()) => Ok(()),
+            Ok(forwarded_to) => {
+                if let Some(owner) = forwarded_to {
+                    self.remember_owner(key, owner).await;
+                }
+                Ok(())
+            }
+            Err(err) if routed_to_owner.is_some() => {
+                // The owner we routed to did not answer. Forget it and let the
+                // next publish forward again rather than keep failing against a
+                // broker that may have lost the shard or gone away. Naming it
+                // matters: the failure is about a broker the caller never chose
+                // and would otherwise have no way to identify.
+                let owner = routed_to_owner.unwrap_or_default();
+                self.owners.write().await.remove(&key);
+                Err(err.context(format!(
+                    "publish to the shard's owner {owner} failed; forgetting it and \
+                     forwarding the next one"
+                )))
+            }
             Err(err) => {
                 // Reconnect before returning, so the caller's next publish does
                 // not repeat this failure against the same dead broker.
@@ -641,6 +715,106 @@ impl ClusterClient {
         &self.policy
     }
 
+    /// Which shard a routing key resolves to, using the same function the
+    /// broker routes with (`felix_wire::routing::shard_for`).
+    ///
+    /// The width is asked once per stream and cached. A broker that cannot
+    /// answer -- one predating `FEATURE_STREAM_SHARDS` -- yields shard 0, which
+    /// is the safe answer: everything shares one cache entry and the worst
+    /// case is the forwarding this exists to avoid.
+    async fn shard_of(&self, key: &StreamKey, routing_key: Option<&[u8]>) -> u32 {
+        if let Some(shards) = self.shards.read().await.get(key) {
+            return felix_wire::routing::shard_for(*shards, routing_key);
+        }
+        let shards = match self
+            .client()
+            .await
+            .stream_shards(&key.0, &key.1, &key.2)
+            .await
+        {
+            Ok(shards) => shards.max(1),
+            Err(err) => {
+                tracing::debug!(
+                    stream = %key.2,
+                    error = %err,
+                    "could not learn the stream's width; routing keyed publishes as shard 0",
+                );
+                1
+            }
+        };
+        self.shards.write().await.insert(key.clone(), shards);
+        felix_wire::routing::shard_for(shards, routing_key)
+    }
+
+    /// Record where a shard's publishes should go next time.
+    ///
+    /// Connecting is done here rather than on the publish path so the cost is
+    /// paid once, by the publish that learned it, instead of by the first one
+    /// that could have used it.
+    ///
+    /// A failure to connect is not an error: the owner is simply not cached,
+    /// and publishes keep forwarding. That is the whole safety property of
+    /// this cache -- it is an optimisation over a path that already works.
+    async fn remember_owner(&self, key: ShardKey, owner: felix_wire::binary::PublishOwner) {
+        // Nowhere to route to. The cluster has not been told where clients
+        // reach this broker, the same gap `NotLeader` has.
+        let Some(addr) = owner.addr.as_deref() else {
+            return;
+        };
+        let Ok(addr) = addr.parse::<SocketAddr>() else {
+            tracing::debug!(
+                owner = %owner.node_id,
+                addr,
+                "the shard owner's address does not parse; still forwarding",
+            );
+            return;
+        };
+
+        // A stale answer must not replace a fresher one. Checked before
+        // connecting, so a late report does not even pay for the connection.
+        if let Some(existing) = self.owners.read().await.get(&key)
+            && existing.generation >= owner.generation
+        {
+            return;
+        }
+
+        match self.connect_to(addr).await {
+            Ok(client) => {
+                let mut owners = self.owners.write().await;
+                // Re-checked under the write lock: another publish may have
+                // learned a newer owner while this one was connecting.
+                if owners
+                    .get(&key)
+                    .is_some_and(|existing| existing.generation >= owner.generation)
+                {
+                    return;
+                }
+                tracing::debug!(
+                    owner = %owner.node_id,
+                    %addr,
+                    generation = owner.generation,
+                    "routing this stream's publishes to the shard owner",
+                );
+                owners.insert(
+                    key,
+                    Owner {
+                        node_id: owner.node_id,
+                        generation: owner.generation,
+                        client: Arc::new(client),
+                    },
+                );
+            }
+            Err(err) => {
+                tracing::debug!(
+                    owner = %owner.node_id,
+                    %addr,
+                    error = %err,
+                    "could not connect to the shard owner; still forwarding",
+                );
+            }
+        }
+    }
+
     /// A client to one broker, with this cluster client's name and config.
     pub(crate) async fn connect_to(&self, addr: SocketAddr) -> Result<Client> {
         Client::connect(addr, &self.server_name, self.config.clone()).await
@@ -662,7 +836,20 @@ impl ClusterClient {
         key: bytes::Bytes,
         ack: AckMode,
     ) -> Result<()> {
-        let client = self.client().await;
+        let stream_key: StreamKey = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            stream.to_string(),
+        );
+        // The key decides the shard, and the shard decides the owner. Computed
+        // with the same function the broker routes with, so the cache is
+        // bounded by shard count rather than by distinct keys.
+        let shard = self.shard_of(&stream_key, Some(key.as_ref())).await;
+        let owner_key: ShardKey = (stream_key.0, stream_key.1, stream_key.2, shard);
+        let (client, routed_to_owner) = match self.owners.read().await.get(&owner_key) {
+            Some(owner) => (Arc::clone(&owner.client), Some(owner.node_id.clone())),
+            None => (self.client().await, None),
+        };
         match publish_once_keyed(
             &client,
             tenant_id,
@@ -674,7 +861,20 @@ impl ClusterClient {
         )
         .await
         {
-            Ok(()) => Ok(()),
+            Ok(forwarded_to) => {
+                if let Some(owner) = forwarded_to {
+                    self.remember_owner(owner_key, owner).await;
+                }
+                Ok(())
+            }
+            Err(err) if routed_to_owner.is_some() => {
+                let owner = routed_to_owner.unwrap_or_default();
+                self.owners.write().await.remove(&owner_key);
+                Err(err.context(format!(
+                    "publish to shard {shard}'s owner {owner} failed; forgetting it and \
+                     forwarding the next one"
+                )))
+            }
             Err(err) => {
                 let reconnected = self.reconnect().await;
                 match reconnected {
@@ -725,7 +925,7 @@ impl ClusterClient {
             }
             let client = self.client().await;
             match publish_once(&client, tenant_id, namespace, stream, payload.clone(), ack).await {
-                Ok(()) => return Ok(()),
+                Ok(_) => return Ok(()),
                 Err(err) => {
                     // No amount of reconnecting changes a forbidden credential
                     // or a stream that does not exist, and burning the whole
@@ -777,7 +977,7 @@ async fn publish_once(
     stream: &str,
     payload: Vec<u8>,
     ack: AckMode,
-) -> Result<()> {
+) -> super::publisher::AckOutcome {
     publish_once_keyed(client, tenant_id, namespace, stream, payload, None, ack).await
 }
 
@@ -789,17 +989,17 @@ async fn publish_once_keyed(
     payload: Vec<u8>,
     key: Option<bytes::Bytes>,
     ack: AckMode,
-) -> Result<()> {
+) -> super::publisher::AckOutcome {
     let publisher = client.publisher().await.context("open publisher")?;
     match key {
         Some(key) => {
             publisher
-                .publish_keyed(tenant_id, namespace, stream, key, payload, ack)
+                .publish_keyed_reporting_owner(tenant_id, namespace, stream, key, payload, ack)
                 .await
         }
         None => {
             publisher
-                .publish(tenant_id, namespace, stream, payload, ack)
+                .publish_reporting_owner(tenant_id, namespace, stream, payload, ack)
                 .await
         }
     }

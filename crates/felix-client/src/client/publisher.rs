@@ -130,7 +130,7 @@ pub(crate) enum PublishRequest {
         ack: AckMode,
         request_id: Option<u64>,
         _permit: OwnedSemaphorePermit,
-        response: oneshot::Sender<Result<()>>,
+        response: oneshot::Sender<AckOutcome>,
     },
     BinaryBytes {
         bytes: Bytes,
@@ -142,10 +142,10 @@ pub(crate) enum PublishRequest {
         ack: AckMode,
         request_id: Option<u64>,
         _permit: OwnedSemaphorePermit,
-        response: oneshot::Sender<Result<()>>,
+        response: oneshot::Sender<AckOutcome>,
     },
     Finish {
-        response: oneshot::Sender<Result<()>>,
+        response: oneshot::Sender<AckOutcome>,
     },
 }
 
@@ -330,6 +330,36 @@ impl Publisher {
     /// never advertised the binary frame this call needs. There is no longer a
     /// way to ask for it: it is strictly more expensive and buys nothing the
     /// binary frames do not cover.
+    /// [`Publisher::publish`], reporting the shard's owner when this broker
+    /// forwarded the batch rather than owning it.
+    ///
+    /// Internal because the owner is only useful to something that can act on
+    /// it -- `ClusterClient`, which holds connections to more than one broker.
+    /// A `Client` speaks to one and has nowhere else to send the next batch.
+    pub(crate) async fn publish_reporting_owner(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> AckOutcome {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(None, tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            None,
+            tenant_id,
+            namespace,
+            stream,
+            vec![payload],
+            ack,
+        )
+        .await
+    }
+
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -402,6 +432,7 @@ impl Publisher {
     ) -> Result<()> {
         self.publish_json_keyed(tenant_id, namespace, stream, payload, None, ack)
             .await
+            .map(|_| ())
     }
 
     /// Publish one payload with a routing key.
@@ -413,6 +444,33 @@ impl Publisher {
     /// Binary against a broker that advertised `FLAG_BINARY_PUBLISH_KEYED`, JSON
     /// against one that did not. A single keyed publish is a one-item keyed
     /// batch on the wire, exactly as `publish` is for the unkeyed case.
+    /// [`Publisher::publish_keyed`], reporting the shard's owner when this
+    /// broker forwarded the batch rather than owning it.
+    pub(crate) async fn publish_keyed_reporting_owner(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> AckOutcome {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(Some(&key), tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            Some(&key),
+            tenant_id,
+            namespace,
+            stream,
+            vec![payload],
+            ack,
+        )
+        .await
+    }
+
     pub async fn publish_keyed(
         &self,
         tenant_id: &str,
@@ -434,7 +492,7 @@ impl Publisher {
         payload: Vec<u8>,
         key: Option<bytes::Bytes>,
         ack: AckMode,
-    ) -> Result<()> {
+    ) -> AckOutcome {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payload = maybe_append_publish_ts(payload, self.inner.bench_embed_ts);
         // Enqueue publish on the single-writer publisher task.
@@ -540,6 +598,7 @@ impl Publisher {
     ) -> Result<()> {
         self.publish_batch_binary_acked_inner(None, tenant_id, namespace, stream, payloads, ack)
             .await
+            .map(|_| ())
     }
 
     async fn publish_batch_binary_acked_inner(
@@ -550,7 +609,7 @@ impl Publisher {
         stream: &str,
         payloads: Vec<Vec<u8>>,
         ack: AckMode,
-    ) -> Result<()> {
+    ) -> AckOutcome {
         if ack == AckMode::None {
             return self
                 .publish_batch_binary_inner(key, tenant_id, namespace, stream, &payloads)
@@ -651,7 +710,8 @@ impl Publisher {
         if ack == AckMode::None {
             return self
                 .publish_batch_binary_inner(Some(&key), tenant_id, namespace, stream, &payloads)
-                .await;
+                .await
+                .map(|_| ());
         }
         // An acked keyed batch needs both modifier bits, so it also needs the
         // broker to have advertised the acked frame.
@@ -669,6 +729,7 @@ impl Publisher {
             ack,
         )
         .await
+        .map(|_| ())
     }
 
     /// One batch under a producer's sequence, appended once however many
@@ -701,6 +762,7 @@ impl Publisher {
         };
         self.send_message(worker, message, AckMode::PerBatch, Some(request_id))
             .await
+            .map(|_| ())
     }
 
     async fn publish_batch_json_keyed(
@@ -728,7 +790,9 @@ impl Publisher {
             request_id,
             ack: Some(ack),
         };
-        self.send_message(worker, message, ack, request_id).await
+        self.send_message(worker, message, ack, request_id)
+            .await
+            .map(|_| ())
     }
 
     /// Queue a JSON publish on `worker` and wait for its answer.
@@ -738,7 +802,7 @@ impl Publisher {
         message: Message,
         ack: AckMode,
         request_id: Option<u64>,
-    ) -> Result<()> {
+    ) -> AckOutcome {
         // Batch publish uses the same queue/writer as single messages.
         let (response_tx, response_rx) = oneshot::channel();
         let permit = self
@@ -788,6 +852,7 @@ impl Publisher {
     ) -> Result<()> {
         self.publish_batch_binary_inner(None, tenant_id, namespace, stream, payloads)
             .await
+            .map(|_| ())
     }
 
     async fn publish_batch_binary_inner(
@@ -797,7 +862,7 @@ impl Publisher {
         namespace: &str,
         stream: &str,
         payloads: &[Vec<u8>],
-    ) -> Result<()> {
+    ) -> AckOutcome {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads_with_ts;
         let payloads = if self.inner.bench_embed_ts {
@@ -926,7 +991,7 @@ impl Publisher {
         let cancelled = CancelledAfterEnqueue::armed();
         let answer = response_rx.await.context("binary batch response dropped")?;
         cancelled.answered();
-        answer
+        answer.map(|_| ())
     }
 
     pub async fn finish(&self) -> Result<()> {
@@ -981,9 +1046,17 @@ pub(crate) async fn run_publisher_writer(
 /// arrived yet. The admission permit rides along so the in-flight byte budget
 /// stays reserved until the broker answers, not merely until the frame is
 /// written.
+/// What a publish learns from its ack: whether it succeeded, and -- when the
+/// broker it went to did not own the shard -- who does.
+///
+/// The owner travels back so `ClusterClient` can send the next batch for this
+/// shard straight there. A forward is correct but costs a decrypt, a
+/// re-encrypt and a decrypt, roughly half the throughput per core (#536).
+pub(crate) type AckOutcome = Result<Option<felix_wire::binary::PublishOwner>>;
+
 struct PendingAck {
     request_id: u64,
-    response: oneshot::Sender<Result<()>>,
+    response: oneshot::Sender<AckOutcome>,
     _permit: OwnedSemaphorePermit,
     // Read only by the telemetry counters in the ack reader.
     #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
@@ -1032,7 +1105,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                 )
                 .await
                 {
-                    Ok(()) => {
+                    Ok(forwarded_to) => {
                         #[cfg(feature = "telemetry")]
                         {
                             let counters = frame_counters();
@@ -1044,7 +1117,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                                 .pub_items_out_ok
                                 .fetch_add(entry.item_count, Ordering::Relaxed);
                         }
-                        let _ = entry.response.send(Ok(()));
+                        let _ = entry.response.send(Ok(forwarded_to));
                     }
                     Err(err) => {
                         #[cfg(feature = "telemetry")]
@@ -1096,7 +1169,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
             pending.push_back($pending);
         }};
     }
-    let mut finish_response: Option<oneshot::Sender<Result<()>>> = None;
+    let mut finish_response: Option<oneshot::Sender<AckOutcome>> = None;
     loop {
         let request = if pending.is_empty() {
             match rx.recv().await {
@@ -1239,7 +1312,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                                         .pub_items_out_ok
                                         .fetch_add(item_count, Ordering::Relaxed);
                                 }
-                                let _ = response.send(Ok(()));
+                                let _ = response.send(Ok(None));
                             } else if let Some(request_id) = request_id {
                                 submit_pending!(PendingAck {
                                     request_id,
@@ -1320,7 +1393,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                                             .fetch_add(item_count, Ordering::Relaxed);
                                     }
                                 }
-                                let _ = response.send(Ok(()));
+                                let _ = response.send(Ok(None));
                             } else if let Some(request_id) = request_id {
                                 submit_pending!(PendingAck {
                                     request_id,
@@ -1407,7 +1480,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
                                     .pub_items_out_ok
                                     .fetch_add(item_count as u64, Ordering::Relaxed);
                             }
-                            let _ = response.send(Ok(()));
+                            let _ = response.send(Ok(None));
                         } else if let Some(request_id) = request_id {
                             submit_pending!(PendingAck {
                                 request_id,
@@ -1467,7 +1540,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
     };
     if let Some(response) = finish_response {
         let _ = response.send(match &result {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(None),
             Err(err) => Err(anyhow::anyhow!(err.to_string())),
         });
     }
@@ -1550,13 +1623,13 @@ mod tests {
                 while let Some(request) = rx.recv().await {
                     match request {
                         PublishRequest::Message { response, .. } => {
-                            let _ = response.send(Ok(()));
+                            let _ = response.send(Ok(None));
                         }
                         PublishRequest::BinaryBytes { response, .. } => {
-                            let _ = response.send(Ok(()));
+                            let _ = response.send(Ok(None));
                         }
                         PublishRequest::Finish { response } => {
-                            let _ = response.send(Ok(()));
+                            let _ = response.send(Ok(None));
                             break;
                         }
                     }
@@ -1643,7 +1716,7 @@ mod tests {
                     }
                     other => panic!("expected a JSON publish_batch, got {other:?}"),
                 }
-                let _ = response.send(Ok(()));
+                let _ = response.send(Ok(None));
             }
             _ => panic!("a broker without the acked binary frame must get JSON"),
         }
@@ -1686,7 +1759,7 @@ mod tests {
                 assert_eq!(item_count, 1);
                 assert_eq!(batch.payloads.len(), 1);
                 assert_eq!(batch.payloads[0], b"binary");
-                let _ = response.send(Ok(()));
+                let _ = response.send(Ok(None));
             }
             _ => panic!("unacked publish should use binary encoding"),
         }
@@ -1713,7 +1786,7 @@ mod tests {
                 message, response, ..
             } => {
                 assert!(matches!(message, Message::Publish { .. }));
-                let _ = response.send(Ok(()));
+                let _ = response.send(Ok(None));
             }
             _ => panic!("explicit JSON publish should use message encoding"),
         }
@@ -1783,7 +1856,7 @@ mod tests {
                     .context("decode publish batch")?;
                 assert_eq!(decoded.payloads.len(), 1);
                 assert!(decoded.payloads[0].len() > 1);
-                let _ = response.send(Ok(()));
+                let _ = response.send(Ok(None));
             }
             Ok(())
         });
