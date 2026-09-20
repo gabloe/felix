@@ -52,6 +52,11 @@ pub struct Client {
     // Connection pool for subscription event streams.
     event_connections: Vec<QuicConnection>,
 
+    // The distinct broker addresses this client's pools were placed on, in
+    // bind order. Recorded at connect because the publish and cache
+    // connections are consumed into workers and cannot be asked later.
+    listeners: Vec<SocketAddr>,
+
     // For each event connection, a router task accepts uni streams, reads EventStreamHello,
     // and hands the RecvStream to the matching Subscription.
     event_stream_routers: Vec<mpsc::Sender<EventRouterCommand>>,
@@ -213,53 +218,70 @@ impl Client {
         let publish_admission = Arc::new(super::publisher::PublishAdmission::new(
             client_config.publish_inflight_bytes,
         ));
-        let mut publish_connections = Vec::with_capacity(publish_pool_size);
-        for _ in 0..publish_pool_size {
-            let connection = publish_client.connect(addr, server_name).await?;
+        // Learn the broker's listener set while building the first connection's
+        // streams, rather than probing for it.
+        //
+        // A broker may bind several client-facing ports, each its own UDP
+        // socket and so its own endpoint driver -- the single task that reads
+        // every datagram for that socket. A pool that dials one port lands
+        // entirely on one driver, which is the per-broker ceiling this exists
+        // to lift.
+        //
+        // The answer rides the first stream's `AuthOk`, which has to be sent
+        // anyway, so a single-listener deployment pays nothing for this.
+        let mut publish_workers = Vec::with_capacity(publish_pool_size * publish_streams_per_conn);
+        let first = publish_client.connect(addr, server_name).await?;
+        debug!("client established publish connection");
+        spawn_conn_stats_logger(&first, "publish");
+        let negotiated = open_publish_streams(
+            &first,
+            publish_streams_per_conn,
+            &auth_tenant_id,
+            &auth_token,
+            &runtime_config,
+            publish_queue_depth,
+            publish_chunk_bytes,
+            &mut publish_workers,
+        )
+        .await?;
+        // Every publish stream negotiates with the same broker, so any stream's
+        // answer is the broker's answer.
+        let server_features = negotiated.server_features;
+        let targets = listener_targets(addr, &negotiated.listener_ports);
+        if targets.len() > 1 {
+            debug!(
+                listeners = targets.len(),
+                "spreading pools across listeners"
+            );
+        }
+
+        // Every distinct address the pools actually land on, for
+        // `listeners_in_use`.
+        let mut listeners: Vec<SocketAddr> = vec![addr];
+        let mut publish_connections = vec![first];
+        for index in 1..publish_pool_size {
+            let target = targets[index % targets.len()];
+            if !listeners.contains(&target) {
+                listeners.push(target);
+            }
+            let connection = publish_client.connect(target, server_name).await?;
             debug!("client established publish connection");
             spawn_conn_stats_logger(&connection, "publish");
+            open_publish_streams(
+                &connection,
+                publish_streams_per_conn,
+                &auth_tenant_id,
+                &auth_token,
+                &runtime_config,
+                publish_queue_depth,
+                publish_chunk_bytes,
+                &mut publish_workers,
+            )
+            .await?;
             publish_connections.push(connection);
         }
-        let mut publish_workers = Vec::with_capacity(publish_pool_size * publish_streams_per_conn);
-        // Every publish stream negotiates with the same broker, so the last
-        // answer is the broker's answer.
-        let mut server_features = 0u32;
-        for connection in &publish_connections {
-            for _ in 0..publish_streams_per_conn {
-                let (mut send, mut recv) = connection.open_bi().await?;
-                debug!("client opened publish stream");
-                let negotiated = authenticate_stream(
-                    &mut send,
-                    &mut recv,
-                    &auth_tenant_id,
-                    &auth_token,
-                    runtime_config.max_frame_bytes,
-                )
-                .await?;
-                let server_flags = negotiated.server_flags;
-                server_features = negotiated.server_features;
-                debug!(server_flags, "client publish stream authenticated");
-                let (tx, rx) = mpsc::channel(publish_queue_depth);
-                // Not colocated with the transport drivers (unlike the
-                // subscription read pump): publisher writers block in
-                // `write_all` against a full send window, and parking them on
-                // the I/O thread starves the drivers they wait on (measured 5x
-                // throughput loss).
-                let handle = tokio::spawn(run_publisher_writer_with_limit(
-                    send,
-                    recv,
-                    rx,
-                    publish_chunk_bytes,
-                    runtime_config.max_frame_bytes,
-                ));
-                publish_workers.push(PublishWorker {
-                    tx,
-                    handle: tokio::sync::Mutex::new(Some(handle)),
-                    request_counter: AtomicU64::new(1),
-                    server_flags,
-                });
-            }
-        }
+        // Held so the streams above keep their connections open.
+        let _publish_connections = publish_connections;
         let publish_sharding = client_config.publish_sharding;
         // Cache connections are pooled to avoid head-of-line blocking.
         // DESIGN NOTE:
@@ -271,8 +293,12 @@ impl Client {
         let cache_client =
             QuicClient::bind(bind_addr, client_config.quinn.clone(), cache_transport)?;
         let mut cache_connections = Vec::with_capacity(cache_pool_size);
-        for _ in 0..cache_pool_size {
-            let connection = cache_client.connect(addr, server_name).await?;
+        for index in 0..cache_pool_size {
+            let target = targets[index % targets.len()];
+            if !listeners.contains(&target) {
+                listeners.push(target);
+            }
+            let connection = cache_client.connect(target, server_name).await?;
             debug!("client established cache connection");
             cache_connections.push(connection);
         }
@@ -317,8 +343,12 @@ impl Client {
         let event_transport = event_transport_config(transport, &client_config);
         let event_client = QuicClient::bind(bind_addr, client_config.quinn, event_transport)?;
         let mut event_connections = Vec::with_capacity(event_pool_size);
-        for _ in 0..event_pool_size {
-            let connection = event_client.connect(addr, server_name).await?;
+        for index in 0..event_pool_size {
+            let target = targets[index % targets.len()];
+            if !listeners.contains(&target) {
+                listeners.push(target);
+            }
+            let connection = event_client.connect(target, server_name).await?;
             debug!("client established event connection");
             event_connections.push(connection);
         }
@@ -335,6 +365,7 @@ impl Client {
             event_conn_counts.push(AtomicUsize::new(0));
         }
         Ok(Self {
+            listeners,
             server_features,
             _publish_client: publish_client,
             _cache_client: cache_client,
@@ -1403,6 +1434,19 @@ impl Client {
 /// that existed before negotiation, which is the only assumption that is safe
 /// against a broker we cannot interrogate.
 impl Client {
+    /// The distinct broker addresses this client's pooled connections are on.
+    ///
+    /// More than one means the broker advertised several listeners and the
+    /// pools were spread across them, which is what keeps a client off a single
+    /// endpoint driver. One means a single-listener broker, an older one, or a
+    /// pool too small to spread.
+    ///
+    /// Sorted, so a caller comparing two clients is comparing sets rather than
+    /// connection order.
+    pub fn listeners_in_use(&self) -> &[SocketAddr] {
+        &self.listeners
+    }
+
     /// True if this broker answers [`Client::topology`].
     pub fn supports_topology(&self) -> bool {
         felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_TOPOLOGY)
@@ -1529,12 +1573,94 @@ impl Client {
 }
 
 /// What one authenticated stream agreed with the broker.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct Negotiated {
     /// Frame-flag bits: how payloads may be laid out.
     pub(crate) server_flags: u16,
     /// Feature bits: which optional requests the broker implements.
     pub(crate) server_features: u32,
+    /// Every port the broker's client-facing listeners are bound to, when it
+    /// reported more than one. Empty otherwise, which is the same instruction:
+    /// keep using the address already dialled.
+    pub(crate) listener_ports: Vec<u16>,
+}
+
+/// Open and authenticate one connection's publish streams, pushing a worker for
+/// each, and return what the broker said during negotiation.
+///
+/// Every stream negotiates with the same broker, so the answer is the same for
+/// all of them; the caller keeps the first, which is what reports the listener
+/// set before the rest of the pool is placed.
+#[allow(clippy::too_many_arguments)]
+async fn open_publish_streams(
+    connection: &QuicConnection,
+    streams_per_conn: usize,
+    auth_tenant_id: &str,
+    auth_token: &str,
+    runtime_config: &crate::config::ClientRuntimeConfig,
+    publish_queue_depth: usize,
+    publish_chunk_bytes: usize,
+    workers: &mut Vec<PublishWorker>,
+) -> Result<Negotiated> {
+    let mut last = None;
+    for _ in 0..streams_per_conn {
+        let (mut send, mut recv) = connection.open_bi().await?;
+        debug!("client opened publish stream");
+        let negotiated = authenticate_stream(
+            &mut send,
+            &mut recv,
+            auth_tenant_id,
+            auth_token,
+            runtime_config.max_frame_bytes,
+        )
+        .await?;
+        let server_flags = negotiated.server_flags;
+        debug!(server_flags, "client publish stream authenticated");
+        let (tx, rx) = mpsc::channel(publish_queue_depth);
+        // Not colocated with the transport drivers (unlike the subscription
+        // read pump): publisher writers block in `write_all` against a full
+        // send window, and parking them on the I/O thread starves the drivers
+        // they wait on (measured 5x throughput loss).
+        let handle = tokio::spawn(run_publisher_writer_with_limit(
+            send,
+            recv,
+            rx,
+            publish_chunk_bytes,
+            runtime_config.max_frame_bytes,
+        ));
+        workers.push(PublishWorker {
+            tx,
+            handle: tokio::sync::Mutex::new(Some(handle)),
+            request_counter: AtomicU64::new(1),
+            server_flags,
+        });
+        last = Some(negotiated);
+    }
+    last.context("publish pool misconfigured: no streams per connection")
+}
+
+/// Where this client's pooled connections should go, given what the broker
+/// said about its listeners.
+///
+/// `dialled` always comes first and is always present, even if the broker did
+/// not name its port: it is the address that demonstrably works, and a pool
+/// that abandoned it on the strength of an advertisement would be trusting a
+/// claim it has not tested.
+///
+/// Only the *port* is taken from the advertisement. The host stays the one
+/// already connected to, so an `AuthOk` cannot move a client to a different
+/// machine -- that would be a redirect, which is a much larger claim than "I
+/// also listen here" and belongs to `NotLeader`.
+pub(crate) fn listener_targets(dialled: SocketAddr, ports: &[u16]) -> Vec<SocketAddr> {
+    let mut targets = vec![dialled];
+    for port in ports {
+        let mut candidate = dialled;
+        candidate.set_port(*port);
+        if !targets.contains(&candidate) {
+            targets.push(candidate);
+        }
+    }
+    targets
 }
 
 async fn authenticate_stream(
@@ -1560,17 +1686,20 @@ async fn authenticate_stream(
         Some(Message::AuthOk {
             server_flags,
             server_features,
+            listener_ports,
         }) => Ok(Negotiated {
             server_flags,
             // Absent means a broker that predates features. It implements none:
             // an unrecognised message type is fatal to the broker's control
             // loop, so a client that guessed would cost itself the connection.
             server_features: server_features.unwrap_or(0),
+            listener_ports: listener_ports.unwrap_or_default(),
         }),
         // Legacy broker: no advertisement, so assume only the original bits.
         Some(Message::Ok) => Ok(Negotiated {
             server_flags: felix_wire::ORIGINAL_V1_FLAGS,
             server_features: 0,
+            listener_ports: Vec::new(),
         }),
         Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),

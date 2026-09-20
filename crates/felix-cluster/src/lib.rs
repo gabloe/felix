@@ -71,6 +71,15 @@ pub struct BrokerNode {
 }
 
 impl BrokerNode {
+    /// This broker's process id, while it is running.
+    ///
+    /// For measurement: attributing CPU to the broker rather than to the
+    /// process driving it is the difference between "the broker is the
+    /// bottleneck" and "the generator is".
+    pub fn pid(&self) -> Option<u32> {
+        self.process.as_ref().map(|child| child.id())
+    }
+
     pub fn is_running(&self) -> bool {
         self.process.is_some()
     }
@@ -278,6 +287,10 @@ pub struct ClusterConfig {
     /// Inherit the parent's stdout/stderr rather than discarding it. Useful when
     /// running the harness by hand; noisy inside a test.
     pub inherit_output: bool,
+    /// How many client-facing QUIC listeners each broker binds, on consecutive
+    /// ports. One by default, which is what every test that says nothing about
+    /// listeners gets.
+    pub quic_listeners: usize,
 }
 
 impl Default for ClusterConfig {
@@ -289,6 +302,7 @@ impl Default for ClusterConfig {
             streams: vec![StreamSpec::new("orders", 1)],
             caches: Vec::new(),
             inherit_output: false,
+            quic_listeners: 1,
         }
     }
 }
@@ -526,6 +540,18 @@ impl Cluster {
     /// This is the width that broker will route a keyed publish with, read
     /// through the same routing snapshot the publish path reads — so it is the
     /// signal to wait on before publishing keys that are expected to spread.
+    /// An authenticated client connected to one named broker.
+    ///
+    /// Exposed for tests that care about the connection itself rather than
+    /// what is published over it -- which listener the pools landed on, for
+    /// instance.
+    pub async fn client_on(&self, node_id: &str) -> Result<felix_client::Client> {
+        let node = self
+            .node(node_id)
+            .ok_or_else(|| anyhow!("unknown node {node_id}"))?;
+        client::connect(node.client_addr, &self.tenant_id, &self.client_token).await
+    }
+
     pub async fn stream_shards_via(&self, node_id: &str, stream: &str) -> Result<u32> {
         let node = self
             .node(node_id)
@@ -1865,7 +1891,13 @@ fn spawn_broker(
     index: usize,
 ) -> Result<BrokerNode> {
     let node_id = format!("broker-{index}");
-    let client_addr = ports::free_udp()?;
+    // A run, not a single port: with several listeners the broker binds
+    // `client_addr.port() + n`, and those have to be free too.
+    let client_addr = if config.quic_listeners > 1 {
+        ports::free_udp_run(config.quic_listeners)?
+    } else {
+        ports::free_udp()?
+    };
     let internal_addr = ports::free_udp()?;
     let metrics_addr = ports::free_tcp()?;
     let data_dir = root.join(&node_id);
@@ -1897,6 +1929,7 @@ fn spawn_broker(
         .env("FELIX_CONTROLPLANE_URL", &control_plane.base_url)
         .env("FELIX_REGION_ID", "local")
         .env("FELIX_QUIC_BIND", client_addr.to_string())
+        .env("FELIX_QUIC_LISTENERS", config.quic_listeners.to_string())
         // And where clients reach it, which is what discovery hands out. The
         // harness binds a concrete loopback port rather than 0.0.0.0, so the
         // bind address is also the reachable one.

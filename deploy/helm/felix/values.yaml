@@ -128,6 +128,16 @@ broker:
   ports:
     # Clients connect here (QUIC).
     client: 5000
+    # How many client listeners each broker binds, on consecutive ports from
+    # `client`. One socket is one QUIC endpoint driver, and that driver is a
+    # single task that cannot use more than one core -- it is the per-broker
+    # throughput ceiling. More listeners spread inbound datagrams across more
+    # drivers; the broker advertises the set and clients spread across it.
+    #
+    # Raising this claims ports `client` .. `client + listeners - 1`, so
+    # `internal` has to move out of the way. Startup fails loudly if it does
+    # not, rather than putting peer and client traffic on one listener.
+    listeners: 1
     # Brokers forward and replicate to each other here (QUIC). Never exposed
     # outside the cluster: see networkPolicy and peerTls.
     internal: 5001

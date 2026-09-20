@@ -1,6 +1,7 @@
 {{- if .Values.broker.enabled }}
 {{- $b := .Values.broker }}
 {{- $name := include "felix.broker.fullname" . }}
+{{- $listeners := int (default 1 $b.ports.listeners) }}
 # Stable per-broker names: what discovery hands clients, and what a client
 # that followed a redirect connects to.
 apiVersion: v1
@@ -14,10 +15,12 @@ metadata:
 spec:
   clusterIP: None
   ports:
-    - name: quic
-      port: {{ int $b.ports.client }}
-      targetPort: quic
+    {{- range $offset := until $listeners }}
+    - name: {{ if eq $offset 0 }}quic{{ else }}quic-{{ $offset }}{{ end }}
+      port: {{ add (int $b.ports.client) $offset }}
+      targetPort: {{ if eq $offset 0 }}quic{{ else }}quic-{{ $offset }}{{ end }}
       protocol: UDP
+    {{- end }}
     - name: internal
       port: {{ int $b.ports.internal }}
       targetPort: internal
@@ -48,10 +51,12 @@ metadata:
 spec:
   type: {{ $b.clientService.type }}
   ports:
-    - name: quic
-      port: {{ int $b.clientService.port }}
-      targetPort: quic
+    {{- range $offset := until $listeners }}
+    - name: {{ if eq $offset 0 }}quic{{ else }}quic-{{ $offset }}{{ end }}
+      port: {{ add (int $b.clientService.port) $offset }}
+      targetPort: {{ if eq $offset 0 }}quic{{ else }}quic-{{ $offset }}{{ end }}
       protocol: UDP
+    {{- end }}
   selector:
     {{- include "felix.broker.selectorLabels" . | nindent 4 }}
 {{- end }}

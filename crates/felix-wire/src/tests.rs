@@ -1075,6 +1075,7 @@ fn an_auth_ok_without_features_reads_as_supporting_none() {
         Message::AuthOk {
             server_flags: 7,
             server_features: None,
+            listener_ports: None,
         }
     );
 }
@@ -1086,6 +1087,7 @@ fn an_auth_ok_advertising_nothing_omits_the_field() {
     let encoded = Message::AuthOk {
         server_flags: 7,
         server_features: None,
+        listener_ports: None,
     }
     .encode()
     .expect("encode");
@@ -1094,6 +1096,37 @@ fn an_auth_ok_advertising_nothing_omits_the_field() {
         !json.contains("server_features"),
         "an absent feature set must not appear on the wire: {json}"
     );
+    assert!(
+        !json.contains("listener_ports"),
+        "a single-listener broker must not mention listener_ports: {json}"
+    );
+}
+
+/// **A broker with one listener is byte-identical to one that predates the
+/// field.** The default is a single listener, so this is the common case: an
+/// old client must see exactly the frame it has always seen.
+#[test]
+fn a_single_listener_auth_ok_is_unchanged_on_the_wire() {
+    let before = Message::AuthOk {
+        server_flags: 7,
+        server_features: Some(crate::FEATURE_TOPOLOGY),
+        listener_ports: None,
+    }
+    .encode()
+    .expect("encode");
+    let json = std::str::from_utf8(&before.payload).expect("utf8");
+    assert!(!json.contains("listener_ports"), "{json}");
+}
+
+#[test]
+fn an_auth_ok_carries_the_listener_ports_it_binds() {
+    let message = Message::AuthOk {
+        server_flags: felix_wire_flags(),
+        server_features: Some(crate::FEATURE_TOPOLOGY),
+        listener_ports: Some(vec![5000, 5001, 5002, 5003]),
+    };
+    let decoded = Message::decode(message.encode().expect("encode")).expect("decode");
+    assert_eq!(decoded, message);
 }
 
 #[test]
@@ -1101,6 +1134,7 @@ fn an_auth_ok_carries_the_features_it_advertises() {
     let message = Message::AuthOk {
         server_flags: felix_wire_flags(),
         server_features: Some(crate::FEATURE_TOPOLOGY),
+        listener_ports: None,
     };
     let decoded = Message::decode(message.encode().expect("encode")).expect("decode");
     assert_eq!(decoded, message);

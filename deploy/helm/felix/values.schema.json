@@ -126,6 +126,7 @@
           "additionalProperties": false,
           "properties": {
             "client": { "$ref": "#/definitions/port" },
+            "listeners": { "type": "integer", "minimum": 1, "maximum": 64 },
             "internal": { "$ref": "#/definitions/port" },
             "metrics": { "$ref": "#/definitions/port" }
           }

@@ -114,8 +114,24 @@ fn warn_on_unreachable_advertise(
 // variable nothing reads.
 #[derive(Debug, Clone, Serialize)]
 pub struct BrokerConfig {
-    // QUIC listener bind address.
+    // QUIC listener bind address. With `quic_listeners > 1` this is the *first*
+    // of a consecutive run of ports; see [`BrokerConfig::quic_binds`].
     pub quic_bind: SocketAddr,
+    // An explicit `FELIX_IO_RUNTIME_THREADS`, when the operator set one.
+    //
+    // Kept so `validate` can see it: the pool size and the listener count must
+    // hold a relationship, and a pool too small for the listeners silently puts
+    // every listener's driver on one thread. Unset means derived.
+    pub io_runtime_threads: Option<usize>,
+    // How many client-facing QUIC listeners to bind, on consecutive ports from
+    // `quic_bind`.
+    //
+    // One socket means one `quinn::Endpoint`, and an endpoint's driver is a
+    // single task that reads every inbound datagram and routes it by connection
+    // id. That task cannot use more than one core, and it is what holds a
+    // broker to ~900 MB/s while the rest of the machine idles (#557). Separate
+    // ports are separate sockets, and separate sockets are separate drivers.
+    pub quic_listeners: usize,
     // Metrics HTTP listener bind address.
     pub metrics_bind: SocketAddr,
     // Optional control-plane base URL.
@@ -308,6 +324,8 @@ impl Default for BrokerConfig {
     fn default() -> Self {
         Self {
             quic_bind: SocketAddr::from(([0, 0, 0, 0], 5000)),
+            quic_listeners: 1,
+            io_runtime_threads: None,
             metrics_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
             controlplane_url: None,
             controlplane_token: String::new(),
@@ -405,6 +423,39 @@ impl SubscriberLaneShard {
 /// The file form exists so a token can arrive as a mounted secret rather than
 /// an environment variable visible in a process listing. Whitespace is trimmed,
 /// and a blank value is treated as no credential rather than as an empty one.
+/// How many client-facing QUIC listeners to bind.
+///
+/// Defaults to 1, which is exactly today's behaviour: one socket, one endpoint
+/// driver, one port. Raising it trades a wider port range for a receive path
+/// that is no longer one task on one core.
+///
+/// Refused rather than clamped when the range would wrap past port 65535: a
+/// broker that silently bound fewer listeners than asked would read as the
+/// feature not working, and the operator has a port number to fix.
+fn quic_listeners_from_env(quic_bind: SocketAddr) -> Result<usize> {
+    let Some(raw) = std::env::var("FELIX_QUIC_LISTENERS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(1);
+    };
+    let count: usize = raw
+        .trim()
+        .parse()
+        .with_context(|| format!("parse FELIX_QUIC_LISTENERS: {raw}"))?;
+    if count == 0 {
+        anyhow::bail!("FELIX_QUIC_LISTENERS is 0; a broker with no listener serves nothing");
+    }
+    let last = u32::from(quic_bind.port()) + count as u32 - 1;
+    if last > u32::from(u16::MAX) {
+        anyhow::bail!(
+            "FELIX_QUIC_LISTENERS ({count}) from FELIX_QUIC_BIND port {} runs past 65535",
+            quic_bind.port(),
+        );
+    }
+    Ok(count)
+}
+
 fn controlplane_token_from_env() -> std::io::Result<String> {
     match std::env::var("FELIX_NODE_TOKEN_FILE")
         .ok()
@@ -635,16 +686,42 @@ struct BrokerConfigOverride {
 }
 
 impl BrokerConfig {
+    /// Every client-facing listener address, in bind order.
+    ///
+    /// Consecutive ports from `quic_bind`. The first is the one an existing
+    /// deployment already knows, so a broker with the default single listener
+    /// binds exactly what it always did.
+    pub fn quic_binds(&self) -> Vec<SocketAddr> {
+        (0..self.quic_listeners)
+            .map(|offset| {
+                let mut addr = self.quic_bind;
+                addr.set_port(self.quic_bind.port() + offset as u16);
+                addr
+            })
+            .collect()
+    }
+
     pub fn from_env() -> Result<Self> {
         // Environment variables provide defaults for local development.
         let metrics_bind = std::env::var("FELIX_BROKER_METRICS_BIND")
             .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
             .parse()
             .with_context(|| "parse FELIX_BROKER_METRICS_BIND")?;
-        let quic_bind = std::env::var("FELIX_QUIC_BIND")
+        let quic_bind: SocketAddr = std::env::var("FELIX_QUIC_BIND")
             .unwrap_or_else(|_| "0.0.0.0:5000".to_string())
             .parse()
             .with_context(|| "parse FELIX_QUIC_BIND")?;
+        let quic_listeners = quic_listeners_from_env(quic_bind)?;
+        let io_runtime_threads = std::env::var("FELIX_IO_RUNTIME_THREADS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .with_context(|| format!("parse FELIX_IO_RUNTIME_THREADS: {value}"))
+            })
+            .transpose()?;
         let controlplane_url = std::env::var("FELIX_CONTROLPLANE_URL").ok();
         // Poll every 2s by default.
         let controlplane_sync_interval_ms = std::env::var("FELIX_CONTROLPLANE_SYNC_INTERVAL_MS")
@@ -655,7 +732,7 @@ impl BrokerConfig {
         let membership = membership_from_env(&controlplane_url, &controlplane_token)?;
         let peer_transport = match &membership {
             Some(membership) => {
-                let peer = crate::peer::PeerTransportConfig::from_env(quic_bind)?;
+                let peer = crate::peer::PeerTransportConfig::from_env(quic_bind, quic_listeners)?;
                 warn_on_unreachable_advertise(membership, &peer);
                 // Under mTLS the node id is the name on the certificate, and a
                 // dialler verifies a peer's certificate against the node id it
@@ -878,6 +955,8 @@ impl BrokerConfig {
                 .unwrap_or(DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC);
         Ok(Self {
             quic_bind,
+            quic_listeners,
+            io_runtime_threads,
             metrics_bind,
             controlplane_url,
             controlplane_token,
@@ -1003,8 +1082,60 @@ impl BrokerConfig {
                 self.cache_conn_recv_window,
             );
         }
+        self.validate_io_runtime_covers_every_listener()?;
         self.validate_credential_can_outlive_itself()?;
         Ok(())
+    }
+
+    /// Refuse an I/O runtime pool too small for the listeners that will use it.
+    ///
+    /// An endpoint's driver is a single task, so two endpoints on one runtime
+    /// share its one thread. `io_runtime_index` gives a server endpoint
+    /// `sequence % (pool_len - 1)`, which for a pool of 2 is `% 1` -- every
+    /// listener on the same thread, which is the single feeder that binding
+    /// several listeners exists to escape.
+    ///
+    /// Each setting is fine alone. `FELIX_IO_RUNTIME_THREADS=1` isolates a
+    /// driver; `FELIX_QUIC_LISTENERS=4` asks for four. Together they quietly
+    /// collapse the four onto one, and the only symptom is throughput that does
+    /// not improve -- which reads as the listeners being pointless rather than
+    /// as a misconfiguration.
+    ///
+    /// Unset is not a conflict: the pool is derived from the listener count, so
+    /// there is nothing to disagree with.
+    fn validate_io_runtime_covers_every_listener(&self) -> Result<()> {
+        let Some(configured) = self.io_runtime_threads else {
+            return Ok(());
+        };
+        // Zero is the documented way to turn the pool off entirely and put
+        // drivers back on the app runtime, where tokio spreads them. That is
+        // the Linux default and not a conflict.
+        if configured == 0 {
+            return Ok(());
+        }
+        let needed = felix_transport::required_io_runtime_threads(self.server_endpoints());
+        if configured < needed {
+            anyhow::bail!(
+                "FELIX_IO_RUNTIME_THREADS ({configured}) is too small for \
+                 FELIX_QUIC_LISTENERS ({}): this broker binds {} server \
+                 endpoints and every driver past the first would share a thread \
+                 with another, which is the single feeder several listeners \
+                 exist to escape. Use {needed}, or 0 to put drivers on the app \
+                 runtime",
+                self.quic_listeners,
+                self.server_endpoints(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Server endpoints this broker binds: the client listeners, plus the
+    /// internal one when it is part of a cluster.
+    ///
+    /// The internal listener carries replication, so it is a driver like any
+    /// other and needs its own runtime rather than sharing a client listener's.
+    pub fn server_endpoints(&self) -> usize {
+        self.quic_listeners + usize::from(self.peer_transport.is_some())
     }
 
     /// Refuse a credential that will expire with nothing able to renew it.
@@ -1368,6 +1499,113 @@ mod tests {
         }
         let err = BrokerConfig::from_env().expect_err("should fail");
         assert!(err.to_string().contains("share a port"), "{err}");
+    }
+
+    /// A listener range must clear the internal port too. The collision is
+    /// easier to hit than the single-port one -- the port that clashes is one
+    /// nobody wrote down, it is merely `quic_bind + n`.
+    #[serial]
+    #[test]
+    fn an_internal_listener_inside_the_client_range_fails_startup() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:5010");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_QUIC_BIND", "0.0.0.0:5000");
+            env::set_var("FELIX_QUIC_LISTENERS", "4");
+            // Inside 5000-5003, but not equal to 5000, so only the range check
+            // catches it.
+            env::set_var("FELIX_INTERNAL_BIND", "0.0.0.0:5002");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("5000-5003"), "{err}");
+        clear_felix_env();
+    }
+
+    /// Just past the range is fine -- the check must not be off by one.
+    #[serial]
+    #[test]
+    fn an_internal_listener_just_past_the_client_range_is_accepted() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_NODE_ID", "broker-a");
+            env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:5004");
+            env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+            env::set_var("FELIX_NODE_TOKEN", "a-node-token");
+            env::set_var("FELIX_QUIC_BIND", "0.0.0.0:5000");
+            env::set_var("FELIX_QUIC_LISTENERS", "4");
+            env::set_var("FELIX_INTERNAL_BIND", "0.0.0.0:5004");
+        }
+        let config = BrokerConfig::from_env().expect("config");
+        assert_eq!(config.quic_listeners, 4);
+        clear_felix_env();
+    }
+
+    /// The default is one listener bound at exactly the configured address, so
+    /// a deployment that has not asked for more is unchanged.
+    #[serial]
+    #[test]
+    fn one_listener_by_default_binds_only_the_configured_address() {
+        clear_felix_env();
+        let config = BrokerConfig::from_env().expect("config");
+        assert_eq!(config.quic_listeners, 1);
+        assert_eq!(
+            config
+                .quic_binds()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["0.0.0.0:5000"],
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn listeners_occupy_consecutive_ports_from_the_bind_address() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_QUIC_BIND", "127.0.0.1:7000");
+            env::set_var("FELIX_QUIC_LISTENERS", "3");
+        }
+        let config = BrokerConfig::from_env().expect("config");
+        assert_eq!(
+            config
+                .quic_binds()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"],
+        );
+        clear_felix_env();
+    }
+
+    /// Refused rather than clamped: a broker that silently bound fewer
+    /// listeners than asked reads as the feature not working.
+    #[serial]
+    #[test]
+    fn a_listener_range_past_the_last_port_is_refused() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_QUIC_BIND", "0.0.0.0:65534");
+            env::set_var("FELIX_QUIC_LISTENERS", "4");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("65535"), "{err}");
+        clear_felix_env();
+    }
+
+    #[serial]
+    #[test]
+    fn zero_listeners_is_refused() {
+        clear_felix_env();
+        unsafe {
+            env::set_var("FELIX_QUIC_LISTENERS", "0");
+        }
+        let err = BrokerConfig::from_env().expect_err("should fail");
+        assert!(err.to_string().contains("serves nothing"), "{err}");
+        clear_felix_env();
     }
 
     /// A token can arrive as a mounted secret rather than an environment
@@ -2016,6 +2254,64 @@ subscriber_single_writer_per_conn: false
             // If this ever fails, a default was changed into a contradiction
             // and every broker would refuse to start.
             BrokerConfig::default().validate().expect("defaults");
+        }
+
+        /// The pair this module exists for, in its newest form: each setting
+        /// is fine alone, and together they put four listeners on one thread.
+        #[test]
+        fn an_io_runtime_pool_too_small_for_the_listeners_is_refused() {
+            let config = BrokerConfig {
+                quic_listeners: 4,
+                io_runtime_threads: Some(1),
+                ..BrokerConfig::default()
+            };
+            let err = config
+                .validate()
+                .expect_err("1 runtime cannot serve 4 listeners");
+            let message = format!("{err:#}");
+            assert!(message.contains("FELIX_IO_RUNTIME_THREADS"), "{message}");
+            assert!(message.contains("FELIX_QUIC_LISTENERS"), "{message}");
+            // Says what to use instead, rather than only what is wrong.
+            assert!(message.contains("Use 5"), "{message}");
+        }
+
+        /// Zero is the documented way to turn the pool off and put drivers back
+        /// on the app runtime, where tokio spreads them. Not a conflict.
+        #[test]
+        fn turning_the_pool_off_is_not_a_conflict() {
+            BrokerConfig {
+                quic_listeners: 8,
+                io_runtime_threads: Some(0),
+                ..BrokerConfig::default()
+            }
+            .validate()
+            .expect("0 disables the pool");
+        }
+
+        /// Unset is the ordinary case: nothing to disagree with, because the
+        /// pool is derived from the listener count.
+        #[test]
+        fn an_underived_pool_is_not_a_conflict() {
+            BrokerConfig {
+                quic_listeners: 8,
+                io_runtime_threads: None,
+                ..BrokerConfig::default()
+            }
+            .validate()
+            .expect("unset derives");
+        }
+
+        /// A pool sized exactly right is accepted, so the error names a number
+        /// that actually works.
+        #[test]
+        fn a_pool_sized_for_the_listeners_is_accepted() {
+            let config = BrokerConfig {
+                quic_listeners: 4,
+                io_runtime_threads: Some(5),
+                ..BrokerConfig::default()
+            };
+            assert_eq!(config.server_endpoints(), 4);
+            config.validate().expect("5 runtimes serve 4 listeners");
         }
 
         #[test]

@@ -348,6 +348,14 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                         // the shards it leads.
                                         | felix_wire::FEATURE_IDEMPOTENT_PRODUCER,
                                 ),
+                                // Only when there is more than one. A single
+                                // listener is the default, and saying so
+                                // explicitly would change the bytes every
+                                // existing deployment puts on the wire to say
+                                // nothing a client does not already know.
+                                listener_ports: (config.quic_listeners > 1).then(|| {
+                                    config.quic_binds().iter().map(|a| a.port()).collect()
+                                }),
                             },
                             None => Message::Ok,
                         };
