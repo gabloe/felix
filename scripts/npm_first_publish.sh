@@ -24,6 +24,12 @@
 # is published is what CI built and what the conformance suite ran against.
 set -euo pipefail
 
+# Every npm call here is pinned to the public registry. A machine with a
+# corporate mirror in ~/.npmrc -- which is a normal thing to have -- would
+# otherwise publish Felix to an internal feed, or fail confusingly against one.
+# Never drop this flag, and never rely on the ambient registry setting.
+REGISTRY="https://registry.npmjs.org/"
+
 tag="${1:-}"
 if [ -z "$tag" ]; then
   echo "usage: $0 <tag>   e.g. $0 v0.5.0" >&2
@@ -33,6 +39,42 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 pkg="$root/crates/felix-typescript"
 version="${tag#v}"
+
+echo "== checking this machine can publish at all"
+
+configured="$(npm config get registry)"
+if [ "$configured" != "$REGISTRY" ]; then
+  echo "  note: npm is configured for ${configured}"
+  echo "        every command here overrides it with ${REGISTRY}"
+fi
+
+# Before anything is downloaded or packed: a network that cannot reach the
+# registry is the common case on a corporate VPN, and finding out at the upload
+# wastes the run and leaves binaries lying around.
+if ! curl -sf -o /dev/null --max-time 15 "${REGISTRY}npm" 2>/dev/null; then
+  cat >&2 <<'BLOCKED'
+error: this network cannot reach https://registry.npmjs.org/.
+
+  A corporate proxy or VPN is in the way. Publishing has to happen from a
+  network that can reach the public registry -- a home connection or a phone
+  hotspot is enough. Nothing has been changed or published.
+BLOCKED
+  exit 1
+fi
+
+if ! npm whoami --registry="$REGISTRY" >/dev/null 2>&1; then
+  cat >&2 <<BLOCKED
+error: not logged in to ${REGISTRY}.
+
+  Run:  npm login --registry=${REGISTRY}
+
+  Log in against the public registry explicitly. A corporate mirror in
+  ~/.npmrc means a plain \`npm login\` authenticates to the wrong place.
+BLOCKED
+  exit 1
+fi
+echo "  publishing to ${REGISTRY} as $(npm whoami --registry="$REGISTRY")"
+echo
 
 manifest_version="$(node -p "require('$pkg/package.json').version")"
 if [ "$manifest_version" != "$version" ]; then
@@ -68,16 +110,16 @@ echo "as these names exist."
 echo
 for dir in "$pkg"/npm/*/; do
   echo "-- $(basename "$dir")"
-  ( cd "$dir" && npm publish )
+  ( cd "$dir" && npm publish --registry="$REGISTRY" )
 done
 echo "-- felix-client"
-( cd "$pkg" && npm publish )
+( cd "$pkg" && npm publish --registry="$REGISTRY" )
 
 echo
 echo "== confirming the registry has them"
 missing=0
 for name in $(node -p "Object.keys(require('$pkg/package.json').optionalDependencies).join(' ')") felix-client; do
-  if npm view "${name}@${version}" version >/dev/null 2>&1; then
+  if npm view "${name}@${version}" version --registry="$REGISTRY" >/dev/null 2>&1; then
     echo "  ok      ${name}@${version}"
   else
     echo "  MISSING ${name}@${version}"

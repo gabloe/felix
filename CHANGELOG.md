@@ -38,6 +38,19 @@ for what the current release actually guarantees.
   `npm_stage` stays, correctly described: it stages a version of a package that
   already exists.
 
+- **A publish could have gone to a corporate mirror.** `npm publish` uses
+  whatever registry is configured, and a mirror in `~/.npmrc` is a normal thing
+  for a machine to have — this one had one, and the publish went at it and
+  stopped only because it demanded credentials. Every npm command in the script
+  now pins `--registry` explicitly, and `crates/felix-typescript` and each
+  platform package carry an `.npmrc` naming the public registry, the way
+  `docs-site` already did for resolution.
+
+  The script also checks, before it downloads or packs anything, that the
+  public registry is reachable and that you are logged in to *it* rather than
+  to a mirror. A corporate network usually cannot reach npm at all, and finding
+  that out at the upload wastes the run and leaves binaries lying around.
+
 ### Changed
 
 - **npm publishes through trusted publishing rather than a token.** The job
