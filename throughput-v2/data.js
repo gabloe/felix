@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789936071863,
+  "lastUpdate": 1789941853246,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13468,6 +13468,58 @@ window.BENCHMARK_DATA = {
             "range": "6921.24",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 945184.06\nmean: 941579.21\nstdev: 6921.24\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3665cd60ddfc3e87343d1925951e4f7f4ef93991",
+          "message": "chore: sweep this session's diff for reuse, simplification, efficiency and altitude (#607)\n\n/simplify against 9c2519af..a1ea7ae2 (the ~10 PRs merged today), four\nparallel review angles, findings applied where the fix stayed inside the\ndiff's own risk envelope.\n\nReuse:\n- Three near-identical AppState test fixtures (api.rs, auth/exchange.rs,\n  auth/bearer.rs), each rebuilding the same struct literal for a different\n  one or two fields, consolidated into services/controlplane/src/test_support.rs.\n- stamp_request_id and restamp each reimplemented the same \"decode to Value,\n  mutate, re-encode\" skeleton from scratch. Extracted edit_command_json.\n- seed-remote.sh decoded the JWT payload three separate times, once per\n  claim, spawning python3 three times. One decode, three claims read off it.\n\nSimplification / comment discipline:\n- listener_throughput.rs's module doc was an 89-line investigative essay --\n  ruled-out hypotheses, specific numbers from one run, a full post-mortem --\n  inside shipped test code. Trimmed to why it's #[ignore]d, how to run it,\n  and one caveat; the findings moved to\n  docs/perf-investigation-sharding-ceiling.md as the section that document's\n  own style already uses for exactly this.\n- The same three-line \"record the target, note it if new\" snippet was\n  copy-pasted across the publish/cache/event pool loops in client.rs.\n  Extracted pool_target.\n- listeners_in_use()'s doc claimed the result was sorted. It never was, and\n  nothing depends on it being sorted -- fixed the doc rather than adding a\n  sort nobody asked for.\n\nEfficiency:\n- MetadataStateMachine::apply() parsed every proposal's JSON generically\n  just to peek at its request id, then parsed it again fully to dispatch.\n  The peek is now a struct that captures only rid; serde skips the rest\n  instead of building a Value tree of it, so a retried ImportState carrying\n  the whole exported state doesn't pay to have that state parsed twice on\n  the common path.\n- snapshot() took the applied-ids lock twice to clone two fields separately\n  -- two acquisitions where one would do, and a window where a concurrent\n  apply() could leave the two clones inconsistent. AppliedIds now derives\n  Clone; one lock, one clone.\n\nAltitude:\n- publish and publish_keyed each had their own copy of \"the owner we routed\n  to failed to answer; forget it and reformat the error.\" Extracted\n  forget_owner.\n\nSkipped, not silently: the I/O runtime pool's ordering dependency on\nplan_server_endpoints running before any endpoint is constructed (real, but\nno assertion can tell \"one endpoint on purpose\" from \"forgot to declare\nmore\" without the larger redesign already weighed and set aside when the\nmechanism was built); per-publish allocations building the owner-cache\nlookup key, and one connection per shard rather than sharing a connection\nper broker (both real, both touch the routing cache's actual design rather\nthan its shape, which is more than this pass should risk); the fnv1a hash\nnow existing in three crates, two of which predate this diff and would need\nnew dependency edges to consolidate into.\n\nVerified: task lint clean; controlplane (277), felix-client (93 + 1), and\nthe four felix-cluster integration tests touching the changed paths (14) all\npass; task docs:evidence and check:mermaid clean; full task test green\n(110 suites, exit 0).",
+          "timestamp": "2026-09-20T15:02:02-07:00",
+          "tree_id": "838977f4a557e78b1ab9a808845eebb85d499956",
+          "url": "https://github.com/gabloe/felix/commit/3665cd60ddfc3e87343d1925951e4f7f4ef93991"
+        },
+        "date": 1789941852449,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 529286.91,
+            "range": "19429.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 529286.91\nmean: 528239.11\nstdev: 19429.47\ncv: 3.68%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 529286.91,
+            "range": "19429.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 529286.91\nmean: 528239.11\nstdev: 19429.47\ncv: 3.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 119160.54,
+            "range": "1039.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 119160.54\nmean: 119074.97\nstdev: 1039.47\ncv: 0.87%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1191605.42,
+            "range": "10394.74",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1191605.42\nmean: 1190749.65\nstdev: 10394.74\ncv: 0.87%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
