@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789930778006,
+  "lastUpdate": 1789934092716,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13312,6 +13312,58 @@ window.BENCHMARK_DATA = {
             "range": "5622.82",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1074313.45\nmean: 1071727.25\nstdev: 5622.82\ncv: 0.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b513b2e661cf18ea3717dfef4e06e5f2f04dc84a",
+          "message": "feat(client): route publishes to the shard's owner (#600)\n\n* feat(client): route unkeyed publishes to the shard's owner\n\nA publish for a shard the entry broker does not own is forwarded and\nacknowledged once the owner has written it. Correct, and it costs a decrypt\nat the entry broker, a re-encrypt to the owner and a decrypt there -- ~140 vs\n~250 MB/s per vCPU measured on a two-broker session. The client was never\ntold, so it kept sending to the same broker forever.\n\nMost of the machinery was already here. The broker names the owner on the\nbinary publish ack, behind a negotiated flag, and the client decoded it,\ncounted it and threw it away -- the comment there said routing was the next\npiece of work. This is that.\n\nThe owner now travels back through the ack to the publish call, and\n`ClusterClient` keeps a stream -> owner map, connecting once when it learns\none and sending subsequent batches straight there. A forward still happens\nwhenever the map is cold, which is what makes this safe: the cache is an\noptimisation over a path that already works, so a failure to connect, an\naddress the cluster never published, or an owner that stops answering all\ndegrade to forwarding rather than to an error.\n\nStaleness is handled by the generation the ack already carries: a lower one\nis an older answer arriving late and does not replace a newer one. Checked\nbefore connecting and again under the write lock, because another publish may\nhave learned a newer owner while this one was dialling. An owner that fails\nis forgotten and named in the error -- the caller never chose that broker and\nwould otherwise have no way to identify it.\n\n**Unkeyed publishes only.** An unkeyed publish always resolves to shard 0, so\none owner per stream is exact. A keyed publish does not: its shard depends on\na hash that lives in felix-router, which felix-client does not depend on, so\nthe client cannot tell which shard an ack refers to. Caching one owner per\nstream would send every key to shard 0's owner. Keyed publishes therefore\nkeep forwarding, which is correct, and the remaining work is recorded on\n#536: the ack's owner block is a fixed layout behind a negotiated flag, so\ncarrying the shard needs a new flag bit rather than an extra field.\n\nTested by counting, not by proxy: `publishes_forwarded()` is incremented per\nack that came back marked forwarded, so the test asserts the thing the issue\nis about. Reverting the cache lookup makes it fail -- five publishes stay\nforwarded (2 -> 7) where they should have stopped.\n\nRefs #536\n\n* feat: route keyed publishes to their shard's owner too\n\nFinishes the routing half of #536. The unkeyed case landed already; keyed\npublishes kept forwarding because the client could not tell which shard an\nack referred to.\n\nThe fix is not the one the issue proposed, and not the one I expected. I had\nsaid the ack needed a new flag bit to carry the shard. It does not: the\nclient never needed the broker's shard number, only a number that is\n*self-consistent*. The shard is a cache key for an owner learned empirically\nfrom the ack, so a client that computed a different number than the broker\nwould still route to the right broker -- it would simply file the entry\nunder a different key.\n\nSo `shard_for` moves into `felix-wire`, where the client and broker already\nmeet, and the broker re-exports it rather than keeping its own copy. That is\nthe better outcome regardless of routing: the client choosing a shard and the\nbroker choosing a shard must agree, and two copies of a hash are two things\nthat can drift -- exactly the failure #598 is about. Sharing it also bounds\nthe owner cache by shard count rather than by the number of distinct routing\nkeys, which is the real reason to use the true hash rather than any stable\none.\n\nThe client asks the cluster how wide a stream is once and caches it. A stale\nwidth is not a correctness problem for the same reason: it changes which key\nan owner is filed under, not which broker the publish reaches. A broker that\ncannot answer at all yields shard 0, so everything shares one entry and the\nworst case is the forwarding this exists to avoid.\n\nThe frozen-mapping test is a contract, not a characterisation: a client and a\nbroker that disagree send the same key to different shards. My first vectors\nput three of four keys on shard 6, which would have passed while\ndemonstrating nothing; they now land on 0, 2, 3, 4 and 6.\n\nAlso corrects a stale claim in `shard_routing.rs` -- \"the wire protocol\ncarries no routing key today, so `routing_key` is always `None`\" -- untrue\nsince #551 put the key on the binary publish frame.\n\nTested by counting acks that came back marked forwarded, across twelve shards\non three brokers: a first pass over twelve keys teaches the owners, a second\npass over the same keys forwards nothing. Reverting the cache lookup makes it\nfail, 7 -> 14 where it should stay at 7.\n\nCloses #536",
+          "timestamp": "2026-09-20T12:52:51-07:00",
+          "tree_id": "f5b857e16e68781a0f66d3667450545600da0168",
+          "url": "https://github.com/gabloe/felix/commit/b513b2e661cf18ea3717dfef4e06e5f2f04dc84a"
+        },
+        "date": 1789934091977,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 641243.08,
+            "range": "10006.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 641243.08\nmean: 637480.97\nstdev: 10006.53\ncv: 1.57%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 641243.08,
+            "range": "10006.53",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 641243.08\nmean: 637480.97\nstdev: 10006.53\ncv: 1.57%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 148674.86,
+            "range": "4796.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 148674.86\nmean: 145909.66\nstdev: 4796.69\ncv: 3.29%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1486748.6,
+            "range": "47966.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1486748.60\nmean: 1459096.59\nstdev: 47966.88\ncv: 3.29%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
