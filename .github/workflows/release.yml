@@ -10,6 +10,14 @@ on:
         description: Existing release tag to build and publish
         required: true
         type: string
+      npm_stage:
+        description: >-
+          Stage the npm packages for a maintainer to promote, instead of
+          publishing them. Needs a stage-only NPM_TOKEN. Use this to claim a
+          name for the first time; trusted publishing handles it after that.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -593,20 +601,34 @@ jobs:
       # Platform packages first: the main package declares them as optional
       # dependencies, so publishing it first leaves a window where an install
       # resolves to nothing.
-      - name: Publish, platform packages first
+      - name: ${{ inputs.npm_stage && 'Stage, platform packages first' || 'Publish, platform packages first' }}
         working-directory: crates/felix-typescript
+        env:
+          # Only in staging mode, and only then: trusted publishing is the
+          # normal path and a token present alongside it is a second way in
+          # that nobody meant to leave open.
+          NODE_AUTH_TOKEN: ${{ inputs.npm_stage && secrets.NPM_TOKEN || '' }}
+          STAGE: ${{ inputs.npm_stage }}
         run: |
           set -euo pipefail
+          # A stage-only token cannot publish directly; it uploads a version
+          # that a maintainer with 2FA then promotes. Direct publish with a
+          # bypass-2fa token is deprecated and removed in January 2027, so this
+          # is the token path that still exists afterwards.
+          if [ "$STAGE" = "true" ]; then publish=(stage publish); else publish=(publish); fi
           for dir in npm/*/; do
             echo "== ${dir}"
-            ( cd "$dir" && npm publish )
+            ( cd "$dir" && npm "${publish[@]}" )
           done
           echo "== felix-client"
-          npm publish
+          npm "${publish[@]}"
 
       # Because the job reported success while publishing nothing at all, and
-      # the only way to know a publish happened is to go and look.
+      # the only way to know a publish happened is to go and look. Staged
+      # versions are deliberately not on the registry yet, so this asks the
+      # question only when something was actually published.
       - name: The registry must actually have them
+        if: ${{ !inputs.npm_stage }}
         working-directory: crates/felix-typescript
         run: |
           set -euo pipefail
@@ -621,6 +643,21 @@ jobs:
             fi
           done
           exit "$missing"
+
+      - name: What a maintainer needs to promote
+        if: ${{ inputs.npm_stage }}
+        working-directory: crates/felix-typescript
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          echo "Staged, awaiting promotion by a maintainer with 2FA:"
+          for pkg in $(node -p "Object.keys(require('./package.json').optionalDependencies).join(' ')") felix-client; do
+            echo "  ${pkg}@${version}"
+          done
+          echo
+          echo "Promote the platform packages before felix-client: it declares"
+          echo "them as optional dependencies, so the other order leaves a"
+          echo "window where an install resolves to nothing."
 
   python-publish:
     name: Publish to PyPI

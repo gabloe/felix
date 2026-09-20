@@ -37,9 +37,24 @@ for what the current release actually guarantees.
 
   It is an explicit `npm publish` per package now, platform packages before the
   one that declares them as optional dependencies, and any failure stops the
-  run. That also leaves the door open to `npm stage publish`, for a stage-only
-  token promoted by a maintainer, if trusted publishing cannot be configured
-  for a name that does not exist yet.
+  run.
+
+- **The release can stage npm packages instead of publishing them.** A
+  `npm_stage` input on the manual dispatch runs `npm stage publish`, which a
+  stage-only token can do and which leaves each version for a maintainer with
+  2FA to promote. It exists to claim a name for the first time: trusted
+  publishing is configured on a package, and a package that has never been
+  published is not there to configure.
+
+  Direct publishing with a token that bypasses 2FA is deprecated and removed in
+  January 2027, so staging is the token path that outlives it. The token is
+  passed only in staging mode — trusted publishing is the normal path, and a
+  token sitting alongside it is a second way in that nobody meant to leave
+  open.
+
+  In staging mode the job prints what to promote and in what order, and does
+  not assert the versions are live, because a staged version deliberately is
+  not.
 
 ### Fixed
 
