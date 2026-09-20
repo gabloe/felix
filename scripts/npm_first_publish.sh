@@ -86,7 +86,23 @@ fi
 echo "== fetching the binaries $tag published"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-gh release download "$tag" --repo gabloe/felix --pattern '*.node' --dir "$work"
+
+# `gh` where it exists, plain HTTPS where it does not -- Azure Cloud Shell and
+# most minimal containers have curl and no gh, and the release is public, so
+# there is nothing to authenticate to.
+if command -v gh >/dev/null 2>&1; then
+  gh release download "$tag" --repo gabloe/felix --pattern '*.node' --dir "$work"
+else
+  echo "  no gh; downloading over https"
+  for dir in "$pkg"/npm/*/; do
+    node_file="felix.$(basename "$dir").node"
+    url="https://github.com/gabloe/felix/releases/download/${tag}/${node_file}"
+    if ! curl -fsSL --max-time 300 -o "$work/$node_file" "$url"; then
+      echo "error: could not download $node_file from $tag" >&2
+      exit 1
+    fi
+  done
+fi
 
 echo
 echo "== placing each binary in its platform package"
