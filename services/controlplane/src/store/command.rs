@@ -302,6 +302,21 @@ pub type MetaResult = Result<MetaResponse, MetaError>;
 #[derive(Serialize, Deserialize)]
 struct Envelope {
     v: u16,
+    /// Identifies one *logical* write across the attempts that carry it.
+    ///
+    /// `RaftStore::write` caps each attempt and retries within a larger
+    /// budget, and a timed-out attempt does not mean the proposal failed -- it
+    /// means no answer arrived in time. If the command committed as the cap
+    /// expired, the retry proposes it again and the state machine answers from
+    /// its post-commit state: `409 tenant already exists`, for a tenant the
+    /// caller successfully created (#529).
+    ///
+    /// With an id the retry is recognised and answered with the original
+    /// response, which makes it genuinely idempotent rather than merely
+    /// repeated. Absent for a proposal from a peer that predates this, which
+    /// is deduplicated by nothing and behaves exactly as it did before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rid: Option<String>,
     #[serde(flatten)]
     command: MetaCommand,
 }
@@ -310,9 +325,45 @@ struct Envelope {
 pub fn encode_command(command: &MetaCommand) -> Vec<u8> {
     serde_json::to_vec(&Envelope {
         v: COMMAND_VERSION,
+        rid: None,
         command: command.clone(),
     })
     .expect("commands serialize by construction")
+}
+
+/// Stamp `command` with a request id, once, before it is first proposed.
+///
+/// Edits the JSON rather than round-tripping through [`MetaCommand`], for the
+/// same reason [`restamp`] does: a command from a newer build may carry fields
+/// this one does not know, and decoding to a struct would drop them.
+///
+/// Stamping must happen **once per logical write, not per attempt** -- a fresh
+/// id on every retry is indistinguishable from a fresh command, which is the
+/// situation this exists to fix.
+///
+/// `None` when the bytes are not a JSON object, which is not this layer's to
+/// diagnose: the proposal goes out unstamped and behaves as it always did.
+pub fn stamp_request_id(command: &[u8], rid: &str) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(command).ok()?;
+    let object = value.as_object_mut()?;
+    // Never overwrite one. A forwarded proposal arrives already stamped by the
+    // instance the client reached, and that is the id the leader must
+    // deduplicate on -- restamping here would give the same logical write two
+    // identities, one per hop.
+    if object.contains_key("rid") {
+        return None;
+    }
+    object.insert("rid".to_string(), rid.into());
+    serde_json::to_vec(&value).ok()
+}
+
+/// The request id on a proposal, if it carries one.
+pub fn request_id_of(command: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(command)
+        .ok()?
+        .get("rid")?
+        .as_str()
+        .map(str::to_string)
 }
 
 /// The `op` of the one command whose clock the leader replaces.

@@ -73,6 +73,7 @@ openraft = { version = "0.9", features = [
 # Backs the Raft log, vote, and snapshot store: crash-safe single-file ACID
 # writes so Felix carries no hand-rolled durability code for consensus state.
 redb = "4"
+uuid = { workspace = true }
 
 [dev-dependencies]
 tower = "0.5"
