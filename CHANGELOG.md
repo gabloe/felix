@@ -11,6 +11,33 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`npm stage publish` cannot claim a name either**, so the staging path added
+  for that purpose does not work for a package that has never been published:
+
+  ```
+  POST /-/stage/package/felix-client-darwin-arm64
+  404 Package "felix-client-darwin-arm64" not found
+  ```
+
+  Staging uploads a new *version* of an existing package. npm's documentation
+  requires the package to exist before a trusted publisher can be configured
+  too ([npm/cli#8544](https://github.com/npm/cli/issues/8544) tracks lifting
+  that), which leaves no way for CI to create a name at all: the remaining
+  option is a direct publish, needing either a token that bypasses 2FA —
+  restricted, and losing publish rights around January 2027 — or a person
+  answering the prompt.
+
+  `scripts/npm_first_publish.sh` is that person's script. It publishes the
+  binaries from a GitHub release, so what reaches npm is what CI built and what
+  the conformance suite ran against, checks the tag against the manifest before
+  it starts, and confirms all six are live afterwards. Run once per package
+  name, ever; trusted publishing takes over from the second release.
+
+  `npm_stage` stays, correctly described: it stages a version of a package that
+  already exists.
+
 ### Changed
 
 - **npm publishes through trusted publishing rather than a token.** The job
