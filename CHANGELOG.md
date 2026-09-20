@@ -11,6 +11,17 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+## [0.6.0-preview] - 2026-09-20
+
+Development towards 0.6.0. Not a release: published from this line only if and
+when something needs to be, and `pip` will not install it without `--pre`.
+
+**A note on the version string.** Cargo and npm carry `0.6.0-preview`
+verbatim. PEP 440 normalises it to `0.6.0rc0` — `preview` is one of its
+spellings of `rc` — so the wheel's version differs from the crate's and the
+npm package's by design rather than by mistake. It sorts before `0.6.0` on all
+three, which is what matters.
+
 ### Fixed
 
 - **The docs said the clients were not installable.** They are: `felix-client`
