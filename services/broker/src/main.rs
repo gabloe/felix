@@ -370,73 +370,89 @@ where
 
     // Build and bind the QUIC listener. `build_server_config` currently uses a self-signed
     // certificate suitable for local development.
-    let bind_addr = config.quic_bind;
     let server_config = build_server_config().context("build QUIC server config")?;
 
     // Apply transport-level configuration (flow control windows, pooling behavior, etc.)
     // derived from broker config.
     let transport = broker::transport::cache_transport_config(&config, TransportConfig::default());
-    let quic_server = Arc::new(
-        QuicServer::bind(bind_addr, server_config, transport).context("bind QUIC listener")?,
-    );
-    tracing::info!(addr = %quic_server.local_addr()?, "quic listener started");
+
+    // One `QuicServer` per configured listener. Each owns its own UDP socket and
+    // therefore its own `quinn` endpoint driver -- the single task that reads
+    // every datagram for that socket and routes it by connection id. That task
+    // is the per-broker throughput ceiling (#557): it cannot use more than one
+    // core, and it saturates while the rest of the machine idles. N sockets are
+    // N drivers. Default is one, so a deployment that has not asked for more
+    // binds exactly what it always did.
+    let mut quic_servers = Vec::with_capacity(config.quic_listeners);
+    for bind_addr in config.quic_binds() {
+        let server = QuicServer::bind(bind_addr, server_config.clone(), transport.clone())
+            .with_context(|| format!("bind QUIC listener on {bind_addr}"))?;
+        tracing::info!(addr = %server.local_addr()?, "quic listener started");
+        quic_servers.push(Arc::new(server));
+    }
 
     // Start accepting QUIC connections in a background task.
     // If the accept loop exits due to an error, we log and continue shutdown normally.
     let broker = Arc::new(broker);
-    let accept_task = {
-        let quic_server = Arc::clone(&quic_server);
-        let broker = Arc::clone(&broker);
-        let quic_config = config.clone();
-        let auth = Arc::clone(&auth);
-        let accept_shutdown = accept_shutdown.clone();
-        let connections = connections.clone();
-        let seeded = seeded.clone();
-        let ingress_router = ingress_router.clone();
-        let peers_for_accept = peers.clone();
-        let lease_for_accept = lease.clone();
-        let marks_for_accept = Arc::clone(&quorum_marks);
-        let endpoints_for_accept = Arc::clone(&client_endpoints);
-        tokio::spawn(async move {
-            // A durable broker does not accept until its streams exist.
-            // Readiness alone only steers orchestrated traffic; a client with
-            // the address in hand would otherwise connect during recovery and
-            // be told its durable stream does not exist. Waiting is the honest
-            // answer, and shutdown still wins the race so a broker told to stop
-            // during recovery stops.
-            if gate_readiness_on_sync {
-                tokio::select! {
-                    biased;
-                    _ = accept_shutdown.cancelled() => {
-                        tracing::info!("shutdown before initial sync; not accepting");
-                        return;
-                    }
-                    _ = seeded.cancelled() => {
-                        tracing::info!("initial sync applied; accepting connections");
+    // One accept loop per listener. They share everything behind them -- the
+    // same broker, the same connection registry, the same shutdown token -- and
+    // differ only in the socket they read from.
+    let accept_tasks: Vec<_> = quic_servers
+        .iter()
+        .map(|server| {
+            let quic_server = Arc::clone(server);
+            let broker = Arc::clone(&broker);
+            let quic_config = config.clone();
+            let auth = Arc::clone(&auth);
+            let accept_shutdown = accept_shutdown.clone();
+            let connections = connections.clone();
+            let seeded = seeded.clone();
+            let ingress_router = ingress_router.clone();
+            let peers_for_accept = peers.clone();
+            let lease_for_accept = lease.clone();
+            let marks_for_accept = Arc::clone(&quorum_marks);
+            let endpoints_for_accept = Arc::clone(&client_endpoints);
+            tokio::spawn(async move {
+                // A durable broker does not accept until its streams exist.
+                // Readiness alone only steers orchestrated traffic; a client with
+                // the address in hand would otherwise connect during recovery and
+                // be told its durable stream does not exist. Waiting is the honest
+                // answer, and shutdown still wins the race so a broker told to stop
+                // during recovery stops.
+                if gate_readiness_on_sync {
+                    tokio::select! {
+                        biased;
+                        _ = accept_shutdown.cancelled() => {
+                            tracing::info!("shutdown before initial sync; not accepting");
+                            return;
+                        }
+                        _ = seeded.cancelled() => {
+                            tracing::info!("initial sync applied; accepting connections");
+                        }
                     }
                 }
-            }
-            if let Err(err) = quic::serve_with_shutdown(
-                quic_server,
-                broker,
-                quic_config,
-                auth,
-                accept_shutdown,
-                connections,
-                quic::ClusterContext {
-                    ingress: ingress_router,
-                    peers: peers_for_accept,
-                    lease: lease_for_accept,
-                    marks: Some(Arc::clone(&marks_for_accept)),
-                    client_endpoints: Some(Arc::clone(&endpoints_for_accept)),
-                },
-            )
-            .await
-            {
-                tracing::warn!(error = %err, "quic accept loop exited");
-            }
+                if let Err(err) = quic::serve_with_shutdown(
+                    quic_server,
+                    broker,
+                    quic_config,
+                    auth,
+                    accept_shutdown,
+                    connections,
+                    quic::ClusterContext {
+                        ingress: ingress_router,
+                        peers: peers_for_accept,
+                        lease: lease_for_accept,
+                        marks: Some(Arc::clone(&marks_for_accept)),
+                        client_endpoints: Some(Arc::clone(&endpoints_for_accept)),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(error = %err, "quic accept loop exited");
+                }
+            })
         })
-    };
+        .collect();
 
     // Optional: start a periodic control-plane sync to keep tenant/namespace/stream metadata
     // refreshed. When disabled, the broker relies solely on local registrations.
@@ -797,14 +813,18 @@ where
         }
     }
 
-    let mut accept_task = accept_task;
+    let mut accept_tasks = accept_tasks;
     if !budget
         .drain("quic_accept_loop", async {
-            let _ = (&mut accept_task).await;
+            for task in &mut accept_tasks {
+                let _ = task.await;
+            }
         })
         .await
     {
-        accept_task.abort();
+        for task in &accept_tasks {
+            task.abort();
+        }
     }
 
     // Leave the cluster before draining connections, so nothing new is placed

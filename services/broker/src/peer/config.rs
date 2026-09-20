@@ -218,7 +218,7 @@ fn env_millis(name: &str) -> Option<Duration> {
 impl PeerTransportConfig {
     /// Read the internal transport settings, validated against the
     /// client-facing bind.
-    pub fn from_env(client_bind: SocketAddr) -> std::io::Result<Self> {
+    pub fn from_env(client_bind: SocketAddr, client_listeners: usize) -> std::io::Result<Self> {
         let mut config = Self::default();
         if let Some(bind) = std::env::var("FELIX_INTERNAL_BIND")
             .ok()
@@ -267,7 +267,7 @@ impl PeerTransportConfig {
         if let Some(value) = env_millis("FELIX_INTERNAL_HANDSHAKE_TIMEOUT_MS") {
             config.handshake_timeout = value;
         }
-        config.validate(client_bind)?;
+        config.validate(client_bind, client_listeners)?;
         Ok(config)
     }
 
@@ -277,12 +277,25 @@ impl PeerTransportConfig {
     /// Sharing a port is not merely a conflicting bind: it would put client
     /// traffic and peer traffic on one listener, which is the separation the
     /// internal protocol exists to keep.
-    fn validate(&self, client_bind: SocketAddr) -> std::io::Result<()> {
-        if self.bind.port() == client_bind.port() {
+    fn validate(&self, client_bind: SocketAddr, client_listeners: usize) -> std::io::Result<()> {
+        // The client-facing side may occupy a run of consecutive ports
+        // (`FELIX_QUIC_LISTENERS`), so the internal listener has to clear the
+        // whole range rather than just the first one. Landing inside it is the
+        // same fault as sharing the single port -- peer traffic and client
+        // traffic on one listener -- and it is easier to do by accident, since
+        // the colliding port is one nobody wrote down.
+        let first = client_bind.port();
+        let last = first.saturating_add(client_listeners.saturating_sub(1) as u16);
+        if (first..=last).contains(&self.bind.port()) {
+            let clash = if first == last {
+                format!("and FELIX_QUIC_BIND ({client_bind}) share a port")
+            } else {
+                format!("falls inside the FELIX_QUIC_BIND listener range {first}-{last}")
+            };
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
                 format!(
-                    "FELIX_INTERNAL_BIND ({}) and FELIX_QUIC_BIND ({client_bind}) share a port; \
+                    "FELIX_INTERNAL_BIND ({}) {clash}; \
                      the internal and client-facing listeners must be separate",
                     self.bind
                 ),
