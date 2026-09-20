@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789916735523,
+  "lastUpdate": 1789922858810,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -16566,6 +16566,72 @@ window.BENCHMARK_DATA = {
             "range": "685.27",
             "unit": "us",
             "extra": "trials: 5\nmedian: 579.00\nmean: 871.60\nstdev: 685.27\ncv: 78.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "23bf8735815018a1012c311fcfa0cf125c630731",
+          "message": "fix: re-lock the demo crates after the 0.6.0-preview bump (#594)\n\n`demos/` are separate crates, not workspace members, so the repository\nworkspace never reaches their lockfiles. The 0.6.0-preview version bump\nupdated the path dependencies they name and left all four `Cargo.lock`\nfiles pinning 0.5.0, so the first build that touched them rewrote the lock\nand CI failed -- on main and on every PR branched from it.\n\n`task lock:refresh` is the fix the Taskfile already documents for exactly\nthis, and the failure it warns about: the demo locks sat at 0.4.0-preview\nthrough two releases the same way.\n\nPurely the version bump: 38 lines, every one `0.5.0` -> `0.6.0-preview`.\n`crates/felix-python` and `crates/felix-typescript` are refreshed by the\nsame task and were already current.\n\nVerified with `task demo:check` afterwards -- it passes and leaves the\nlockfiles untouched, which is the condition CI asserts.",
+          "timestamp": "2026-09-20T09:43:05-07:00",
+          "tree_id": "85aaa43f116d731df0096c31515a07364b7df2cc",
+          "url": "https://github.com/gabloe/felix/commit/23bf8735815018a1012c311fcfa0cf125c630731"
+        },
+        "date": 1789922857368,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 160,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 160.00\nmean: 160.20\nstdev: 0.45\ncv: 0.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 203,
+            "range": "3.05",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 204.40\nstdev: 3.05\ncv: 1.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 239,
+            "range": "86.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 239.00\nmean: 280.00\nstdev: 86.45\ncv: 30.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 198,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 198.00\nmean: 198.00\nstdev: 0.71\ncv: 0.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 402,
+            "range": "23.24",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 402.00\nmean: 413.60\nstdev: 23.24\ncv: 5.62%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 681,
+            "range": "453.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 681.00\nmean: 877.80\nstdev: 453.58\ncv: 51.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
