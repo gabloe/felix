@@ -11,6 +11,58 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Changed
+
+- **npm publishes through trusted publishing rather than a token.** The job
+  exchanges the workflow's OIDC identity for a short-lived credential, the way
+  the PyPI job already did, so there is no `NPM_TOKEN` to store, rotate or
+  leak. npm's own guidance is to prefer this over an automation token, and the
+  alternative was a token configured to bypass 2FA — a standing credential with
+  publish rights, held in CI, exempted from the control protecting it.
+
+  Two details the failure mode hides: the job needs `id-token: write`, and Node
+  22 ships an npm too old to know about OIDC, so the job upgrades npm first.
+  Without either, a publish falls back to looking for a token and fails as
+  though none were configured.
+
+  Each package needs a trusted publisher configured on npm — this repository,
+  this workflow, the `npm` environment — for all six.
+
+- **`napi prepublish` is no longer how the packages are published.** What it
+  still did for this repository was sync the platform versions, which are
+  committed and asserted by `check_npm_packages.py`, and upload the binaries to
+  the GitHub release, which the release-assets job already did. What it did
+  besides was swallow "this package has no binary" and exit 0 — which is how a
+  publish job went green having uploaded nothing.
+
+  It is an explicit `npm publish` per package now, platform packages before the
+  one that declares them as optional dependencies, and any failure stops the
+  run.
+
+- **The release can stage npm packages instead of publishing them.** A
+  `npm_stage` input on the manual dispatch runs `npm stage publish`, which a
+  stage-only token can do and which leaves each version for a maintainer with
+  2FA to promote. It exists to claim a name for the first time: trusted
+  publishing is configured on a package, and a package that has never been
+  published is not there to configure.
+
+  A trusted publisher can only be configured on a package that already exists,
+  so the first release of a new name cannot use one — and direct publishing
+  with a token that bypasses 2FA is deprecated and removed in January 2027.
+  Staging is what is left, and it is the better shape anyway: a person with 2FA
+  confirms the one irreversible act, claiming a permanent name. The token is
+  passed only in staging mode — trusted publishing is the normal path, and a
+  token sitting alongside it is a second way in that nobody meant to leave
+  open.
+
+  The workflow records the one-time sequence, because it is exactly the kind of
+  thing nobody remembers a release later: stage, promote, configure the
+  publishers now that the packages exist, delete the token.
+
+  In staging mode the job prints what to promote and in what order, and does
+  not assert the versions are live, because a staged version deliberately is
+  not.
+
 ### Fixed
 
 - **The npm job published nothing and reported success.** `napi prepublish`
