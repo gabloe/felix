@@ -609,3 +609,59 @@ index encoded in the connection ID quinn generates.
 
 Until then, the honest deployment guidance is the one this session started by
 disproving and ended by confirming: **scale Felix with brokers.**
+
+## 10. A local attempt on macOS, and why it settles nothing
+
+`crates/felix-cluster/tests/listener_throughput.rs` (`#[ignore]`d) sweeps
+`FELIX_QUIC_LISTENERS` on one broker, to see whether the multi-listener fix
+(#558) actually moves the ceiling section 9 measured. Run on an M4 Max, 16
+cores, with `FELIX_INITIAL_MTU=1350` (macOS loopback otherwise pins a
+16336-byte MTU, ~11x a real path, which would understate the driver's
+per-byte work), 12 shards and keyed batches.
+
+Flat: 1.00x / 1.00x / 1.00x / 0.98x at 1, 2, 4 and 8 listeners. Not evidence
+the fix does nothing — the rig never reached the regime section 9's endpoint
+driver finding describes:
+
+- **The broker was nowhere near driver-bound.** ~2.5 of 16 cores, ~13 idle.
+  The ceiling this lifts is a single task pegged at one core; a broker at 2.5
+  cores spread across many is not hitting it.
+- **The generator was the limiter, on one thread of it.** `io_runtime_index`
+  sends every *client* endpoint to `pool_len - 1`, so all 16 clients in the
+  test process funnel their QUIC drivers onto one thread — measured at 99.7%
+  while the next busiest client thread sat at 3.4%. Four publishers and 32
+  publishers gave identical throughput because the measurement was one
+  saturated client thread throughout. Section 9's session used four separate
+  generator VMs for exactly this reason.
+- **`AckMode::None` makes the client-side counter an enqueue rate.**
+  `client-sent` read ~770 MiB/s while the broker's own
+  `felix_storage_append_bytes_total` read ~543 MiB/s over the same window.
+  Only the broker-side number is real.
+
+Ruled out on the way: storage bandwidth (the temp device does 4.19 GB/s, 7x
+the observed rate), broker admission (`FELIX_BROKER_PUBLISH_INFLIGHT_BYTES=1GiB`
+changed nothing, 511 vs 520 MiB/s stored), fsync (`none` is worth ~25%, not
+the wall).
+
+A single-process generator on macOS cannot discriminate this question. Tracked
+as its own gap in #597.
+
+### The finding that outlasted the run: the pool defeats N listeners at N=2
+
+For servers `io_runtime_index` is `sequence % (pool_len - 1)`, and the macOS
+default pool is 2 — so `sequence % 1`, which is always 0. Every listener a
+broker binds landed on the same I/O thread, measured here as the broker's
+79.5% thread while its others sat at ~35%: the pool defeated the fix before it
+could help.
+
+Linux defaults the pool to 0, so drivers go to the app runtime and tokio
+spreads them — this does not touch the design in section 9. But any
+deployment setting `FELIX_IO_RUNTIME_THREADS >= 1` with a pool of 2 gets one
+driver thread however many ports it binds. Filed as #596; a future session
+should measure `FELIX_IO_RUNTIME_THREADS` in `{0, N+1}` rather than
+rediscover this as a null result.
+
+One more thing worth carrying forward: broker-stored throughput drifted down
+slightly as listeners rose (543 → 527 → 499 → 485 MiB/s). Inside run-to-run
+spread on a rig this noisy to trust, but worth re-checking where the
+measurement is trustworthy — N endpoints may have a small cost of their own.

@@ -331,39 +331,61 @@ pub fn encode_command(command: &MetaCommand) -> Vec<u8> {
     .expect("commands serialize by construction")
 }
 
-/// Stamp `command` with a request id, once, before it is first proposed.
+/// The shared skeleton behind every in-place command edit ([`restamp`],
+/// [`stamp_request_id`]): decode to `Value` rather than round-tripping through
+/// [`MetaCommand`], because a command from a newer build may carry fields this
+/// one does not know, and the typed form would drop them on the way back out.
 ///
-/// Edits the JSON rather than round-tripping through [`MetaCommand`], for the
-/// same reason [`restamp`] does: a command from a newer build may carry fields
-/// this one does not know, and decoding to a struct would drop them.
+/// `edit` returns whether it changed anything; `false` means "nothing to do
+/// here" (the wrong command, or a field already set), and this returns `None`
+/// so the caller proposes the original bytes.
+fn edit_command_json(
+    command: &[u8],
+    edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> bool,
+) -> Option<Vec<u8>> {
+    let mut value: serde_json::Value = serde_json::from_slice(command).ok()?;
+    let object = value.as_object_mut()?;
+    if !edit(object) {
+        return None;
+    }
+    serde_json::to_vec(&value).ok()
+}
+
+/// Stamp `command` with a request id, once, before it is first proposed.
 ///
 /// Stamping must happen **once per logical write, not per attempt** -- a fresh
 /// id on every retry is indistinguishable from a fresh command, which is the
 /// situation this exists to fix.
-///
-/// `None` when the bytes are not a JSON object, which is not this layer's to
-/// diagnose: the proposal goes out unstamped and behaves as it always did.
 pub fn stamp_request_id(command: &[u8], rid: &str) -> Option<Vec<u8>> {
-    let mut value: serde_json::Value = serde_json::from_slice(command).ok()?;
-    let object = value.as_object_mut()?;
-    // Never overwrite one. A forwarded proposal arrives already stamped by the
-    // instance the client reached, and that is the id the leader must
-    // deduplicate on -- restamping here would give the same logical write two
-    // identities, one per hop.
-    if object.contains_key("rid") {
-        return None;
-    }
-    object.insert("rid".to_string(), rid.into());
-    serde_json::to_vec(&value).ok()
+    edit_command_json(command, |object| {
+        // Never overwrite one. A forwarded proposal arrives already stamped by
+        // the instance the client reached, and that is the id the leader must
+        // deduplicate on -- restamping here would give the same logical write
+        // two identities, one per hop.
+        if object.contains_key("rid") {
+            return false;
+        }
+        object.insert("rid".to_string(), rid.into());
+        true
+    })
+}
+
+/// Just the request id, ignoring every other field.
+///
+/// A dedicated struct rather than a `Value` parse of the whole payload:
+/// serde skips fields it does not recognise instead of materialising them, so
+/// this stays cheap even when the command is large -- a retried `ImportState`
+/// carries the whole exported state, and `apply` calls this on every proposal
+/// before deciding whether to decode the rest.
+#[derive(Deserialize)]
+struct RidPeek {
+    #[serde(default)]
+    rid: Option<String>,
 }
 
 /// The request id on a proposal, if it carries one.
 pub fn request_id_of(command: &[u8]) -> Option<String> {
-    serde_json::from_slice::<serde_json::Value>(command)
-        .ok()?
-        .get("rid")?
-        .as_str()
-        .map(str::to_string)
+    serde_json::from_slice::<RidPeek>(command).ok()?.rid
 }
 
 /// The `op` of the one command whose clock the leader replaces.
@@ -385,26 +407,23 @@ const REPLICA_REPORT_OP: &str = "record_replica_report";
 /// The other proposer clock, `TakeRefreshToken`'s `now_secs`, is left alone
 /// because the `expires_at` it is compared against was stamped by a proposer
 /// too — fixing one half would not make that comparison single-clock.
-///
-/// Edits the JSON rather than round-tripping through [`MetaCommand`]: a
-/// command from a newer build may carry fields this one does not know, and
-/// decoding to a struct would drop them on the way back out.
 pub fn restamp(command: &[u8], now_millis: u64) -> Option<Vec<u8>> {
-    let mut value: serde_json::Value = serde_json::from_slice(command).ok()?;
-    let object = value.as_object_mut()?;
-    match object.get("op").and_then(serde_json::Value::as_str) {
-        Some(HEARTBEAT_OP) => {
-            object.insert("at_millis".to_string(), now_millis.into());
+    edit_command_json(command, |object| {
+        match object.get("op").and_then(serde_json::Value::as_str) {
+            Some(HEARTBEAT_OP) => {
+                object.insert("at_millis".to_string(), now_millis.into());
+                true
+            }
+            Some(REPLICA_REPORT_OP) => {
+                let Some(report) = object.get_mut("report").and_then(|v| v.as_object_mut()) else {
+                    return false;
+                };
+                report.insert("reported_at_millis".to_string(), now_millis.into());
+                true
+            }
+            _ => false,
         }
-        Some(REPLICA_REPORT_OP) => {
-            object
-                .get_mut("report")?
-                .as_object_mut()?
-                .insert("reported_at_millis".to_string(), now_millis.into());
-        }
-        _ => return None,
-    }
-    serde_json::to_vec(&value).ok()
+    })
 }
 
 /// Decode a committed command. An unreadable command is an error *response*,

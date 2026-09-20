@@ -44,32 +44,25 @@ post_ok() {
   esac
 }
 
-# Derive principal (iss#sub) and issuer FROM the token — an app-only Entra
-# credential issues a v1 token (iss=https://sts.windows.net/<tenant>/) even
-# through the v2 endpoint, so assuming the issuer would reject a valid token.
-ISS=$(python3 - "$IDP_TOKEN" <<'PY'
+# Derive principal (iss#sub), issuer and audience FROM the token, in one
+# decode — an app-only Entra credential issues a v1 token
+# (iss=https://sts.windows.net/<tenant>/, aud=api://<client-id>) even through
+# the v2 endpoint (aud=bare GUID), so assuming either would reject a valid
+# token or register the wrong audience. What the token says beats what we
+# asked for.
+CLAIMS=$(python3 - "$IDP_TOKEN" <<'PY'
 import base64, json, sys
 p = sys.argv[1].split('.')[1]; p += '=' * (-len(p) % 4)
-print(json.loads(base64.urlsafe_b64decode(p))['iss'])
+c = json.loads(base64.urlsafe_b64decode(p))
+aud = c.get('aud')
+print(c['iss'])
+print(c.get('sub') or c.get('oid') or '')
+print(aud[0] if isinstance(aud, list) else (aud or ''))
 PY
 )
-SUB=$(python3 - "$IDP_TOKEN" <<'PY'
-import base64, json, sys
-p = sys.argv[1].split('.')[1]; p += '=' * (-len(p) % 4)
-c = json.loads(base64.urlsafe_b64decode(p)); print(c.get('sub') or c.get('oid') or '')
-PY
-)
-# The audience, for the same reason as the issuer: what the token says beats
-# what we asked for. A v1 token carries aud=api://<client-id>, a v2 token the
-# bare GUID, and the same credential can issue either. Register the one the
-# exchange will actually see.
-AUD=$(python3 - "$IDP_TOKEN" <<'PY'
-import base64, json, sys
-p = sys.argv[1].split('.')[1]; p += '=' * (-len(p) % 4)
-a = json.loads(base64.urlsafe_b64decode(p))['aud']
-print(a[0] if isinstance(a, list) else a)
-PY
-)
+ISS=$(echo "$CLAIMS" | sed -n '1p')
+SUB=$(echo "$CLAIMS" | sed -n '2p')
+AUD=$(echo "$CLAIMS" | sed -n '3p')
 [ -n "$AUD" ] || { echo "!! token has no aud claim" >&2; exit 1; }
 if [ -n "${IDP_AUDIENCE:-}" ] && [ "$IDP_AUDIENCE" != "$AUD" ]; then
   echo ">> note: registering the token's aud ($AUD), not IDP_AUDIENCE ($IDP_AUDIENCE)"

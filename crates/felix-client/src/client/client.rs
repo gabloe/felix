@@ -260,10 +260,7 @@ impl Client {
         let mut listeners: Vec<SocketAddr> = vec![addr];
         let mut publish_connections = vec![first];
         for index in 1..publish_pool_size {
-            let target = targets[index % targets.len()];
-            if !listeners.contains(&target) {
-                listeners.push(target);
-            }
+            let target = pool_target(&targets, index, &mut listeners);
             let connection = publish_client.connect(target, server_name).await?;
             debug!("client established publish connection");
             spawn_conn_stats_logger(&connection, "publish");
@@ -294,10 +291,7 @@ impl Client {
             QuicClient::bind(bind_addr, client_config.quinn.clone(), cache_transport)?;
         let mut cache_connections = Vec::with_capacity(cache_pool_size);
         for index in 0..cache_pool_size {
-            let target = targets[index % targets.len()];
-            if !listeners.contains(&target) {
-                listeners.push(target);
-            }
+            let target = pool_target(&targets, index, &mut listeners);
             let connection = cache_client.connect(target, server_name).await?;
             debug!("client established cache connection");
             cache_connections.push(connection);
@@ -344,10 +338,7 @@ impl Client {
         let event_client = QuicClient::bind(bind_addr, client_config.quinn, event_transport)?;
         let mut event_connections = Vec::with_capacity(event_pool_size);
         for index in 0..event_pool_size {
-            let target = targets[index % targets.len()];
-            if !listeners.contains(&target) {
-                listeners.push(target);
-            }
+            let target = pool_target(&targets, index, &mut listeners);
             let connection = event_client.connect(target, server_name).await?;
             debug!("client established event connection");
             event_connections.push(connection);
@@ -1441,8 +1432,9 @@ impl Client {
     /// endpoint driver. One means a single-listener broker, an older one, or a
     /// pool too small to spread.
     ///
-    /// Sorted, so a caller comparing two clients is comparing sets rather than
-    /// connection order.
+    /// In discovery order (the dialled address first, then each new target the
+    /// first pool spread reaches it), not sorted -- a caller wanting a set
+    /// rather than an order should sort it.
     pub fn listeners_in_use(&self) -> &[SocketAddr] {
         &self.listeners
     }
@@ -1661,6 +1653,24 @@ pub(crate) fn listener_targets(dialled: SocketAddr, ports: &[u16]) -> Vec<Socket
         }
     }
     targets
+}
+
+/// The listener one pool connection at `index` should dial, noting it in
+/// `listeners` the first time any pool lands on it.
+///
+/// Shared by the publish, cache and event pools below: each spreads its
+/// connections across `targets` the same way and needs the same bookkeeping
+/// for `Client::listeners_in_use`.
+fn pool_target(
+    targets: &[SocketAddr],
+    index: usize,
+    listeners: &mut Vec<SocketAddr>,
+) -> SocketAddr {
+    let target = targets[index % targets.len()];
+    if !listeners.contains(&target) {
+        listeners.push(target);
+    }
+    target
 }
 
 async fn authenticate_stream(

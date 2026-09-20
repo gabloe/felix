@@ -18,4 +18,6 @@ pub mod raft;
 pub mod readiness;
 pub mod replica_positions;
 pub mod store;
+#[cfg(test)]
+mod test_support;
 pub mod tls;
