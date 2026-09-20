@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789872243895,
+  "lastUpdate": 1789872585444,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -16368,6 +16368,72 @@ window.BENCHMARK_DATA = {
             "range": "32.05",
             "unit": "us",
             "extra": "trials: 5\nmedian: 550.00\nmean: 550.40\nstdev: 32.05\ncv: 5.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f4633484a6ddf9eef023044936351e91ebdf87f",
+          "message": "ci: pin npm publishing to the public registry, and check before packing (#583)\n\nnpm publish uses whatever registry is configured. A corporate mirror in\n~/.npmrc is a normal thing for a machine to have, and this one had one: the\npublish went at the mirror and stopped only because it wanted credentials. It\ncould as easily have succeeded.\n\nSo every npm command in the script passes --registry, and felix-typescript and\neach platform package carry an .npmrc naming the public registry -- the pattern\ndocs-site already uses for resolution, for the same reason.\n\nThe script also checks reachability and login before downloading or packing\nanything. A corporate network usually cannot reach registry.npmjs.org at all,\nand learning that at the upload wastes the run and leaves binaries in the\nplatform directories. It now says so and exits having changed nothing.",
+          "timestamp": "2026-09-19T19:46:53-07:00",
+          "tree_id": "9c2ac15166381e528f876de99a8e29b923f9223f",
+          "url": "https://github.com/gabloe/felix/commit/2f4633484a6ddf9eef023044936351e91ebdf87f"
+        },
+        "date": 1789872582791,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 122,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 122.00\nmean: 121.60\nstdev: 0.55\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 165,
+            "range": "2.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 165.60\nstdev: 2.41\ncv: 1.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 208,
+            "range": "10.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 209.80\nstdev: 10.69\ncv: 5.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 165,
+            "range": "1.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 165.00\nstdev: 1.22\ncv: 0.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 341,
+            "range": "13.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 341.00\nmean: 345.40\nstdev: 13.79\ncv: 3.99%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 864,
+            "range": "342.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 864.00\nmean: 894.60\nstdev: 342.80\ncv: 38.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
