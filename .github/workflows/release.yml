@@ -575,10 +575,6 @@ jobs:
       - name: Install the napi CLI
         run: npm install -g @napi-rs/cli@2
 
-      # Three separate things, and only the middle one is `prepublish`:
-      # `artifacts` moves each .node into the platform package that carries it,
-      # `prepublish` publishes those platform packages, and `npm publish` sends
-      # the JavaScript package that declares them as optional dependencies.
       - name: Move each binary into its platform package
         working-directory: crates/felix-typescript
         run: napi artifacts
@@ -587,18 +583,26 @@ jobs:
         working-directory: crates/felix-typescript
         run: ls -la npm/*/
 
-      # No `--access`: the napi 2 CLI has no such option, and the packages are
-      # unscoped, so npm treats them as public anyway. A scoped package would
-      # need `publishConfig.access` in its manifest rather than a flag here.
-      - name: Publish the platform packages
+      # `npm publish` per package rather than `napi prepublish`. What that
+      # command still did for us was sync the versions -- which are committed
+      # and asserted by check_npm_packages.py -- and upload the binaries to the
+      # GitHub release, which the release-assets job already did. What it did
+      # besides was swallow "this package has no binary" and exit 0, which is
+      # how a publish job went green having uploaded nothing.
+      #
+      # Platform packages first: the main package declares them as optional
+      # dependencies, so publishing it first leaves a window where an install
+      # resolves to nothing.
+      - name: Publish, platform packages first
         working-directory: crates/felix-typescript
-        run: napi prepublish -t npm --skip-gh-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish felix-client
-        working-directory: crates/felix-typescript
-        run: npm publish
+        run: |
+          set -euo pipefail
+          for dir in npm/*/; do
+            echo "== ${dir}"
+            ( cd "$dir" && npm publish )
+          done
+          echo "== felix-client"
+          npm publish
 
       # Because the job reported success while publishing nothing at all, and
       # the only way to know a publish happened is to go and look.

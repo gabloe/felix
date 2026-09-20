@@ -28,6 +28,19 @@ for what the current release actually guarantees.
   Each package needs a trusted publisher configured on npm — this repository,
   this workflow, the `npm` environment — for all six.
 
+- **`napi prepublish` is no longer how the packages are published.** What it
+  still did for this repository was sync the platform versions, which are
+  committed and asserted by `check_npm_packages.py`, and upload the binaries to
+  the GitHub release, which the release-assets job already did. What it did
+  besides was swallow "this package has no binary" and exit 0 — which is how a
+  publish job went green having uploaded nothing.
+
+  It is an explicit `npm publish` per package now, platform packages before the
+  one that declares them as optional dependencies, and any failure stops the
+  run. That also leaves the door open to `npm stage publish`, for a stage-only
+  token promoted by a maintainer, if trusted publishing cannot be configured
+  for a name that does not exist yet.
+
 ### Fixed
 
 - **The npm job published nothing and reported success.** `napi prepublish`
