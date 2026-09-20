@@ -1,0 +1,38 @@
+########## 1 GENERATOR(S) ##########
+>> generators: felixperf-loadgen
+>> distributing the client token
+>> aggregate ingest: 16 pubs/loadgen x        1 loadgens = 16 publishers, stream=perf-durable
+   -- broker CPU at load --
+      broker-0: %Cpu(s):  8.5 us,  9.2 sy,  0.0 ni, 80.0 id,  0.0 wa,  0.0 hi,  2.4 si,  0.0 st 
+      broker-1: %Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
+   -- per-loadgen results --
+      felixperf-loadgen: ingest: publishers = 16, published = 6400000, 256602 msg/s, 1051.0 MB/s, publish_retries = 0
+   AGGREGATE: 256602 msg/s, 1051.0 MB/s across 1/       1 loadgens
+########## 2 GENERATOR(S) ##########
+>> generators: felixperf-loadgen felixperf-loadgen-2
+>> distributing the client token
+   felixperf-loadgen-2: token written
+>> aggregate ingest: 16 pubs/loadgen x        2 loadgens = 32 publishers, stream=perf-durable
+   -- broker CPU at load --
+      broker-0: %Cpu(s): 20.5 us, 15.9 sy,  0.0 ni, 53.7 id,  0.0 wa,  0.0 hi, 10.0 si,  0.0 st 
+      broker-1: %Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
+   -- per-loadgen results --
+      felixperf-loadgen: ingest: publishers = 16, published = 6400000, 249656 msg/s, 1022.6 MB/s, publish_retries = 0
+      felixperf-loadgen-2: ingest: publishers = 16, published = 6400000, 243247 msg/s, 996.3 MB/s, publish_retries = 0
+   AGGREGATE: 492903 msg/s, 2018.9 MB/s across 2/       2 loadgens
+########## 3 GENERATOR(S) ##########
+>> generators: felixperf-loadgen felixperf-loadgen-2 felixperf-loadgen-3
+>> distributing the client token
+   felixperf-loadgen-2: token written
+   felixperf-loadgen-3: token written
+>> aggregate ingest: 16 pubs/loadgen x        3 loadgens = 48 publishers, stream=perf-durable
+   -- broker CPU at load --
+      broker-0: %Cpu(s): 19.9 us, 15.8 sy,  0.0 ni, 54.5 id,  0.0 wa,  0.0 hi,  9.7 si,  0.0 st 
+      broker-1: %Cpu(s):  0.1 us,  0.1 sy,  0.0 ni, 99.8 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
+   -- per-loadgen results --
+      felixperf-loadgen: ingest: publishers = 16, published = 6400000, 150354 msg/s, 615.9 MB/s, publish_retries = 0
+      felixperf-loadgen-2: ingest: publishers = 16, published = 6400000, 178274 msg/s, 730.2 MB/s, publish_retries = 0
+      felixperf-loadgen-3: ingest: publishers = 16, published = 6400000, 164650 msg/s, 674.4 MB/s, publish_retries = 0
+   AGGREGATE: 493278 msg/s, 2020.5 MB/s across 3/       3 loadgens
+
+[exited with code 0]

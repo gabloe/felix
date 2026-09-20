@@ -17,7 +17,8 @@ set -euo pipefail
 : "${BROKER_COUNT:?}"
 : "${BOOTSTRAP_TOKEN:?}"
 : "${IDP_JWKS_URL:?set IDP_JWKS_URL}"
-: "${IDP_AUDIENCE:?set IDP_AUDIENCE (the app registration audience)}"
+# Not required: the audience the tenant is registered with is derived from
+# IDP_TOKEN itself. If it is set it is only used to flag a mismatch.
 : "${IDP_TOKEN:?set IDP_TOKEN (a token from the IdP for the perf principal)}"
 : "${GROUP:?}"
 
@@ -39,7 +40,7 @@ BOOTSTRAP='http://${CONTROLPLANE_IP}:8081'
 BOOTSTRAP_TOKEN='${BOOTSTRAP_TOKEN}'
 IDP_TOKEN='${IDP_TOKEN}'
 IDP_JWKS_URL='${IDP_JWKS_URL}'
-IDP_AUDIENCE='${IDP_AUDIENCE}'
+IDP_AUDIENCE='${IDP_AUDIENCE:-}'
 TENANT='${TENANT}'
 NAMESPACE='${NAMESPACE}'
 REPLICATION_FACTOR='${REPLICATION_FACTOR:-1}'
@@ -130,7 +131,7 @@ BOOTSTRAP='http://${CONTROLPLANE_IP}:8081'
 BOOTSTRAP_TOKEN='${BOOTSTRAP_TOKEN}'
 IDP_TOKEN='${IDP_TOKEN}'
 IDP_JWKS_URL='${IDP_JWKS_URL}'
-IDP_AUDIENCE='${IDP_AUDIENCE}'
+IDP_AUDIENCE='${IDP_AUDIENCE:-}'
 TENANT='${TENANT}'
 NAMESPACE='${NAMESPACE}'
 REPLICATION_FACTOR='${REPLICATION_FACTOR:-1}'

@@ -1,0 +1,11 @@
+{
+  "session": "f1",
+  "tier": "t1",
+  "release": "v0.3.0 brokers, v0.3.1 control plane (built from main)",
+  "purpose": "fanout-scaling curve — delivered throughput and ack latency vs subscriber count",
+  "topology": "3x Standard_D4as_v5 brokers (4 vCPU, 16 GiB) + 1x D2as_v5 control plane + 1x D4as_v5 load generator, eastus2, one zone, proximity placement group, accelerated networking",
+  "identity": "Microsoft Entra ID app registration, client-credentials grant, RS256 — verified on the token exchange",
+  "hardware_parity": "ack p50 183 us at fanout 1 matches the t1-a session (181-183 us), confirming comparable hardware across the two provisioned sessions",
+  "note": "pubsub scenario, one stream (single shard, so fanout delivery is one broker's path), 256 B payload, latency profile (batch 1, per-message ack, default delivery batching). Delivered throughput = publish rate x fanout; zero drops at every point. The throughput-profile (batch 64) rows in fanout.jsonl are NOT usable: fire-and-forget overran the subscribers, delivery lagged the publish window (p50 up to ~0.7s), and the rate is inflated by the short window. fanout 1000 (latency) did not complete: the load generator's publish queue filled opening 1000 connections from one VM.",
+  "raw": "fanout.jsonl (11 rows) + fanout-*.out; the latency-profile rows (batch 1) are the curve"
+}

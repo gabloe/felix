@@ -1,0 +1,8 @@
+Enable succeeded: 
+[stdout]
+  delivery (publish -> subscriber): p50 = 439 us, p99 = 576 us, p999 = 633 us (ack latency above)
+LOADGEN_JSON {"ack_latency_us":{"max":473,"p50":253,"p99":350,"p999":392,"samples":20000},"batch":1,"binary":false,"delivered_throughput_msg_s":38660.82235490411,"delivery_latency_us":{"max":700,"p50":439,"p99":576,"p999":633},"effective_throughput_msg_s":3869.85648418388,"environment":"azure-t1-lat-tuned","fanout":10,"payload_bytes":4096,"publish_retries":0,"publish_throughput_msg_s":3866.0822354904108,"received":220000,"scenario":"pubsub","stream":"perf","total":20000,"unaccounted":0,"warmup":2000}
+__RUNOK__
+
+[stderr]
+

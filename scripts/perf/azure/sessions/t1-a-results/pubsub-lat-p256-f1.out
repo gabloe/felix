@@ -1,0 +1,16 @@
+Enable succeeded: 
+[stdout]
+Results (publish n = 22000, sampled 20000, received 22000, unaccounted 0, payload 256 bytes, fanout 1, batch 1, binary false)
+  delivered total = 22000
+  p50 = 181 us
+  p99 = 214 us
+  p999 = 243 us
+  throughput = 5472.2 msg/s
+  effective throughput = 5479.3 msg/s
+  delivered throughput = 5472.2 msg/s
+  delivered per-sub throughput = 5472.2 msg/s
+  delivery (publish -> subscriber): p50 = 6014 us, p99 = 11.8 ms, p999 = 12.2 ms (ack latency above)
+LOADGEN_JSON {"ack_latency_us":{"max":309,"p50":181,"p99":214,"p999":243,"samples":20000},"batch":1,"binary":false,"delivered_throughput_msg_s":5472.218308287171,"delivery_latency_us":{"max":12973,"p50":6014,"p99":11808,"p999":12241},"effective_throughput_msg_s":5479.287487021904,"environment":"azure-t1","fanout":1,"payload_bytes":256,"publish_retries":0,"publish_throughput_msg_s":5472.218308287171,"received":22000,"scenario":"pubsub","stream":"perf","total":20000,"unaccounted":0,"warmup":2000}
+__RUNOK__
+
+[stderr]

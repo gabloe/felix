@@ -27,7 +27,19 @@ post_ok() {
   _code=$(curl -s -o "$RESP" -w '%{http_code}' -X POST "$_url" "$@" -d @-)
   case "$_code" in
     2*) return 0 ;;
-    409) echo "   (already exists: HTTP 409, continuing)" ;;
+    409)
+      echo "   (already exists: HTTP 409, continuing)"
+      # Bootstrap-initialize is exactly-once: a 409 means the tenant keeps the
+      # issuer and audience the FIRST run registered, and this one's are
+      # discarded. Silently reusing a wrong audience is a 401 on every exchange
+      # afterwards with nothing pointing here, so say it out loud.
+      case "$_url" in
+        */initialize)
+          echo "   !! the tenant's registered issuer/audience are unchanged." >&2
+          echo "   !! if they are wrong, clear the control plane's store and re-seed." >&2
+          ;;
+      esac
+      ;;
     *) echo "!! POST $_url -> HTTP $_code" >&2; cat "$RESP" >&2; echo >&2; return 1 ;;
   esac
 }
@@ -47,6 +59,21 @@ p = sys.argv[1].split('.')[1]; p += '=' * (-len(p) % 4)
 c = json.loads(base64.urlsafe_b64decode(p)); print(c.get('sub') or c.get('oid') or '')
 PY
 )
+# The audience, for the same reason as the issuer: what the token says beats
+# what we asked for. A v1 token carries aud=api://<client-id>, a v2 token the
+# bare GUID, and the same credential can issue either. Register the one the
+# exchange will actually see.
+AUD=$(python3 - "$IDP_TOKEN" <<'PY'
+import base64, json, sys
+p = sys.argv[1].split('.')[1]; p += '=' * (-len(p) % 4)
+a = json.loads(base64.urlsafe_b64decode(p))['aud']
+print(a[0] if isinstance(a, list) else a)
+PY
+)
+[ -n "$AUD" ] || { echo "!! token has no aud claim" >&2; exit 1; }
+if [ -n "${IDP_AUDIENCE:-}" ] && [ "$IDP_AUDIENCE" != "$AUD" ]; then
+  echo ">> note: registering the token's aud ($AUD), not IDP_AUDIENCE ($IDP_AUDIENCE)"
+fi
 # The control plane keys RBAC on principal_id = hex(sha256(issuer|subject))
 # (services/controlplane/src/auth/principal.rs), NOT a human-readable string.
 # Registering the admin/role grouping under anything else yields a validated
@@ -59,7 +86,7 @@ print(hashlib.sha256(sys.argv[1].encode() + b"|" + sys.argv[2].encode()).hexdige
 PY
 )
 
-echo ">> bootstrap-initialize tenant $TENANT (issuer $ISS, principal $PRINCIPAL)"
+echo ">> bootstrap-initialize tenant $TENANT (issuer $ISS, aud $AUD, principal $PRINCIPAL)"
 post_ok "$BOOTSTRAP/internal/bootstrap/tenants/$TENANT/initialize" \
   -H "X-Felix-Bootstrap-Token: $BOOTSTRAP_TOKEN" \
   -H 'Content-Type: application/json' <<JSON
@@ -67,7 +94,7 @@ post_ok "$BOOTSTRAP/internal/bootstrap/tenants/$TENANT/initialize" \
   "display_name": "Perf",
   "idp_issuers": [{
     "issuer": "$ISS",
-    "audiences": ["$IDP_AUDIENCE"],
+    "audiences": ["$AUD"],
     "jwks_url": "$IDP_JWKS_URL",
     "claim_mappings": { "subject_claim": "sub" }
   }],

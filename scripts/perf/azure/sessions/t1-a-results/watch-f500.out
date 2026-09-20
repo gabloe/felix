@@ -1,0 +1,8 @@
+Enable succeeded: 
+[stdout]
+watch delivery: watchers = 500, puts = 2200, delivered = 1100000/1100000, p50 = 4594 us, p99 = 8110 us, p999 = 9858 us
+LOADGEN_JSON {"cache":"perf","delivered":1100000,"delivery_latency_us":{"max":554622,"p50":4594,"p99":8110,"p999":9858},"environment":"azure-t1","expected":1100000,"payload_bytes":256,"puts":2200,"scenario":"watch","watchers":500}
+__RUNOK__
+
+[stderr]
+

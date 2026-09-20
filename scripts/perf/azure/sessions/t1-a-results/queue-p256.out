@@ -1,0 +1,8 @@
+Enable succeeded: 
+[stdout]
+queue drain: delivered = 22000/22000, redeliveries = 26343, p50 = 4341.6 ms, p99 = 7181.6 ms, p999 = 7221.5 ms, throughput = 9620.2 msg/s
+LOADGEN_JSON {"delivered":22000,"delivery_latency_us":{"max":8233057,"p50":4341606,"p99":7181630,"p999":7221534},"drain_throughput_msg_s":9620.176707953491,"environment":"azure-t1","group":"perf-cg","payload_bytes":256,"published":22000,"redeliveries":26343,"scenario":"queue","stream":"perf-queue"}
+__RUNOK__
+
+[stderr]
+

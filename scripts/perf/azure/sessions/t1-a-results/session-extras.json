@@ -1,0 +1,94 @@
+{
+  "session": "t1-a",
+  "tier": "t1",
+  "region": "eastus2",
+  "topology": "3x Standard_D4as_v5 brokers (4 vCPU, 16 GiB) + 1x D2as_v5 control plane + 1x D4as_v5 load generator, proximity placement group, accelerated networking",
+  "broker_data_disk": "Premium SSD (Premium_LRS), 128 GiB",
+  "release_brokers": "v0.3.0 tarball (control plane runs a patched build with the alg-less-JWK + configurable-TTL fixes; off the data path)",
+  "network": {
+    "icmp_rtt_ms": {
+      "note": "ping -qc10, ICMP is deprioritised on Azure and overstates",
+      "p_avg": [
+        0.636,
+        0.66,
+        0.929
+      ]
+    },
+    "quic_path_rtt_us": {
+      "note": "from broker quinn ConnectionStats, the real transport RTT",
+      "approx": 260
+    },
+    "path_mtu": {
+      "note": "settled path MTU on the VNet",
+      "approx": 1400
+    }
+  },
+  "premium_ssd_fsync_us": {
+    "note": "raw os.fsync() of a 256B write on /data, n=50",
+    "p50": 3640,
+    "p99": 8680
+  },
+  "token_exchange_us": {
+    "note": "warm JWKS, CP-local (add ~260us for a remote client); RS256 verify + RBAC + EdDSA mint, n=200",
+    "p50": 686,
+    "p90": 713,
+    "p99": 876
+  },
+  "idp": "Microsoft Entra ID app registration, client-credentials grant, v1 token (iss=sts.windows.net), RS256",
+  "broker_cpu_during_ingest": {
+    "note": "CPU busy% (/proc/stat delta, mid-run) during ~980 MB/s 4KiB n=12 ingest to non-durable perf-ingest",
+    "broker_0_pct": 73,
+    "broker_1_pct": 48,
+    "broker_2_pct": 42,
+    "reading": "loadgen-VM-limited at ~1 GB/s; brokers have headroom (42-73%), broker-0 hottest; true broker ceiling modestly higher, reachable with more loadgen VMs"
+  },
+  "oncommit_write_latency": {
+    "note": "durable cache put on on_commit brokers; concurrency 1 = one device flush per write (no group commit)",
+    "c1_put_p50_us": 4011,
+    "c1_put_p99_us": 9247,
+    "c1_get_p50_us": 407,
+    "c8_put_p50_us": 33400,
+    "c8_put_throughput_op_s": 233,
+    "finding": "durable stream append group-commits to >1 GB/s, but the durable cache-write path is fsync-serialized (~230 puts/s); concurrency adds latency, not throughput"
+  },
+  "delivery_latency_profiles": {
+    "note": "same non-durable pubsub, batch-1; the two profiles differ only in the broker's delivery-batch knobs",
+    "throughput_profile_default": {
+      "knobs": "FELIX_EVENT_BATCH_MAX_DELAY_US=250, MAX_EVENTS=64",
+      "delivery_p50_us_f1": {
+        "0B": 5907,
+        "256B": 6014,
+        "4KiB": 2209
+      }
+    },
+    "latency_profile_tuned": {
+      "knobs": "FELIX_EVENT_BATCH_MAX_DELAY_US=0, MAX_EVENTS=1",
+      "delivery_p50_us_f1": {
+        "0B": 190,
+        "256B": 202,
+        "4KiB": 253
+      }
+    },
+    "finding": "minimizing delivery batching cuts publish-to-subscriber latency ~30x (to ~=ack latency); the default trades it for delivery batching that helps sustained throughput"
+  },
+  "network_ceiling": {
+    "note": "iperf3 loadgen<->broker-0, VNet, accelerated networking; raw TCP, unencrypted",
+    "gbit_s": 11.9,
+    "gbyte_s": 1.49,
+    "comparison": "Felix peak 4KiB ingest 1.09 GB/s (8.7 Gbit/s) = ~73% of raw TCP line rate, but encrypted (QUIC/TLS1.3), framed, durable-capable, and fanned across 12 shards / 3 brokers"
+  },
+  "multi_loadgen_ingest": {
+    "note": "two load generators (D4 + D2) driving ingest into the 12-shard non-durable perf-ingest stream simultaneously, 4KiB",
+    "loadgen1_d4_mb_s": 1084.3,
+    "loadgen2_d2_mb_s": 548.6,
+    "aggregate_mb_s": 1632.9,
+    "aggregate_gbit_s": 13.1,
+    "broker_cpu_pct": {
+      "b0": 84,
+      "b1": 46,
+      "b2": 66
+    },
+    "publish_retries": 0,
+    "finding": "single-loadgen ~1.09 GB/s was loadgen-NIC-bound, not Felix; two loadgens sustain ~1.63 GB/s with linear addition (loadgen1 undegraded) and zero loss; brokers now the emerging constraint (broker-0 84%). True 3x4-vCPU broker ceiling ~1.6-1.9 GB/s."
+  }
+}

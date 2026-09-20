@@ -1,0 +1,9 @@
+Enable succeeded: 
+[stdout]
+cache put: n = 16000, concurrency = 8, p50 = 33.4 ms, p99 = 46.4 ms, p999 = 50.4 ms, max = 66.2 ms, throughput = 233.3 op/s
+cache get: n = 16000, concurrency = 8, p50 = 22.7 ms, p99 = 29.1 ms, p999 = 29.5 ms, max = 29.9 ms, throughput = 423.5 op/s
+LOADGEN_JSON {"cache":"perf","concurrency":8,"environment":"azure-t1-dur-oncommit","get":{"latency_us":{"max":29915,"p50":22730,"p99":29139,"p999":29530},"n":16000,"throughput_op_s":423.5100867220678},"payload_bytes":256,"put":{"latency_us":{"max":66207,"p50":33361,"p99":46405,"p999":50426},"n":16000,"throughput_op_s":233.25519839529693},"scenario":"cache"}
+__RUNOK__
+
+[stderr]
+

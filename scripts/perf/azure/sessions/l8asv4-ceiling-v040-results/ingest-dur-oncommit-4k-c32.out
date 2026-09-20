@@ -1,0 +1,7 @@
+Enable succeeded: 
+[stdout]
+ingest: publishers = 32, published = 6400000, 226940 msg/s, 929.5 MB/s, publish_retries = 0
+LOADGEN_JSON {"batch":64,"environment":"azure-nvme","payload_bytes":4096,"per_publisher_msg_s":7091.869849753181,"publish_retries":0,"published":6400000,"publishers":32,"scenario":"ingest","stream":"perf-durable","throughput_mb_s":929.545564946849,"throughput_msg_s":226939.8351921018}
+__RUNOK__
+
+[stderr]
