@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789872247296,
+  "lastUpdate": 1789872588856,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -12896,6 +12896,58 @@ window.BENCHMARK_DATA = {
             "range": "14713.18",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 927476.14\nmean: 927759.18\nstdev: 14713.18\ncv: 1.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2f4633484a6ddf9eef023044936351e91ebdf87f",
+          "message": "ci: pin npm publishing to the public registry, and check before packing (#583)\n\nnpm publish uses whatever registry is configured. A corporate mirror in\n~/.npmrc is a normal thing for a machine to have, and this one had one: the\npublish went at the mirror and stopped only because it wanted credentials. It\ncould as easily have succeeded.\n\nSo every npm command in the script passes --registry, and felix-typescript and\neach platform package carry an .npmrc naming the public registry -- the pattern\ndocs-site already uses for resolution, for the same reason.\n\nThe script also checks reachability and login before downloading or packing\nanything. A corporate network usually cannot reach registry.npmjs.org at all,\nand learning that at the upload wastes the run and leaves binaries in the\nplatform directories. It now says so and exits having changed nothing.",
+          "timestamp": "2026-09-19T19:46:53-07:00",
+          "tree_id": "9c2ac15166381e528f876de99a8e29b923f9223f",
+          "url": "https://github.com/gabloe/felix/commit/2f4633484a6ddf9eef023044936351e91ebdf87f"
+        },
+        "date": 1789872587840,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 413506.82,
+            "range": "19511.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 413506.82\nmean: 407437.67\nstdev: 19511.95\ncv: 4.79%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 413506.82,
+            "range": "19511.95",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 413506.82\nmean: 407437.67\nstdev: 19511.95\ncv: 4.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 96067.68,
+            "range": "2786.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 96067.68\nmean: 94610.95\nstdev: 2786.11\ncv: 2.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 960676.81,
+            "range": "27861.13",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 960676.81\nmean: 946109.53\nstdev: 27861.13\ncv: 2.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
