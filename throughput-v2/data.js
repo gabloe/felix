@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789928494178,
+  "lastUpdate": 1789930778006,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13260,6 +13260,58 @@ window.BENCHMARK_DATA = {
             "range": "45515.38",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 935178.63\nmean: 917439.50\nstdev: 45515.38\ncv: 4.96%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4e516b281699a14165b8758957f13dbc1425c9e6",
+          "message": "fix(formal): model the report-before-mark ordering the broker implements (#599)\n\n* fix(formal): model the report-before-mark ordering the broker implements\n\nThe model checked a design the code stopped having in September, and CI\npinned the consequence as expected:\n\n    \"FelixShard violates AckedSurvive\"\n\nSo CI asserted that Felix loses acknowledged records. #268 had added the\nreport-before-mark ordering a week before #527 was filed against the model's\nfinding, proposing to change the reporting direction to close a hole the\nbroker had already closed by ordering.\n\n`publish_mark` reports who holds the record and moves the quorum mark only\n`if reported`; `await_quorum` blocks the publish on that mark. So the chain\nis report lands, mark moves, client acknowledged -- a leader cannot\nacknowledge under Quorum while the control plane knows nothing about which\nreplica holds the record. The spec said the opposite in as many words: \"the\nreport travels on its own; it may arrive later than the acknowledgements it\ndescribes, or never.\"\n\n`report` now carries what the control plane was told -- the holders and the\nlength they held -- rather than a bare set, because the state that matters is\nfrozen at report time and the old shape could not express it. Same variable\ncount, so no UNCHANGED list moves.\n\n`ReportBeforeAck` gates the ordering so both designs stay checkable.\n`FelixShard.cfg` is the implemented design and now passes: 13.2M states,\n2.4M distinct, exhaustive. `FelixShardNoReportOrder.cfg` is the same design\nwithout the ordering and loses an acknowledged record in a second -- which is\nwhat makes the ordering demonstrably load-bearing rather than merely present.\n\nA pass is worth nothing if the added precondition is unsatisfiable, so I\nchecked it is not: with a temporary `acked = {}` invariant TLC finds a\nviolation in 7,107 states. Acknowledgements are released, and the pass is\nabout them. The README records that caution next to the result.\n\nDocs corrected where they carried the stale finding: the two capability rows\nciting #527 as a live defect, and the \"Who may be promoted\" follow-up in\n`docs/replication-design.md` that named the election restriction as the rule\nto move to. Both now describe the ordering, and cite both model results\nrather than only the passing one.\n\nRefs #527\n\n* test(formal): make each spec configuration cite the code it assumes\n\nNothing connected the spec to the implementation, and the drift this closes\nis the one that just happened: the broker gained report-before-mark in #268,\nthe model went on describing the design without it, and check_tla.sh pinned\nthe resulting AckedSurvive violation as expected for three weeks. CI asserted\nFelix loses acknowledged records, for a design it no longer had, and an issue\nwas filed against the model's finding proposing work the code did not need.\n\nA configuration's constants are claims about how the code behaves, so each\none now names the tests that establish them, and\n`scripts/check_spec_evidence.py` fails when a cited test no longer exists or\na configuration cites nothing at all. Same mechanism and same reasoning as\n`check_doc_evidence.py` does for prose: rename the test for a behaviour and\nthe spec is put in front of whoever is changing it.\n\nThirteen citations across six configurations. The counterexample\nconfigurations cite the test proving the check they *remove* is really in the\ncode -- FelixShardNoReportOrder cites the mark-withheld test, which is what\nmakes removing the ordering mean something. FelixShardLogOrder declares\n`Evidence: none` because Raft's election restriction is an alternative the\nimplementation does not use, and says so.\n\nRequiring every configuration to carry a block is the part that keeps this\nfrom rotting: a new .cfg with no evidence fails rather than silently opting\nout. Verified all three ways -- a renamed citation fails, a new\nconfiguration without evidence fails, and the six as written pass.\n\nWhat it does not do is stated in the README rather than left to be assumed: a\ncited test can keep its name while its assertions change, and the spec can\nmodel a behaviour wrongly while every citation resolves. This makes drift\nharder to introduce silently; it does not detect it. Conformance needs trace\nvalidation, which is #598.\n\nRefs #598",
+          "timestamp": "2026-09-20T11:56:43-07:00",
+          "tree_id": "8ddba8efdf841701d15525c0065088444d7005f2",
+          "url": "https://github.com/gabloe/felix/commit/4e516b281699a14165b8758957f13dbc1425c9e6"
+        },
+        "date": 1789930777463,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 482076.01,
+            "range": "15443.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 482076.01\nmean: 474850.00\nstdev: 15443.91\ncv: 3.25%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 482076.01,
+            "range": "15443.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 482076.01\nmean: 474850.00\nstdev: 15443.91\ncv: 3.25%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 107431.34,
+            "range": "562.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 107431.34\nmean: 107172.72\nstdev: 562.28\ncv: 0.52%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1074313.45,
+            "range": "5622.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1074313.45\nmean: 1071727.25\nstdev: 5622.82\ncv: 0.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
