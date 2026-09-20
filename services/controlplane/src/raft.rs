@@ -303,6 +303,19 @@ impl RaftHandle {
         const ATTEMPT_CAP: Duration = Duration::from_secs(2);
         let deadline = tokio::time::Instant::now() + self.write_timeout;
 
+        // One id for this write, stamped before the first attempt and carried
+        // by every retry. A timed-out attempt does not mean the proposal
+        // failed -- it means no answer arrived in time -- so a retry may be
+        // re-proposing a command that committed. The id is what lets the state
+        // machine answer the retry with the original response instead of the
+        // conflict its post-commit state would otherwise produce (#529).
+        //
+        // Stamped here rather than per attempt, and never restamped: a fresh
+        // id on each retry is indistinguishable from a fresh command.
+        let command =
+            crate::store::command::stamp_request_id(&command, &uuid::Uuid::new_v4().to_string())
+                .unwrap_or(command);
+
         let mut last_refusal = None;
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());

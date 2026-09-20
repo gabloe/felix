@@ -15,20 +15,86 @@
 //! operation — the answer is an [`MetaError::Unsupported`] *response*,
 //! identical on every replica; silently skipping a committed command would
 //! fork this replica's state from the group's.
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use crate::raft::AppStateMachine;
 use crate::store::command::{MetaCommand, MetaResponse, MetaResult, decode_command, encode_result};
 use crate::store::memory::InMemoryStore;
 use crate::store::{AuthStore, ControlPlaneStore};
 
+/// How many applied request ids to remember.
+///
+/// Bounds what a retry can be answered from. It only has to outlive one
+/// write's budget -- `RaftStore::write` gives up after `write_timeout`, so an
+/// id older than the commands applied since then can never be re-proposed by
+/// anyone still waiting. A few thousand is far past that on any real load and
+/// costs a few hundred kilobytes.
+///
+/// Evicted in apply order rather than by age: every replica applies the same
+/// log in the same order, so the same ids are forgotten at the same point.
+/// A clock-based bound would not be deterministic, and a state machine whose
+/// replicas disagree is worse than one that forgets early.
+const APPLIED_IDS_KEPT: usize = 4096;
+
+/// Responses to the writes already applied, by request id.
+///
+/// A retry re-proposes a command that may have committed; this is what lets it
+/// be answered with what that command actually returned rather than with the
+/// conflict its effect now produces (#529).
+#[derive(Default, Serialize, Deserialize)]
+struct AppliedIds {
+    /// Apply order, for deterministic eviction.
+    order: VecDeque<String>,
+    /// Ordered, because this is serialized into the snapshot and two replicas
+    /// must produce byte-identical ones -- a `HashMap` here would serialize in
+    /// arbitrary order and show up as replicas disagreeing. The determinism
+    /// harness in this module's tests is what catches that.
+    responses: BTreeMap<String, Vec<u8>>,
+}
+
+impl AppliedIds {
+    fn get(&self, rid: &str) -> Option<&Vec<u8>> {
+        self.responses.get(rid)
+    }
+
+    fn insert(&mut self, rid: String, response: Vec<u8>) {
+        if self.responses.insert(rid.clone(), response).is_none() {
+            self.order.push_back(rid);
+        }
+        while self.order.len() > APPLIED_IDS_KEPT {
+            if let Some(evicted) = self.order.pop_front() {
+                self.responses.remove(&evicted);
+            }
+        }
+    }
+}
+
+/// What a snapshot carries: the store's state, and the ids applied into it.
+///
+/// A wrapper rather than a field on the store's exported state, because
+/// deduplicating Raft proposals is this layer's concern and not the metadata
+/// store's.
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    state: crate::store::memory::ExportedState,
+    #[serde(default)]
+    applied: AppliedIds,
+}
+
 pub struct MetadataStateMachine {
     store: Arc<InMemoryStore>,
+    applied: tokio::sync::RwLock<AppliedIds>,
 }
 
 impl MetadataStateMachine {
     pub fn new(store: Arc<InMemoryStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            applied: tokio::sync::RwLock::new(AppliedIds::default()),
+        }
     }
 
     /// The applied state, for serving reads. Reads need no consensus hop —
@@ -263,24 +329,59 @@ impl MetadataStateMachine {
 #[async_trait::async_trait]
 impl AppStateMachine for MetadataStateMachine {
     async fn apply(&self, command: &[u8]) -> Vec<u8> {
+        // A proposal this state machine has already applied is a retry of a
+        // write that succeeded, not a second write. Answering it from the
+        // response it produced the first time is what stops a caller being
+        // told its own tenant already exists (#529).
+        //
+        // Read before dispatching, because dispatching is the thing that must
+        // not happen twice.
+        let rid = crate::store::command::request_id_of(command);
+        if let Some(rid) = rid.as_deref()
+            && let Some(response) = self.applied.read().await.get(rid)
+        {
+            metrics::counter!("felix_meta_raft_deduplicated_proposals_total").increment(1);
+            return response.clone();
+        }
+
         let result: MetaResult = match decode_command(command) {
             Ok(command) => self.dispatch(command).await,
             Err(err) => Err(err),
         };
-        encode_result(&result)
+        let encoded = encode_result(&result);
+        if let Some(rid) = rid {
+            self.applied.write().await.insert(rid, encoded.clone());
+        }
+        encoded
     }
 
     async fn snapshot(&self) -> Vec<u8> {
-        serde_json::to_vec(&self.store.export_state().await)
-            .expect("exported state serializes by construction")
+        serde_json::to_vec(&Snapshot {
+            state: self.store.export_state().await,
+            applied: AppliedIds {
+                order: self.applied.read().await.order.clone(),
+                responses: self.applied.read().await.responses.clone(),
+            },
+        })
+        .expect("exported state serializes by construction")
     }
 
     async fn restore(&self, snapshot: &[u8]) {
-        let state = serde_json::from_slice(snapshot).expect("snapshot produced by export_state");
+        // Two shapes: this build's, and one from before applied ids were
+        // carried. A rolling upgrade installs the older one, and refusing it
+        // would make the upgrade the outage.
+        let (state, applied) = match serde_json::from_slice::<Snapshot>(snapshot) {
+            Ok(snapshot) => (snapshot.state, snapshot.applied),
+            Err(_) => (
+                serde_json::from_slice(snapshot).expect("snapshot produced by export_state"),
+                AppliedIds::default(),
+            ),
+        };
         self.store
             .import_state(state)
             .await
             .expect("snapshot version produced by this cluster");
+        *self.applied.write().await = applied;
     }
 
     fn restamp(&self, command: &[u8], now_millis: u64) -> Option<Vec<u8>> {

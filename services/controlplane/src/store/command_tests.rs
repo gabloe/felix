@@ -112,3 +112,73 @@ fn a_replica_report_is_restamped() {
         other => panic!("restamping changed the command: {other:?}"),
     }
 }
+
+/// A stamped command still decodes to the same command. The id rides beside
+/// it, not instead of it.
+#[test]
+fn a_request_id_does_not_disturb_the_command() {
+    let encoded = encode_command(&MetaCommand::RecordNodeHeartbeat {
+        node_id: "broker-1".to_string(),
+        incarnation: 3,
+        at_millis: 111,
+    });
+    let stamped = stamp_request_id(&encoded, "rid-1").expect("stamps");
+    assert_eq!(request_id_of(&stamped).as_deref(), Some("rid-1"));
+    match decode_command(&stamped).expect("decodes") {
+        MetaCommand::RecordNodeHeartbeat {
+            node_id,
+            incarnation,
+            at_millis,
+        } => {
+            assert_eq!(node_id, "broker-1");
+            assert_eq!(incarnation, 3);
+            assert_eq!(at_millis, 111);
+        }
+        other => panic!("wrong command: {other:?}"),
+    }
+}
+
+/// **A stamped command is never restamped.** A forwarded proposal arrives
+/// already carrying the id the client's instance gave it, and that is the id
+/// the leader must deduplicate on -- a second one per hop would give one
+/// logical write two identities and defeat the whole mechanism.
+#[test]
+fn an_already_stamped_command_keeps_its_id() {
+    let encoded = encode_command(&MetaCommand::DeleteTenant {
+        tenant_id: "acme".to_string(),
+    });
+    let stamped = stamp_request_id(&encoded, "first").expect("stamps");
+    assert!(
+        stamp_request_id(&stamped, "second").is_none(),
+        "a second stamp must refuse rather than overwrite",
+    );
+    assert_eq!(request_id_of(&stamped).as_deref(), Some("first"));
+}
+
+/// An unstamped command carries no id, which is what a proposal from a peer
+/// that predates this looks like.
+#[test]
+fn an_unstamped_command_has_no_request_id() {
+    let encoded = encode_command(&MetaCommand::DeleteTenant {
+        tenant_id: "acme".to_string(),
+    });
+    assert_eq!(request_id_of(&encoded), None);
+    // And it must not appear on the wire at all, so an older peer sees the
+    // bytes it has always seen.
+    let json = std::str::from_utf8(&encoded).expect("utf8");
+    assert!(!json.contains("rid"), "{json}");
+}
+
+/// The clock rewrite and the id are independent: restamping a heartbeat must
+/// not drop the id it was proposed with.
+#[test]
+fn restamping_preserves_the_request_id() {
+    let encoded = encode_command(&MetaCommand::RecordNodeHeartbeat {
+        node_id: "broker-1".to_string(),
+        incarnation: 3,
+        at_millis: 111,
+    });
+    let stamped = stamp_request_id(&encoded, "rid-9").expect("stamps");
+    let restamped = restamp(&stamped, 222).expect("a heartbeat carries a clock");
+    assert_eq!(request_id_of(&restamped).as_deref(), Some("rid-9"));
+}
