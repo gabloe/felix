@@ -554,50 +554,44 @@ been measured; it is in the next section.
 
 ## Sizing: add brokers, not shards
 
-A later session drove one broker with **four** generators instead of one, which
-is what made the next two numbers trustworthy — a single `D4as_v5` generator
-tops out near 1,050 MB/s, close enough to the per-broker ceiling that the two
-could not be told apart. Every earlier single-generator figure on this page,
-the ~977 MB/s included, could not distinguish the broker's limit from the
-instrument's.
+One broker holds 842–926 MB/s durable. A second takes it to 1,896. Twelve
+shards on one broker change nothing.
+
+Those numbers come from a session that drove the broker with four generators.
+Earlier sessions used one, and a `D4as_v5` generator tops out near 1,050 MB/s.
+That is close enough to the broker's own limit that neither could be separated
+from the other, and the ~977 MB/s quoted above is one of those figures.
 
 | axis | measured | |
 |---|---|---|
-| one broker | **842–926 MB/s** across every valid run | broker ≤69% busy, generators ≤31% |
-| a second broker | **1,896 MB/s** (repeat: 1,852) | **2.1x** — essentially linear |
-| more shards on one broker | within run-to-run spread of one shard | **1.0x** |
+| one broker | 842–926 MB/s across every valid run | broker ≤69% busy, generators ≤31% |
+| a second broker | 1,896 MB/s (repeat: 1,852) | 2.1x |
+| more shards on one broker | within run-to-run spread of one shard | 1.0x |
 
 Shard count, connection count, flush mechanism, worker count and admission
-budget each moved the single-broker number by less than the ~3% two identical
-runs differ by.
+budget all moved the single-broker number by less than the 3% that two
+identical runs differed by.
 
-**So shards are a horizontal lever, not a vertical one.** Shards spread work
-across brokers: more sockets, more cores, more independent devices. Twelve
-shards on *one* broker share one socket, one CPU and one filesystem — there is
-nothing to win, and the extra flush work costs a little.
+Shards spread work across brokers. On one broker they share a socket, a CPU and
+a filesystem, so there is nothing for them to win.
 
-### The rule
+Size on ~900 MB/s durable per broker (8 vCPU, local NVMe, `on_commit`) and add
+brokers from there. A faster disk or more cores per node will not move it. At
+the ceiling the broker used 3.96 of 8 cores, iowait sat at 2%, and the device
+was running at two-thirds of its `fdatasync` capability.
 
-Size on **~900 MB/s durable per broker** on 8 vCPU with local NVMe and
-`on_commit`, then add brokers. The constraint is the transport, so a faster
-disk or more cores per node will not move it: at the ceiling the broker used
-3.96 of 8 cores, iowait ~2%, and the device was at about two-thirds of its
-`fdatasync` capability.
+The limit is one task. Every inbound datagram goes through a single `quinn`
+endpoint driver that reads the socket and routes by connection id, and it
+measured at 88% of one core. A second broker brings its own socket and its own
+driver. Shards do not.
 
-The reason is a single task. Every inbound datagram passes through one `quinn`
-endpoint driver, which reads the socket and routes by connection id — measured
-at **~88% of one core**, which is nearly all a single task can ever have. Two
-brokers scale because each has its own socket and therefore its own driver.
-Adding shards adds none.
+One warning before you reach for a knob: `FELIX_IO_RUNTIME_THREADS=2` measured
+1,341 MB/s where the default gave 1,896, on the same two brokers. Isolating the
+drivers helps on macOS and hurts on Linux, which is why Linux defaults it off.
 
-> One thing worth knowing before you tune: `FELIX_IO_RUNTIME_THREADS=2` measured
-> **1,341 MB/s** against 1,896 with the default on the same two brokers. Driver
-> isolation is a macOS optimisation and a Linux pessimisation, which is why it
-> defaults to off there. Leave it alone unless you are measuring.
-
-Full method, the ten hypotheses tested and killed, and the flamegraph are in
-[`docs/perf-investigation-sharding-ceiling.md`](https://github.com/gabloe/felix/blob/main/docs/perf-investigation-sharding-ceiling.md).
-The raw session output is committed under
+Method, the hypotheses that were tested and discarded, and the flamegraph are
+in [`docs/perf-investigation-sharding-ceiling.md`](https://github.com/gabloe/felix/blob/main/docs/perf-investigation-sharding-ceiling.md).
+The raw session output is under
 [`scripts/perf/azure/sessions/`](https://github.com/gabloe/felix/tree/main/scripts/perf/azure/sessions).
 
 ## What we found and fixed
