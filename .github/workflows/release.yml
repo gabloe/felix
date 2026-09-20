@@ -531,16 +531,22 @@ jobs:
   # one name across both registries is worth more than a namespace here. Six
   # names go up per release — `felix-client` and one per platform.
   #
-  # To turn it on: set the repository variable PUBLISH_NPM to "true" and add an
-  # NPM_TOKEN secret with publish rights. It must be an automation or granular
-  # token: with 2FA on writes, an ordinary token stops for an OTP prompt that
-  # nothing in CI can answer.
+  # To turn it on: set the repository variable PUBLISH_NPM to "true" and
+  # configure a trusted publisher on npm for each of the six packages -- this
+  # repository, this workflow file, the `npm` environment. There is no token:
+  # npm exchanges the workflow's OIDC identity for a short-lived credential,
+  # which is npm's own guidance over an automation token that bypasses 2FA.
   typescript-publish:
     name: Publish to npm
     needs: typescript-release-assets
     if: vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
     environment: npm
+    permissions:
+      # Trusted publishing, like the PyPI job: npm trades this workflow's OIDC
+      # identity for a short-lived credential. No token to store, rotate or
+      # leak, and nothing that has to bypass 2FA to work.
+      id-token: write
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v7
@@ -551,6 +557,11 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      # Node 22 ships an npm too old to know about OIDC. Without this the
+      # publish falls back to looking for a token and fails as if none was set.
+      - name: An npm that speaks OIDC
+        run: npm install -g npm@latest
 
       # Into `artifacts/`, which is where `napi artifacts` looks. Downloading
       # them beside the manifest instead leaves every platform package empty
@@ -583,14 +594,11 @@ jobs:
         working-directory: crates/felix-typescript
         run: napi prepublish -t npm --skip-gh-release
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish felix-client
         working-directory: crates/felix-typescript
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Because the job reported success while publishing nothing at all, and
       # the only way to know a publish happened is to go and look.

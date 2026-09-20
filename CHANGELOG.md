@@ -11,6 +11,23 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Changed
+
+- **npm publishes through trusted publishing rather than a token.** The job
+  exchanges the workflow's OIDC identity for a short-lived credential, the way
+  the PyPI job already did, so there is no `NPM_TOKEN` to store, rotate or
+  leak. npm's own guidance is to prefer this over an automation token, and the
+  alternative was a token configured to bypass 2FA — a standing credential with
+  publish rights, held in CI, exempted from the control protecting it.
+
+  Two details the failure mode hides: the job needs `id-token: write`, and Node
+  22 ships an npm too old to know about OIDC, so the job upgrades npm first.
+  Without either, a publish falls back to looking for a token and fails as
+  though none were configured.
+
+  Each package needs a trusted publisher configured on npm — this repository,
+  this workflow, the `npm` environment — for all six.
+
 ### Fixed
 
 - **The npm job published nothing and reported success.** `napi prepublish`
