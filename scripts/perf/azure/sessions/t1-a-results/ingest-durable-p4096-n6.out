@@ -1,0 +1,8 @@
+Enable succeeded: 
+[stdout]
+ingest: publishers = 6, published = 999996, 266827 msg/s, 1092.9 MB/s, publish_retries = 0
+LOADGEN_JSON {"batch":64,"environment":"azure-t1","payload_bytes":4096,"per_publisher_msg_s":44471.123394751,"publish_retries":0,"published":999996,"publishers":6,"scenario":"ingest","stream":"perf-ingest-durable","throughput_mb_s":1092.9223285494006,"throughput_msg_s":266826.740368506}
+__RUNOK__
+
+[stderr]
+

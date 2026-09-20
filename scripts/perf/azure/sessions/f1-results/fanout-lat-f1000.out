@@ -1,0 +1,10 @@
+Enable succeeded: 
+[stdout]
+!! case failed
+Error: routing never stabilised
+
+Caused by:
+    publish failed: publish queue full
+
+[stderr]
+!! case fanout-lat-f1000 did not complete; recorded and continuing

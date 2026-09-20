@@ -1,0 +1,8 @@
+Enable succeeded: 
+[stdout]
+retained join: roster = 10000, received = 10000/10000, time-to-complete-state = 38.1 ms
+LOADGEN_JSON {"cache":"perf","complete":true,"environment":"azure-t1","payload_bytes":256,"received":10000,"roster":10000,"scenario":"retained","time_to_complete_state_us":38078}
+__RUNOK__
+
+[stderr]
+

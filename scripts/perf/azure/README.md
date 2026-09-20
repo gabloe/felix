@@ -78,3 +78,17 @@ az login                                    # the Azure account
 - **Honesty rules**: compare only within a session; keep the machines
   otherwise idle during `run.sh`; every published number cites the
   `session.json` beside it.
+
+### What is committed, and what is not
+
+`sessions/<name>-results/` and `sessions/*-findings.md` **are tracked**. They
+are the evidence behind every performance figure the docs publish, and a number
+whose working lives on one laptop is a number nobody can check.
+
+`sessions/<name>.env` is **not**: it holds the bootstrap token and the
+addresses of a live cluster. That is the only thing the ignore rule excludes,
+so adding a run's output is just `git add`.
+
+Results are loadgen stdout, a JSONL of `LOADGEN_JSON` rows, and the
+`session.json` describing the hardware. No script writes a credential there —
+keep it that way, and check before committing a session that used a new script.

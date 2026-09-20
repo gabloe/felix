@@ -1,0 +1,8 @@
+Enable succeeded: 
+[stdout]
+counter add: n = 20000, concurrency = 8, p50 = 307 us, p99 = 550 us, p999 = 37.7 ms, max = 52.9 ms, throughput = 15079.6 op/s
+counter get: n = 20000, concurrency = 8, p50 = 297 us, p99 = 511 us, p999 = 756 us, max = 1043 us, throughput = 18512.6 op/s
+LOADGEN_JSON {"add":{"latency_us":{"max":52885,"p50":307,"p99":550,"p999":37730},"n":20000,"throughput_op_s":15079.63425301249},"cache":"perf","concurrency":8,"environment":"azure-t1","get":{"latency_us":{"max":1043,"p50":297,"p99":511,"p999":756},"n":20000,"throughput_op_s":18512.60805673634},"scenario":"counter"}
+__RUNOK__
+
+[stderr]
