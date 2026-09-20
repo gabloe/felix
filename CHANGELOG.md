@@ -46,11 +46,18 @@ for what the current release actually guarantees.
   publishing is configured on a package, and a package that has never been
   published is not there to configure.
 
-  Direct publishing with a token that bypasses 2FA is deprecated and removed in
-  January 2027, so staging is the token path that outlives it. The token is
+  A trusted publisher can only be configured on a package that already exists,
+  so the first release of a new name cannot use one — and direct publishing
+  with a token that bypasses 2FA is deprecated and removed in January 2027.
+  Staging is what is left, and it is the better shape anyway: a person with 2FA
+  confirms the one irreversible act, claiming a permanent name. The token is
   passed only in staging mode — trusted publishing is the normal path, and a
   token sitting alongside it is a second way in that nobody meant to leave
   open.
+
+  The workflow records the one-time sequence, because it is exactly the kind of
+  thing nobody remembers a release later: stage, promote, configure the
+  publishers now that the packages exist, delete the token.
 
   In staging mode the job prints what to promote and in what order, and does
   not assert the versions are live, because a staged version deliberately is

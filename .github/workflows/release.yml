@@ -13,8 +13,9 @@ on:
       npm_stage:
         description: >-
           Stage the npm packages for a maintainer to promote, instead of
-          publishing them. Needs a stage-only NPM_TOKEN. Use this to claim a
-          name for the first time; trusted publishing handles it after that.
+          publishing them. Needs a stage-only NPM_TOKEN. Only for the first
+          release of a new package name -- a trusted publisher cannot be
+          configured until the package exists, and handles every release after.
         required: false
         default: false
         type: boolean
@@ -539,11 +540,26 @@ jobs:
   # one name across both registries is worth more than a namespace here. Six
   # names go up per release — `felix-client` and one per platform.
   #
-  # To turn it on: set the repository variable PUBLISH_NPM to "true" and
-  # configure a trusted publisher on npm for each of the six packages -- this
-  # repository, this workflow file, the `npm` environment. There is no token:
-  # npm exchanges the workflow's OIDC identity for a short-lived credential,
-  # which is npm's own guidance over an automation token that bypasses 2FA.
+  # Steady state is trusted publishing: npm exchanges this workflow's OIDC
+  # identity for a short-lived credential, so there is no token to store,
+  # rotate or leak. That is npm's own guidance over a token that bypasses 2FA,
+  # and such tokens stop being able to publish in January 2027 anyway.
+  #
+  # **A trusted publisher can only be configured on a package that already
+  # exists**, so the first release of a new name cannot use one. That is what
+  # `npm_stage` is for: a stage-only token uploads the version, a maintainer
+  # with 2FA promotes it, and the name exists from then on.
+  #
+  # First release of a new package name:
+  #   1. PUBLISH_NPM=true, and an NPM_TOKEN that is stage-only.
+  #   2. Dispatch with npm_stage checked. Promote what the job lists, in the
+  #      order it lists -- platform packages before the one that depends on
+  #      them.
+  #   3. Configure a trusted publisher on each package now that each exists:
+  #      this repository, this workflow file, the `npm` environment.
+  #   4. Delete NPM_TOKEN. Nothing reads it once npm_stage is off.
+  #
+  # Every release after that: dispatch normally and leave npm_stage alone.
   typescript-publish:
     name: Publish to npm
     needs: typescript-release-assets
