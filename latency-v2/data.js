@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789934090191,
+  "lastUpdate": 1789935534473,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -16962,6 +16962,72 @@ window.BENCHMARK_DATA = {
             "range": "722.48",
             "unit": "us",
             "extra": "trials: 5\nmedian: 290.00\nmean: 738.40\nstdev: 722.48\ncv: 97.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d6c6cfedb87d58c6d0535fbd4f1094210facebfb",
+          "message": "fix(controlplane): make a retried Raft proposal idempotent (#602)\n\n`RaftStore::write` caps each attempt and retries within a larger budget. A\ntimed-out attempt does not mean the proposal failed -- it means no answer\narrived in time. If the command committed as the cap expired, the retry\nproposes the same command again and the state machine answers from its\npost-commit state: `409 tenant already exists`, for a tenant the caller\nsuccessfully created. Nothing in the response distinguishes that from a\ngenuine conflict with someone else's write, and the usual reaction to a 409\n-- treat it as \"someone beat me to it\", or fail the provisioning run -- is\nwrong in exactly this case.\n\nCommands carried no identity, so a re-proposal was indistinguishable from a\nfresh one. The envelope now carries an optional request id, stamped once\nbefore the first attempt and carried by every retry, and `apply` answers a\nproposal it has already applied with the response that proposal produced.\n\nThree details are load-bearing:\n\nStamped once, not per attempt. A fresh id on each retry is exactly as\nanonymous as no id at all.\n\nNever restamped. A forwarded proposal arrives already carrying the id the\ninstance the client reached gave it, and that is the id the leader must\ndeduplicate on -- a second one per hop would give one logical write two\nidentities.\n\nBounded in apply order, not by a clock. Every replica applies the same log in\nthe same order, so the same ids are forgotten at the same point. A TTL would\nnot be deterministic, and replicas that disagree are worse than a cache that\nforgets early.\n\nThe ids ride the snapshot too, so a replica that restored from one still\nrecognises a retry -- without that, a leader change reopens the hole. The\nrestore reads the older snapshot shape as well, because refusing it would\nmake a rolling upgrade the outage.\n\nThe responses map is a `BTreeMap` rather than a `HashMap` because it is\nserialized into that snapshot, and two replicas must produce byte-identical\nones. The determinism harness in `state_machine_tests` is what catches a\n`HashMap` here, and it did.\n\nAn unstamped proposal is deduplicated by nothing and conflicts exactly as it\ndid before, which is what a proposal from a peer that predates this looks\nlike. Verified by reverting: the retry and snapshot-restore tests both fail\nwithout the dedup.\n\nCloses #529",
+          "timestamp": "2026-09-20T13:16:16-07:00",
+          "tree_id": "e016cd97c151dd78eec7beb8945e857011a5d7a7",
+          "url": "https://github.com/gabloe/felix/commit/d6c6cfedb87d58c6d0535fbd4f1094210facebfb"
+        },
+        "date": 1789935532119,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 127,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 127.00\nstdev: 1.00\ncv: 0.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 175,
+            "range": "2.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 175.00\nmean: 173.80\nstdev: 2.17\ncv: 1.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 230,
+            "range": "8.96",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 230.00\nmean: 226.20\nstdev: 8.96\ncv: 3.96%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 167,
+            "range": "6.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 170.20\nstdev: 6.69\ncv: 3.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 359,
+            "range": "243.63",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 359.00\nmean: 457.60\nstdev: 243.63\ncv: 53.24%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1351,
+            "range": "744.04",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1351.00\nmean: 1314.80\nstdev: 744.04\ncv: 56.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
