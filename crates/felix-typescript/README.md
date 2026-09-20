@@ -10,6 +10,17 @@ the places that matter. Here they exist once, in `felix-client`, and every
 language binds to them. The Python binding is built on the same reasoning and
 exposes the same surface.
 
+```bash
+npm install felix-client
+```
+
+The binary ships as one package per platform, declared as optional
+dependencies, so npm fetches only the one your machine needs. Nothing is
+compiled at install time. Linux (x86-64 and arm64, glibc), macOS (Intel and
+Apple silicon) and Windows x86-64 are covered. Node 18 or newer.
+
+Full documentation: https://gabloe.github.io/felix/clients/typescript/
+
 ## One surface, and it is asynchronous
 
 Python offers two surfaces because its sync one is the older idiom. Node has no

@@ -9,6 +9,17 @@ get wrong — a second implementation is a second set of subtle bugs in exactly
 the places that matter. Here they exist once, in `felix-client`, and every
 language binds to them.
 
+```bash
+pip install felix-client
+```
+
+Wheels ship compiled, one per platform, covering every Python from 3.9 up — so
+installing needs no Rust toolchain. Linux (x86-64 and arm64), macOS (Intel and
+Apple silicon) and Windows x86-64 are covered; anything else builds from the
+sdist and does need one.
+
+Full documentation: https://gabloe.github.io/felix/clients/python/
+
 ## Two surfaces
 
 Synchronous, for threads and `asyncio.to_thread`:

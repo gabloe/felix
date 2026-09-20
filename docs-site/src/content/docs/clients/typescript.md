@@ -12,11 +12,16 @@ deliberately identical on crates.io, PyPI and npm. See
 
 ## Installing
 
-Not published to npm yet. The release pipeline builds the addon for each
-platform and attaches it to the GitHub release; the npm step is behind an
-explicit switch until Felix is meant to be publicly installable.
+```bash
+npm install felix-client
+```
 
-To build it from the repository:
+The binary ships as one package per platform, declared as optional
+dependencies, so npm fetches only the one your machine needs — nothing is
+compiled at install time and no Rust toolchain is required. Linux (x86-64 and
+arm64, glibc), macOS (Intel and Apple silicon) and Windows x86-64 are covered.
+
+To build it from the repository instead:
 
 ```bash
 cd crates/felix-typescript
