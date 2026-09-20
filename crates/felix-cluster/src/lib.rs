@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -1275,6 +1275,56 @@ impl Cluster {
 
     pub async fn owner(&self, stream: &str) -> Result<String> {
         self.shard_owner_of("stream", stream, 0).await
+    }
+
+    /// Wait until the broker owning `stream` reports a replication pass, and
+    /// return it.
+    ///
+    /// Tests kill a leader to watch a failover, and a leader that has shipped
+    /// nothing tests startup instead. This is the wait that makes the shard
+    /// healthy first.
+    ///
+    /// The owner is re-resolved on every poll rather than captured once. A
+    /// caller publishing through an ordinary client does not choose which
+    /// broker the bytes land on, and placement may move between the publish and
+    /// this wait; a counter read from the wrong broker stays zero forever, and
+    /// no timeout rescues that. Returning the node that actually reported is
+    /// the point — kill *that* one.
+    ///
+    /// On timeout it reports every broker's counter, because "replication never
+    /// ran" and "the wrong broker was being read" are the two explanations and
+    /// the message should say which.
+    pub async fn wait_for_replication(&self, stream: &str, timeout: Duration) -> Result<String> {
+        let budget = crate::wait::budget(timeout);
+        let deadline = Instant::now() + budget;
+        loop {
+            if let Ok(owner) = self.owner(stream).await
+                && let Ok(Some(shipped)) = self
+                    .metric(&owner, "felix_broker_replication_shipped_total")
+                    .await
+                && shipped > 0.0
+            {
+                return Ok(owner);
+            }
+            if Instant::now() >= deadline {
+                let mut seen = Vec::new();
+                for node_id in self.node_ids() {
+                    let shipped = self
+                        .metric(&node_id, "felix_broker_replication_shipped_total")
+                        .await
+                        .ok()
+                        .flatten();
+                    seen.push(format!("{node_id}={shipped:?}"));
+                }
+                bail!(
+                    "no owner of {stream} reported replication within {budget:?}; \
+                     owner now {:?}, shipped per node: {}",
+                    self.owner(stream).await.ok(),
+                    seen.join(" "),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// The node leading one shard of one stream or cache.

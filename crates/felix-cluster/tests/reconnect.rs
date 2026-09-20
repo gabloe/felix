@@ -48,15 +48,10 @@ async fn a_publisher_survives_losing_its_broker() {
         .await
         .expect("publish before the failure");
 
-    let leader = cluster.owner(STREAM).await.expect("owner");
-    felix_cluster::wait::until(Duration::from_secs(20), "the leader to report", || async {
-        matches!(
-            cluster.metric(&leader, "felix_broker_replication_shipped_total").await,
-            Ok(Some(n)) if n > 0.0
-        )
-    })
-    .await
-    .expect("the leader should ship and report");
+    let leader = cluster
+        .wait_for_replication(STREAM, Duration::from_secs(20))
+        .await
+        .expect("the leader should ship and report");
     cluster.kill_node(&leader).expect("kill the leader");
     felix_cluster::wait::until(Duration::from_secs(30), "a new leader", || async {
         cluster.place_shards().await;
@@ -153,7 +148,6 @@ async fn records_published_across_a_failover_are_all_readable() {
     .await
     .expect("connect");
 
-    let leader = cluster.owner(STREAM).await.expect("owner");
     for i in 0..3 {
         client
             .publish_at_least_once(
@@ -166,14 +160,10 @@ async fn records_published_across_a_failover_are_all_readable() {
             .await
             .expect("publish");
     }
-    felix_cluster::wait::until(Duration::from_secs(20), "the leader to report", || async {
-        matches!(
-            cluster.metric(&leader, "felix_broker_replication_shipped_total").await,
-            Ok(Some(n)) if n > 0.0
-        )
-    })
-    .await
-    .expect("ship");
+    let leader = cluster
+        .wait_for_replication(STREAM, Duration::from_secs(20))
+        .await
+        .expect("ship");
     cluster.kill_node(&leader).expect("kill");
     felix_cluster::wait::until(Duration::from_secs(30), "a new leader", || async {
         cluster.place_shards().await;
