@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789934092716,
+  "lastUpdate": 1789935537968,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13364,6 +13364,58 @@ window.BENCHMARK_DATA = {
             "range": "47966.88",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1486748.60\nmean: 1459096.59\nstdev: 47966.88\ncv: 3.29%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d6c6cfedb87d58c6d0535fbd4f1094210facebfb",
+          "message": "fix(controlplane): make a retried Raft proposal idempotent (#602)\n\n`RaftStore::write` caps each attempt and retries within a larger budget. A\ntimed-out attempt does not mean the proposal failed -- it means no answer\narrived in time. If the command committed as the cap expired, the retry\nproposes the same command again and the state machine answers from its\npost-commit state: `409 tenant already exists`, for a tenant the caller\nsuccessfully created. Nothing in the response distinguishes that from a\ngenuine conflict with someone else's write, and the usual reaction to a 409\n-- treat it as \"someone beat me to it\", or fail the provisioning run -- is\nwrong in exactly this case.\n\nCommands carried no identity, so a re-proposal was indistinguishable from a\nfresh one. The envelope now carries an optional request id, stamped once\nbefore the first attempt and carried by every retry, and `apply` answers a\nproposal it has already applied with the response that proposal produced.\n\nThree details are load-bearing:\n\nStamped once, not per attempt. A fresh id on each retry is exactly as\nanonymous as no id at all.\n\nNever restamped. A forwarded proposal arrives already carrying the id the\ninstance the client reached gave it, and that is the id the leader must\ndeduplicate on -- a second one per hop would give one logical write two\nidentities.\n\nBounded in apply order, not by a clock. Every replica applies the same log in\nthe same order, so the same ids are forgotten at the same point. A TTL would\nnot be deterministic, and replicas that disagree are worse than a cache that\nforgets early.\n\nThe ids ride the snapshot too, so a replica that restored from one still\nrecognises a retry -- without that, a leader change reopens the hole. The\nrestore reads the older snapshot shape as well, because refusing it would\nmake a rolling upgrade the outage.\n\nThe responses map is a `BTreeMap` rather than a `HashMap` because it is\nserialized into that snapshot, and two replicas must produce byte-identical\nones. The determinism harness in `state_machine_tests` is what catches a\n`HashMap` here, and it did.\n\nAn unstamped proposal is deduplicated by nothing and conflicts exactly as it\ndid before, which is what a proposal from a peer that predates this looks\nlike. Verified by reverting: the retry and snapshot-restore tests both fail\nwithout the dedup.\n\nCloses #529",
+          "timestamp": "2026-09-20T13:16:16-07:00",
+          "tree_id": "e016cd97c151dd78eec7beb8945e857011a5d7a7",
+          "url": "https://github.com/gabloe/felix/commit/d6c6cfedb87d58c6d0535fbd4f1094210facebfb"
+        },
+        "date": 1789935537149,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 401581.05,
+            "range": "12091.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 401581.05\nmean: 400999.66\nstdev: 12091.84\ncv: 3.02%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 401581.05,
+            "range": "12091.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 401581.05\nmean: 400999.66\nstdev: 12091.84\ncv: 3.02%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94958.37,
+            "range": "396.41",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94958.37\nmean: 94980.46\nstdev: 396.41\ncv: 0.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 949583.73,
+            "range": "3964.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 949583.73\nmean: 949804.58\nstdev: 3964.12\ncv: 0.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
