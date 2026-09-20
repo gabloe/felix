@@ -281,10 +281,9 @@ fn unverified_tenant(token: &str) -> Result<String, ApiError> {
 #[cfg(test)]
 mod not_ready_tests {
     use super::*;
-    use crate::api::types::{FeatureFlags, Region};
-    use crate::readiness::{HealthProbe, Readiness};
+    use crate::readiness::HealthProbe;
+    use crate::store::StoreConfig;
     use crate::store::memory::InMemoryStore;
-    use crate::store::{ControlPlaneStore, StoreConfig};
     use std::sync::Arc;
 
     /// A store that is up but holds nothing the group holds -- a member whose
@@ -305,25 +304,7 @@ mod not_ready_tests {
             changes_limit: crate::config::DEFAULT_CHANGES_LIMIT,
             change_retention_max_rows: Some(crate::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
         });
-        AppState {
-            region: Region {
-                region_id: "local".to_string(),
-                display_name: "Local".to_string(),
-            },
-            api_version: "v1".to_string(),
-            features: FeatureFlags {
-                durable_storage: store.is_durable(),
-                tiered_storage: false,
-                bridges: false,
-            },
-            store: Arc::new(store),
-            oidc_validator: crate::auth::oidc::UpstreamOidcValidator::default(),
-            bootstrap_enabled: false,
-            bootstrap_tokens: Vec::new(),
-            node_liveness: Default::default(),
-            readiness: Arc::new(Readiness::new(probe)),
-            in_flight: Default::default(),
-        }
+        crate::test_support::app_state(Arc::new(store), probe)
     }
 
     /// **A member that cannot verify says so, rather than blaming the token.**

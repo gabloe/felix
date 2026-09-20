@@ -578,19 +578,9 @@ impl ClusterClient {
                 }
                 Ok(())
             }
-            Err(err) if routed_to_owner.is_some() => {
-                // The owner we routed to did not answer. Forget it and let the
-                // next publish forward again rather than keep failing against a
-                // broker that may have lost the shard or gone away. Naming it
-                // matters: the failure is about a broker the caller never chose
-                // and would otherwise have no way to identify.
-                let owner = routed_to_owner.unwrap_or_default();
-                self.owners.write().await.remove(&key);
-                Err(err.context(format!(
-                    "publish to the shard's owner {owner} failed; forgetting it and \
-                     forwarding the next one"
-                )))
-            }
+            Err(err) if routed_to_owner.is_some() => Err(self
+                .forget_owner(&key, routed_to_owner.unwrap_or_default(), err)
+                .await),
             Err(err) => {
                 // Reconnect before returning, so the caller's next publish does
                 // not repeat this failure against the same dead broker.
@@ -815,6 +805,28 @@ impl ClusterClient {
         }
     }
 
+    /// The owner a publish routed to did not answer. Forget it and say which
+    /// broker and shard failed -- the caller never chose that broker and would
+    /// otherwise have no way to identify it.
+    ///
+    /// Only called when the publish that failed actually went to a cached
+    /// owner. Forgetting it here is what makes the next publish for this shard
+    /// forward instead of repeating the failure against a broker that may have
+    /// lost the shard or gone away.
+    async fn forget_owner(
+        &self,
+        key: &ShardKey,
+        node_id: String,
+        err: anyhow::Error,
+    ) -> anyhow::Error {
+        self.owners.write().await.remove(key);
+        err.context(format!(
+            "publish to shard {}'s owner {node_id} failed; forgetting it and \
+             forwarding the next one",
+            key.3
+        ))
+    }
+
     /// A client to one broker, with this cluster client's name and config.
     pub(crate) async fn connect_to(&self, addr: SocketAddr) -> Result<Client> {
         Client::connect(addr, &self.server_name, self.config.clone()).await
@@ -867,14 +879,9 @@ impl ClusterClient {
                 }
                 Ok(())
             }
-            Err(err) if routed_to_owner.is_some() => {
-                let owner = routed_to_owner.unwrap_or_default();
-                self.owners.write().await.remove(&owner_key);
-                Err(err.context(format!(
-                    "publish to shard {shard}'s owner {owner} failed; forgetting it and \
-                     forwarding the next one"
-                )))
-            }
+            Err(err) if routed_to_owner.is_some() => Err(self
+                .forget_owner(&owner_key, routed_to_owner.unwrap_or_default(), err)
+                .await),
             Err(err) => {
                 let reconnected = self.reconnect().await;
                 match reconnected {

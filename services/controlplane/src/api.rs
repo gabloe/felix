@@ -58,9 +58,8 @@ pub(crate) async fn ensure_tenant_exists(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::types::{FeatureFlags, Region};
+    use crate::store::StoreConfig;
     use crate::store::memory::InMemoryStore;
-    use crate::store::{ControlPlaneStore, StoreConfig};
     use std::sync::Arc;
 
     fn test_state() -> AppState {
@@ -68,27 +67,7 @@ mod tests {
             changes_limit: crate::config::DEFAULT_CHANGES_LIMIT,
             change_retention_max_rows: Some(crate::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
         });
-        AppState {
-            region: Region {
-                region_id: "local".to_string(),
-                display_name: "Local".to_string(),
-            },
-            api_version: "v1".to_string(),
-            features: FeatureFlags {
-                durable_storage: store.is_durable(),
-                tiered_storage: false,
-                bridges: false,
-            },
-            store: Arc::new(store),
-            oidc_validator: crate::auth::oidc::UpstreamOidcValidator::default(),
-            bootstrap_enabled: false,
-            bootstrap_tokens: Vec::new(),
-            node_liveness: Default::default(),
-            readiness: std::sync::Arc::new(crate::readiness::Readiness::new(std::sync::Arc::new(
-                crate::readiness::AlwaysReady,
-            ))),
-            in_flight: Default::default(),
-        }
+        crate::test_support::app_state_ready(Arc::new(store))
     }
 
     #[tokio::test]

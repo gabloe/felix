@@ -256,7 +256,6 @@ fn group_subject(group: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::types::{FeatureFlags, Region};
     use crate::app::AppState;
     use crate::auth::idp_registry::IdpIssuerConfig;
     use crate::config::{DEFAULT_CHANGE_RETENTION_MAX_ROWS, DEFAULT_CHANGES_LIMIT};
@@ -322,27 +321,7 @@ mod tests {
     }
 
     fn test_state(store: Arc<InMemoryStore>) -> AppState {
-        AppState {
-            region: Region {
-                region_id: "local".to_string(),
-                display_name: "Local".to_string(),
-            },
-            api_version: "v1".to_string(),
-            features: FeatureFlags {
-                durable_storage: false,
-                tiered_storage: false,
-                bridges: false,
-            },
-            store,
-            oidc_validator: crate::auth::oidc::UpstreamOidcValidator::default(),
-            bootstrap_enabled: false,
-            bootstrap_tokens: Vec::new(),
-            node_liveness: Default::default(),
-            readiness: std::sync::Arc::new(crate::readiness::Readiness::new(std::sync::Arc::new(
-                crate::readiness::AlwaysReady,
-            ))),
-            in_flight: Default::default(),
-        }
+        crate::test_support::app_state_ready(store)
     }
 
     fn store_config() -> StoreConfig {

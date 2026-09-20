@@ -44,7 +44,7 @@ const APPLIED_IDS_KEPT: usize = 4096;
 /// A retry re-proposes a command that may have committed; this is what lets it
 /// be answered with what that command actually returned rather than with the
 /// conflict its effect now produces (#529).
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 struct AppliedIds {
     /// Apply order, for deterministic eviction.
     order: VecDeque<String>,
@@ -356,12 +356,14 @@ impl AppStateMachine for MetadataStateMachine {
     }
 
     async fn snapshot(&self) -> Vec<u8> {
+        // One lock acquisition, not two: `order` and `responses` are updated
+        // together on every insert, so reading them under separate guards
+        // could interleave with a concurrent apply and snapshot a `responses`
+        // entry with no matching `order` entry (or the reverse).
+        let applied = self.applied.read().await.clone();
         serde_json::to_vec(&Snapshot {
             state: self.store.export_state().await,
-            applied: AppliedIds {
-                order: self.applied.read().await.order.clone(),
-                responses: self.applied.read().await.responses.clone(),
-            },
+            applied,
         })
         .expect("exported state serializes by construction")
     }
