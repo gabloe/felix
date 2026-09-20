@@ -117,6 +117,12 @@ pub struct BrokerConfig {
     // QUIC listener bind address. With `quic_listeners > 1` this is the *first*
     // of a consecutive run of ports; see [`BrokerConfig::quic_binds`].
     pub quic_bind: SocketAddr,
+    // An explicit `FELIX_IO_RUNTIME_THREADS`, when the operator set one.
+    //
+    // Kept so `validate` can see it: the pool size and the listener count must
+    // hold a relationship, and a pool too small for the listeners silently puts
+    // every listener's driver on one thread. Unset means derived.
+    pub io_runtime_threads: Option<usize>,
     // How many client-facing QUIC listeners to bind, on consecutive ports from
     // `quic_bind`.
     //
@@ -319,6 +325,7 @@ impl Default for BrokerConfig {
         Self {
             quic_bind: SocketAddr::from(([0, 0, 0, 0], 5000)),
             quic_listeners: 1,
+            io_runtime_threads: None,
             metrics_bind: SocketAddr::from(([0, 0, 0, 0], 8080)),
             controlplane_url: None,
             controlplane_token: String::new(),
@@ -705,6 +712,16 @@ impl BrokerConfig {
             .parse()
             .with_context(|| "parse FELIX_QUIC_BIND")?;
         let quic_listeners = quic_listeners_from_env(quic_bind)?;
+        let io_runtime_threads = std::env::var("FELIX_IO_RUNTIME_THREADS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                value
+                    .trim()
+                    .parse::<usize>()
+                    .with_context(|| format!("parse FELIX_IO_RUNTIME_THREADS: {value}"))
+            })
+            .transpose()?;
         let controlplane_url = std::env::var("FELIX_CONTROLPLANE_URL").ok();
         // Poll every 2s by default.
         let controlplane_sync_interval_ms = std::env::var("FELIX_CONTROLPLANE_SYNC_INTERVAL_MS")
@@ -939,6 +956,7 @@ impl BrokerConfig {
         Ok(Self {
             quic_bind,
             quic_listeners,
+            io_runtime_threads,
             metrics_bind,
             controlplane_url,
             controlplane_token,
@@ -1064,8 +1082,60 @@ impl BrokerConfig {
                 self.cache_conn_recv_window,
             );
         }
+        self.validate_io_runtime_covers_every_listener()?;
         self.validate_credential_can_outlive_itself()?;
         Ok(())
+    }
+
+    /// Refuse an I/O runtime pool too small for the listeners that will use it.
+    ///
+    /// An endpoint's driver is a single task, so two endpoints on one runtime
+    /// share its one thread. `io_runtime_index` gives a server endpoint
+    /// `sequence % (pool_len - 1)`, which for a pool of 2 is `% 1` -- every
+    /// listener on the same thread, which is the single feeder that binding
+    /// several listeners exists to escape.
+    ///
+    /// Each setting is fine alone. `FELIX_IO_RUNTIME_THREADS=1` isolates a
+    /// driver; `FELIX_QUIC_LISTENERS=4` asks for four. Together they quietly
+    /// collapse the four onto one, and the only symptom is throughput that does
+    /// not improve -- which reads as the listeners being pointless rather than
+    /// as a misconfiguration.
+    ///
+    /// Unset is not a conflict: the pool is derived from the listener count, so
+    /// there is nothing to disagree with.
+    fn validate_io_runtime_covers_every_listener(&self) -> Result<()> {
+        let Some(configured) = self.io_runtime_threads else {
+            return Ok(());
+        };
+        // Zero is the documented way to turn the pool off entirely and put
+        // drivers back on the app runtime, where tokio spreads them. That is
+        // the Linux default and not a conflict.
+        if configured == 0 {
+            return Ok(());
+        }
+        let needed = felix_transport::required_io_runtime_threads(self.server_endpoints());
+        if configured < needed {
+            anyhow::bail!(
+                "FELIX_IO_RUNTIME_THREADS ({configured}) is too small for \
+                 FELIX_QUIC_LISTENERS ({}): this broker binds {} server \
+                 endpoints and every driver past the first would share a thread \
+                 with another, which is the single feeder several listeners \
+                 exist to escape. Use {needed}, or 0 to put drivers on the app \
+                 runtime",
+                self.quic_listeners,
+                self.server_endpoints(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Server endpoints this broker binds: the client listeners, plus the
+    /// internal one when it is part of a cluster.
+    ///
+    /// The internal listener carries replication, so it is a driver like any
+    /// other and needs its own runtime rather than sharing a client listener's.
+    pub fn server_endpoints(&self) -> usize {
+        self.quic_listeners + usize::from(self.peer_transport.is_some())
     }
 
     /// Refuse a credential that will expire with nothing able to renew it.
@@ -2184,6 +2254,64 @@ subscriber_single_writer_per_conn: false
             // If this ever fails, a default was changed into a contradiction
             // and every broker would refuse to start.
             BrokerConfig::default().validate().expect("defaults");
+        }
+
+        /// The pair this module exists for, in its newest form: each setting
+        /// is fine alone, and together they put four listeners on one thread.
+        #[test]
+        fn an_io_runtime_pool_too_small_for_the_listeners_is_refused() {
+            let config = BrokerConfig {
+                quic_listeners: 4,
+                io_runtime_threads: Some(1),
+                ..BrokerConfig::default()
+            };
+            let err = config
+                .validate()
+                .expect_err("1 runtime cannot serve 4 listeners");
+            let message = format!("{err:#}");
+            assert!(message.contains("FELIX_IO_RUNTIME_THREADS"), "{message}");
+            assert!(message.contains("FELIX_QUIC_LISTENERS"), "{message}");
+            // Says what to use instead, rather than only what is wrong.
+            assert!(message.contains("Use 5"), "{message}");
+        }
+
+        /// Zero is the documented way to turn the pool off and put drivers back
+        /// on the app runtime, where tokio spreads them. Not a conflict.
+        #[test]
+        fn turning_the_pool_off_is_not_a_conflict() {
+            BrokerConfig {
+                quic_listeners: 8,
+                io_runtime_threads: Some(0),
+                ..BrokerConfig::default()
+            }
+            .validate()
+            .expect("0 disables the pool");
+        }
+
+        /// Unset is the ordinary case: nothing to disagree with, because the
+        /// pool is derived from the listener count.
+        #[test]
+        fn an_underived_pool_is_not_a_conflict() {
+            BrokerConfig {
+                quic_listeners: 8,
+                io_runtime_threads: None,
+                ..BrokerConfig::default()
+            }
+            .validate()
+            .expect("unset derives");
+        }
+
+        /// A pool sized exactly right is accepted, so the error names a number
+        /// that actually works.
+        #[test]
+        fn a_pool_sized_for_the_listeners_is_accepted() {
+            let config = BrokerConfig {
+                quic_listeners: 4,
+                io_runtime_threads: Some(5),
+                ..BrokerConfig::default()
+            };
+            assert_eq!(config.server_endpoints(), 4);
+            config.validate().expect("5 runtimes serve 4 listeners");
         }
 
         #[test]

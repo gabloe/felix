@@ -67,6 +67,10 @@ export FELIX_QUIC_LISTENERS=4          # binds 5000, 5001, 5002, 5003
   binding fewer listeners than asked for.
 - Adding brokers remains the horizontal lever; this raises what one broker can
   do before you need another.
+- Do not pin [`FELIX_IO_RUNTIME_THREADS`](#felix_io_runtime_threads) below one
+  runtime per listener plus one. It is derived from this setting, and a pool
+  too small puts every listener's driver back on a single thread. Startup
+  refuses that combination.
 
 ### `FELIX_TLS_CERT_EXPORT`
 
@@ -979,12 +983,41 @@ experiment.
 
 **Type**: Non-negative integer
 
-**Default**: `2` on macOS, `0` elsewhere
+**Default**: derived on macOS — one runtime per server endpoint plus one for
+clients, so a broker with one client listener gets `2`, and one with
+`FELIX_QUIC_LISTENERS=4` gets `6` (four client listeners, the internal
+listener, and the client runtime). `0` elsewhere.
 
 ```bash
 export FELIX_IO_RUNTIME_THREADS="2"
 export FELIX_IO_RUNTIME_THREADS="0"   # disable driver isolation
 ```
+
+:::danger[Do not set this below one runtime per listener]
+The pool is **derived from the listener count** for a reason. Server endpoints
+are assigned `sequence % (pool_len - 1)`, so a pool of 2 gives every one of
+them runtime `0` — every listener's driver on a single thread, which is exactly
+the single feeder [`FELIX_QUIC_LISTENERS`](#felix_quic_listeners) exists to
+escape.
+
+Each setting is harmless alone. `FELIX_IO_RUNTIME_THREADS=1` isolates a driver;
+`FELIX_QUIC_LISTENERS=4` asks for four. Together they collapse the four onto
+one, and the only symptom is throughput that does not improve — which reads as
+the extra listeners being pointless rather than as a misconfiguration.
+
+The broker refuses to start on that combination rather than let you find out
+from a benchmark:
+
+```
+FELIX_IO_RUNTIME_THREADS (2) is too small for FELIX_QUIC_LISTENERS (4): this
+broker binds 4 server endpoints and every driver past the first would share a
+thread with another, which is the single feeder several listeners exist to
+escape. Use 5, or 0 to put drivers on the app runtime
+```
+
+Leave it unset unless you are experimenting; the derived value is correct by
+construction.
+:::
 
 ### `FELIX_ACK_ELICITING_THRESHOLD`
 

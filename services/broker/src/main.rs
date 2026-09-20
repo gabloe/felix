@@ -127,6 +127,13 @@ where
     // Observability is initialized first so any subsequent startup logs/metrics are captured.
 
     let config = config::BrokerConfig::from_env_or_yaml()?;
+    // Size the QUIC I/O runtime pool before ANY endpoint is built: the pool is
+    // created on the first one and a tokio runtime cannot be resized after.
+    // This has to sit above the peer pool below, which binds a client endpoint
+    // long before the client listeners are bound -- placing it next to those
+    // listeners is too late, and the symptom is silent: every driver lands on
+    // one thread and throughput simply does not improve.
+    felix_transport::plan_server_endpoints(config.server_endpoints());
     // Lifecycle coordination. `readiness` gates `/ready`; the two tokens separate
     // "stop admitting connections" from "stop serving probes", because the metrics
     // endpoint has to outlive the drain — that is how an operator watches the drain

@@ -42,9 +42,60 @@ fn io_runtime_index(role: EndpointRole, sequence: usize, pool_len: usize) -> usi
     }
 }
 
+/// How many server endpoints this process has said it will bind.
+///
+/// One unless a process declares otherwise, which is what a single-listener
+/// broker and every test binding one server are.
+static PLANNED_SERVER_ENDPOINTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(1);
+
+/// The I/O runtime pool a process binding `server_endpoints` needs.
+///
+/// One runtime per server endpoint, because an endpoint's driver is a single
+/// task and two endpoints sharing a runtime share its one thread, plus the one
+/// reserved for every client endpoint.
+///
+/// Note this reproduces the historical default exactly: a process with one
+/// server endpoint needs 2, which is what macOS defaulted to when a broker
+/// could only have one listener.
+pub const fn required_io_runtime_threads(server_endpoints: usize) -> usize {
+    server_endpoints + 1
+}
+
+/// Declare how many server endpoints this process will bind, before it binds
+/// the first one.
+///
+/// The pool is sized from this rather than from a separate setting. The two
+/// numbers have to hold a relationship -- a pool smaller than the endpoints
+/// using it silently puts several drivers on one thread, which is the ceiling
+/// the endpoints were split up to escape -- and a relationship that must hold
+/// is not something to leave two knobs free to break.
+///
+/// Has no effect once the pool exists: it is built on the first endpoint, and
+/// tokio runtimes are not resized. Called after that, it warns rather than
+/// pretending.
+pub fn plan_server_endpoints(count: usize) {
+    use std::sync::atomic::Ordering;
+    PLANNED_SERVER_ENDPOINTS.store(count.max(1), Ordering::Relaxed);
+    if io_runtime_pool_built() {
+        tracing::warn!(
+            planned = count,
+            "plan_server_endpoints called after the I/O runtime pool was built; \
+             the pool keeps the size it was created with",
+        );
+    }
+}
+
+/// Built once, on the first endpoint. Module scope so [`plan_server_endpoints`]
+/// can tell whether it is already too late to size it.
+static IO_RUNTIMES: OnceLock<Vec<tokio::runtime::Runtime>> = OnceLock::new();
+
+fn io_runtime_pool_built() -> bool {
+    IO_RUNTIMES.get().is_some()
+}
+
 fn io_runtime_handle(role: EndpointRole) -> Option<tokio::runtime::Handle> {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    static IO_RUNTIMES: OnceLock<Vec<tokio::runtime::Runtime>> = OnceLock::new();
     static NEXT_SERVER: AtomicUsize = AtomicUsize::new(0);
     static NEXT_CLIENT: AtomicUsize = AtomicUsize::new(0);
     let pool = IO_RUNTIMES.get_or_init(|| {
@@ -68,7 +119,19 @@ fn io_runtime_handle(role: EndpointRole) -> Option<tokio::runtime::Handle> {
         // colocation both on and off.
         //
         // `FELIX_IO_RUNTIME_THREADS` overrides on any platform.
-        let default_threads = if cfg!(target_os = "macos") { 2 } else { 0 };
+        //
+        // Sized from the endpoints that will use it, not fixed at 2. A broker
+        // binding N client listeners has N+1 server endpoints with the internal
+        // one, and a pool of 2 puts every one of their drivers on the same
+        // thread -- `io_runtime_index` gives servers `sequence % (pool_len - 1)`,
+        // which is `% 1` for a pool of 2. That is exactly the single feeder
+        // multiple listeners exist to escape.
+        let planned = PLANNED_SERVER_ENDPOINTS.load(Ordering::Relaxed).max(1);
+        let default_threads = if cfg!(target_os = "macos") {
+            required_io_runtime_threads(planned)
+        } else {
+            0
+        };
         let threads = std::env::var("FELIX_IO_RUNTIME_THREADS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -1300,6 +1363,46 @@ mod tests {
         assert_eq!(io_runtime_index(EndpointRole::Client, 99, 4), 3);
         assert_eq!(io_runtime_index(EndpointRole::Server, 99, 1), 0);
         assert_eq!(io_runtime_index(EndpointRole::Client, 99, 1), 0);
+    }
+
+    /// The pool must give every server endpoint its own runtime, or several
+    /// listeners' drivers land on one thread -- the single feeder that binding
+    /// several listeners exists to escape.
+    #[test]
+    fn a_derived_pool_gives_every_server_endpoint_its_own_runtime() {
+        for endpoints in 1..=8 {
+            let pool = required_io_runtime_threads(endpoints);
+            let assigned: std::collections::HashSet<_> = (0..endpoints)
+                .map(|sequence| io_runtime_index(EndpointRole::Server, sequence, pool))
+                .collect();
+            assert_eq!(
+                assigned.len(),
+                endpoints,
+                "{endpoints} endpoints shared runtimes in a pool of {pool}: {assigned:?}",
+            );
+            // And never the one reserved for clients.
+            let client = io_runtime_index(EndpointRole::Client, 0, pool);
+            assert!(
+                !assigned.contains(&client),
+                "a server took the client runtime"
+            );
+        }
+    }
+
+    /// The historical default was right for the broker it was written for: one
+    /// server endpoint needs two runtimes. Deriving must not change that.
+    #[test]
+    fn one_server_endpoint_still_wants_the_historical_pool_of_two() {
+        assert_eq!(required_io_runtime_threads(1), 2);
+    }
+
+    /// The defect this replaced: a pool of 2 gives every server `% 1`.
+    #[test]
+    fn a_pool_of_two_collapses_every_listener_onto_one_runtime() {
+        let assigned: std::collections::HashSet<_> = (0..4)
+            .map(|sequence| io_runtime_index(EndpointRole::Server, sequence, 2))
+            .collect();
+        assert_eq!(assigned.len(), 1, "expected the documented collapse");
     }
 
     #[test]
