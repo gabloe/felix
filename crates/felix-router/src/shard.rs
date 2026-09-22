@@ -70,6 +70,20 @@ pub struct Route {
     pub leader: NodeRef,
     pub replicas: Vec<NodeRef>,
     pub generation: u64,
+    /// The leader has been told to stop serving at this generation so the
+    /// shard can move. It still leads for replication: the followers are
+    /// caught up from it before anyone else takes over.
+    pub draining: bool,
+}
+
+/// One assignment as the table takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    pub key: ShardKey,
+    pub leader: String,
+    pub replicas: Vec<String>,
+    pub generation: u64,
+    pub draining: bool,
 }
 
 /// Why a shard cannot be routed.
@@ -179,9 +193,35 @@ impl RoutingTable {
         assignments: impl IntoIterator<Item = (ShardKey, String, Vec<String>, u64)>,
         nodes: &HashMap<String, NodeRef>,
     ) -> Self {
+        Self::build_with(
+            assignments
+                .into_iter()
+                .map(|(key, leader, replicas, generation)| Placed {
+                    key,
+                    leader,
+                    replicas,
+                    generation,
+                    draining: false,
+                }),
+            nodes,
+        )
+    }
+
+    /// [`RoutingTable::build`], with each assignment's draining flag.
+    pub fn build_with(
+        assignments: impl IntoIterator<Item = Placed>,
+        nodes: &HashMap<String, NodeRef>,
+    ) -> Self {
         let mut routes = HashMap::new();
         let mut shards_per_stream: HashMap<String, u32> = HashMap::new();
-        for (key, leader, replicas, generation) in assignments {
+        for Placed {
+            key,
+            leader,
+            replicas,
+            generation,
+            draining,
+        } in assignments
+        {
             // The count is the highest shard index placed plus one, not the
             // number of assignments: placement may not have managed to place
             // every shard, and a publish must still resolve keys against the
@@ -213,6 +253,7 @@ impl RoutingTable {
                         .filter_map(|id| nodes.get(&id).cloned())
                         .collect(),
                     generation,
+                    draining,
                 },
             );
         }

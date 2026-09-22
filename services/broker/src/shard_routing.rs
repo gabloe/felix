@@ -244,14 +244,13 @@ pub fn routing_table_from(
     assignments: &std::collections::HashMap<ShardKey, crate::shard_watch::ShardAssignment>,
     nodes: &std::collections::HashMap<String, felix_router::NodeRef>,
 ) -> felix_router::RoutingTable {
-    felix_router::RoutingTable::build(
-        assignments.values().map(|assignment| {
-            (
-                to_router_key(&assignment.key),
-                assignment.leader.clone(),
-                assignment.replicas.clone(),
-                assignment.generation,
-            )
+    felix_router::RoutingTable::build_with(
+        assignments.values().map(|assignment| felix_router::Placed {
+            key: to_router_key(&assignment.key),
+            leader: assignment.leader.clone(),
+            replicas: assignment.replicas.clone(),
+            generation: assignment.generation,
+            draining: assignment.is_draining(),
         }),
         nodes,
     )

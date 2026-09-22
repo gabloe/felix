@@ -1714,7 +1714,7 @@ impl ControlPlaneStore for PostgresStore {
         // `FOR UPDATE` so a concurrent write to the same shard waits rather than
         // reading the row this transaction is about to replace.
         let existing = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
                FROM shard_assignments
                WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5
                FOR UPDATE"#,
@@ -1753,13 +1753,14 @@ impl ControlPlaneStore for PostgresStore {
         };
 
         sqlx::query(
-            r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE SET
                  leader = EXCLUDED.leader,
                  replicas = EXCLUDED.replicas,
                  generation = EXCLUDED.generation,
                  state = EXCLUDED.state,
+                 successor = EXCLUDED.successor,
                  updated_at = now()"#,
         )
         .bind(&stored.key.tenant_id)
@@ -1771,6 +1772,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&stored.replicas)?)
         .bind(stored.generation as i64)
         .bind(shard_state_to_str(stored.state))
+        .bind(&stored.successor)
         .execute(&mut *tx)
         .await?;
 
@@ -1783,7 +1785,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
         sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
                FROM shard_assignments
                WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5"#,
         )
@@ -1801,7 +1803,7 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
         let rows = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
                FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
         )
         .fetch_all(&self.pool)
@@ -1814,7 +1816,7 @@ impl ControlPlaneStore for PostgresStore {
         node_id: &str,
     ) -> StoreResult<Vec<ShardAssignment>> {
         let rows = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
                FROM shard_assignments WHERE leader = $1
                ORDER BY tenant_id, namespace, stream, shard, kind"#,
         )
@@ -1855,13 +1857,14 @@ impl ControlPlaneStore for PostgresStore {
         let result = sqlx::query(
             r#"INSERT INTO replica_reports
                    (tenant_id, namespace, kind, stream, shard, generation, caught_up, offsets,
-                    reported_at_millis)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    reported_at_millis, drained)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE
                SET generation = EXCLUDED.generation,
                    caught_up = EXCLUDED.caught_up,
                    offsets = EXCLUDED.offsets,
-                   reported_at_millis = EXCLUDED.reported_at_millis
+                   reported_at_millis = EXCLUDED.reported_at_millis,
+                   drained = EXCLUDED.drained
                WHERE EXCLUDED.generation >= replica_reports.generation"#,
         )
         .bind(&report.key.tenant_id)
@@ -1873,6 +1876,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(serde_json::to_value(&report.caught_up).expect("a set of strings serializes"))
         .bind(serde_json::to_value(&report.offsets).expect("a map of integers serializes"))
         .bind(report.reported_at_millis as i64)
+        .bind(report.drained)
         .execute(&self.pool)
         .await;
         match result {
@@ -1887,7 +1891,7 @@ impl ControlPlaneStore for PostgresStore {
     async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
         sqlx::query_as::<_, DbReplicaReport>(
             r#"SELECT tenant_id, namespace, stream, shard, kind, generation, caught_up, offsets,
-                      reported_at_millis
+                      reported_at_millis, drained
                FROM replica_reports
                ORDER BY tenant_id, namespace, kind, stream, shard"#,
         )
@@ -1906,7 +1910,7 @@ impl ControlPlaneStore for PostgresStore {
         let mut tx = self.pool.begin().await?;
         begin_consistent_read(&mut tx).await?;
         let rows = sqlx::query_as::<_, DbShardAssignment>(
-            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state
+            r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
                FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
         )
         .fetch_all(&mut *tx)
@@ -2091,6 +2095,7 @@ struct DbReplicaReport {
     caught_up: serde_json::Value,
     offsets: serde_json::Value,
     reported_at_millis: i64,
+    drained: bool,
 }
 
 fn replica_report_from_db(row: DbReplicaReport) -> StoreResult<ReplicaReport> {
@@ -2108,6 +2113,7 @@ fn replica_report_from_db(row: DbReplicaReport) -> StoreResult<ReplicaReport> {
         offsets: serde_json::from_value(row.offsets)
             .map_err(|err| StoreError::Unexpected(anyhow!("decode offsets: {err}")))?,
         reported_at_millis: row.reported_at_millis as u64,
+        drained: row.drained,
     })
 }
 
@@ -2122,6 +2128,7 @@ struct DbShardAssignment {
     replicas: serde_json::Value,
     generation: i64,
     state: String,
+    successor: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -2149,6 +2156,7 @@ fn shard_from_db(row: DbShardAssignment) -> StoreResult<ShardAssignment> {
         replicas: serde_json::from_value(row.replicas)?,
         generation: row.generation as u64,
         state: parse_shard_state(&row.state)?,
+        successor: row.successor,
     })
 }
 

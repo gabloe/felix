@@ -61,6 +61,14 @@ pub struct ShardAssignment {
     pub state: String,
 }
 
+impl ShardAssignment {
+    /// The control plane has told the leader to stop serving at this
+    /// generation so the shard can move.
+    pub fn is_draining(&self) -> bool {
+        self.state == "draining"
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ShardAssignmentChange {
     seq: u64,

@@ -43,7 +43,7 @@ fn an_assignment_does_not_serve_until_the_log_is_open() {
     assert_eq!(own.phase(&key(0)), Phase::Opening);
     assert!(!own.may_serve(&key(0)), "opening must not serve");
 
-    assert!(own.opened(&key(0), 3));
+    assert_eq!(own.opened(&key(0), 3), Opened::Activated);
     assert_eq!(own.phase(&key(0)), Phase::Active);
     assert!(own.may_serve(&key(0)));
 }
@@ -187,7 +187,7 @@ fn a_closed_shard_can_be_reacquired() {
             generation: 6
         }
     );
-    assert!(own.opened(&key(0), 6));
+    assert_eq!(own.opened(&key(0), 6), Opened::Activated);
     assert!(own.may_serve(&key(0)));
 }
 
@@ -245,13 +245,13 @@ fn an_open_that_finishes_after_a_reassignment_does_not_activate() {
     own.observe(&key(0), Some(&assigned_to("broker-a", 2)));
 
     assert!(
-        !own.opened(&key(0), 1),
+        own.opened(&key(0), 1) == Opened::Stale,
         "the open for generation 1 must not activate generation 2",
     );
     assert_eq!(own.phase(&key(0)), Phase::Opening);
     assert!(!own.may_serve(&key(0)));
 
-    assert!(own.opened(&key(0), 2));
+    assert_eq!(own.opened(&key(0), 2), Opened::Activated);
     assert!(own.may_serve_at(&key(0), 2));
 }
 
@@ -587,4 +587,101 @@ mod recording_where_a_leadership_begins {
 
         store.open(&cache_key, 4).await.expect("open");
     }
+}
+
+fn draining_on(leader: &str, generation: u64) -> ShardAssignment {
+    ShardAssignment {
+        state: "draining".to_string(),
+        ..assigned_to(leader, generation)
+    }
+}
+
+/// The fence of a planned move: a draining assignment stops this broker
+/// serving the shard, and re-delivering it does not start serving again.
+#[test]
+fn a_draining_assignment_stops_serving_and_stays_stopped() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+    own.opened(&key(0), 3);
+
+    let action = own.observe(&key(0), Some(&draining_on("broker-a", 4)));
+    assert_eq!(
+        action,
+        Action::Open {
+            key: key(0),
+            generation: 4
+        },
+        "the new generation is recovered so replication can ship from it",
+    );
+    assert!(!own.may_serve(&key(0)));
+    assert_eq!(own.opened(&key(0), 4), Opened::Draining);
+    assert_eq!(own.phase(&key(0)), Phase::Closed);
+    assert!(!own.may_serve(&key(0)));
+    for _ in 0..3 {
+        assert_eq!(
+            own.observe(&key(0), Some(&draining_on("broker-a", 4))),
+            Action::None
+        );
+    }
+    assert!(!own.may_serve(&key(0)));
+    assert_eq!(own.phase(&key(0)), Phase::Closed);
+}
+
+/// The fence arriving at the generation already being served releases the
+/// shard in place rather than reopening it.
+#[test]
+fn a_draining_assignment_at_the_served_generation_releases() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+    own.opened(&key(0), 3);
+
+    assert_eq!(
+        own.observe(&key(0), Some(&draining_on("broker-a", 3))),
+        Action::Release {
+            key: key(0),
+            generation: 3
+        }
+    );
+    assert!(!own.may_serve(&key(0)));
+    own.released(&key(0), 3);
+    assert_eq!(own.phase(&key(0)), Phase::Closed);
+    assert_eq!(
+        own.observe(&key(0), Some(&draining_on("broker-a", 3))),
+        Action::None
+    );
+}
+
+/// A drain that arrives while the log is still opening lands closed, never
+/// active.
+#[test]
+fn a_drain_during_an_open_does_not_activate() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+    assert_eq!(
+        own.observe(&key(0), Some(&draining_on("broker-a", 3))),
+        Action::None
+    );
+    assert_eq!(own.opened(&key(0), 3), Opened::Draining);
+    assert!(!own.may_serve(&key(0)));
+    assert_eq!(own.phase(&key(0)), Phase::Closed);
+}
+
+/// The shard came back at a later generation: served again, as after any
+/// reassignment.
+#[test]
+fn a_drained_shard_reassigned_here_serves_again() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&draining_on("broker-a", 3)));
+    own.opened(&key(0), 3);
+    assert_eq!(own.phase(&key(0)), Phase::Closed);
+
+    assert_eq!(
+        own.observe(&key(0), Some(&assigned_to("broker-a", 5))),
+        Action::Open {
+            key: key(0),
+            generation: 5
+        }
+    );
+    assert_eq!(own.opened(&key(0), 5), Opened::Activated);
+    assert!(own.may_serve_at(&key(0), 5));
 }

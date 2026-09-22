@@ -133,6 +133,14 @@ so a tenant admin cannot grant themselves cluster access. The tenant comes from
 the token's own `tid` claim rather than a path segment, and only selects which
 signing keys to verify against.
 
+`POST /v1/nodes/{node_id}/drain` marks a broker as leaving: it keeps serving,
+and placement moves every shard it leads to brokers that are staying, one
+handoff at a time. `GET /v1/shard-assignments?leader={node_id}` is empty when
+it is done, and `DELETE /v1/nodes/{node_id}` is refused until then. A shard
+being moved shows its destination as `successor` and, once the leader has
+been told to stop, `"state": "draining"`. See
+[Adding, draining and removing brokers](/felix/deployment/scaling/).
+
 The registration, heartbeat, drain, and deregister endpoints require
 `node.manage` over the node being changed. A broker's credential is scoped to
 `node:{its own id}`, so it cannot act for another broker; an operator holding

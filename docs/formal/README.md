@@ -41,6 +41,13 @@ One shard, three brokers, one control plane, discrete time.
   the last report named as caught up. `Promotion = "log-order"` is the live
   replica with the greatest (last generation, length): Raft's election
   restriction, which needs no report.
+- **Planned handoff**, under `Handoff`. The control plane may move the shard
+  while its leader is alive: it fences the leader, which stops serving when
+  it sees the fence but keeps its lease and keeps shipping, and names the
+  successor only once the leader has reported that its log stopped growing.
+  A write admitted before the fence still commits. `WaitForDrained` is that
+  wait. Reports carry the generation they were made at and one from a
+  superseded generation is dropped on arrival, as the store does.
 
 Not modelled: the storage layer (a commit is a commit), network partitions as
 such (they are lost heartbeats, lost reports, and delays), retention, and the
@@ -72,6 +79,8 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardNoCommitCheck.cfg` | commit-time lease check removed | violate `NoStaleCommit` |
 | `FelixShardNoReportOrder.cfg` | the design *before* #268: a `Quorum` ack released before the report describing it lands | violate `AckedSurvive` |
 | `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.4M states) |
+| `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over | pass every invariant (2.6M states) |
+| `FelixShardHandoffNoWait.cfg` | the same move cutting over without waiting for the drained report | violate `AtMostOneServing` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -121,6 +130,27 @@ With `CheckAtCommit = FALSE`, TLC finds a broker that admits a write while its
 lease is valid, is paused while the lease lapses and the next generation is
 granted, and then commits. That is the "process suspension" case the design
 names, and the second check is what closes it.
+
+### The wait that is load-bearing
+
+`FelixShardHandoffNoWait.cfg` names the successor as soon as the fence is
+written. TLC finds two leaders in seven steps: the control plane fences the
+leader and cuts over, and the old leader has simply not seen the fence yet —
+it holds a valid lease, believes it leads, and is serving. Nothing about the
+lease closes this, because the lease has not lapsed; the leader is alive and
+was meant to keep it.
+
+What closes it is the leader saying it stopped. `WaitForDrained = TRUE` holds
+the cut-over until a report at the fenced generation says the leader has
+stopped serving and its log is not growing, and the same configuration then
+explores 2.6M states without a violation. The generation on the report matters
+as much as the flag: an earlier leader's drained report is about a leadership
+that has ended, and believing it lets the next move skip its wait.
+
+The broker's half is `ShardLifecycle::observe`, which releases a shard the
+moment a draining assignment arrives and never serves it again at that
+generation, and the driver's settle rule, which withholds the drained report
+until the tail has held still with no publish in flight.
 
 ### The ordering that is load-bearing
 

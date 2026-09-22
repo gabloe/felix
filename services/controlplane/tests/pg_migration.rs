@@ -191,6 +191,7 @@ async fn seed(store: &(dyn ControlPlaneAuthStore + Send + Sync)) {
             replicas: Vec::new(),
             generation: 0,
             state: ShardState::Assigning,
+            successor: None,
         })
         .await
         .expect("assignment");

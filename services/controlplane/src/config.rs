@@ -203,6 +203,9 @@ pub struct ControlPlaneConfig {
     pub oidc_allowed_algorithms: Vec<Algorithm>,
     pub bootstrap: BootstrapConfig,
     pub node_liveness: NodeLivenessConfig,
+    /// Shard moves in progress at once, across the cluster. See
+    /// `placement::MovePolicy`.
+    pub max_concurrent_shard_moves: usize,
     // Total budget for draining in-flight requests after SIGTERM/SIGINT before
     // remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,
@@ -245,6 +248,7 @@ struct ControlPlaneConfigOverride {
     oidc_allowed_algorithms: Option<Vec<String>>,
     bootstrap: Option<BootstrapOverride>,
     node_liveness: Option<NodeLivenessOverride>,
+    max_concurrent_shard_moves: Option<usize>,
     shutdown_drain_timeout_ms: Option<u64>,
     shutdown_predrain_ms: Option<u64>,
 }
@@ -353,6 +357,11 @@ impl ControlPlaneConfig {
             shard_reconcile_interval_ms: parse_positive_env("FELIX_SHARD_RECONCILE_INTERVAL_MS")
                 .unwrap_or(DEFAULT_SHARD_RECONCILE_INTERVAL_MS),
         };
+        // Zero is meaningful: it holds every move.
+        let max_concurrent_shard_moves = std::env::var("FELIX_SHARD_MOVES_MAX_CONCURRENT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(crate::placement::DEFAULT_MAX_CONCURRENT_MOVES);
         let readiness_timeout_ms = parse_positive_env("FELIX_READINESS_TIMEOUT_MS")
             .unwrap_or(DEFAULT_READINESS_TIMEOUT_MS);
         let readiness_cache_ttl_ms = parse_positive_env("FELIX_READINESS_CACHE_TTL_MS")
@@ -432,6 +441,7 @@ impl ControlPlaneConfig {
                 tls: bootstrap_tls_from_env()?,
             },
             node_liveness,
+            max_concurrent_shard_moves,
             shutdown_drain_timeout_ms,
             shutdown_predrain_ms,
             readiness_timeout_ms,
@@ -477,6 +487,9 @@ impl ControlPlaneConfig {
             if let Some(value) = liveness.shard_reconcile_interval_ms {
                 config.node_liveness.shard_reconcile_interval_ms = value;
             }
+        }
+        if let Some(value) = override_cfg.max_concurrent_shard_moves {
+            config.max_concurrent_shard_moves = value;
         }
         if let Some(value) = override_cfg.shutdown_drain_timeout_ms
             && value > 0

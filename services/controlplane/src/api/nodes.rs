@@ -188,6 +188,7 @@ pub(crate) async fn report_replica_status(
                 key,
                 generation: shard.generation,
                 caught_up: shard.caught_up.into_iter().collect(),
+                drained: shard.drained,
                 offsets: shard
                     .replica_offsets
                     .into_iter()

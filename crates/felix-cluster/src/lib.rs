@@ -377,6 +377,16 @@ impl Cluster {
         self.control_plane().place_shards().await
     }
 
+    /// Step placement once with up to `max_concurrent` shard moves in flight.
+    pub async fn place_shards_moving(
+        &self,
+        max_concurrent: usize,
+    ) -> ::controlplane::placement::ReconcileOutcome {
+        self.control_plane()
+            .place_shards_with(::controlplane::placement::MovePolicy { max_concurrent })
+            .await
+    }
+
     fn control_plane(&self) -> &ControlPlane {
         self.control_plane
             .as_ref()
@@ -482,6 +492,14 @@ impl Cluster {
         // That gap is exactly where a publish is refused as `NotReady`, and no
         // control-plane state distinguishes the two — so the only honest check
         // is a publish that succeeds.
+        //
+        // Placement is stepped inside the wait, not only before it. Brokers
+        // register as they start, so a pass that ran while only some of them
+        // had can leave a node over its share, and the next pass moves shards
+        // off it. A move is several passes with a catch-up between them, and
+        // the shard does not serve between its fence and its cut-over — so a
+        // probe loop that did not step placement would wait out a move that
+        // nothing was advancing.
         for spec in &config.streams {
             let stream = &spec.name;
             let stream = stream.clone();
@@ -490,7 +508,10 @@ impl Cluster {
                 &format!("a publish to {stream} to be accepted"),
                 || {
                     let stream = stream.clone();
-                    async move { self.probe_publish(&stream).await.is_ok() }
+                    async move {
+                        self.control_plane().place_shards().await;
+                        self.probe_publish(&stream).await.is_ok()
+                    }
                 },
             )
             .await?;
@@ -517,6 +538,7 @@ impl Cluster {
                 || {
                     let stream = stream.clone();
                     async move {
+                        self.control_plane().place_shards().await;
                         for node in &self.nodes {
                             if !node.is_running() {
                                 continue;
@@ -532,6 +554,14 @@ impl Cluster {
             )
             .await?;
         }
+        // Nothing mid-move. A cluster that came up staggered rebalances, and
+        // a test that began publishing into the middle of that would be
+        // racing it rather than testing what it came for.
+        wait::until(READY_TIMEOUT, "placement to settle", || async {
+            let outcome = self.control_plane().place_shards().await;
+            outcome.moved == 0 && outcome.waiting == 0
+        })
+        .await?;
         Ok(())
     }
 
@@ -1038,10 +1068,12 @@ impl Cluster {
 
     /// Move a stream's shard off its current owner.
     ///
-    /// Drains the owner so placement will not choose it, re-runs placement, and
-    /// waits for the assignment to name someone else at a higher generation.
-    /// Draining rather than stopping the broker on purpose: the node stays up
-    /// and reachable, so what changes is ownership alone.
+    /// Drains the owner and steps placement until the assignment names
+    /// someone else at a higher generation. The move goes through the planned
+    /// handoff -- staged, fenced, cut over -- so this takes several steps and
+    /// needs the brokers to be shipping and reporting. Draining rather than
+    /// stopping the broker on purpose: the node stays up and reachable, so
+    /// what changes is ownership alone.
     ///
     /// Returns the new owner.
     pub async fn move_shard(&self, stream: &str) -> Result<String> {
@@ -1053,24 +1085,7 @@ impl Cluster {
             .cloned()
             .ok_or_else(|| anyhow!("no assignment for {key}"))?;
 
-        let url = format!(
-            "{}/v1/nodes/{}/drain",
-            self.control_plane_url(),
-            before.leader
-        );
-        let response = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.operator_token)
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-            .with_context(|| format!("drain {}", before.leader))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("drain {}: {status}: {body}", before.leader);
-        }
+        self.drain_node(&before.leader).await?;
 
         let key_for_wait = key.clone();
         let before_for_wait = before.clone();
@@ -1100,6 +1115,180 @@ impl Cluster {
             .cloned()
             .ok_or_else(|| anyhow!("no assignment for {key} after the move"))?;
         Ok(after.leader)
+    }
+
+    /// Start another broker and wait until the control plane can place on it.
+    ///
+    /// The node takes the next index, so its id follows the ones the cluster
+    /// started with. Returns the new node id.
+    pub async fn add_node(&mut self) -> Result<String> {
+        let index = self.nodes.len();
+        let control_plane = self
+            .control_plane
+            .as_ref()
+            .ok_or_else(|| anyhow!("control plane is gone"))?;
+        let node = spawn_broker(
+            &self.binary,
+            control_plane,
+            &self.config,
+            self._root.path(),
+            index,
+        )
+        .with_context(|| format!("start broker {index}"))?;
+        let node_id = node.node_id.clone();
+        self.nodes.push(node);
+
+        let deadline = std::time::Instant::now() + wait::budget(READY_TIMEOUT);
+        loop {
+            let url = format!("http://{}/ready", self.nodes[index].metrics_addr);
+            if let Some(status) = self.nodes[index].exited() {
+                let reason = self.nodes[index].failure_reason();
+                bail!("{node_id} exited before becoming ready ({status}){reason}");
+            }
+            let ok = matches!(
+                self.http.get(&url).send().await,
+                Ok(response) if response.status().is_success()
+            );
+            if ok {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("timed out waiting for {node_id} to be ready");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let this = &*self;
+        let expected = node_id.clone();
+        wait::until(
+            READY_TIMEOUT,
+            &format!("{expected} to be placeable"),
+            || {
+                let expected = expected.clone();
+                async move {
+                    matches!(this.placeable_nodes().await, Ok(live) if live.contains(&expected))
+                }
+            },
+        )
+        .await?;
+        Ok(node_id)
+    }
+
+    /// Mark a broker draining, as an operator would before removing it.
+    ///
+    /// The broker keeps running and keeps serving; placement moves its shards
+    /// off it one step per `place_shards`. This only sets the lifecycle --
+    /// drive placement and wait on `shard_owners` to see the shards go.
+    pub async fn drain_node(&self, node_id: &str) -> Result<()> {
+        self.post_lifecycle(node_id, "drain").await
+    }
+
+    /// Put a draining broker back into placement.
+    pub async fn undrain_node(&self, node_id: &str) -> Result<()> {
+        let url = format!("{}/v1/nodes/{node_id}", self.control_plane_url());
+        let response = self
+            .http
+            .patch(&url)
+            .bearer_auth(&self.operator_token)
+            .json(&serde_json::json!({ "lifecycle": "live" }))
+            .send()
+            .await
+            .with_context(|| format!("undrain {node_id}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("undrain {node_id}: {status}: {body}");
+        }
+        Ok(())
+    }
+
+    async fn post_lifecycle(&self, node_id: &str, action: &str) -> Result<()> {
+        let url = format!("{}/v1/nodes/{node_id}/{action}", self.control_plane_url());
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.operator_token)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .with_context(|| format!("{action} {node_id}"))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("{action} {node_id}: {status}: {body}");
+        }
+        Ok(())
+    }
+
+    /// Step placement until `node_id` leads nothing, or the budget runs out.
+    ///
+    /// Each step advances every move in flight by one stage, so a drain of
+    /// `n` shards at `max_concurrent` moves takes roughly `3n / max_concurrent`
+    /// steps plus the catch-ups in between. On timeout the message says what
+    /// the node still leads and why placement was waiting.
+    pub async fn drain_until_empty(
+        &self,
+        node_id: &str,
+        max_concurrent: usize,
+        timeout: Duration,
+    ) -> Result<()> {
+        let budget = wait::budget(timeout);
+        let deadline = Instant::now() + budget;
+        loop {
+            let outcome = self.place_shards_moving(max_concurrent).await;
+            let owners = self.shard_owners().await?;
+            let still: Vec<&String> = owners
+                .iter()
+                .filter(|(_, leader)| leader.as_str() == node_id)
+                .map(|(shard, _)| shard)
+                .collect();
+            if still.is_empty() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!("{node_id} still leads {still:?} after {budget:?}; last pass: {outcome:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// The successor staged for each shard, keyed like [`Cluster::shard_owners`].
+    /// `None` for a shard with no move in progress.
+    pub async fn shard_successors(&self) -> Result<HashMap<String, Option<String>>> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            items: Vec<Row>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Row {
+            tenant_id: String,
+            namespace: String,
+            stream: String,
+            shard: u32,
+            #[serde(default)]
+            kind: Option<String>,
+            #[serde(default)]
+            successor: Option<String>,
+        }
+        let response: Response = self
+            .get(&format!(
+                "{}/v1/shard-assignments",
+                self.control_plane_url()
+            ))
+            .await?;
+        Ok(response
+            .items
+            .into_iter()
+            .map(|row| {
+                let kind = row.kind.as_deref().unwrap_or("stream");
+                (
+                    format!(
+                        "{kind}/{}/{}/{}/{}",
+                        row.tenant_id, row.namespace, row.stream, row.shard
+                    ),
+                    row.successor,
+                )
+            })
+            .collect())
     }
 
     /// Which broker leads each shard, keyed by `tenant/namespace/stream/shard`.

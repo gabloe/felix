@@ -94,6 +94,10 @@ pub struct ShardReplicaStatus {
     pub caught_up: Vec<String>,
     #[serde(default)]
     pub replica_offsets: Vec<ReplicaOffset>,
+    /// The leader has stopped serving at `generation` and `caught_up` was
+    /// measured against its final tail. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drained: bool,
 }
 
 /// What a leader tells the control plane about the shards it leads.
@@ -134,6 +138,26 @@ mod tests {
         }
     }
 
+    /// A broker that never drains sends the bytes it always sent.
+    #[test]
+    fn a_report_that_is_not_drained_omits_the_field() {
+        let status = ShardReplicaStatus {
+            tenant_id: "t1".into(),
+            namespace: "ns".into(),
+            stream: "orders".into(),
+            shard: 0,
+            kind: ShardKind::Stream,
+            generation: 1,
+            caught_up: Vec::new(),
+            replica_offsets: Vec::new(),
+            drained: false,
+        };
+        let json = serde_json::to_string(&status).expect("write");
+        assert!(!json.contains("drained"), "{json}");
+        let parsed: ShardReplicaStatus = serde_json::from_str(&json).expect("read");
+        assert!(!parsed.drained);
+    }
+
     #[test]
     fn only_live_and_draining_are_placeable() {
         assert!(NodeLifecycle::Live.is_placeable());
@@ -158,6 +182,7 @@ mod tests {
                     node_id: "broker-b".into(),
                     durable_offset: 42,
                 }],
+                drained: true,
             }],
         };
         let json = serde_json::to_string(&report).expect("write");

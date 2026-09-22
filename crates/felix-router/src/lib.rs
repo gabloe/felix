@@ -8,8 +8,8 @@
 pub mod shard;
 
 pub use shard::{
-    NodeRef, ReplicaRole, Resolution, Route, RoutingTable, ShardKey, ShardKind, ShardRouter,
-    Unavailable,
+    NodeRef, Placed, ReplicaRole, Resolution, Route, RoutingTable, ShardKey, ShardKind,
+    ShardRouter, Unavailable,
 };
 
 use felix_common::ids::RegionId;

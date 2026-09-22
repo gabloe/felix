@@ -136,6 +136,28 @@ fn publish(router: &ShardRouter, leader: &str, replicas: &[&str], generation: u6
     router.publish(table, &nodes);
 }
 
+/// A router where `leader` leads the shard, and has been told to stop.
+fn draining_router(leader: &str, replicas: &[&str], generation: u64) -> Arc<ShardRouter> {
+    let router = Arc::new(ShardRouter::new(
+        LOCAL,
+        "us-west-2",
+        RegionRouter::new("us-west-2".to_string()),
+    ));
+    let nodes = nodes();
+    let table = RoutingTable::build_with(
+        [felix_router::Placed {
+            key: key(),
+            leader: leader.to_string(),
+            replicas: replicas.iter().map(|r| r.to_string()).collect(),
+            generation,
+            draining: true,
+        }],
+        &nodes,
+    );
+    router.publish(table, &nodes);
+    router
+}
+
 /// A router where `leader` leads `shards` shards, each with `replicas` behind
 /// it.
 fn router_over_shards(
@@ -1024,6 +1046,7 @@ fn a_report_body_is_the_shape_the_control_plane_parses() {
                 node_id: "broker-b".to_string(),
                 durable_offset: 41,
             }],
+            drained: false,
         }],
     };
 
@@ -1569,5 +1592,77 @@ async fn a_quorum_mark_does_not_pass_a_record_the_follower_disagrees_with() {
         mark.is_none_or(|offset| offset < 3),
         "the quorum mark reached {mark:?} with the only follower in \
          disagreement, so a record no majority holds was acknowledged",
+    );
+}
+
+/// One pass over a draining shard with one follower and no reporter.
+async fn drain_pass(
+    follower: &AcceptingFollower,
+    broker: &Arc<Broker>,
+    router: &ShardRouter,
+    cursors: &mut HashMap<ShardKey, ShardCursors>,
+) -> Pass {
+    replicate_once(
+        follower,
+        broker,
+        router,
+        &QuorumMarks::new(),
+        None,
+        cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await
+}
+
+/// **A draining shard reports drained only once its log has stopped growing.**
+/// The first passes ship the tail and say nothing; once the tail has held
+/// still with nothing in flight, the report carries the flag and the
+/// successor caught up against that tail. A record landing in between starts
+/// the wait again.
+#[tokio::test]
+async fn a_draining_shard_reports_drained_once_its_tail_holds_still() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = draining_router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let mut cursors = HashMap::new();
+
+    // The catch-up pass, then the settling passes.
+    let first = drain_pass(&follower, &broker, &router, &mut cursors).await;
+    assert!(
+        first.reports.iter().all(|report| !report.drained),
+        "the first pass is the catch-up: {:?}",
+        first.reports
+    );
+    let mut drained = None;
+    for _ in 0..DRAIN_SETTLE_PASSES + 1 {
+        let out = drain_pass(&follower, &broker, &router, &mut cursors).await;
+        if let Some(report) = out.reports.into_iter().find(|report| report.drained) {
+            drained = Some(report);
+            break;
+        }
+    }
+    let report = drained.expect("a settled draining shard never reported drained");
+    assert_eq!(report.caught_up, vec!["broker-b".to_string()]);
+
+    // An append after the fence -- a publish admitted just before it -- is
+    // shipped, and the settle wait starts over.
+    let log = broker
+        .durable_storage()
+        .expect("durable")
+        .open_stream(TENANT, NAMESPACE, STREAM, 0)
+        .expect("open");
+    log.append(&[Bytes::from("late")]).await.expect("append");
+    let after_append = drain_pass(&follower, &broker, &router, &mut cursors).await;
+    assert!(
+        after_append.reports.iter().all(|report| !report.drained),
+        "a late record must reset the drain: {:?}",
+        after_append.reports
+    );
+    assert_eq!(
+        follower.batches().iter().map(|(_, _, n)| n).sum::<usize>(),
+        4,
+        "the late record was shipped to the successor",
     );
 }
