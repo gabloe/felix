@@ -20,6 +20,13 @@
 (*   NoStaleCommit      -- no broker commits at a generation the control    *)
 (*                         plane has already superseded.                   *)
 (*                                                                         *)
+(* With `Handoff`, the control plane may also move the shard while its     *)
+(* leader is alive: it fences the leader, which stops serving when it sees *)
+(* the fence but keeps shipping, and names the successor only once the    *)
+(* leader has reported that its log stopped growing. `WaitForDrained =    *)
+(* FALSE` cuts over as soon as the fence is written, and TLC finds the     *)
+(* leader landing a write after its successor has taken over.             *)
+(*                                                                         *)
 (* Time is discrete. `now` is real time; each broker has its own clock,    *)
 (* within `Drift` of real time, which is the drift-rate assumption of the  *)
 (* design in the only form a finite model needs. A broker anchors a lease  *)
@@ -49,10 +56,14 @@ CONSTANTS
     CheckAtCommit,  \* re-check the lease before committing, or only at admission
     Quorum,         \* acknowledge on a majority (TRUE) or on the leader alone (FALSE)
     Promotion,      \* "leader-report" or "log-order"
-    ReportBeforeAck \* whether a Quorum ack waits for the report describing it
+    ReportBeforeAck, \* whether a Quorum ack waits for the report describing it
+    Handoff,        \* whether the control plane may move the shard off a live leader
+    WaitForDrained, \* whether a cut-over waits for the leader's drained report
+    MaxMoves        \* how many planned moves the run starts; bounds the state space
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
+ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -61,7 +72,7 @@ VARIABLES
     gen,        \* the assignment generation at the control plane
     leader,     \* who the control plane assigned at gen
     cpExpiry,   \* when the lease at gen lapses, on the control plane's clock (real time)
-    report,     \* what the control plane was last told: [holders, len]
+    report,     \* what the control plane was last told: [holders, len, drained, gen]
     inflight,   \* a leader report on its way to the control plane, or <<>>
     bgen,       \* the generation each broker believes it leads; 0 means it does not
     bexpiry,    \* each broker's own belief of its lease expiry, on its own clock
@@ -73,19 +84,31 @@ VARIABLES
     pending,    \* a write admitted by each broker and not yet committed; 0 means none
     acked,      \* writes acknowledged to a client
     writes,     \* how many writes have been admitted so far
-    staleCommit \* history: a broker committed at a generation already superseded
+    staleCommit, \* history: a broker committed at a generation already superseded
+    draining,   \* the control plane has fenced the leader so the shard can move
+    successor,  \* where it is moving to; meaningful only while draining
+    stopped,    \* each broker has seen the fence and stopped serving
+    moves       \* how many planned moves have been started
 
 vars == << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-           hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+           hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+           draining, successor, stopped, moves >>
+
+handoffVars == << draining, successor, stopped, moves >>
+
+NoReport == [holders |-> {}, len |-> 0, drained |-> FALSE, gen |-> 0]
 
 Majority(S) == Cardinality(S) * 2 > Cardinality(Brokers)
 
 \* Brokers are interchangeable, which lets TLC fold their permutations.
 Symm == Permutations(Brokers)
 
-\* A broker serves the shard while it believes it leads and its own clock is
+\* A broker's lease is good while it believes it leads and its own clock is
 \* short of its own expiry by the margin it gives up.
-Serving(b) == bgen[b] > 0 /\ clock[b] + Eps < bexpiry[b]
+LeaseValid(b) == bgen[b] > 0 /\ clock[b] + Eps < bexpiry[b]
+
+\* It serves the shard on that lease until it has seen a fence.
+Serving(b) == LeaseValid(b) /\ ~stopped[b]
 
 Record(g, id) == [g |-> g, id |-> id]
 
@@ -99,7 +122,7 @@ Init ==
     /\ gen = 1
     /\ leader \in Brokers
     /\ cpExpiry = L
-    /\ report = [holders |-> {}, len |-> 0]
+    /\ report = NoReport
     /\ inflight = <<>>
     /\ bgen = [b \in Brokers |-> IF b = leader THEN 1 ELSE 0]
     /\ bexpiry = [b \in Brokers |-> IF b = leader THEN L ELSE 0]
@@ -112,6 +135,10 @@ Init ==
     /\ acked = {}
     /\ writes = 0
     /\ staleCommit = FALSE
+    /\ draining = FALSE
+    /\ successor = leader
+    /\ stopped = [b \in Brokers |-> FALSE]
+    /\ moves = 0
 
 -----------------------------------------------------------------------------
 (* Time. Real time ticks, and with it each broker's clock moves by zero,   *)
@@ -130,6 +157,7 @@ Tick ==
                                         /\ c[b] <= now + 1 + Drift }
     /\ UNCHANGED << gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
 (* The lease is the heartbeat. A broker that believes it leads sends one,  *)
@@ -145,6 +173,7 @@ SendHeartbeat(b) ==
     /\ hbAt' = [hbAt EXCEPT ![b] = clock[b]]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 AcceptHeartbeat(b) ==
     /\ hbOut[b]
@@ -155,12 +184,14 @@ AcceptHeartbeat(b) ==
     /\ bexpiry' = [bexpiry EXCEPT ![b] = hbAt[b] + L]
     /\ UNCHANGED << now, clock, gen, leader, report, inflight, bgen, hbAt,
                     log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 LoseHeartbeat(b) ==
     /\ hbOut[b]
     /\ hbOut' = [hbOut EXCEPT ![b] = FALSE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 \* A broker that finds its lease lapsed, or that hears of a newer generation,
 \* stops believing it leads. Modelled as the broker noticing; the safety
@@ -170,8 +201,10 @@ StepDown(b) ==
     /\ (bgen[b] < gen \/ clock[b] + Eps >= bexpiry[b])
     /\ bgen' = [bgen EXCEPT ![b] = 0]
     /\ pending' = [pending EXCEPT ![b] = 0]
+    /\ stopped' = [stopped EXCEPT ![b] = FALSE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit,
+                    draining, successor, moves >>
 
 -----------------------------------------------------------------------------
 (* Writes. Admission checks the lease; the commit checks it again, or does *)
@@ -186,11 +219,12 @@ Admit(b) ==
     /\ pending' = [pending EXCEPT ![b] = writes + 1]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, acked, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 Commit(b) ==
     /\ pending[b] /= 0
     /\ bgen[b] > 0
-    /\ CheckAtCommit => Serving(b)
+    /\ CheckAtCommit => LeaseValid(b)
     /\ log' = [log EXCEPT ![b] = Append(@, Record(bgen[b], pending[b]))]
     /\ pending' = [pending EXCEPT ![b] = 0]
     \* Under `Leader`, the leader's own durable write is the acknowledgement.
@@ -199,6 +233,7 @@ Commit(b) ==
     /\ staleCommit' = (staleCommit \/ bgen[b] < gen)
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, hwm, halted, writes >>
+    /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
 (* Replication. The leader ships the next record a follower is missing. A  *)
@@ -231,6 +266,7 @@ Ship(b, f) ==
                   /\ UNCHANGED log
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, hwm, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 \* Under `Quorum`, a record is acknowledged once a majority including the
 \* leader holds it, and the leader's mark moves up to it.
@@ -246,7 +282,7 @@ Ship(b, f) ==
 \* acknowledgement.
 AckQuorum(b) ==
     /\ Quorum
-    /\ Serving(b)
+    /\ LeaseValid(b)
     /\ \E i \in (hwm[b] + 1)..Len(log[b]) :
         /\ Majority({ m \in Brokers : Len(log[m]) >= i /\ log[m][i] = log[b][i] } \cup {b})
         /\ ReportBeforeAck => /\ i <= report.len
@@ -255,6 +291,7 @@ AckQuorum(b) ==
         /\ hwm' = [hwm EXCEPT ![b] = i]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, halted, pending, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 \* A follower learns the mark from the leader, never past what it holds.
 LearnHwm(b, f) ==
@@ -265,33 +302,45 @@ LearnHwm(b, f) ==
     /\ hwm' = [hwm EXCEPT ![f] = hwm[b]]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
 (* Reports. The leader tells the control plane which followers hold every  *)
-(* record it does. The report travels on its own; it may arrive later than *)
-(* the acknowledgements it describes, or never.                            *)
+(* record it does, at which generation, and whether its log has stopped    *)
+(* growing. The report travels on its own; it may arrive later than the    *)
+(* acknowledgements it describes, or never. One from a generation the      *)
+(* control plane has moved past is dropped on arrival, as the store does:  *)
+(* it describes a leadership that has ended, and TLC finds what believing  *)
+(* it does -- a drained report from the old leader, read as the new one's, *)
+(* lets the next move skip its wait.                                       *)
 
 Report(b) ==
-    /\ Serving(b)
+    /\ LeaseValid(b)
+    /\ leader = b /\ bgen[b] = gen
     /\ inflight = <<>>
     /\ inflight' = << [holders |-> { f \in Brokers \ {b} :
                                         log[f] = log[b] /\ f \notin halted },
-                       len     |-> Len(log[b])] >>
+                       len     |-> Len(log[b]),
+                       drained |-> stopped[b] /\ pending[b] = 0,
+                       gen     |-> bgen[b]] >>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 DeliverReport ==
     /\ inflight /= <<>>
-    /\ report' = inflight[1]
+    /\ report' = IF inflight[1].gen = gen THEN inflight[1] ELSE report
     /\ inflight' = <<>>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 LoseReport ==
     /\ inflight /= <<>>
     /\ inflight' = <<>>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+    /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
 (* Promotion. Once the lease has lapsed and the margin has passed, the      *)
@@ -320,8 +369,58 @@ Promote(f) ==
     /\ bgen' = [bgen EXCEPT ![f] = gen + 1]
     /\ bexpiry' = [bexpiry EXCEPT ![f] = clock[f] + L]
     /\ pending' = [pending EXCEPT ![f] = 0]
-    /\ report' = [holders |-> {}, len |-> 0]
-    /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit >>
+    /\ report' = NoReport
+    /\ draining' = FALSE
+    /\ stopped' = [stopped EXCEPT ![f] = FALSE]
+    /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
+                    staleCommit, successor, moves >>
+
+-----------------------------------------------------------------------------
+(* Planned handoff. The control plane fences the leader so the shard can    *)
+(* move to a follower the last report says is caught up. The leader keeps  *)
+(* its lease and keeps shipping; it stops serving when it sees the fence,  *)
+(* and a write it admitted before that still lands. Its next report says   *)
+(* whether the log has stopped growing, and the cut-over waits for that -- *)
+(* or does not, which is the knob.                                         *)
+
+Fence(f) ==
+    /\ Handoff
+    /\ moves < MaxMoves
+    /\ ~draining
+    /\ f /= leader
+    /\ f \in report.holders /\ f \notin halted
+    /\ draining' = TRUE
+    /\ successor' = f
+    /\ moves' = moves + 1
+    /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
+                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+                    stopped >>
+
+\* The leader sees the fence. Modelled as the broker noticing; the cut-over
+\* below does not rely on it noticing in time.
+ObserveFence(b) ==
+    /\ draining /\ leader = b /\ bgen[b] = gen
+    /\ ~stopped[b]
+    /\ stopped' = [stopped EXCEPT ![b] = TRUE]
+    /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
+                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+                    draining, successor, moves >>
+
+CutOver(f) ==
+    /\ draining /\ successor = f
+    /\ f \notin halted
+    /\ WaitForDrained => (report.gen = gen /\ report.drained /\ f \in report.holders)
+    /\ gen' = gen + 1
+    /\ leader' = f
+    /\ cpExpiry' = now + L
+    /\ bgen' = [bgen EXCEPT ![f] = gen + 1]
+    /\ bexpiry' = [bexpiry EXCEPT ![f] = clock[f] + L]
+    /\ pending' = [pending EXCEPT ![f] = 0]
+    /\ report' = NoReport
+    /\ draining' = FALSE
+    /\ stopped' = [stopped EXCEPT ![f] = FALSE]
+    /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
+                    staleCommit, successor, moves >>
 
 -----------------------------------------------------------------------------
 
@@ -337,6 +436,9 @@ Next ==
         \/ AckQuorum(b)
         \/ Report(b)
         \/ Promote(b)
+        \/ Fence(b)
+        \/ ObserveFence(b)
+        \/ CutOver(b)
         \/ \E f \in Brokers : Ship(b, f) \/ LearnHwm(b, f)
     \/ DeliverReport
     \/ LoseReport
@@ -385,5 +487,8 @@ TypeOK ==
     /\ leader \in Brokers
     /\ halted \subseteq Brokers
     /\ writes \in 0..MaxWrites
+    /\ draining \in BOOLEAN
+    /\ successor \in Brokers
+    /\ moves \in 0..MaxMoves
 
 =============================================================================

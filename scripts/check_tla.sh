@@ -66,6 +66,8 @@ expectations=(
   "FelixShardNoCommitCheck violates NoStaleCommit"
   "FelixShardNoReportOrder violates AckedSurvive"
   "FelixShard pass"
+  "FelixShardHandoff pass"
+  "FelixShardHandoffNoWait violates AtMostOneServing"
 )
 
 fetch_tools

@@ -240,6 +240,49 @@ pub trait CaughtUp {
     fn is_drained(&self, _key: &ShardKey, _generation: u64) -> bool {
         false
     }
+
+    /// The generation the report for `key` was made at, if there is a fresh
+    /// one.
+    fn reported_generation(&self, _key: &ShardKey) -> Option<u64> {
+        None
+    }
+}
+
+/// `inner`, believed only where its report is from `generation`.
+///
+/// A move is decided on the assignment's own generation. The report the store
+/// holds may be the previous leader's, still fresh and still listing the
+/// replicas it had level -- and a fence made on that would stop a leader for
+/// a destination that may hold nothing of what it has written since.
+struct AtGeneration<'a> {
+    inner: &'a dyn CaughtUp,
+    generation: u64,
+}
+
+impl AtGeneration<'_> {
+    fn current(&self, key: &ShardKey) -> bool {
+        self.inner.reported_generation(key) == Some(self.generation)
+    }
+}
+
+impl CaughtUp for AtGeneration<'_> {
+    fn is_caught_up(&self, key: &ShardKey, node_id: &str) -> bool {
+        self.current(key) && self.inner.is_caught_up(key, node_id)
+    }
+
+    fn reported_offset(&self, key: &ShardKey, node_id: &str) -> Option<u64> {
+        self.current(key)
+            .then(|| self.inner.reported_offset(key, node_id))
+            .flatten()
+    }
+
+    fn is_drained(&self, key: &ShardKey, generation: u64) -> bool {
+        self.inner.is_drained(key, generation)
+    }
+
+    fn reported_generation(&self, key: &ShardKey) -> Option<u64> {
+        self.inner.reported_generation(key)
+    }
 }
 
 /// Nothing is caught up.
@@ -505,7 +548,7 @@ pub fn plan_with(
             continue;
         }
 
-        let decision = match choose(&key, &eligible, &load, cap) {
+        let decision = match choose(&key, &eligible, &load, cap, &leaders, leader_share) {
             Some(leader) => {
                 *load.entry(leader).or_default() += 1;
                 *leaders.entry(leader).or_default() += 1;
@@ -573,6 +616,10 @@ fn move_step<'a>(
 ) -> Decision {
     let leader = existing.leader.as_str();
     let leader_live = is_live(leader);
+    let caught_up = &AtGeneration {
+        inner: caught_up,
+        generation: existing.generation,
+    };
     // The maps are keyed by catalog-lifetime strings.
     let catalog_id = |id: &str| -> Option<&'a str> {
         eligible
@@ -999,25 +1046,35 @@ fn choose<'a>(
     eligible: &[&'a Node],
     load: &HashMap<&str, u32>,
     cap: u32,
+    leaders: &HashMap<&str, u32>,
+    leader_share: u32,
 ) -> Option<&'a str> {
     let has_capacity = |node: &Node| match node.spec.capacity.max_shards {
         Some(max) => load.get(node.node_id.as_str()).copied().unwrap_or(0) < max,
         None => true,
     };
     let under_share = |node: &Node| load.get(node.node_id.as_str()).copied().unwrap_or(0) < cap;
-    let best = |balanced: bool| {
+    // Leaders are bounded as well as roles. With a replication factor equal
+    // to the node count every node holds a role for every shard, so the role
+    // cap says nothing about who leads -- and a cluster placed with every
+    // leader on one node would be moved apart again by the next pass.
+    let under_leader_share =
+        |node: &Node| leaders.get(node.node_id.as_str()).copied().unwrap_or(0) < leader_share;
+    let best = |balanced: bool, led: bool| {
         eligible
             .iter()
             .filter(|node| has_capacity(node))
             .filter(|node| !balanced || under_share(node))
+            .filter(|node| !led || under_leader_share(node))
             .max_by(|a, b| {
                 score(key, &a.node_id)
                     .cmp(&score(key, &b.node_id))
                     .then_with(|| a.node_id.cmp(&b.node_id))
             })
     };
-    best(true)
-        .or_else(|| best(false))
+    best(true, true)
+        .or_else(|| best(true, false))
+        .or_else(|| best(false, false))
         .map(|n| n.node_id.as_str())
 }
 

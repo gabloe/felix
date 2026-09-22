@@ -670,6 +670,14 @@ than the report said, because the report is the only input either reads.
 > side of the fence: no drained report until the tail has settled, and a late
 > record starts the wait again.
 
+Both halves are model-checked. `docs/formal/FelixShardHandoff.cfg` explores
+2.6M states of the move as implemented without a violation;
+`FelixShardHandoffNoWait.cfg` — the same move cutting over as soon as the
+fence is written — finds two brokers serving the shard at once in seven
+steps, because the old leader has not seen the fence yet. The lease does not
+close that: it has not lapsed, and the leader is alive and meant to keep it.
+Only the leader's own word that it stopped does.
+
 The steps, their triggers and the policy that bounds them are in
 [control-plane.md](control-plane.md#moving-a-shard).
 

@@ -492,6 +492,14 @@ impl Cluster {
         // That gap is exactly where a publish is refused as `NotReady`, and no
         // control-plane state distinguishes the two — so the only honest check
         // is a publish that succeeds.
+        //
+        // Placement is stepped inside the wait, not only before it. Brokers
+        // register as they start, so a pass that ran while only some of them
+        // had can leave a node over its share, and the next pass moves shards
+        // off it. A move is several passes with a catch-up between them, and
+        // the shard does not serve between its fence and its cut-over — so a
+        // probe loop that did not step placement would wait out a move that
+        // nothing was advancing.
         for spec in &config.streams {
             let stream = &spec.name;
             let stream = stream.clone();
@@ -500,7 +508,10 @@ impl Cluster {
                 &format!("a publish to {stream} to be accepted"),
                 || {
                     let stream = stream.clone();
-                    async move { self.probe_publish(&stream).await.is_ok() }
+                    async move {
+                        self.control_plane().place_shards().await;
+                        self.probe_publish(&stream).await.is_ok()
+                    }
                 },
             )
             .await?;
@@ -527,6 +538,7 @@ impl Cluster {
                 || {
                     let stream = stream.clone();
                     async move {
+                        self.control_plane().place_shards().await;
                         for node in &self.nodes {
                             if !node.is_running() {
                                 continue;
@@ -542,6 +554,14 @@ impl Cluster {
             )
             .await?;
         }
+        // Nothing mid-move. A cluster that came up staggered rebalances, and
+        // a test that began publishing into the middle of that would be
+        // racing it rather than testing what it came for.
+        wait::until(READY_TIMEOUT, "placement to settle", || async {
+            let outcome = self.control_plane().place_shards().await;
+            outcome.moved == 0 && outcome.waiting == 0
+        })
+        .await?;
         Ok(())
     }
 

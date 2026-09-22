@@ -120,6 +120,10 @@ impl CaughtUp for ReplicaPositions {
         self.fresh(key)?.offsets.get(node_id).copied()
     }
 
+    fn reported_generation(&self, key: &ShardKey) -> Option<u64> {
+        self.fresh(key).map(|report| report.generation)
+    }
+
     fn is_drained(&self, key: &ShardKey, generation: u64) -> bool {
         // The held report may predate the fence, when the leader was still
         // writing.

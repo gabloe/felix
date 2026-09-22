@@ -1266,23 +1266,32 @@ fn a_cache_defaults_to_a_single_shard() {
 mod moves {
     use super::*;
 
-    /// What the leaders last reported, with the drained flag.
-    #[derive(Default)]
+    /// What the leaders last reported: who is caught up, at which
+    /// generation, and whether the leader has drained.
     struct Reported {
         caught_up: BTreeSet<String>,
-        drained_at: Option<u64>,
+        generation: u64,
+        drained: bool,
     }
 
     impl Reported {
+        /// At the generation `assigned` uses.
         fn caught_up(nodes: &[&str]) -> Self {
             Self {
                 caught_up: nodes.iter().map(|n| n.to_string()).collect(),
-                drained_at: None,
+                generation: 3,
+                drained: false,
             }
         }
 
+        fn at(mut self, generation: u64) -> Self {
+            self.generation = generation;
+            self
+        }
+
         fn drained_at(mut self, generation: u64) -> Self {
-            self.drained_at = Some(generation);
+            self.generation = generation;
+            self.drained = true;
             self
         }
     }
@@ -1293,7 +1302,11 @@ mod moves {
         }
 
         fn is_drained(&self, _key: &ShardKey, generation: u64) -> bool {
-            self.drained_at == Some(generation)
+            self.drained && self.generation == generation
+        }
+
+        fn reported_generation(&self, _key: &ShardKey) -> Option<u64> {
+            Some(self.generation)
         }
     }
 
@@ -1467,7 +1480,7 @@ mod moves {
             let reported = if existing[0].state == ShardState::Draining {
                 Reported::caught_up(&["broker-b"]).drained_at(existing[0].generation)
             } else {
-                Reported::caught_up(&["broker-b"])
+                Reported::caught_up(&["broker-b"]).at(existing[0].generation)
             };
             let plan = plan(&streams, &[], &nodes, &existing, &reported);
             match only_decision(&plan) {
@@ -1507,6 +1520,49 @@ mod moves {
             }
             other => panic!("expected a fence, got {other:?}"),
         }
+    }
+
+    /// A report from before the staging write says nothing about the
+    /// successor: the leader may have written since. The move waits for a
+    /// report at its own generation.
+    #[test]
+    fn a_report_from_an_older_generation_does_not_fence() {
+        let streams = vec![stream("orders", 1)];
+        let mut staged = one_shard("broker-a", &["broker-b"]);
+        staged.successor = Some("broker-b".to_string());
+        staged.generation = 4;
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &[staged.clone()],
+            &Reported::caught_up(&["broker-b"]).at(3),
+        );
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Waiting(Blocked::DestinationCatchingUp {
+                successor: "broker-b".to_string()
+            })
+        );
+
+        // Nor does it let a caught-up replica skip the staging.
+        let existing = vec![one_shard("broker-a", &["broker-b"])];
+        let plan = super::plan(
+            &[replicated_stream("orders", 1, 2)],
+            &[],
+            &draining_cluster(),
+            &existing,
+            &Reported::caught_up(&["broker-b"]).at(2),
+        );
+        assert!(
+            matches!(
+                only_decision(&plan),
+                Decision::Move(MoveStep::Stage { .. }, _)
+            ),
+            "got {:?}",
+            only_decision(&plan)
+        );
     }
 
     /// A staged destination that stops being live is dropped from the move,
@@ -1682,6 +1738,37 @@ mod moves {
         assert_eq!(plan.moves().count(), 0);
     }
 
+    /// A fresh cluster is placed with leaders spread, so it never needs a move
+    /// to get there -- however the hash falls, and however many roles each node
+    /// holds. Replication factor equal to the node count is the case that used
+    /// to slip through: every node held a role for every shard, so the role
+    /// bound was met with every leader on one node.
+    #[test]
+    fn fresh_placement_needs_no_rebalance() {
+        for (shards, nodes, rf) in [(4, 3, 3), (6, 2, 2), (5, 3, 1), (12, 4, 3), (7, 3, 2)] {
+            let streams = vec![replicated_stream("orders", shards, rf)];
+            let ids: Vec<String> = (0..nodes).map(|i| format!("broker-{i}")).collect();
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            let nodes = live(&ids);
+            let plan = plan(&streams, &[], &nodes, &[], &NothingCaughtUp);
+            let placed: Vec<ShardAssignment> = plan
+                .to_place()
+                .map(|(key, leader, replicas)| assignment_for(key, leader, replicas.to_vec()))
+                .collect();
+            assert_eq!(placed.len() as u32, shards);
+
+            let again = super::plan(&streams, &[], &nodes, &placed, &NothingCaughtUp);
+            assert_eq!(
+                again.moves().count(),
+                0,
+                "{shards} shards over {} nodes at rf {rf} were placed unevenly: {:?}",
+                nodes.len(),
+                placed.iter().map(|a| a.leader.as_str()).collect::<Vec<_>>()
+            );
+            assert_eq!(again.kept() as u32, shards);
+        }
+    }
+
     /// The motivating case: every shard landed on one broker while the other
     /// was registering. Rebalancing moves shards from the node over its share
     /// to the one under it, and stops when neither holds.
@@ -1695,17 +1782,18 @@ mod moves {
 
         let mut writes = 0;
         for _ in 0..40 {
-            let drained: Vec<u64> = existing
+            // One report per shard in the store; here one fixture answers for
+            // all of them at the generation of whichever shard is moving.
+            let moving = existing
                 .iter()
-                .filter(|a| a.state == ShardState::Draining)
-                .map(|a| a.generation)
-                .collect();
+                .find(|a| a.state == ShardState::Draining || a.successor.is_some());
             let reported = Reported {
                 caught_up: ["broker-a", "broker-b"]
                     .iter()
                     .map(|n| n.to_string())
                     .collect(),
-                drained_at: drained.first().copied(),
+                generation: moving.map_or(3, |a| a.generation),
+                drained: moving.is_some_and(|a| a.state == ShardState::Draining),
             };
             let plan = plan_with(
                 &streams,

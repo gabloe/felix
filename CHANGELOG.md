@@ -38,6 +38,11 @@ for what the current release actually guarantees.
   owner opening. Real-process tests cover drain, join, a destination dying
   mid-transfer, a drain and a join at once, and publishes arriving throughout.
 
+  The fence is model-checked. `docs/formal/FelixShardHandoff.cfg` adds the
+  planned move to the TLA+ spec and explores 2.6M states without a
+  violation; `FelixShardHandoffNoWait.cfg`, which cuts over as soon as the
+  fence is written, finds two brokers serving one shard in seven steps.
+
   The assignment carries an optional `successor`, the replica report an
   optional `drained`; both are omitted when unset, so nothing changes on the
   wire for a cluster that never moves a shard. Postgres gains migration
@@ -47,6 +52,11 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- Fresh placement bounds leaders as well as roles. With a replication factor
+  equal to the node count every node holds a role for every shard, so the
+  role bound was satisfied with every leader on one node — and the new
+  rebalancer would then move them apart again. A cluster placed from scratch
+  now needs no move to be balanced.
 - A `draining` assignment is reachable from `assigning` as well as `active`,
   since nothing reports `active` yet and the fence should not cost a move an
   extra generation. A drained shard still leaves only through a fresh
