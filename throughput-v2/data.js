@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790003393830,
+  "lastUpdate": 1790096712992,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13624,6 +13624,58 @@ window.BENCHMARK_DATA = {
             "range": "8550.10",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 957266.63\nmean: 957919.39\nstdev: 8550.10\ncv: 0.89%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5abc13ad5a644b569f6400cead9cc4a1ff0dce11",
+          "message": "feat(controlplane): move shards between live brokers instead of reassigning them (#631)\n\n* feat(controlplane): move shards between live brokers instead of reassigning them (#130)\n\nA shard whose leader is alive is now moved, never reassigned: the\ndestination is staged as a replica and caught up, the leader is fenced by\na `draining` assignment it never serves, it reports once its log has\nstopped growing, and only then is the destination named leader. Each step\nis an assignment write, so any control-plane instance resumes a move.\n\nTwo triggers: a drained node hands off everything it leads and is\nreseated as a follower; a live node over its share of leadership gives\nshards to one under it, over-to-under only, with moves in flight counted\nas done so placement converges. FELIX_SHARD_MOVES_MAX_CONCURRENT bounds\nmoves in flight.\n\nReal-process tests cover drain, join, publishes throughout a move, a\ndestination dying mid-transfer, and a drain and a join at once; the\nmid-move test fails deterministically with the drained gate removed.\n\n* fix(controlplane): keep a fresh cluster balanced, and model-check the fence\n\nThree things the first round missed.\n\nFresh placement bounded roles but not leaders, so with a replication\nfactor equal to the node count every node held a role for every shard\nand the bound was met with every leader on one node. The rebalancer\nthen moved them apart again. A cluster placed from scratch now needs no\nmove to be balanced, whatever the replication factor.\n\nThe harness stepped placement before waiting for a publish to be\naccepted, but not while waiting. Brokers register as they start, so a\npass that ran while only some of them had can leave a node over its\nshare; the move that follows fences the shard, and the probe then waited\nout a move nothing was advancing. That is what failed CI.\n\nThe fence is now in the TLA+ model. FelixShardHandoff explores 2.6M\nstates of the move as implemented without a violation;\nFelixShardHandoffNoWait, which cuts over as soon as the fence is\nwritten, finds two brokers serving one shard in seven steps -- the old\nleader has not seen the fence, and its lease has not lapsed. Reports\ncarry the generation they were made at, in the model and in the\nplanner, so an earlier leader's report cannot stand in for the current\none's.",
+          "timestamp": "2026-09-22T10:03:02-07:00",
+          "tree_id": "3a1189b96e8a7279c3632759a5e9a719c36762bf",
+          "url": "https://github.com/gabloe/felix/commit/5abc13ad5a644b569f6400cead9cc4a1ff0dce11"
+        },
+        "date": 1790096712597,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 531536.41,
+            "range": "12952.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 531536.41\nmean: 533850.52\nstdev: 12952.58\ncv: 2.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 531536.41,
+            "range": "12952.58",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 531536.41\nmean: 533850.52\nstdev: 12952.58\ncv: 2.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 116699.48,
+            "range": "2567.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 116699.48\nmean: 116606.77\nstdev: 2567.32\ncv: 2.20%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1166994.76,
+            "range": "25673.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1166994.76\nmean: 1166067.68\nstdev: 25673.17\ncv: 2.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
