@@ -94,9 +94,13 @@ Leaders ship log records to followers — deliberately *not* per-shard Raft;
 — and a lost leader is replaced only by a replica that provably holds the
 log. A `Quorum` stream's publishes wait for a majority before acknowledging.
 
-Not built: follower reads (every read goes to the leader) and rebalancing (a
-shard whose leader is alive is never moved, however uneven that leaves the
-cluster).
+A broker that joins takes shards from any broker leading more than its
+share, and a drained broker hands off everything it leads before it is
+removed; both go through a staged handoff so a shard is never served by a
+broker that has not seen its log (see
+[Adding, draining and removing brokers](/felix/deployment/scaling/)).
+
+Not built: follower reads (every read goes to the leader).
 
 ## What about exactly-once?
 

@@ -214,33 +214,54 @@ fn reconciliation_is_idempotent() {
     assert_eq!(second.to_place().count(), 0, "and write nothing");
 }
 
-/// An assignment whose leader is still live is kept even when the hash would now
-/// prefer someone else. Moving it costs a log handoff v1 does not have.
+/// An assignment whose leader is still live is kept even when the hash would
+/// now prefer someone else. A balanced cluster is not reshuffled for locality.
 #[test]
 fn a_valid_assignment_is_kept_even_if_the_hash_disagrees() {
     let streams = vec![stream("orders", 4)];
-    let nodes = live(&["broker-a", "broker-b", "broker-c"]);
+    let nodes = live(&["broker-a", "broker-b"]);
 
-    // Pin every shard to one node, which rendezvous hashing would not choose.
-    let pinned: Vec<ShardAssignment> = (0..4)
-        .map(|shard| ShardAssignment {
-            key: ShardKey {
-                tenant_id: "t1".to_string(),
-                namespace: "ns".to_string(),
-                stream: "orders".to_string(),
-                shard,
-                kind: ShardKind::Stream,
-            },
-            leader: "broker-a".to_string(),
-            replicas: Vec::new(),
-            generation: 3,
-            state: ShardState::Active,
+    // Two each, which is balanced, but on the opposite nodes from the ones
+    // the hash chooses.
+    let by_hash = placements(&plan(&streams, &[], &nodes, &[], &NothingCaughtUp));
+    let swapped: Vec<ShardAssignment> = (0..4)
+        .map(|shard| {
+            let hashed = &by_hash[&("orders".to_string(), shard)];
+            let other = if hashed == "broker-a" {
+                "broker-b"
+            } else {
+                "broker-a"
+            };
+            pinned("orders", shard, other)
         })
         .collect();
+    let leaders_on_a = swapped.iter().filter(|a| a.leader == "broker-a").count();
+    assert_eq!(
+        leaders_on_a, 2,
+        "the fixture must be balanced for this to mean anything"
+    );
 
-    let plan = plan(&streams, &[], &nodes, &pinned, &NothingCaughtUp);
+    let plan = plan(&streams, &[], &nodes, &swapped, &NothingCaughtUp);
     assert_eq!(plan.kept(), 4);
     assert_eq!(plan.to_place().count(), 0, "no reshuffling");
+    assert_eq!(plan.moves().count(), 0, "no reshuffling");
+}
+
+fn pinned(stream: &str, shard: u32, leader: &str) -> ShardAssignment {
+    ShardAssignment {
+        key: ShardKey {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: stream.to_string(),
+            shard,
+            kind: ShardKind::Stream,
+        },
+        leader: leader.to_string(),
+        replicas: Vec::new(),
+        generation: 3,
+        state: ShardState::Active,
+        successor: None,
+    }
 }
 
 /// Losing a node must move that node's shards and nothing else.
@@ -295,12 +316,13 @@ fn only_live_nodes_are_eligible() {
     }
 }
 
-/// An assignment on a node that stopped being eligible is re-placed, not kept.
+/// An assignment on a node that is gone is re-placed, not kept. A draining
+/// node is not gone -- its shards are moved, which `moves` covers.
 #[test]
 fn an_assignment_on_an_ineligible_node_is_replaced() {
     let streams = vec![stream("orders", 2)];
     let nodes = vec![
-        node("broker-a", NodeLifecycle::Draining, None),
+        node("broker-a", NodeLifecycle::Down, None),
         node("broker-b", NodeLifecycle::Live, None),
     ];
     let stale: Vec<ShardAssignment> = (0..2)
@@ -485,7 +507,7 @@ mod reconcile {
     async fn three_nodes_and_three_shards_each_get_one_owner() {
         let store = cluster(&["broker-a", "broker-b", "broker-c"]).await;
 
-        let outcome = reconcile_once(&store, &Default::default()).await;
+        let outcome = reconcile_once(&store, &Default::default(), MovePolicy::default()).await;
         assert_eq!(outcome.placed, 3);
         assert_eq!(outcome.unplaceable, 0);
         assert_eq!(outcome.failed, 0);
@@ -501,7 +523,7 @@ mod reconcile {
     #[tokio::test]
     async fn a_second_pass_writes_nothing() {
         let store = cluster(&["broker-a", "broker-b", "broker-c"]).await;
-        reconcile_once(&store, &Default::default()).await;
+        reconcile_once(&store, &Default::default(), MovePolicy::default()).await;
         let after_first = store
             .shard_assignment_snapshot()
             .await
@@ -509,7 +531,7 @@ mod reconcile {
             .next_seq;
 
         for _ in 0..5 {
-            let outcome = reconcile_once(&store, &Default::default()).await;
+            let outcome = reconcile_once(&store, &Default::default(), MovePolicy::default()).await;
             assert_eq!(outcome.placed, 0);
             assert_eq!(outcome.kept, 3);
         }
@@ -530,7 +552,7 @@ mod reconcile {
     #[tokio::test]
     async fn a_lost_node_has_its_shards_replaced() {
         let store = cluster(&["broker-a", "broker-b", "broker-c"]).await;
-        reconcile_once(&store, &Default::default()).await;
+        reconcile_once(&store, &Default::default(), MovePolicy::default()).await;
 
         let before = store.list_shard_assignments().await.expect("list");
         let victim = before[0].leader.clone();
@@ -540,7 +562,7 @@ mod reconcile {
             .await
             .expect("down");
 
-        let outcome = reconcile_once(&store, &Default::default()).await;
+        let outcome = reconcile_once(&store, &Default::default(), MovePolicy::default()).await;
         assert_eq!(outcome.placed, lost);
         assert_eq!(outcome.kept, 3 - lost);
 
@@ -560,7 +582,7 @@ mod reconcile {
     #[tokio::test]
     async fn an_empty_cluster_places_nothing_and_says_so() {
         let store = cluster(&[]).await;
-        let outcome = reconcile_once(&store, &Default::default()).await;
+        let outcome = reconcile_once(&store, &Default::default(), MovePolicy::default()).await;
         assert_eq!(outcome.placed, 0);
         assert_eq!(outcome.unplaceable, 3);
         assert!(
@@ -703,6 +725,7 @@ fn assigned(stream: &str, leader: &str, replicas: &[&str]) -> ShardAssignment {
         replicas: replicas.iter().map(|r| r.to_string()).collect(),
         generation: 3,
         state: ShardState::Active,
+        successor: None,
     }
 }
 
@@ -1235,4 +1258,572 @@ fn a_cache_defaults_to_a_single_shard() {
 
     assert_eq!(cache.shards, 1);
     assert_eq!(cache.replication_factor, 1);
+}
+
+/// Planned moves: a shard whose leader is alive is handed off, never
+/// reassigned. Each step is checked from the store state that precedes it,
+/// which is how a pass on any instance resumes a move.
+mod moves {
+    use super::*;
+
+    /// What the leaders last reported, with the drained flag.
+    #[derive(Default)]
+    struct Reported {
+        caught_up: BTreeSet<String>,
+        drained_at: Option<u64>,
+    }
+
+    impl Reported {
+        fn caught_up(nodes: &[&str]) -> Self {
+            Self {
+                caught_up: nodes.iter().map(|n| n.to_string()).collect(),
+                drained_at: None,
+            }
+        }
+
+        fn drained_at(mut self, generation: u64) -> Self {
+            self.drained_at = Some(generation);
+            self
+        }
+    }
+
+    impl CaughtUp for Reported {
+        fn is_caught_up(&self, _key: &ShardKey, node_id: &str) -> bool {
+            self.caught_up.contains(node_id)
+        }
+
+        fn is_drained(&self, _key: &ShardKey, generation: u64) -> bool {
+            self.drained_at == Some(generation)
+        }
+    }
+
+    fn one_shard(leader: &str, replicas: &[&str]) -> ShardAssignment {
+        assigned("orders", leader, replicas)
+    }
+
+    fn only_decision(plan: &Plan) -> &Decision {
+        assert_eq!(plan.shards.len(), 1);
+        &plan.shards[0].decision
+    }
+
+    fn draining_cluster() -> Vec<Node> {
+        vec![
+            node("broker-a", NodeLifecycle::Draining, None),
+            node("broker-b", NodeLifecycle::Live, None),
+        ]
+    }
+
+    /// Step one: the destination joins the replica set as the successor. The
+    /// old leader keeps leading -- nothing is reassigned to a node holding
+    /// none of the log.
+    #[test]
+    fn a_draining_leader_stages_its_successor_as_a_replica() {
+        let streams = vec![stream("orders", 1)];
+        let existing = vec![one_shard("broker-a", &[])];
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &existing,
+            &NothingCaughtUp,
+        );
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::Stage { successor }, next) => {
+                assert_eq!(successor, "broker-b");
+                assert_eq!(next.leader, "broker-a", "the leader does not change yet");
+                assert_eq!(next.replicas, vec!["broker-b".to_string()]);
+                assert_eq!(next.successor.as_deref(), Some("broker-b"));
+                assert_eq!(next.state, ShardState::Active);
+            }
+            other => panic!("expected a stage, got {other:?}"),
+        }
+        assert_eq!(plan.to_place().count(), 0, "nothing is reassigned outright");
+    }
+
+    /// Step two waits: a staged successor that has not caught up is not fenced.
+    #[test]
+    fn a_successor_that_is_not_caught_up_is_waited_for() {
+        let streams = vec![stream("orders", 1)];
+        let mut staged = one_shard("broker-a", &["broker-b"]);
+        staged.successor = Some("broker-b".to_string());
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &[staged],
+            &NothingCaughtUp,
+        );
+
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Waiting(Blocked::DestinationCatchingUp {
+                successor: "broker-b".to_string()
+            })
+        );
+    }
+
+    /// Step two: a caught-up successor fences the leader. The assignment goes
+    /// `Draining` with everything else unchanged.
+    #[test]
+    fn a_caught_up_successor_fences_the_leader() {
+        let streams = vec![stream("orders", 1)];
+        let mut staged = one_shard("broker-a", &["broker-b"]);
+        staged.successor = Some("broker-b".to_string());
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &[staged],
+            &Reported::caught_up(&["broker-b"]),
+        );
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::Fence, next) => {
+                assert_eq!(next.leader, "broker-a");
+                assert_eq!(next.state, ShardState::Draining);
+                assert_eq!(next.successor.as_deref(), Some("broker-b"));
+            }
+            other => panic!("expected a fence, got {other:?}"),
+        }
+    }
+
+    /// Step three waits: a fenced leader that has not reported drained is
+    /// still writing as far as the control plane knows.
+    #[test]
+    fn a_fenced_shard_waits_for_the_leader_to_report_drained() {
+        let streams = vec![stream("orders", 1)];
+        let mut fenced = one_shard("broker-a", &["broker-b"]);
+        fenced.successor = Some("broker-b".to_string());
+        fenced.state = ShardState::Draining;
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            std::slice::from_ref(&fenced),
+            &Reported::caught_up(&["broker-b"]),
+        );
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Waiting(Blocked::LeaderStopping)
+        );
+
+        // A drained report from before the fence does not count.
+        let plan = super::plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &[fenced],
+            &Reported::caught_up(&["broker-b"]).drained_at(2),
+        );
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Waiting(Blocked::LeaderStopping)
+        );
+    }
+
+    /// Step three: the drained report at the fenced generation cuts over. The
+    /// old leader is not kept as a follower -- it is draining.
+    #[test]
+    fn a_drained_report_cuts_over_to_the_successor() {
+        let streams = vec![stream("orders", 1)];
+        let mut fenced = one_shard("broker-a", &["broker-b"]);
+        fenced.successor = Some("broker-b".to_string());
+        fenced.state = ShardState::Draining;
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &[fenced.clone()],
+            &Reported::caught_up(&["broker-b"]).drained_at(fenced.generation),
+        );
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::CutOver { from, to }, next) => {
+                assert_eq!((from.as_str(), to.as_str()), ("broker-a", "broker-b"));
+                assert_eq!(next.leader, "broker-b");
+                assert!(next.replicas.is_empty(), "replication factor one");
+                assert_eq!(next.state, ShardState::Assigning);
+                assert_eq!(next.successor, None);
+            }
+            other => panic!("expected a cut-over, got {other:?}"),
+        }
+    }
+
+    /// The whole move, driven to the end, writes exactly three steps and then
+    /// nothing: staged, fenced, cut over.
+    #[test]
+    fn a_drain_converges_in_three_writes() {
+        let streams = vec![stream("orders", 1)];
+        let nodes = draining_cluster();
+        let mut existing = vec![one_shard("broker-a", &[])];
+        let mut steps = Vec::new();
+        for _ in 0..6 {
+            let reported = if existing[0].state == ShardState::Draining {
+                Reported::caught_up(&["broker-b"]).drained_at(existing[0].generation)
+            } else {
+                Reported::caught_up(&["broker-b"])
+            };
+            let plan = plan(&streams, &[], &nodes, &existing, &reported);
+            match only_decision(&plan) {
+                Decision::Move(step, next) => {
+                    steps.push(step.label());
+                    let mut next = next.clone();
+                    next.generation = existing[0].generation + 1;
+                    existing = vec![next];
+                }
+                Decision::Kept => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(steps, vec!["stage", "fence", "cut_over"]);
+        assert_eq!(existing[0].leader, "broker-b");
+    }
+
+    /// A destination that already holds a copy is fenced straight away: the
+    /// stage step exists only to make the copy.
+    #[test]
+    fn a_caught_up_replica_needs_no_staging() {
+        let streams = vec![replicated_stream("orders", 1, 2)];
+        let existing = vec![one_shard("broker-a", &["broker-b"])];
+
+        let plan = plan(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &existing,
+            &Reported::caught_up(&["broker-b"]),
+        );
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::Fence, next) => {
+                assert_eq!(next.successor.as_deref(), Some("broker-b"));
+                assert_eq!(next.state, ShardState::Draining);
+            }
+            other => panic!("expected a fence, got {other:?}"),
+        }
+    }
+
+    /// A staged destination that stops being live is dropped from the move,
+    /// not waited on.
+    #[test]
+    fn a_lost_destination_abandons_the_move() {
+        let streams = vec![stream("orders", 1)];
+        let nodes = vec![
+            node("broker-a", NodeLifecycle::Live, None),
+            node("broker-b", NodeLifecycle::Down, None),
+        ];
+        let mut staged = one_shard("broker-a", &["broker-b"]);
+        staged.successor = Some("broker-b".to_string());
+
+        let plan = plan(&streams, &[], &nodes, &[staged], &NothingCaughtUp);
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::Abandon { successor }, next) => {
+                assert_eq!(successor, "broker-b");
+                assert_eq!(next.leader, "broker-a");
+                assert!(next.replicas.is_empty());
+                assert_eq!(next.successor, None);
+            }
+            other => panic!("expected the move to be abandoned, got {other:?}"),
+        }
+    }
+
+    /// A destination that dies between the fence and the cut-over does not
+    /// take the shard. Nothing else holds the log, so the old leader takes
+    /// it back at a new generation and the move is chosen again.
+    #[test]
+    fn a_destination_lost_after_the_fence_does_not_lead() {
+        let streams = vec![stream("orders", 1)];
+        let nodes = vec![
+            node("broker-a", NodeLifecycle::Live, None),
+            node("broker-b", NodeLifecycle::Down, None),
+        ];
+        let mut fenced = one_shard("broker-a", &["broker-b"]);
+        fenced.successor = Some("broker-b".to_string());
+        fenced.state = ShardState::Draining;
+
+        let plan = plan(
+            &streams,
+            &[],
+            &nodes,
+            &[fenced.clone()],
+            &Reported::caught_up(&["broker-b"]).drained_at(fenced.generation),
+        );
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::CutOver { to, .. }, next) => {
+                assert_eq!(to, "broker-a");
+                assert_eq!(next.leader, "broker-a");
+                assert_eq!(next.state, ShardState::Assigning);
+                assert_eq!(next.successor, None);
+            }
+            other => panic!("expected the leader to take the shard back, got {other:?}"),
+        }
+    }
+
+    /// The leader dying mid-move is a failover, and the successor -- a replica
+    /// like any other -- is promoted if it holds the log.
+    #[test]
+    fn a_leader_lost_mid_move_fails_over_to_the_successor() {
+        let streams = vec![stream("orders", 1)];
+        let nodes = vec![
+            node("broker-a", NodeLifecycle::Down, None),
+            node("broker-b", NodeLifecycle::Live, None),
+        ];
+        let mut fenced = one_shard("broker-a", &["broker-b"]);
+        fenced.successor = Some("broker-b".to_string());
+        fenced.state = ShardState::Draining;
+
+        let plan = plan(
+            &streams,
+            &[],
+            &nodes,
+            &[fenced],
+            &Reported::caught_up(&["broker-b"]),
+        );
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Place("broker-b".to_string(), Vec::new())
+        );
+
+        // And not if it does not: the shard stays unavailable rather than
+        // served empty.
+        let mut fenced = one_shard("broker-a", &["broker-b"]);
+        fenced.successor = Some("broker-b".to_string());
+        let plan = super::plan(&streams, &[], &nodes, &[fenced], &NothingCaughtUp);
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Unplaceable(Unplaceable::NoCaughtUpReplica)
+        );
+    }
+
+    /// The old leader stays as a follower after a rebalance, so the stream
+    /// keeps its copies without a fresh catch-up.
+    #[test]
+    fn a_cut_over_keeps_the_old_leader_as_a_follower_when_it_is_staying() {
+        let streams = vec![replicated_stream("orders", 1, 2)];
+        let nodes = live(&["broker-a", "broker-b"]);
+        let mut fenced = one_shard("broker-a", &["broker-b"]);
+        fenced.successor = Some("broker-b".to_string());
+        fenced.state = ShardState::Draining;
+
+        let plan = plan(
+            &streams,
+            &[],
+            &nodes,
+            &[fenced.clone()],
+            &Reported::caught_up(&["broker-b"]).drained_at(fenced.generation),
+        );
+
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::CutOver { .. }, next) => {
+                assert_eq!(next.leader, "broker-b");
+                assert_eq!(next.replicas, vec!["broker-a".to_string()]);
+            }
+            other => panic!("expected a cut-over, got {other:?}"),
+        }
+    }
+
+    /// Only as many moves as the policy allows are in flight at once; the
+    /// rest wait, visibly.
+    #[test]
+    fn moves_are_bounded_by_the_policy() {
+        let streams = vec![stream("orders", 4)];
+        let existing: Vec<ShardAssignment> = (0..4)
+            .map(|shard| pinned("orders", shard, "broker-a"))
+            .collect();
+
+        let plan = plan_with(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &existing,
+            &NothingCaughtUp,
+            MovePolicy { max_concurrent: 2 },
+        );
+        assert_eq!(plan.moves().count(), 2);
+        assert_eq!(
+            plan.waiting()
+                .filter(|(_, why)| **why == Blocked::MoveLimit)
+                .count(),
+            2
+        );
+
+        // A move already in flight holds its slot.
+        let mut existing = existing;
+        existing[0].successor = Some("broker-b".to_string());
+        existing[0].replicas = vec!["broker-b".to_string()];
+        let plan = plan_with(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &existing,
+            &NothingCaughtUp,
+            MovePolicy { max_concurrent: 1 },
+        );
+        assert_eq!(plan.moves().count(), 0);
+        assert_eq!(plan.waiting().count(), 4);
+
+        // Zero holds everything.
+        let plan = plan_with(
+            &streams,
+            &[],
+            &draining_cluster(),
+            &existing[1..],
+            &NothingCaughtUp,
+            MovePolicy { max_concurrent: 0 },
+        );
+        assert_eq!(plan.moves().count(), 0);
+    }
+
+    /// The motivating case: every shard landed on one broker while the other
+    /// was registering. Rebalancing moves shards from the node over its share
+    /// to the one under it, and stops when neither holds.
+    #[test]
+    fn an_overloaded_node_gives_shards_to_an_idle_one_until_balanced() {
+        let streams = vec![stream("orders", 6)];
+        let nodes = live(&["broker-a", "broker-b"]);
+        let mut existing: Vec<ShardAssignment> = (0..6)
+            .map(|shard| pinned("orders", shard, "broker-a"))
+            .collect();
+
+        let mut writes = 0;
+        for _ in 0..40 {
+            let drained: Vec<u64> = existing
+                .iter()
+                .filter(|a| a.state == ShardState::Draining)
+                .map(|a| a.generation)
+                .collect();
+            let reported = Reported {
+                caught_up: ["broker-a", "broker-b"]
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect(),
+                drained_at: drained.first().copied(),
+            };
+            let plan = plan_with(
+                &streams,
+                &[],
+                &nodes,
+                &existing,
+                &reported,
+                MovePolicy { max_concurrent: 1 },
+            );
+            let mut wrote = false;
+            for (key, _, next) in plan.moves() {
+                let slot = existing.iter_mut().find(|a| &a.key == key).expect("known");
+                let mut next = next.clone();
+                next.generation = slot.generation + 1;
+                *slot = next;
+                wrote = true;
+                writes += 1;
+            }
+            if !wrote && plan.waiting().count() == 0 {
+                break;
+            }
+        }
+
+        let on_a = existing.iter().filter(|a| a.leader == "broker-a").count();
+        let on_b = existing.iter().filter(|a| a.leader == "broker-b").count();
+        assert_eq!((on_a, on_b), (3, 3), "balanced");
+        assert_eq!(
+            writes, 9,
+            "three moves of three writes each, and no churn after"
+        );
+        assert!(existing.iter().all(|a| a.successor.is_none()));
+    }
+
+    /// One shard over is not an imbalance worth a move: the share is a ceiling,
+    /// and five shards on two nodes is three and two.
+    #[test]
+    fn a_cluster_within_one_of_balanced_is_left_alone() {
+        let streams = vec![stream("orders", 5)];
+        let nodes = live(&["broker-a", "broker-b"]);
+        let existing: Vec<ShardAssignment> = (0..5)
+            .map(|shard| {
+                pinned(
+                    "orders",
+                    shard,
+                    if shard < 3 { "broker-a" } else { "broker-b" },
+                )
+            })
+            .collect();
+
+        let plan = plan(&streams, &[], &nodes, &existing, &NothingCaughtUp);
+        assert_eq!(plan.kept(), 5);
+        assert_eq!(plan.moves().count(), 0);
+    }
+
+    /// An ephemeral stream has no log to hand off, so a draining node's shard
+    /// of one is simply reassigned, as it always was.
+    #[test]
+    fn an_ephemeral_stream_is_reassigned_rather_than_moved() {
+        let mut ephemeral = stream("orders", 1);
+        ephemeral.durable = false;
+        let existing = vec![one_shard("broker-a", &[])];
+
+        let plan = plan(
+            &[ephemeral],
+            &[],
+            &draining_cluster(),
+            &existing,
+            &NothingCaughtUp,
+        );
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Place("broker-b".to_string(), Vec::new())
+        );
+    }
+
+    /// A follower on a draining node is replaced by one that is staying, so
+    /// the node ends up holding nothing and can leave.
+    #[test]
+    fn a_follower_on_a_draining_node_is_reseated() {
+        let streams = vec![replicated_stream("orders", 1, 2)];
+        let nodes = vec![
+            node("broker-a", NodeLifecycle::Live, None),
+            node("broker-b", NodeLifecycle::Draining, None),
+            node("broker-c", NodeLifecycle::Live, None),
+        ];
+        let existing = vec![one_shard("broker-a", &["broker-b"])];
+
+        let plan = plan(&streams, &[], &nodes, &existing, &NothingCaughtUp);
+        match only_decision(&plan) {
+            Decision::Move(MoveStep::Reseat { from, to }, next) => {
+                assert_eq!((from.as_str(), to.as_str()), ("broker-b", "broker-c"));
+                assert_eq!(next.leader, "broker-a");
+                assert_eq!(next.replicas, vec!["broker-c".to_string()]);
+            }
+            other => panic!("expected a reseat, got {other:?}"),
+        }
+
+        // A follower that is merely down is left where it is.
+        let nodes = vec![
+            node("broker-a", NodeLifecycle::Live, None),
+            node("broker-b", NodeLifecycle::Down, None),
+            node("broker-c", NodeLifecycle::Live, None),
+        ];
+        let plan = super::plan(&streams, &[], &nodes, &existing, &NothingCaughtUp);
+        assert_eq!(only_decision(&plan), &Decision::Kept);
+    }
+
+    /// A draining node with nowhere to send its shards waits, and says so.
+    #[test]
+    fn a_drain_with_no_destination_waits() {
+        let streams = vec![stream("orders", 1)];
+        let nodes = vec![node("broker-a", NodeLifecycle::Draining, None)];
+        let existing = vec![one_shard("broker-a", &[])];
+
+        let plan = plan(&streams, &[], &nodes, &existing, &NothingCaughtUp);
+        assert_eq!(
+            only_decision(&plan),
+            &Decision::Waiting(Blocked::NoDestination)
+        );
+    }
 }

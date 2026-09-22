@@ -34,6 +34,9 @@ pub struct ShardCursors {
     /// Where a follower with no cursor yet starts. See [`compare_from`].
     base: u64,
     followers: Vec<FollowerCursor>,
+    /// The tail this draining shard had at the end of the last pass, and how
+    /// many passes in a row it has stayed there with nothing in flight.
+    settled: Option<(u64, u32)>,
 }
 
 impl ShardCursors {
@@ -45,9 +48,28 @@ impl ShardCursors {
             generation,
             base: 0,
             followers: Vec::new(),
+            settled: None,
         }
     }
+
+    /// Whether a draining shard's log has stopped growing.
+    ///
+    /// Admission closed when the route went draining, but a publish admitted
+    /// just before may still be committing. `in_flight` covers what has been
+    /// claimed; the tail holding still across two passes covers the gap
+    /// between admission and the claim, since an append wakes another pass.
+    fn settle(&mut self, tail: u64, in_flight: usize) -> bool {
+        let passes = match self.settled {
+            Some((seen, passes)) if seen == tail && in_flight == 0 => passes + 1,
+            _ => 0,
+        };
+        self.settled = Some((tail, passes));
+        passes >= DRAIN_SETTLE_PASSES
+    }
 }
+
+/// Passes a draining shard's tail must hold still before it reports drained.
+const DRAIN_SETTLE_PASSES: u32 = 2;
 
 /// Tell the control plane who holds what, then move the mark if it listened.
 ///
@@ -88,6 +110,7 @@ fn shard_report(
     generation: u64,
     tail: u64,
     followers: &[FollowerCursor],
+    drained: bool,
 ) -> ShardReport {
     ShardReport {
         key: key.clone(),
@@ -98,6 +121,7 @@ fn shard_report(
             .filter(|follower| follower.halted.is_none())
             .map(|follower| (follower.node_id.clone(), follower.next_offset))
             .collect(),
+        drained,
     }
 }
 
@@ -320,7 +344,7 @@ async fn replicate_shard<R: PeerRequester>(
         let offset = quorum_offset(tail, &positions);
         if offset > 0 {
             majority = Some((
-                shard_report(key, route.generation, tail, &positions),
+                shard_report(key, route.generation, tail, &positions, false),
                 offset,
             ));
             break;
@@ -385,7 +409,22 @@ async fn replicate_shard<R: PeerRequester>(
     // Equal reports send nothing, which is the healthy case: followers finish
     // together, so the majority report already described all of them.
     let tail = log.tail_offset().await.unwrap_or(tail);
-    let settled = shard_report(key, route.generation, tail, &entry.followers);
+    // A draining shard says so once its log has stopped growing, and only
+    // then: the control plane hands it on against exactly this tail.
+    let drained = route.draining && {
+        let in_flight = match key.kind {
+            felix_router::ShardKind::Stream => {
+                broker
+                    .in_flight_publishes(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+                    .await
+            }
+            // Cache writes are not claimed the way publishes are; the tail
+            // holding still is the whole check.
+            felix_router::ShardKind::Cache => 0,
+        };
+        entry.settle(tail, in_flight)
+    };
+    let settled = shard_report(key, route.generation, tail, &entry.followers, drained);
     if report_out.as_ref() != Some(&settled) {
         // And the mark with it. Usually a no-op — the mark is monotonic and the
         // majority already moved it — but with five replicas a second follower
@@ -750,6 +789,9 @@ pub struct ShardReport {
     /// leader that reports and then writes more before dying leaves a report
     /// that says every replica was level without saying level with what.
     pub offsets: Vec<(String, u64)>,
+    /// This broker has stopped serving the shard and its log will not grow,
+    /// so `caught_up` is measured against the final tail.
+    pub drained: bool,
 }
 
 /// Add cursors for new replicas and drop those no longer in the set.
@@ -826,6 +868,7 @@ pub(super) async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool
                 },
                 generation: report.generation,
                 caught_up: report.caught_up.to_vec(),
+                drained: report.drained,
                 replica_offsets: report
                     .offsets
                     .iter()

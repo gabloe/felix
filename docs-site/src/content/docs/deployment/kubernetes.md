@@ -243,11 +243,14 @@ rolling: scale brokers to zero, upgrade, scale back.
 helm upgrade felix deploy/helm/felix -n felix --reuse-values --set broker.replicas=5
 ```
 
-New brokers register and become placement targets; existing shards stay where
-they are until something moves them. Scaling **in** removes the highest
-ordinals: drain each first (`POST /v1/nodes/{id}/drain` with an operator
-token), wait for its shards to fail over, then lower `replicas`. The budget
-refuses a value it cannot keep a quorum under.
+New brokers register, and placement moves shards onto them from whichever
+brokers lead more than their share, one move at a time by default. Scaling
+**in** removes the highest ordinals: drain each first (`POST
+/v1/nodes/{id}/drain` with an operator token), wait until
+`GET /v1/shard-assignments?leader=<id>` is empty, then lower `replicas`. The
+budget refuses a value it cannot keep a quorum under. What a move does, how
+long it takes and what to watch is on
+[Adding, draining and removing brokers](/felix/deployment/scaling/).
 
 ### Replacing a broker's volume
 

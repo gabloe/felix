@@ -260,7 +260,16 @@ impl ControlPlane {
     /// them, and the defaults would give a report a 20-second life against a
     /// cluster tuned to notice a dead broker in one.
     pub async fn place_shards(&self) -> controlplane::placement::ReconcileOutcome {
-        controlplane::placement::reconcile_once(self.store.as_ref(), &LIVENESS).await
+        self.place_shards_with(controlplane::placement::MovePolicy::default())
+            .await
+    }
+
+    /// Step placement once under an explicit move policy.
+    pub async fn place_shards_with(
+        &self,
+        policy: controlplane::placement::MovePolicy,
+    ) -> controlplane::placement::ReconcileOutcome {
+        controlplane::placement::reconcile_once(self.store.as_ref(), &LIVENESS, policy).await
     }
 
     pub async fn shutdown(self) {

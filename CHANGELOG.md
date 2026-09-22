@@ -11,6 +11,51 @@ for what the current release actually guarantees.
 
 ## [Unreleased]
 
+### Added
+
+- **Online shard rebalancing** (#130). A shard whose leader is alive is now
+  moved rather than reassigned. The control plane stages the destination as a
+  replica and lets the leader catch it up, fences the leader once the copy is
+  level — the assignment goes `draining`, and a broker never serves a draining
+  assignment — waits for the leader to report that its log has stopped
+  growing, and only then names the destination leader at a new generation.
+  Each step is an assignment write, so any control-plane instance resumes a
+  half-done move from the store.
+
+  Two triggers. A drained broker (`POST /v1/nodes/{id}/drain`) hands off
+  everything it leads and is replaced as a follower wherever it holds a copy,
+  so it can then be deleted. A broker leading more than its share of shards
+  gives them to one under its share, which is what makes a broker that joins
+  a running cluster take work — the case where a control-plane restart left
+  every shard on the first broker to register now corrects itself. Moves only
+  go from over share to under share and count moves in flight as done, so
+  placement converges instead of oscillating. `FELIX_SHARD_MOVES_MAX_CONCURRENT`
+  bounds moves in flight, one by default.
+
+  A destination that dies before it leads is passed over; a leader that dies
+  mid-move is an ordinary failover with the destination as a candidate.
+  Publishes to the shard are refused, not lost, between the fence and the new
+  owner opening. Real-process tests cover drain, join, a destination dying
+  mid-transfer, a drain and a join at once, and publishes arriving throughout.
+
+  The assignment carries an optional `successor`, the replica report an
+  optional `drained`; both are omitted when unset, so nothing changes on the
+  wire for a cluster that never moves a shard. Postgres gains migration
+  `0012_shard_moves`. `felix_shard_move_steps_total{step}` and
+  `felix_shard_moves_waiting` report progress. The harness gained `add_node`,
+  `drain_node`, `undrain_node` and `drain_until_empty`.
+
+### Changed
+
+- A `draining` assignment is reachable from `assigning` as well as `active`,
+  since nothing reports `active` yet and the fence should not cost a move an
+  extra generation. A drained shard still leaves only through a fresh
+  `assigning`.
+- A node marked draining no longer has its shards reassigned on the next
+  placement pass to brokers that hold none of their log. Its shards are moved
+  instead, which takes a few passes; the harness's `move_shard` steps
+  placement until the move completes.
+
 ## [0.6.0-preview] - 2026-09-20
 
 Development towards 0.6.0. Not a release: published from this line only if and

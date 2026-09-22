@@ -314,16 +314,21 @@ was slow, partitioned, or restarted cannot resurrect an ownership decision that
 placement has already replaced.
 
 States are `assigning` (placement decided, the leader has not confirmed),
-`active` (the leader is serving), and `draining` (ownership is moving). Only a
-shard someone is actually serving can drain, and a drained shard does not return
-to the same leader — placement writes a new assignment at a new generation.
+`active` (the leader is serving), and `draining` (the leader has been told to
+stop serving at this generation so the shard can move). A drained shard leaves
+only through a fresh `assigning` at a new generation, never back to `active`
+where it stands. `successor` names the node a shard is moving to while a move
+is in progress; it is always one of `replicas`, and absent otherwise. See
+[Moving a shard](#moving-a-shard).
 
 #### Replica reports
 
 `POST /v1/nodes/{node_id}/replica-status` is how a shard's leader tells the
 control plane which replicas hold its log and how far each has got. Promotion
 is gated on it: a lost leader is replaced only by a replica reported caught up,
-and among those by the one reported furthest ahead. Requires `node.manage` over
+and among those by the one reported furthest ahead. A report may also carry
+`drained: true`, the leader's word that it has stopped serving the shard at
+that generation and its log will not grow — the fence of a planned move. Requires `node.manage` over
 the reporting node, and the node must lead the shard it reports on; a report
 naming a generation ahead of the assignment is refused, since one claiming
 `u64::MAX` would otherwise block every real report after it.
@@ -371,11 +376,8 @@ single pass over the concatenation is badly behaved at the size a cluster
 actually is: over 300 shards on four nodes it put 43 on one node and 94 on
 another, against a spread within 8% of even for the split form.
 
-Three deliberate omissions in v1:
+Two deliberate omissions:
 
-- **No online rebalancing.** An assignment whose leader is still live is kept,
-  however uneven that leaves the cluster. Moving a shard costs a log handoff
-  that does not exist yet.
 - **`NodeCapacity::weight` is ignored.** Weighted rendezvous needs a logarithm,
   and floating point that must agree bit-for-bit across every instance is a bad
   foundation for a decision that has to be identical everywhere. `max_shards` is
@@ -392,6 +394,62 @@ fixes.
 | Setting | Env | Default |
 | --- | --- | --- |
 | `node_liveness.shard_reconcile_interval_ms` | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | 5000 |
+| `max_concurrent_shard_moves` | `FELIX_SHARD_MOVES_MAX_CONCURRENT` | 1 |
+
+#### Moving a shard
+
+A shard whose leader is alive is never reassigned outright: a node that has
+not seen the log would serve it empty. It is **moved**, in three assignment
+writes, each at a new generation and each resumable from the store by
+whichever instance runs the next pass:
+
+1. **Stage.** The destination joins `replicas` and is recorded as
+   `successor`. The leader ships it the log like any other follower.
+2. **Fence.** Once the leader's replica report lists the successor as caught
+   up, the assignment goes `draining`. The leader stops admitting writes at
+   that generation, lets what it already accepted land, keeps shipping, and
+   reports `drained: true` once its log has held still with nothing in
+   flight — with `caught_up` measured against that final tail.
+3. **Cut over.** On a drained report at the fenced generation, the successor
+   is named leader in a fresh `assigning` assignment. The old leader keeps a
+   follower's seat if it is staying and the replication factor wants one;
+   a draining node is dropped from the set.
+
+Two things start a move. A **draining node** (`POST /v1/nodes/{id}/drain`)
+gives up everything it leads, one shard per free move slot, preferring a
+caught-up live replica under its share as the destination; a follower it
+holds for some other shard is reseated onto a node that is staying. A
+**live node over its share** of leadership — more than `ceil(shards /
+live nodes)` — gives a shard to a node under its share. Moves in flight are
+counted as complete for the share calculation, so a node never stages more
+moves than it needs, and only over-to-under moves are made, so the process
+converges without trading shards back and forth. A follower that is merely
+down is left where it is: a rolling restart would otherwise copy every shard
+once per node.
+
+A move stops safely at every step. A destination that stops being live is
+dropped from the move (`abandon`) or, after the fence, passed over for
+another caught-up replica or the old leader itself, which takes the shard
+back at a new generation. A leader that dies mid-move is a failover, where
+the successor is a candidate like any other replica. An ephemeral stream has
+no log to hand off and is reassigned as it always was.
+
+Between the fence and the new owner opening, publishes to the shard are
+refused rather than accepted somewhere the successor cannot see — the client
+sees an error, never a silent drop. Locally that window is under a second;
+in a deployment it is a few control-plane sync intervals.
+
+`max_concurrent_shard_moves` bounds moves in flight across the cluster,
+one by default, because each is a full copy of a shard's log. `0` starts
+nothing: a drain waits and an imbalance stays, both visibly.
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
+| `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or the move limit holding a drain back |
+
+The fence and the broker's side of it are described in
+[replication-design.md](replication-design.md#planned-handoff).
 
 #### How brokers follow ownership
 
@@ -568,6 +626,8 @@ Control plane:
 | `felix_shard_assignment_changes_total{op}` | shard ownership changes: `assigned`, `updated`, `unassigned` |
 | `felix_shards_placed_total` | shards given a leader by reconciliation |
 | `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
+| `felix_shard_move_steps_total{step}` | planned-move steps written |
+| `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
 | `felix_controlplane_auth_rejected_total{reason}` | credentials turned away by any authenticated endpoint: `missing_token`, `malformed_token`, `invalid_token`, `tenant_mismatch`, `forbidden`. Each is also an `info` log line with the reason and the message the caller saw, never the token. A rising `invalid_token` or `forbidden` is a broker with a stale credential, or something that is not a broker |
 

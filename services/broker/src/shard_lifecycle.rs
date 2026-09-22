@@ -65,6 +65,21 @@ pub struct LocalShard {
     pub phase: Phase,
     /// The assignment generation this state was reached for.
     pub generation: u64,
+    /// The assignment at this generation is `draining`: the shard is being
+    /// moved away and must not serve here again, however many times the
+    /// assignment is re-delivered.
+    pub draining: bool,
+}
+
+/// What recording a successful open did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opened {
+    /// Serving.
+    Activated,
+    /// Recovered but not serving: the assignment is draining.
+    Draining,
+    /// The generation moved on while the log was opening.
+    Stale,
 }
 
 /// Work the driver must do to catch up with a decision.
@@ -142,11 +157,12 @@ impl ShardLifecycle {
     pub fn observe(&mut self, key: &ShardKey, assignment: Option<&ShardAssignment>) -> Action {
         let ours = assignment.is_some_and(|a| a.leader == self.node_id);
         let generation = assignment.map_or(0, |a| a.generation);
+        let draining = assignment.is_some_and(ShardAssignment::is_draining);
         let current = self.shards.get(key).cloned();
 
         match (ours, current) {
             // Newly ours: open before serving.
-            (true, None) => self.begin_open(key, generation),
+            (true, None) => self.begin_open(key, generation, draining),
 
             (true, Some(existing)) => {
                 if generation < existing.generation {
@@ -156,6 +172,20 @@ impl ShardLifecycle {
                     return Action::None;
                 }
                 match existing.phase {
+                    // The shard is moving away. Stop serving now; the log
+                    // stays open for replication to ship the tail.
+                    Phase::Active if draining && generation == existing.generation => {
+                        self.set(key, Phase::Draining, generation, true);
+                        Action::Release {
+                            key: key.clone(),
+                            generation,
+                        }
+                    }
+                    Phase::Opening if draining && generation == existing.generation => {
+                        // `opened` reads this and closes instead of serving.
+                        self.set(key, Phase::Opening, generation, true);
+                        Action::None
+                    }
                     // Already serving this generation: nothing to do. This is
                     // the common case on every poll.
                     Phase::Active | Phase::Opening if generation == existing.generation => {
@@ -165,16 +195,22 @@ impl ShardLifecycle {
                     // what makes the generation meaningful: the control plane
                     // moved the shard away and back, and the local state has to
                     // be re-established rather than assumed.
-                    Phase::Active | Phase::Opening => self.begin_open(key, generation),
+                    Phase::Active | Phase::Opening => self.begin_open(key, generation, draining),
                     // A failed open is not retried by the same assignment
                     // arriving again. Every poll re-delivers it, and retrying
                     // each time buries the failure in noise while hammering a
                     // log that is not opening. A new generation is real news.
                     Phase::Failed if generation == existing.generation => Action::None,
+                    // Released for a drain at this generation: stays released.
+                    Phase::Draining | Phase::Closed
+                        if existing.draining && generation == existing.generation =>
+                    {
+                        Action::None
+                    }
                     // Ours again after we let it go, or after a failure at an
                     // older generation.
                     Phase::Draining | Phase::Closed | Phase::Unassigned | Phase::Failed => {
-                        self.begin_open(key, generation)
+                        self.begin_open(key, generation, draining)
                     }
                 }
             }
@@ -187,11 +223,11 @@ impl ShardLifecycle {
                 Phase::Closed | Phase::Unassigned | Phase::Draining => Action::None,
                 // A failed open never served, so there is nothing to drain.
                 Phase::Failed => {
-                    self.set(key, Phase::Closed, existing.generation);
+                    self.set(key, Phase::Closed, existing.generation, false);
                     Action::None
                 }
                 Phase::Active | Phase::Opening => {
-                    self.set(key, Phase::Draining, existing.generation);
+                    self.set(key, Phase::Draining, existing.generation, false);
                     Action::Release {
                         key: key.clone(),
                         generation: existing.generation,
@@ -225,16 +261,23 @@ impl ShardLifecycle {
     ///
     /// Ignored if the generation has moved on since the open began: the shard
     /// was reassigned while we were recovering it, and activating now would
-    /// serve a generation we no longer hold.
-    pub fn opened(&mut self, key: &ShardKey, generation: u64) -> bool {
+    /// serve a generation we no longer hold. An open for a draining
+    /// assignment lands in `Closed`: the log was recovered so replication can
+    /// ship from it, but the shard is leaving and must not serve.
+    pub fn opened(&mut self, key: &ShardKey, generation: u64) -> Opened {
         match self.shards.get(key) {
             Some(shard) if shard.phase == Phase::Opening && shard.generation == generation => {
-                self.set(key, Phase::Active, generation);
-                true
+                if shard.draining {
+                    self.set(key, Phase::Closed, generation, true);
+                    Opened::Draining
+                } else {
+                    self.set(key, Phase::Active, generation, false);
+                    Opened::Activated
+                }
             }
             _ => {
                 mm::record_stale_event();
-                false
+                Opened::Stale
             }
         }
     }
@@ -245,7 +288,7 @@ impl ShardLifecycle {
             && shard.phase == Phase::Opening
             && shard.generation == generation
         {
-            self.set(key, Phase::Failed, generation);
+            self.set(key, Phase::Failed, generation, shard.draining);
         }
     }
 
@@ -255,22 +298,28 @@ impl ShardLifecycle {
             && shard.phase == Phase::Draining
             && shard.generation == generation
         {
-            self.set(key, Phase::Closed, generation);
+            self.set(key, Phase::Closed, generation, shard.draining);
         }
     }
 
-    fn begin_open(&mut self, key: &ShardKey, generation: u64) -> Action {
-        self.set(key, Phase::Opening, generation);
+    fn begin_open(&mut self, key: &ShardKey, generation: u64, draining: bool) -> Action {
+        self.set(key, Phase::Opening, generation, draining);
         Action::Open {
             key: key.clone(),
             generation,
         }
     }
 
-    fn set(&mut self, key: &ShardKey, phase: Phase, generation: u64) {
+    fn set(&mut self, key: &ShardKey, phase: Phase, generation: u64, draining: bool) {
         let previous = self.shards.get(key).map(|shard| shard.phase);
-        self.shards
-            .insert(key.clone(), LocalShard { phase, generation });
+        self.shards.insert(
+            key.clone(),
+            LocalShard {
+                phase,
+                generation,
+                draining,
+            },
+        );
         if previous != Some(phase) {
             mm::record_transition(previous.unwrap_or(Phase::Unassigned), phase);
             mm::record_phase_counts(self.counts());
@@ -423,26 +472,28 @@ pub async fn apply(
     match action {
         Action::None => {}
         Action::Open { key, generation } => match store.open(&key, generation).await {
-            Ok(()) => {
-                let activated = lifecycle.lock().await.opened(&key, generation);
-                if activated {
-                    tracing::info!(
-                        stream = %key.stream,
-                        shard = key.shard,
-                        generation,
-                        "shard opened and now serving",
-                    );
-                } else {
-                    // Reassigned while we were recovering it. Not an error, and
-                    // deliberately not activated -- see `ShardLifecycle::opened`.
-                    tracing::info!(
-                        stream = %key.stream,
-                        shard = key.shard,
-                        generation,
-                        "shard was reassigned while opening; not activating",
-                    );
-                }
-            }
+            Ok(()) => match lifecycle.lock().await.opened(&key, generation) {
+                Opened::Activated => tracing::info!(
+                    stream = %key.stream,
+                    shard = key.shard,
+                    generation,
+                    "shard opened and now serving",
+                ),
+                Opened::Draining => tracing::info!(
+                    stream = %key.stream,
+                    shard = key.shard,
+                    generation,
+                    "shard opened for a move; shipping to its successor, not serving",
+                ),
+                // Reassigned while we were recovering it. Not an error, and
+                // deliberately not activated -- see `ShardLifecycle::opened`.
+                Opened::Stale => tracing::info!(
+                    stream = %key.stream,
+                    shard = key.shard,
+                    generation,
+                    "shard was reassigned while opening; not activating",
+                ),
+            },
             Err(err) => {
                 mm::record_open_failure();
                 lifecycle.lock().await.open_failed(&key, generation);

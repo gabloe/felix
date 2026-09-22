@@ -1623,7 +1623,8 @@ absent; they are listed in that script rather than here.
 | `FELIX_NODE_HEARTBEAT_INTERVAL_MS` | `5000` | How often a broker reports itself alive. |
 | `FELIX_NODE_EXPIRY_TIMEOUT_MS` | `15000` | Silence after which a node is considered gone. Placement will not promote a replica whose last report is older than roughly twice this. |
 | `FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS` | `2000` | How often expiry is evaluated. |
-| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement re-plans. Bounds how quickly a failover happens. |
+| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement re-plans. Bounds how quickly a failover happens, and how quickly a shard move advances a step. |
+| `FELIX_SHARD_MOVES_MAX_CONCURRENT` | `1` | Shard moves in flight across the cluster — a drain or a rebalance moves this many shards at once. Each is a full copy of a shard's log. `0` holds every move. |
 | `FELIX_CP_URL`, `FELIX_CP_SYNC_INTERVAL_MS` | — | Short aliases used by the demos and cluster harness. |
 
 ### Peer protocol, between brokers

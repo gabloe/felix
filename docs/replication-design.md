@@ -611,6 +611,68 @@ until it is upgraded or an operator acts.
 this broker has in flight. The halted listing drops an entry when its rebuild
 begins, since the follower is shipping again.
 
+### Planned handoff
+
+Everything above is about a leader that is *gone*. A leader that is alive and
+must give a shard up — its node is draining, or it holds more than its share —
+needs a different fence. The lease cannot be it: the lease is per node, the
+node keeps heartbeating, and a revocation that has to reach the old leader is
+the thing the lease design exists to avoid depending on.
+
+The fence is the assignment itself. The control plane writes the shard
+`draining` at a new generation, and the broker's rule for a draining
+assignment is that it never serves it: a shard already active at that
+generation is released in place, one that arrives draining is opened only so
+the log is recovered, and either way it lands `closed` and stays there however
+often the assignment is re-delivered. The next assignment, the one that names
+the successor, is not written until the old leader has said it stopped.
+
+Saying so rides the replica report. The leader keeps leading for replication
+while draining — the followers are caught up from it, and the successor is
+one of them — and reports `drained` once its log has held still with no
+publish in flight across two passes. Admission closed when the fence arrived,
+but a publish admitted just before may still be committing; the in-flight
+count covers what has been claimed, and the tail holding still covers the gap
+between admission and the claim, since an append wakes another pass. The
+control plane cuts over on that report and no earlier one: a report from
+before the fence, at the previous generation, describes a leader that was
+still writing.
+
+So the ordering is the same shape as report-before-mark. The successor is
+staged as a replica and caught up *before* the fence; the leader stops
+*before* it reports; the control plane names the successor *after* the
+report; and every step is an assignment the next pass reads back, so a
+control-plane restart resumes the move where it was. What a client sees is a
+window between the fence and the successor opening in which the shard's
+publishes are refused. That window is the cost of the fence, the same way
+the safety interval is the cost of the lease, and it is a refusal rather than
+an acknowledgement nobody can honour.
+
+A destination that dies before it leads is passed over: another caught-up
+replica, or the old leader itself, takes the shard at a new generation. A
+leader that dies mid-move is a failover, and the successor is a candidate
+there like any other replica. Neither path can name a broker holding less
+than the report said, because the report is the only input either reads.
+
+> `a_drained_broker_hands_its_shard_over_with_every_record` — an unreplicated
+> durable shard moves off a draining broker and every record acknowledged
+> before the drain is readable from the new owner.
+>
+> `records_acknowledged_during_a_move_survive_it` — publishes arriving through
+> the staging, fence and cut-over are either acknowledged and on the new owner,
+> or refused.
+>
+> `a_destination_that_dies_mid_transfer_does_not_take_the_shard` — the
+> staged successor is killed before the cut-over; the shard lands on a broker
+> that holds the log.
+>
+> `a_draining_shard_reports_drained_once_its_tail_holds_still` — the broker
+> side of the fence: no drained report until the tail has settled, and a late
+> record starts the wait again.
+
+The steps, their triggers and the policy that bounds them are in
+[control-plane.md](control-plane.md#moving-a-shard).
+
 ## What this does to the other M5 issues
 
 - **#111 (fenced leadership)** — this is now specific: the epoch is the

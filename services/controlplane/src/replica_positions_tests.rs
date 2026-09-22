@@ -44,6 +44,7 @@ fn report(stream: &str, caught_up: &[&str], reported_at_millis: u64) -> ReplicaR
             .collect::<BTreeMap<_, _>>(),
         caught_up,
         reported_at_millis,
+        drained: false,
     }
 }
 
@@ -208,6 +209,7 @@ async fn load_reads_the_store_on_the_stores_clock() {
             caught_up: ["broker-b".to_string()].into_iter().collect(),
             offsets: [("broker-b".to_string(), 7)].into_iter().collect(),
             reported_at_millis: now,
+            drained: false,
         })
         .await
         .expect("record");
@@ -217,4 +219,27 @@ async fn load_reads_the_store_on_the_stores_clock() {
         .expect("load");
     assert!(view.is_caught_up(&key, "broker-b"));
     assert_eq!(view.reported_offset(&key, "broker-b"), Some(7));
+}
+
+/// A drained report counts only at the generation it was made for, and only
+/// while it is fresh: the fence is a new generation, and a report from before
+/// it describes a leader that was still writing.
+#[test]
+fn a_drained_report_is_believed_at_its_generation_while_fresh() {
+    let liveness = liveness();
+    let mut drained = report("orders", &["broker-b"], 1_000);
+    drained.drained = true;
+    let positions = at(vec![drained.clone()], 1_000);
+    assert!(positions.is_drained(&key("orders"), drained.generation));
+    assert!(!positions.is_drained(&key("orders"), drained.generation + 1));
+    assert!(!positions.is_drained(&key("orders"), drained.generation - 1));
+
+    let stale = at(
+        vec![drained.clone()],
+        1_000 + report_ttl_millis(&liveness) + 1,
+    );
+    assert!(!stale.is_drained(&key("orders"), drained.generation));
+
+    let not_drained = at(vec![report("orders", &["broker-b"], 1_000)], 1_000);
+    assert!(!not_drained.is_drained(&key("orders"), drained.generation));
 }

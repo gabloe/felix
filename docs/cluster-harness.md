@@ -206,6 +206,14 @@ really something else passes for the wrong reason. It also pins that teardown
 reclaims a suspended broker, so a test panicking mid-fault fails on its own
 rather than wedging the suite.
 
+`drain_node` marks a broker draining through the same endpoint an operator
+uses, and `drain_until_empty` steps placement until it leads nothing — a move
+is three assignment writes with a catch-up between the first two, so a single
+`place_shards` does not finish one. `undrain_node` puts it back. `add_node`
+starts one more broker against the running control plane and waits until it
+is placeable, which is the join half of a rebalance. `shard_successors` reads
+each shard's staged destination, for a test that wants to kill it mid-move.
+
 Skewing a broker's clock is not supported. Lease expiry is read from the system
 clock, so testing expiry against a skewed one needs either an injectable clock
 in the broker or `libfaketime` around the process, and neither is in place.
@@ -318,27 +326,26 @@ a non-owner handled the publish locally instead of forwarding it
   (ingress=broker-0 owner=broker-2 shard=t1/ns/orders/0 generation=0)
 ```
 
-## A gap the suite does not paper over: the stale-ownership window
+## The stale-ownership window, and what closes it
 
-Ownership reaches a broker through its watch. Between the control plane moving a
-shard and the old owner noticing, that broker still believes it owns the shard
-and **serves publishes locally**. Those records land in its log and are invisible
-to subscribers on the new owner.
+Ownership reaches a broker through its watch, so between the control plane
+writing an assignment and the old owner reading it, that broker still believes
+it owns the shard. Two mechanisms keep that from becoming acknowledged-write
+loss, one per way a shard can change hands.
 
-Nothing in M4 closes this. There is no fencing, and the generation check protects
-only a *forwarded* publish — a stale ex-owner serving locally never forwards, so
-nothing checks it. The window is bounded by the broker's control-plane sync
-interval.
+An **unplanned** change — the leader is gone — is fenced by the lease: the
+control plane grants the next generation only after the old one's lease has
+lapsed with a margin, and the old leader stopped serving before that by its
+own clock.
 
-This is acknowledged-write loss, not merely a routing delay: the client is told
-the publish succeeded, and the record is durably on disk on a broker nobody will
-read it from. Tracked in
-[#239](https://github.com/gabloe/felix/issues/239).
-
-What is promised, and what `a_moved_shard_converges_on_the_new_owner` asserts, is
-**convergence**: the old owner starts forwarding within a bounded time. The test
-is deliberately written to converge rather than to wait long enough not to
-observe the window, so the gap stays visible.
+A **planned** change — the leader is alive and the shard is moved — is fenced
+by the assignment. The old owner is told to stop (`state: draining`) at a new
+generation, stops serving the shard the moment its watch delivers that, and
+reports once its log has stopped growing; the successor is named only after
+that report. In between, publishes to the shard are refused. `move_shard`
+drives exactly this, and `a_moved_shard_converges_on_the_new_owner` asserts the
+old owner ends up forwarding to the new one; `tests/rebalance.rs` asserts that
+nothing acknowledged across the move is lost.
 
 ## Using it from a test
 

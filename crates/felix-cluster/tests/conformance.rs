@@ -156,21 +156,11 @@ async fn a_forwarded_publish_is_still_authorized() -> Result<()> {
 /// A shard that moves converges: the old owner stops serving it locally and
 /// starts forwarding to the new one, within a bounded time.
 ///
-/// # The stale-ownership window is real
-///
-/// Ownership reaches a broker through its watch, so between the control plane
-/// moving a shard and the old owner noticing, that broker still believes it owns
-/// the shard and **serves publishes locally**. Those records land in its log and
-/// are invisible to subscribers on the new owner.
-///
-/// Nothing in M4 closes that window — there is no fencing, and the generation
-/// check only protects a *forwarded* publish, which is not what this is. The
-/// client is told the publish succeeded, so this is acknowledged-write loss:
-/// tracked in <https://github.com/gabloe/felix/issues/239>.
-///
-/// What is promised is convergence, and convergence is what this asserts. The
-/// test is deliberately written to converge rather than to wait long enough not
-/// to observe the window, so the gap stays visible.
+/// The move is a planned handoff -- staged, fenced, cut over -- so the old
+/// owner has stopped serving before the new one is named, and publishes in
+/// between are refused rather than written somewhere the new owner cannot
+/// see. What this asserts is the routing half: the old owner ends up
+/// forwarding. `tests/rebalance.rs` asserts the data half.
 #[serial]
 #[tokio::test]
 async fn a_moved_shard_converges_on_the_new_owner() -> Result<()> {

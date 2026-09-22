@@ -44,6 +44,7 @@ pub(crate) fn assignment(shard: u32, leader: &str) -> ShardAssignment {
         // a generation is checking the store ignored what the caller sent.
         generation: 999,
         state: ShardState::Assigning,
+        successor: None,
     }
 }
 
@@ -129,6 +130,8 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     a_report_from_a_superseded_leader_is_dropped(store).await;
     a_report_at_the_same_generation_is_an_update(store).await;
     a_report_needs_an_assignment_and_goes_with_it(store).await;
+    a_move_in_progress_is_persisted(store).await;
+    a_drained_report_is_kept(store).await;
 }
 
 fn report(shard: u32, generation: u64, caught_up: &[&str], at: u64) -> ReplicaReport {
@@ -138,6 +141,7 @@ fn report(shard: u32, generation: u64, caught_up: &[&str], at: u64) -> ReplicaRe
         caught_up: caught_up.iter().map(|n| n.to_string()).collect(),
         offsets: caught_up.iter().map(|n| (n.to_string(), 10)).collect(),
         reported_at_millis: at,
+        drained: false,
     }
 }
 
@@ -258,6 +262,7 @@ fn cache_assignment(shard: u32, leader: &str) -> ShardAssignment {
         replicas: Vec::new(),
         generation: 999,
         state: ShardState::Assigning,
+        successor: None,
     }
 }
 
@@ -479,18 +484,76 @@ async fn an_unsupported_state_transition_is_rejected(store: &dyn ControlPlaneSto
         .await
         .expect("assigning");
 
-    // Assigning -> Draining is not a move: nothing is serving yet.
-    let mut draining = assignment(0, "broker-x");
-    draining.state = ShardState::Draining;
+    // Assigning -> Active is fine; Active -> Assigning is not a move.
+    let mut active = assignment(0, "broker-x");
+    active.state = ShardState::Active;
+    store.put_shard_assignment(active).await.expect("active");
     let err = store
-        .put_shard_assignment(draining)
+        .put_shard_assignment(assignment(0, "broker-x"))
         .await
         .expect_err("bad transition");
     assert!(matches!(err, StoreError::Conflict(_)), "got {err:?}");
 
     let unchanged = store.get_shard_assignment(&key(0)).await.expect("get");
-    assert_eq!(unchanged.state, ShardState::Assigning);
-    assert_eq!(unchanged.generation, 0, "a rejected write moves nothing");
+    assert_eq!(unchanged.state, ShardState::Active);
+    assert_eq!(unchanged.generation, 1, "a rejected write moves nothing");
+}
+
+/// The steps of a planned move, as the store must carry them: the successor
+/// survives a round trip, a drain at any serving state is accepted, and the
+/// cut-over is a fresh `Assigning` naming the successor.
+async fn a_move_in_progress_is_persisted(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .put_shard_assignment(assignment(0, "broker-x"))
+        .await
+        .expect("assigning");
+
+    let mut staged = assignment(0, "broker-x");
+    staged.replicas = vec!["broker-y".to_string()];
+    staged.successor = Some("broker-y".to_string());
+    let written = store.put_shard_assignment(staged).await.expect("stage");
+    assert_eq!(written.successor.as_deref(), Some("broker-y"));
+    let read = store.get_shard_assignment(&key(0)).await.expect("get");
+    assert_eq!(read.successor.as_deref(), Some("broker-y"));
+
+    let mut not_a_replica = read.clone();
+    not_a_replica.successor = Some("broker-z".to_string());
+    let err = store
+        .put_shard_assignment(not_a_replica)
+        .await
+        .expect_err("a successor outside the replica set");
+    assert!(matches!(err, StoreError::Conflict(_)), "got {err:?}");
+
+    let mut fenced = read.clone();
+    fenced.state = ShardState::Draining;
+    store.put_shard_assignment(fenced).await.expect("fence");
+
+    let mut cut_over = assignment(0, "broker-y");
+    cut_over.state = ShardState::Assigning;
+    let written = store
+        .put_shard_assignment(cut_over)
+        .await
+        .expect("cut over");
+    assert_eq!(written.leader, "broker-y");
+    assert_eq!(written.successor, None);
+    assert_eq!(written.generation, 3);
+}
+
+/// The drained flag rides the report and is read back with it.
+async fn a_drained_report_is_kept(store: &dyn ControlPlaneStore) {
+    let shard = 2;
+    store
+        .put_shard_assignment(assignment(shard, "broker-x"))
+        .await
+        .expect("assign");
+    let mut drained = report(shard, 1, &["broker-y"], 7_000);
+    drained.drained = true;
+    store
+        .record_replica_report(drained.clone())
+        .await
+        .expect("record");
+    assert_eq!(report_for(store, shard).await, Some(unstamped(drained)));
 }
 
 /// The question placement asks when a node fails or is drained.
@@ -744,6 +807,7 @@ async fn deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(
         replicas: Vec::new(),
         generation: 0,
         state: ShardState::Assigning,
+        successor: None,
     };
     for shard in 0..2 {
         store

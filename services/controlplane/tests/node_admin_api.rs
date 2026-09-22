@@ -399,6 +399,7 @@ async fn seed_shards(store: &InMemoryStore) {
                 replicas: Vec::new(),
                 generation: 0,
                 state: ShardState::Active,
+                successor: None,
             })
             .await
             .expect("assign");

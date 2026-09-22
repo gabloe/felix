@@ -91,6 +91,7 @@ fn a_replica_report_is_restamped() {
         caught_up: ["broker-b".to_string()].into_iter().collect(),
         offsets: [("broker-b".to_string(), 10)].into_iter().collect(),
         reported_at_millis: 111,
+        drained: false,
     };
     let encoded = encode_command(&MetaCommand::RecordReplicaReport {
         report: report.clone(),
@@ -103,6 +104,7 @@ fn a_replica_report_is_restamped() {
             assert_eq!(
                 crate::model::ReplicaReport {
                     reported_at_millis: 111,
+                    drained: false,
                     ..stamped
                 },
                 report,

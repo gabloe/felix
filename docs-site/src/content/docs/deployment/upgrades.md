@@ -132,10 +132,9 @@ If it changes `FORMAT_VERSION`, back up first and do not plan to roll back.
 
 ## What this does not cover
 
-Topology, install steps, adding and draining a broker, replacing a persistent
-volume, and rebalancing. Rebalancing is not implemented — a shard whose leader
-is alive is never moved — so a procedure for it would be fiction, and the rest
-waits on the packaging work.
+Topology, install steps, and replacing a persistent volume, which wait on the
+packaging work. Adding, draining and removing a broker have their own page:
+[Adding, draining and removing brokers](/felix/deployment/scaling/).
 
 The two observable checks available during any upgrade:
 

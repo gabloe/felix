@@ -14,6 +14,7 @@ fn assignment() -> ShardAssignment {
         replicas: vec!["broker-b".to_string(), "broker-c".to_string()],
         generation: 7,
         state: ShardState::Active,
+        successor: None,
     }
 }
 
@@ -87,16 +88,50 @@ fn an_assignment_with_no_replicas_is_valid() {
     assert_eq!(a.validate(), Ok(()), "replication does not exist until M5");
 }
 
-/// Draining is only meaningful for a shard someone is serving, and a drained
-/// shard does not return to the same leader: placement writes a new assignment
-/// at a new generation instead.
+/// A drain is entered from either serving state and left only through a
+/// fresh `Assigning`: the shard never goes back to serving where it stands.
 #[test]
-fn only_a_serving_shard_can_drain() {
+fn a_drained_shard_leaves_only_through_a_new_assignment() {
     assert!(ShardState::Active.can_transition_to(ShardState::Draining));
-    assert!(!ShardState::Assigning.can_transition_to(ShardState::Draining));
+    assert!(ShardState::Assigning.can_transition_to(ShardState::Draining));
+    assert!(ShardState::Draining.can_transition_to(ShardState::Assigning));
     assert!(!ShardState::Draining.can_transition_to(ShardState::Active));
-    assert!(!ShardState::Draining.can_transition_to(ShardState::Assigning));
     assert!(!ShardState::Active.can_transition_to(ShardState::Assigning));
+}
+
+#[test]
+fn a_successor_must_be_a_replica_and_not_the_leader() {
+    let mut a = assignment();
+    a.successor = Some(a.leader.clone());
+    assert_eq!(
+        a.validate(),
+        Err(ShardValidationError::SuccessorIsLeader(a.leader.clone()))
+    );
+
+    let mut a = assignment();
+    a.successor = Some("broker-elsewhere".to_string());
+    assert_eq!(
+        a.validate(),
+        Err(ShardValidationError::SuccessorNotAReplica(
+            "broker-elsewhere".to_string()
+        ))
+    );
+
+    let mut a = assignment();
+    a.successor = a.replicas.first().cloned();
+    assert!(a.successor.is_some(), "the fixture needs a replica");
+    assert_eq!(a.validate(), Ok(()));
+}
+
+/// An assignment with no move in progress encodes exactly as it did before
+/// the field existed.
+#[test]
+fn an_idle_assignment_omits_the_successor() {
+    let a = assignment();
+    let json = serde_json::to_string(&a).expect("serialize");
+    assert!(!json.contains("successor"), "{json}");
+    let back: ShardAssignment = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(back.successor, None);
 }
 
 #[test]

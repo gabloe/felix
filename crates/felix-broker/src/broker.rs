@@ -211,6 +211,23 @@ pub struct ClaimedPublish {
     payloads: Vec<Bytes>,
     durable: Option<ClaimedDurable>,
     sample: bool,
+    in_flight: InFlight,
+}
+
+/// Counts a claimed publish until it completes or is dropped.
+struct InFlight(Arc<StreamState>);
+
+impl InFlight {
+    fn begin(state: &Arc<StreamState>) -> Self {
+        state.in_flight.fetch_add(1, Ordering::AcqRel);
+        Self(Arc::clone(state))
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl ClaimedPublish {
@@ -371,6 +388,24 @@ impl Broker {
     /// Durable storage, if this broker has any.
     pub fn durable_storage(&self) -> Option<&DurableStorage> {
         self.durable_storage.as_ref()
+    }
+
+    /// Publishes claimed on a stream shard and not yet completed. Zero for a
+    /// shard this broker has no state for.
+    pub async fn in_flight_publishes(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+    ) -> usize {
+        self.topics
+            .read()
+            .await
+            .get(&crate::keys::TopicKeyRef::new(
+                tenant_id, namespace, stream, shard,
+            ))
+            .map_or(0, |state| state.in_flight.load(Ordering::Acquire))
     }
 
     /// Where consumer groups keep their positions, and how long a claim stands.
@@ -561,6 +596,7 @@ impl Broker {
             payloads: payloads.to_vec(),
             durable: None,
             sample,
+            in_flight: InFlight::begin(&handle.state),
         };
         if payloads.is_empty() {
             return Ok(claimed);
@@ -601,7 +637,10 @@ impl Broker {
             payloads,
             durable,
             sample,
+            in_flight,
         } = claimed;
+        // Held to the end: the publish is in flight until fanout is done.
+        let _in_flight = in_flight;
         let payloads = payloads.as_slice();
         let stream_state = &handle.state;
 

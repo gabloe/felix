@@ -57,3 +57,22 @@ where
         tokio::time::sleep(POLL).await;
     }
 }
+
+/// Poll `probe` until it yields a value, or fail saying what never appeared.
+pub async fn until_some<T, F, Fut>(timeout: Duration, what: &str, mut probe: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Option<T>>,
+{
+    let timeout = budget(timeout);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(value) = probe().await {
+            return Ok(value);
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out after {timeout:?} waiting for {what}");
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}

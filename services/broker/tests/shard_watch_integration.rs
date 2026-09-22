@@ -184,6 +184,7 @@ impl Cluster {
                 replicas: Vec::new(),
                 generation: 0,
                 state,
+                successor: None,
             })
             .await
             .expect("assign");

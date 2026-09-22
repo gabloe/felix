@@ -31,6 +31,12 @@ pub enum ShardValidationError {
     DuplicateReplica(String),
     #[error("cannot move a shard from {from:?} to {to:?}")]
     UnsupportedTransition { from: ShardState, to: ShardState },
+    #[error("successor node is invalid: {0}")]
+    InvalidSuccessor(NodeValidationError),
+    #[error("successor {0:?} is the current leader")]
+    SuccessorIsLeader(String),
+    #[error("successor {0:?} is not in the replica set")]
+    SuccessorNotAReplica(String),
 }
 
 /// Where an assignment is between being decided and being served.
@@ -41,21 +47,24 @@ pub enum ShardState {
     Assigning,
     /// The leader is serving this shard.
     Active,
-    /// Ownership is moving elsewhere. The leader still serves until it stops.
+    /// Ownership is moving. The leader stops serving at this generation and
+    /// reports so; the next assignment names the successor.
     Draining,
 }
 
 impl ShardState {
     /// Whether `self` may move to `next`.
     ///
-    /// Draining is only meaningful for a shard someone is actually serving, and
-    /// a drained shard does not return to the same leader — placement writes a
-    /// new assignment, at a new generation, instead.
+    /// `Draining` is reachable from `Assigning` too: nothing reports `Active`
+    /// yet, and requiring it would cost every move an extra generation. A
+    /// drained shard leaves only through a fresh `Assigning`.
     pub fn can_transition_to(self, next: ShardState) -> bool {
         use ShardState::*;
         matches!(
             (self, next),
-            (Assigning, Assigning | Active) | (Active, Active | Draining) | (Draining, Draining)
+            (Assigning, Assigning | Active | Draining)
+                | (Active, Active | Draining)
+                | (Draining, Draining | Assigning)
         )
     }
 }
@@ -166,6 +175,11 @@ pub struct ShardAssignment {
     /// decision that placement has already replaced.
     pub generation: u64,
     pub state: ShardState,
+    /// Where this shard is moving to, while a move is in progress. Always one
+    /// of `replicas`; cleared by the assignment that makes it leader. In the
+    /// store so any instance can resume the move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub successor: Option<String>,
 }
 
 impl ShardAssignment {
@@ -184,6 +198,19 @@ impl ShardAssignment {
             }
             if !seen.insert(replica) {
                 return Err(ShardValidationError::DuplicateReplica(replica.clone()));
+            }
+        }
+        if let Some(successor) = &self.successor {
+            validate_node_id(successor).map_err(ShardValidationError::InvalidSuccessor)?;
+            if successor == &self.leader {
+                return Err(ShardValidationError::SuccessorIsLeader(successor.clone()));
+            }
+            // The catch-up gate reads the replica report, so a successor that
+            // is not a replica can never be found caught up.
+            if !self.replicas.contains(successor) {
+                return Err(ShardValidationError::SuccessorNotAReplica(
+                    successor.clone(),
+                ));
             }
         }
         Ok(())
@@ -247,4 +274,8 @@ pub struct ReplicaReport {
     /// The store's clock when it was recorded. Never the broker's, which would
     /// let a leader keep its own report alive.
     pub reported_at_millis: u64,
+    /// The leader has stopped serving at `generation` and its log will not
+    /// grow: the handoff may proceed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drained: bool,
 }
