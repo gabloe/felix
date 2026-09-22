@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790096712992,
+  "lastUpdate": 1790099732747,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13676,6 +13676,58 @@ window.BENCHMARK_DATA = {
             "range": "25673.17",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1166994.76\nmean: 1166067.68\nstdev: 25673.17\ncv: 2.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6cc582063dd9e61106dfd75e0b962e2a15f65e06",
+          "message": "ci: hold mermaid's major back to astro-mermaid's peer range (#633)\n\nThe astro group exists so astro, starlight, astro-mermaid and mermaid\nmove together, but a group only moves the packages that have an update.\n#630 took mermaid to 12 while astro-mermaid stayed at 2.1.0, whose peer\nrange is `^10 || ^11`, so `npm ci` failed to resolve and the docs deploy\nbroke on main until #632 reverted it.\n\nNothing in the config prevented that, and next Tuesday's run would\npropose it again. Ignore mermaid's major until astro-mermaid accepts it,\nand drop the ignore in the same change that raises astro-mermaid.",
+          "timestamp": "2026-09-22T10:53:16-07:00",
+          "tree_id": "aef99912b6283cfe17d0a0066fda57192330d083",
+          "url": "https://github.com/gabloe/felix/commit/6cc582063dd9e61106dfd75e0b962e2a15f65e06"
+        },
+        "date": 1790099731949,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 520207.26,
+            "range": "10508.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 520207.26\nmean: 514255.64\nstdev: 10508.28\ncv: 2.04%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 520207.26,
+            "range": "10508.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 520207.26\nmean: 514255.64\nstdev: 10508.28\ncv: 2.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 120634,
+            "range": "3662.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 120634.00\nmean: 119051.80\nstdev: 3662.88\ncv: 3.08%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1206340,
+            "range": "36628.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1206340.00\nmean: 1190517.99\nstdev: 36628.79\ncv: 3.08%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
