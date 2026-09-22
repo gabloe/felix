@@ -69,6 +69,14 @@ updates:
   # --- docs-site (Astro / Starlight) --------------------------------------
   # astro, @astrojs/starlight, astro-mermaid and mermaid are pinned exactly and
   # move together; a split bump breaks `npm run build` at check:mermaid.
+  #
+  # Grouping alone cannot keep that promise. A group moves the packages that
+  # have an update, not the ones that do not: #630 took mermaid to 12 while
+  # astro-mermaid stayed at 2.1.0, whose peer range is `^10 || ^11`, and
+  # `npm ci` then failed to resolve at all -- so the docs deploy broke on
+  # main until it was reverted. mermaid's major is therefore held back until
+  # astro-mermaid accepts it; drop the ignore in the same change that raises
+  # astro-mermaid.
   - package-ecosystem: "npm"
     directory: "/docs-site"
     schedule:
@@ -84,6 +92,10 @@ updates:
     labels: ["dependencies", "docs"]
     cooldown:
       default-days: 7
+    ignore:
+      # Capped by astro-mermaid's peer range, not by preference.
+      - dependency-name: "mermaid"
+        update-types: ["version-update:semver-major"]
     groups:
       astro:
         patterns: ["astro", "@astrojs/*", "astro-mermaid", "mermaid"]
