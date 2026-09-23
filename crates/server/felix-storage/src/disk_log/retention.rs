@@ -1,20 +1,22 @@
-// Retention: deleting the oldest sealed segments once a bound is exceeded.
-//
-// This runs on its own timer rather than from an append. Retention is bulk file
-// deletion — it unlinks whole segments and their indexes — and putting that on
-// the publish path would trade a bounded disk for an unbounded p999. The
-// rollover work is the cautionary tale: storage work sharing a lock with
-// appends is what makes appends wait on flushes.
-//
-// See `docs/durable-storage.md` for what a trimmed log means to a reader.
+//! Retention: deleting the oldest sealed segments once a bound is exceeded.
+//!
+//! This runs on its own timer rather than from an append. Retention is bulk file
+//! deletion — it unlinks whole segments and their indexes — and putting that on
+//! the publish path would trade a bounded disk for an unbounded p999. The
+//! rollover work is the cautionary tale: storage work sharing a lock with
+//! appends is what makes appends wait on flushes.
+//!
+//! See `docs/durable-storage.md` for what a trimmed log means to a reader.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Notify;
 
-use crate::disk_log::segments::RetentionOutcome;
 use crate::{Result, StorageError, metrics_names};
+
+use super::segments::RetentionOutcome;
+use super::{LogInner, now_micros};
 
 /// Background task that enforces retention on a timer.
 ///
@@ -102,10 +104,19 @@ impl RetentionTask {
     }
 }
 
-/// Micros since the Unix epoch, matching `AppendRecord::timestamp_micros`.
-pub fn now_micros() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_micros().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0)
+impl LogInner {
+    /// One retention pass, on a blocking thread.
+    ///
+    /// Deleting files is a syscall per file and can block on a busy device, so
+    /// it never runs on a reactor worker — the same rule the rollover path
+    /// follows for its flushes.
+    pub(super) async fn sweep_retention(self: Arc<Self>) -> Result<RetentionOutcome> {
+        let inner = Arc::clone(&self);
+        tokio::task::spawn_blocking(move || {
+            let now = now_micros();
+            inner.segments.write().enforce_retention(now)
+        })
+        .await
+        .map_err(|err| StorageError::Io(std::io::Error::other(err)))?
+    }
 }
