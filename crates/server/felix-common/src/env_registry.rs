@@ -213,22 +213,6 @@ pub const KNOWN_VARS: &[&str] = &[
     "FELIX_WORKER_THREADS",
 ];
 
-/// Levenshtein distance, bounded — only used to suggest a name for a typo.
-fn distance(a: &str, b: &str) -> usize {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut current = vec![0usize; b.len() + 1];
-    for (i, &ca) in a.iter().enumerate() {
-        current[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            current[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
-        }
-        std::mem::swap(&mut prev, &mut current);
-    }
-    prev[b.len()]
-}
-
 /// Known names worth suggesting for `name`, best first.
 ///
 /// Empty when nothing is close enough — suggesting the nearest arbitrary string
@@ -267,14 +251,6 @@ pub fn suggestions(name: &str) -> Vec<&'static str> {
         .min_by_key(|(d, _)| *d)
         .map(|(_, known)| vec![known])
         .unwrap_or_default()
-}
-
-/// Whether every element of `needle` appears in `haystack`, in order.
-fn is_subsequence(needle: &[&str], haystack: &[&str]) -> bool {
-    let mut it = haystack.iter();
-    needle
-        .iter()
-        .all(|segment| it.any(|candidate| candidate == segment))
 }
 
 /// `FELIX_*` variables that are set in the environment and read by nothing,
@@ -316,6 +292,29 @@ pub fn unrecognised_warnings() -> Vec<String> {
         .collect()
 }
 
+/// Levenshtein distance, bounded — only used to suggest a name for a typo.
+fn distance(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0usize; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            current[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut current);
+    }
+    prev[b.len()]
+}
+
+/// Whether every element of `needle` appears in `haystack`, in order.
+fn is_subsequence(needle: &[&str], haystack: &[&str]) -> bool {
+    let mut it = haystack.iter();
+    needle
+        .iter()
+        .all(|segment| it.any(|candidate| candidate == segment))
+}
+
 #[cfg(test)]
-#[path = "env_registry_tests.rs"]
 mod tests;
