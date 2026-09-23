@@ -508,14 +508,44 @@ impl ClusterClient {
             .with_context(|| format!("ask how many shards {stream} has"))
     }
 
-    async fn subscribe_sharded_inner(
+    /// One consumer group read across **every** shard of a stream.
+    ///
+    /// A group is bound to one shard, and only that shard's leader serves it,
+    /// so this keeps one group per shard and follows each shard's own redirect
+    /// to its leader. See [`crate::ShardedGroup`] for how shards are visited
+    /// and what ordering is promised.
+    ///
+    /// Needs a broker that advertises `FEATURE_STREAM_SHARDS`, to learn the
+    /// shard count, and brokers that answer a group request for a shard they do
+    /// not lead with a redirect rather than a refusal.
+    pub async fn group_sharded(
         self: &Arc<Self>,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-        start: Option<felix_wire::StartPosition>,
-        resume: Option<ShardOffsets>,
-    ) -> Result<ShardedSubscription> {
+        group: &str,
+    ) -> Result<crate::ShardedGroup> {
+        let shards = self
+            .stream_shard_count(tenant_id, namespace, stream)
+            .await?;
+        Ok(crate::ShardedGroup::new(
+            Arc::clone(self),
+            tenant_id,
+            namespace,
+            stream,
+            group,
+            shards,
+        ))
+    }
+
+    /// How many shards a stream has, reconnecting once if the broker in hand
+    /// cannot answer.
+    async fn stream_shard_count(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<u32> {
         // Asking costs a round trip to whichever broker this client holds, and
         // that broker can be the one that just died. Reconnect and ask again
         // rather than reporting its death as an answer about the stream —
@@ -537,6 +567,20 @@ impl ClusterClient {
             shards > 0,
             "the broker knows of no stream {stream} in {tenant_id}/{namespace}"
         );
+        Ok(shards)
+    }
+
+    async fn subscribe_sharded_inner(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<felix_wire::StartPosition>,
+        resume: Option<ShardOffsets>,
+    ) -> Result<ShardedSubscription> {
+        let shards = self
+            .stream_shard_count(tenant_id, namespace, stream)
+            .await?;
         crate::client::sharded::subscribe_sharded(
             self, tenant_id, namespace, stream, shards, start, resume,
         )

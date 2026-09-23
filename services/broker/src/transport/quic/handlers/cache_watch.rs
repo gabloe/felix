@@ -53,7 +53,7 @@ pub(crate) struct WatchResponder<'a> {
 }
 
 impl WatchResponder<'_> {
-    async fn send(&self, message: Message) -> Result<()> {
+    pub(crate) async fn send(&self, message: Message) -> Result<()> {
         super::publish::handle_ack_enqueue_result(
             send_outgoing_critical(
                 self.out_ack_tx,

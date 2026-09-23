@@ -1295,6 +1295,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 {
                     return Ok(false);
                 }
+                if let Some(answer) = group_redirect(
+                    &publish_ctx,
+                    peer_features,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                ) {
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    }
+                    .send(answer)
+                    .await?;
+                    continue;
+                }
                 let polled = crate::group_ops::poll(
                     &broker,
                     &publish_ctx,
@@ -1373,6 +1392,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 {
                     return Ok(false);
                 }
+                if let Some(answer) = group_redirect(
+                    &publish_ctx,
+                    peer_features,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                ) {
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    }
+                    .send(answer)
+                    .await?;
+                    continue;
+                }
                 if let Err(reason) = crate::group_ops::settle(
                     &broker,
                     &publish_ctx,
@@ -1440,6 +1478,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 {
                     return Ok(false);
                 }
+                if let Some(answer) = group_redirect(
+                    &publish_ctx,
+                    peer_features,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                ) {
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    }
+                    .send(answer)
+                    .await?;
+                    continue;
+                }
                 if let Err(reason) = crate::group_ops::settle(
                     &broker,
                     &publish_ctx,
@@ -1505,6 +1562,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 .await?
                 {
                     return Ok(false);
+                }
+                if let Some(answer) = group_redirect(
+                    &publish_ctx,
+                    peer_features,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                ) {
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    }
+                    .send(answer)
+                    .await?;
+                    continue;
                 }
                 let listed = crate::group_ops::dead_letters(
                     &broker,
@@ -1580,6 +1656,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 {
                     return Ok(false);
                 }
+                if let Some(answer) = group_redirect(
+                    &publish_ctx,
+                    peer_features,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                ) {
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    }
+                    .send(answer)
+                    .await?;
+                    continue;
+                }
                 if let Err(reason) = crate::group_ops::manage_dead_letter(
                     &broker,
                     &publish_ctx,
@@ -1646,6 +1741,25 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 .await?
                 {
                     return Ok(false);
+                }
+                if let Some(answer) = group_redirect(
+                    &publish_ctx,
+                    peer_features,
+                    &tenant_id,
+                    &namespace,
+                    &stream,
+                    shard,
+                ) {
+                    crate::transport::quic::handlers::cache_watch::WatchResponder {
+                        out_ack_tx: &out_ack_tx,
+                        out_ack_depth: &out_ack_depth,
+                        ack_throttle_tx: &ack_throttle_tx,
+                        ack_timeout_state: &ack_timeout_state,
+                        cancel_tx: &cancel_tx,
+                    }
+                    .send(answer)
+                    .await?;
+                    continue;
                 }
                 if let Err(reason) = crate::group_ops::manage_dead_letter(
                     &broker,
@@ -1858,6 +1972,38 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // `graceful_close` only tracks EOF from the peer. Any other early-exit path returns false
     // (protocol error) or Err (hard failure).
     Ok(graceful_close)
+}
+
+/// A group operation for a shard another broker leads, answered with where to
+/// go instead of refused.
+///
+/// Only a client that offered `FEATURE_REDIRECT` gets it; the rest keep the
+/// plain refusal they always had. Every group request travels on its own
+/// stream, so a `NotLeader` there answers exactly that request.
+fn group_redirect(
+    publish_ctx: &PublishContext,
+    peer_features: u32,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+) -> Option<Message> {
+    if !felix_wire::supports_feature(peer_features, felix_wire::FEATURE_REDIRECT) {
+        return None;
+    }
+    match crate::transport::quic::handlers::subscribe::redirect_for(
+        publish_ctx.ingress.as_deref(),
+        publish_ctx.client_endpoints.as_deref(),
+        tenant_id,
+        namespace,
+        stream,
+        shard,
+        crate::shard_watch::ShardKind::Stream,
+        peer_features,
+    ) {
+        answer @ Some(Message::NotLeader { .. }) => answer,
+        _ => None,
+    }
 }
 
 async fn send_control_error(

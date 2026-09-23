@@ -10,5 +10,6 @@ pub(crate) mod idempotent;
 pub(crate) mod inprocess;
 pub(crate) mod publisher;
 pub(crate) mod sharded;
+pub(crate) mod sharded_group;
 pub(crate) mod sharding;
 pub(crate) mod subscription;

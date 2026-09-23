@@ -1368,6 +1368,18 @@ impl Client {
             Some(Message::Error { message }) => {
                 Err(anyhow::anyhow!("group request refused: {message}"))
             }
+            // Typed, so a caller can follow it: only the shard's leader holds
+            // its groups, and this names which broker that is.
+            Some(Message::NotLeader {
+                node_id,
+                addr,
+                generation,
+            }) => Err(NotLeaderError {
+                node_id,
+                addr,
+                generation,
+            }
+            .into()),
             Some(other) => {
                 // The exchange is one request on one stream, so an answer
                 // carrying a different id belongs to nothing this sent.

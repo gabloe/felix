@@ -160,10 +160,40 @@ It needs a broker advertising `FEATURE_STREAM_SHARDS`, because the shard count
 comes from asking one. A broker that has never heard of the stream reports zero
 shards and the call fails rather than reading shard 0 and calling it the stream.
 
+## A consumer group across every shard
+
+A group is bound to one shard, and only that shard's leader can serve it: the
+group's cursor and its claims live there. `ClusterClient::group_sharded` keeps
+one group per shard and follows each shard's redirect to its leader:
+
+```rust,no_run
+# async fn example(cluster: std::sync::Arc<felix_client::ClusterClient>) -> anyhow::Result<()> {
+let group = cluster.group_sharded("t1", "default", "jobs", "workers").await?;
+loop {
+    for claimed in group.poll(32).await? {
+        // `claimed.shard` travels with the record, so the ack goes to the
+        // broker that holds that shard's group.
+        group.ack(&claimed).await?;
+    }
+}
+# }
+```
+
+- **Each poll takes one shard's batch, visiting shards in turn.** Every shard
+  is reached and none can starve the rest; an empty answer means no shard had
+  anything.
+- **Ordering is per shard.** As with `subscribe_sharded`, records from
+  different shards arrive in no particular order relative to each other.
+- **A shard that cannot be polled fails the poll** rather than being skipped,
+  because a skipped shard looks exactly like an empty one.
+
+It needs brokers that answer a group request for a shard they do not lead with
+a redirect, which is any broker from this release on.
+
 ## Redirects
 
-A subscribe sent to a broker that does not own the shard is answered with a
-redirect naming the one that does. `ClusterClient::subscribe` follows it — up to
+A subscribe or a consumer-group request sent to a broker that does not own the
+shard is answered with a redirect naming the one that does. `ClusterClient::subscribe` follows it — up to
 three hops, never revisiting a broker within one attempt, because a cluster
 mid-rebalance can otherwise bounce a client between two brokers that disagree.
 
