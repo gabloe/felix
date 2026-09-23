@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790195297665,
+  "lastUpdate": 1790196232874,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -17754,6 +17754,72 @@ window.BENCHMARK_DATA = {
             "range": "278.39",
             "unit": "us",
             "extra": "trials: 5\nmedian: 453.00\nmean: 601.20\nstdev: 278.39\ncv: 46.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16cd529169b69185253b363e2fb1da049fc02668",
+          "message": "feat(client): one consumer group across every shard of a stream (#649)\n\n* feat(client): one consumer group across every shard of a stream\n\nCloses #610. A group is bound to one shard and only that shard's leader can\nserve it, so consuming a multi-shard stream through a group meant finding\neach shard's owner and routing every ack by hand. Worse, a non-leader\nanswered a group request with a prose refusal, so there was nothing typed to\nfollow.\n\nThe broker now answers all six group requests for a shard it does not lead\nwith `NotLeader`, to clients that offered FEATURE_REDIRECT (everyone else\nkeeps the old refusal). Each group request has its own stream, so the\nredirect needs no request id. The client maps it to NotLeaderError.\n\n`ClusterClient::group_sharded` returns a `ShardedGroup`: one group per shard,\neach shard's leader found by following its redirect and remembered until it\nfails. `poll` visits shards in turn and returns one shard's batch, tagged\nwith the shard, so `ack`/`nack` go back to the right leader.\n\n* style: rustfmt the sharded group test",
+          "timestamp": "2026-09-23T13:41:10-07:00",
+          "tree_id": "ceda461f8ebc7a9a9bf1d77f0803077a024d9b41",
+          "url": "https://github.com/gabloe/felix/commit/16cd529169b69185253b363e2fb1da049fc02668"
+        },
+        "date": 1790196230756,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 124,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 124.00\nmean: 123.20\nstdev: 1.64\ncv: 1.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 169,
+            "range": "30.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 181.60\nstdev: 30.49\ncv: 16.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 203,
+            "range": "75.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 233.80\nstdev: 75.98\ncv: 32.50%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 167,
+            "range": "1.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 167.60\nstdev: 1.95\ncv: 1.16%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 347,
+            "range": "81.50",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 347.00\nmean: 384.40\nstdev: 81.50\ncv: 21.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 653,
+            "range": "598.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 653.00\nmean: 1026.80\nstdev: 598.67\ncv: 58.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
