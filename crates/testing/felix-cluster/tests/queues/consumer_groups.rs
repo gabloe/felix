@@ -5,7 +5,7 @@
 //! a shard may serve its groups — two brokers each keeping their own in-flight
 //! state would each hand out the same records, and neither would know.
 //!
-//! Run with `cargo test -p felix-cluster --test consumer_groups`.
+//! Run with `cargo test -p felix-cluster --test queues consumer_groups::`.
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
 use serial_test::serial;
 

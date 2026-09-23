@@ -6,7 +6,7 @@
 //! to act on. `docs/subscribe-routing.md` records the decision: redirect to the
 //! owner rather than proxy for it.
 //!
-//! Run with `cargo test -p felix-cluster --test redirect`.
+//! Run with `cargo test -p felix-cluster --test routing redirect::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

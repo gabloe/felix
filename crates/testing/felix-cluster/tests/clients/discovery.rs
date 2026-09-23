@@ -6,7 +6,7 @@
 //! the seam: what the client is told, what it does with it, and whether the one
 //! address it started from can then be taken away.
 //!
-//! Run with `cargo test -p felix-cluster --test discovery`.
+//! Run with `cargo test -p felix-cluster --test clients discovery::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

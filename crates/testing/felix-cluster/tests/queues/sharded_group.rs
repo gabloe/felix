@@ -6,7 +6,7 @@
 //! `ClusterClient::group_sharded` does that by following each shard's
 //! `NotLeader`.
 //!
-//! Run with `cargo test -p felix-cluster --test sharded_group`.
+//! Run with `cargo test -p felix-cluster --test queues sharded_group::`.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;

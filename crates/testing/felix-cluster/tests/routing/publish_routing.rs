@@ -6,7 +6,7 @@
 //! broker, a re-encrypt to the owner and a decrypt there -- measured at roughly
 //! half the throughput per core (#536).
 //!
-//! Run with `cargo test -p felix-cluster --test publish_routing`.
+//! Run with `cargo test -p felix-cluster --test routing publish_routing::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

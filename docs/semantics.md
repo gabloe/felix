@@ -261,7 +261,7 @@ An operation this broker cannot route is refused, and a read it cannot route is
 an error rather than a miss — reporting a miss would let a client conclude a key
 does not exist when it does, on the owner.
 
-> `crates/testing/felix-cluster/tests/cache_routing.rs`, including
+> `crates/testing/felix-cluster/tests/caches/cache_routing.rs`, including
 > `a_value_written_through_one_broker_is_readable_through_every_other` and
 > `two_brokers_writing_one_key_do_not_diverge`.
 
@@ -270,7 +270,7 @@ above one has its log shipped to followers exactly as a stream's is, and a value
 written before the owning broker dies is readable from the replica promoted in
 its place.
 
-> `crates/testing/felix-cluster/tests/cache_failover.rs::a_cache_value_survives_the_loss_of_its_owner`.
+> `crates/testing/felix-cluster/tests/caches/cache_failover.rs::a_cache_value_survives_the_loss_of_its_owner`.
 
 **A key or prefix can be watched** (#348). `cache_watch` — negotiated as
 `FEATURE_CACHE_WATCH`, and offered only by a log-backed cache — delivers each
@@ -304,7 +304,7 @@ and the watch is live on it.
 > `a_retained_watch_delivers_current_state_then_live_under_concurrent_writes`,
 > `a_retained_watch_on_an_empty_key_reports_no_value` and
 > `a_retained_value_survives_a_restart`;
-> `crates/testing/felix-cluster/tests/cache_failover.rs::a_retained_watch_survives_the_loss_of_the_owner`.
+> `crates/testing/felix-cluster/tests/caches/cache_failover.rs::a_retained_watch_survives_the_loss_of_the_owner`.
 
 **A counter folds deltas into a durable sum** (#350). `counter_add` /
 `counter_get`, negotiated as `FEATURE_COUNTERS` and offered only with durable
@@ -322,7 +322,7 @@ acknowledgement double-counts — deltas carry no dedupe identity, and
 > `an_add_answers_with_the_sum_including_it` and
 > `a_counter_survives_a_restart`;
 > `crates/server/felix-storage/src/counter_log/tests.rs::compaction_moves_neither_the_sum_nor_the_offsets`;
-> `crates/testing/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
+> `crates/testing/felix-cluster/tests/caches/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
 
 A cache declares a consistency level, as a stream does, and it defaults to
 `Leader`: a write is acknowledged once durable on the leader and replication
@@ -330,7 +330,7 @@ follows, so losing the leader between the acknowledgement and the ship loses
 the write. Under `Quorum` a put or delete is acknowledged only once a majority
 of the shard's replicas hold it, and survives the loss of its leader.
 
-> `crates/testing/felix-cluster/tests/cache_failover.rs::a_quorum_acknowledged_cache_write_survives_its_leader`
+> `crates/testing/felix-cluster/tests/caches/cache_failover.rs::a_quorum_acknowledged_cache_write_survives_its_leader`
 > and `a_quorum_cache_write_without_a_majority_is_refused`.
 
 Counter updates are the exception: the counter log feeds no quorum mark, so a
@@ -385,7 +385,7 @@ Stated because a guarantee without its failure model is a slogan.
 
   > `a_re_sent_batch_lands_once`, `a_non_leader_names_the_leader`, and
   > `a_gap_is_refused_with_the_expected_sequence` in
-  > `crates/testing/felix-cluster/tests/idempotent.rs`, on a `Quorum` stream replicated
+  > `crates/testing/felix-cluster/tests/clients/idempotent.rs`, on a `Quorum` stream replicated
   > three ways; `racing_re_sends_append_once` in `crates/server/felix-broker` for the
   > two re-sends that arrive at once.
 - **No cross-region ordering or routing guarantees.**
@@ -426,7 +426,7 @@ Stated because a guarantee without its failure model is a slogan.
   same generation. A promoted replica resumes each group where it had reached,
   lists what it had abandoned, and serves an operator's redrive.
 
-  > `crates/testing/felix-cluster/tests/consumer_groups.rs`, including
+  > `crates/testing/felix-cluster/tests/queues/consumer_groups.rs`, including
   > `a_group_position_survives_a_leader_failover` and
   > `a_dead_letter_survives_a_leader_failover`.
 - **Retention is per stream and unbounded by default.** A stream with no

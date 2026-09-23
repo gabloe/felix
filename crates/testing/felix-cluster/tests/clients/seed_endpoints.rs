@@ -5,7 +5,7 @@
 //! while every other broker sits there able to serve. These cover the seam
 //! between "the cluster is fine" and "the application can tell".
 //!
-//! Run with `cargo test -p felix-cluster --test seed_endpoints`.
+//! Run with `cargo test -p felix-cluster --test clients seed_endpoints::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

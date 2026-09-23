@@ -5,7 +5,7 @@
 //! on — that a record acknowledged under `Quorum` is still there after the
 //! broker that acknowledged it is gone.
 //!
-//! Run with `cargo test -p felix-cluster --test failover`.
+//! Run with `cargo test -p felix-cluster --test failures failover::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

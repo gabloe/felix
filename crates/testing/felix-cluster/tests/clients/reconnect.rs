@@ -4,7 +4,7 @@
 //! pools to that broker did not. These cover the seam an application actually
 //! sits on: not "did the cluster recover" but "could the program carry on".
 //!
-//! Run with `cargo test -p felix-cluster --test reconnect`.
+//! Run with `cargo test -p felix-cluster --test clients reconnect::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

@@ -10,7 +10,7 @@
 //! the one fault where the cluster's account of itself and the truth disagree
 //! without anything looking broken.
 //!
-//! Run with `cargo test -p felix-cluster --test partition`.
+//! Run with `cargo test -p felix-cluster --test failures partition::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

@@ -160,7 +160,7 @@ async fn a_forwarded_publish_is_still_authorized() -> Result<()> {
 /// owner has stopped serving before the new one is named, and publishes in
 /// between are refused rather than written somewhere the new owner cannot
 /// see. What this asserts is the routing half: the old owner ends up
-/// forwarding. `tests/rebalance.rs` asserts the data half.
+/// forwarding. `tests/routing/rebalance.rs` asserts the data half.
 #[serial]
 #[tokio::test]
 async fn a_moved_shard_converges_on_the_new_owner() -> Result<()> {

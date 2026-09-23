@@ -8,7 +8,7 @@
 //! on. That is the case worth injecting, and it is what `pause_node` exists
 //! for.
 //!
-//! Run with `cargo test -p felix-cluster --test fencing`.
+//! Run with `cargo test -p felix-cluster --test failures fencing::`.
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};

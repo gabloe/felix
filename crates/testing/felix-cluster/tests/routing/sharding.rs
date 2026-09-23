@@ -7,7 +7,7 @@
 //!
 //! These are the tests that could not previously be written.
 //!
-//! Run with `cargo test -p felix-cluster --test sharding`.
+//! Run with `cargo test -p felix-cluster --test routing sharding::`.
 use std::collections::HashSet;
 use std::time::Duration;
 

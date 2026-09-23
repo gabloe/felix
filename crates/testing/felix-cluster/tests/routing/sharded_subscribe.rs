@@ -7,7 +7,7 @@
 //! `ClusterClient::subscribe_sharded` does that. These are the tests for what
 //! it promises — and, as much, for what it refuses to promise.
 //!
-//! Run with `cargo test -p felix-cluster --test sharded_subscribe`.
+//! Run with `cargo test -p felix-cluster --test routing sharded_subscribe::`.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;

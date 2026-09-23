@@ -6,7 +6,7 @@
 //! harness's control plane does not run the reconciler on a timer -- and
 //! reads back through the new owner what was acknowledged through the old.
 //!
-//! Run with `cargo test -p felix-cluster --test rebalance`.
+//! Run with `cargo test -p felix-cluster --test routing rebalance::`.
 use std::collections::BTreeSet;
 use std::time::Duration;
 

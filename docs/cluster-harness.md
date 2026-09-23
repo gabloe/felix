@@ -199,7 +199,7 @@ than committing to a shard someone else now leads. Unix only; there is no
 equivalent elsewhere that leaves the process holding its state, and a test that
 quietly did something weaker would be worse than one that does not run.
 
-`crates/testing/felix-cluster/tests/faults.rs` asserts each fault is the fault it
+`crates/testing/felix-cluster/tests/failures/faults.rs` asserts each fault is the fault it
 claims — a paused broker stops answering *and* stays alive, a resumed one comes
 back, a kill returns immediately — because a scenario built on a fault that is
 really something else passes for the wrong reason. It also pins that teardown
@@ -344,7 +344,7 @@ generation, stops serving the shard the moment its watch delivers that, and
 reports once its log has stopped growing; the successor is named only after
 that report. In between, publishes to the shard are refused. `move_shard`
 drives exactly this, and `a_moved_shard_converges_on_the_new_owner` asserts the
-old owner ends up forwarding to the new one; `tests/rebalance.rs` asserts that
+old owner ends up forwarding to the new one; `tests/routing/rebalance.rs` asserts that
 nothing acknowledged across the move is lost.
 
 ## Using it from a test

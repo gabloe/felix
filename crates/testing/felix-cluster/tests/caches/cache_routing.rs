@@ -8,7 +8,7 @@
 //! These tests are written from the client's side on purpose. The unit tests
 //! prove the routing decision; these prove the thing a user would notice.
 //!
-//! Run with `cargo test -p felix-cluster --test cache_routing`.
+//! Run with `cargo test -p felix-cluster --test caches cache_routing::`.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;

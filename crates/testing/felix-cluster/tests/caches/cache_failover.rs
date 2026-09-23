@@ -7,7 +7,7 @@
 //! cache reaches those records through an index rather than by replaying, and
 //! a follower's index is built from a log that grew underneath it.
 //!
-//! Run with `cargo test -p felix-cluster --test cache_failover`.
+//! Run with `cargo test -p felix-cluster --test caches cache_failover::`.
 use std::time::Duration;
 
 use felix_cluster::{CacheSpec, Cluster, ClusterConfig, StreamSpec};

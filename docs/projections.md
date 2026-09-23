@@ -171,7 +171,7 @@ shard's, shipped by the same driver pass and gating nothing.
 > `compaction_moves_neither_the_sum_nor_the_offsets` and
 > `the_sum_survives_a_restart`;
 > `services/felix-broker-service/tests/counters.rs::an_add_answers_with_the_sum_including_it`;
-> `crates/testing/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
+> `crates/testing/felix-cluster/tests/caches/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
 
 ## Where this stops being true
 

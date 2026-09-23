@@ -7,7 +7,7 @@
 //! several sockets, which are several drivers -- but only if clients actually
 //! spread across them, which is what these cover.
 //!
-//! Run with `cargo test -p felix-cluster --test listeners`.
+//! Run with `cargo test -p felix-cluster --test clients listeners::`.
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
 use serial_test::serial;
 
