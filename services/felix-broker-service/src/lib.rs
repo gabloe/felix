@@ -16,22 +16,21 @@
 //!
 //! [`serving::quic`] accepts connections, decodes frames and runs the
 //! per-message work, and [`serving::auth`] checks the token on each action.
-//! [`shards::routing`] answers the question every publish asks first: is this
-//! shard mine, should it be forwarded, or can nobody serve it right now?
-//! `serving::cache_routing` is the same question for a cache key,
-//! `serving::group_ops` and [`serving::core_shards`] are the queue and shard
-//! operations behind the handlers, and [`cluster::client_endpoints`] is what
-//! this broker tells a client about where to connect.
+//! A publish for a shard another broker owns goes there through
+//! [`serving::forward`]. `serving::cache_routing` decides which broker answers
+//! for a cache key, and `serving::group_ops` and [`serving::core_shards`] are
+//! the queue and shard operations behind the handlers.
 //!
 //! # 2. Belonging to a cluster
 //!
 //! [`cluster::membership`] registers this node and heartbeats;
 //! [`cluster::credential`] holds the token it presents and refreshes it before
 //! expiry. [`cluster::catalog_sync`] syncs the metadata catalog,
-//! [`cluster::node_catalog`] turns node ids into addresses, and
-//! [`cluster::lease`] is the authority to serve at all — renewed by the same
-//! heartbeat, checked cheaply on admission and against the clock again before
-//! any record is committed.
+//! [`cluster::node_catalog`] turns node ids into addresses,
+//! [`cluster::client_endpoints`] is what this broker tells a client about where
+//! to connect, and [`cluster::lease`] is the authority to serve at all —
+//! renewed by the same heartbeat, checked cheaply on admission and against the
+//! clock again before any record is committed.
 //!
 //! # 3. Owning shards
 //!
@@ -39,39 +38,38 @@
 //! then by change feed. [`shards::lifecycle`] is what this broker has actually
 //! *done* about that, which is deliberately separate state: a shard serves
 //! only once its log is open, and only at the generation the control plane
-//! currently names.
+//! currently names. [`shards::routing`] answers the question every publish
+//! asks first: is this shard mine, should it be forwarded, or can nobody serve
+//! it right now?
 //!
 //! # 4. Replicating
 //!
 //! [`replication`] ships committed records to the followers of every shard
-//! this broker leads, over the broker-to-broker transport in [`peer`]. It is
-//! also what tells the control plane which replicas hold the log, which is
-//! what a failover and a planned move both read.
+//! this broker leads, and applies them on a follower, over the broker-to-broker
+//! transport in [`peer`]. It is also what tells the control plane which
+//! replicas hold the log, which is what a failover and a planned move both
+//! read.
 //!
 //! [`config`] parses the environment and decides where logs live, and
-//! [`observability::timings`] is the opt-in per-stage latency instrumentation.
+//! [`observability`] serves metrics and health and holds the opt-in per-stage
+//! latency instrumentation in [`observability::timings`].
 //!
 //! Each module owns its own tests at `<module>/tests.rs` and its own metrics
 //! at `<module>/metrics.rs`.
 
-// --- 1. Serving clients -------------------------------------------------
 pub mod serving;
 
-// --- 2. Belonging to a cluster ------------------------------------------
 pub mod cluster;
 
-// --- 3. Owning shards ---------------------------------------------------
 pub mod shards;
 
-// --- 4. Replicating -----------------------------------------------------
 pub mod peer;
 pub mod replication;
 
-// --- Process-wide -------------------------------------------------------
 pub mod config;
 pub mod node;
 pub mod observability;
 
+// HTTP helpers shared by the unit tests of several modules.
 #[cfg(test)]
-// Test utilities live alongside the library for reuse in integration tests.
 mod test_support;
