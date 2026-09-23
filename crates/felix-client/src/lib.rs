@@ -1,24 +1,38 @@
-// High-level client for talking to a Felix broker.
-// Provides both an in-process wrapper and a QUIC-based network client.
-//
-// IMPORTANT CLIENT-SIDE DESIGN INTENT
-// ----------------------------------
-// This crate is intentionally *not* a general-purpose “do anything concurrently”
-// QUIC client. It is a latency-oriented client with explicit serialization
-// points to avoid hidden contention:
-//
-// - Quinn `SendStream` is effectively a single-writer resource. If multiple tasks
-//   write concurrently, Quinn (or our layers) must serialize those writes via
-//   internal locking, which becomes a performance cliff under load. Quinn has a mutex
-//   per `SendStream` for this purpose. We want to avoid that lock contention entirely.
-//
-// Therefore, for correctness + predictable performance, we build explicit
-// single-writer loops and communicate via bounded queues.
-//
-// If we want more parallelism, we need to scale by increasing:
-// - number of connections (pool size), and/or
-// - number of independent streams (streams-per-connection),
-// not by writing concurrently to the same `SendStream`.
+//! The Rust client: how an application publishes, subscribes, and reads a
+//! cache.
+//!
+//! **Start at [`Client`].** It connects to one broker over QUIC and is the
+//! root of everything else: [`Client::publisher`] for a [`Publisher`],
+//! [`Client::subscribe`] for a [`Subscription`], and the cache and counter
+//! calls directly on it. Beyond that:
+//!
+//! - [`ClusterClient`] takes several broker addresses and rebuilds its
+//!   connection from the rest when one fails, so an application outlives the
+//!   broker it happened to reach.
+//! - [`ShardedSubscription`] follows every shard of a stream at once and
+//!   reports per-shard offsets, since one number cannot describe where a
+//!   sharded consumer got to.
+//! - [`IdempotentProducer`] re-sends across a reconnection without
+//!   duplicating.
+//! - [`InProcessClient`] talks to an embedded broker with no network at all.
+//!   Behind the `in-process` feature, off by default, because it pulls in
+//!   `felix-broker`, which is AGPL where the rest of this crate is Apache-2.0
+//!   (see LICENSING.md).
+//!
+//! # The rule that shapes this crate
+//!
+//! This is a latency-oriented client, not a general-purpose "do anything
+//! concurrently" QUIC client. Quinn's `SendStream` is effectively a
+//! single-writer resource: concurrent writes from several tasks are
+//! serialized by a mutex inside Quinn, which is a performance cliff under
+//! load. So every stream here has one writer loop, fed through a bounded
+//! queue, and parallelism comes from *more* connections or *more* streams —
+//! never from writing to one stream from two tasks. The notes below record
+//! how that is enforced.
+//!
+//! The frame codec and message types are `felix-wire`; the QUIC layer is
+//! `felix-transport`. This crate is the application-facing shape over both.
+
 /*
 CLIENT DESIGN NOTES (felix-client)
 

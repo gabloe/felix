@@ -13,9 +13,11 @@
 //! The decision half is a pure state machine and the I/O half is a driver, for
 //! the same reason placement is split that way: every interesting rule is then
 //! testable without a disk.
+pub mod metrics;
+
 use std::collections::HashMap;
 
-use crate::shard_lifecycle_metrics as mm;
+use crate::shard_lifecycle::metrics as mm;
 use crate::shard_watch::{ShardAssignment, ShardKey, ShardKind};
 
 /// Where this broker is with one shard.
@@ -556,5 +558,4 @@ pub async fn reconcile(
 }
 
 #[cfg(test)]
-#[path = "shard_lifecycle_tests.rs"]
 mod tests;

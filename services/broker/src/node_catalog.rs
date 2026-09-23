@@ -135,5 +135,4 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
 }
 
 #[cfg(test)]
-#[path = "node_catalog_tests.rs"]
 mod tests;

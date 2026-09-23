@@ -934,5 +934,4 @@ fn close_reason_label(reason: &quinn::ConnectionError) -> &'static str {
 }
 
 #[cfg(test)]
-#[path = "pool_tests.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 #[cfg(feature = "telemetry")]
 mod telemetry {
-    include!("timings_telemetry.rs");
+    include!("timings/telemetry.rs");
 }
 
 #[cfg(not(feature = "telemetry"))]

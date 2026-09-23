@@ -469,7 +469,7 @@ pub(crate) async fn resolve_route(
     if let Some(lease) = lease
         && !lease.looks_valid()
     {
-        crate::lease_metrics::record_refusal(crate::lease_metrics::BOUNDARY_ADMISSION);
+        crate::lease::metrics::record_refusal(crate::lease::metrics::BOUNDARY_ADMISSION);
         tracing::debug!(
             tenant_id,
             namespace,

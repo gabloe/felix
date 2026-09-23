@@ -26,6 +26,8 @@
 //!   authoritative one, and it is the reason a process suspended past its expiry
 //!   cannot write on waking: the cached flag would still say yes, and the clock
 //!   says no. It sits behind an fsync, so its cost is not measurable.
+pub mod metrics;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -172,9 +174,9 @@ impl LeaseState {
                         usable_ms = self.usable().as_millis() as u64,
                         "lease expired; this broker is no longer serving the shards it led",
                     );
-                    crate::lease_metrics::record_expiry();
+                    crate::lease::metrics::record_expiry();
                 }
-                crate::lease_metrics::set_held(self.is_valid_now());
+                crate::lease::metrics::set_held(self.is_valid_now());
             }
         })
     }
@@ -189,5 +191,4 @@ fn usable_millis(lease: Duration) -> u64 {
 }
 
 #[cfg(test)]
-#[path = "lease_tests.rs"]
 mod tests;

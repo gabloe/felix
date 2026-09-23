@@ -220,5 +220,4 @@ pub async fn await_quorum(
 }
 
 #[cfg(test)]
-#[path = "quorum_tests.rs"]
 mod tests;

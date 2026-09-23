@@ -113,5 +113,4 @@ async fn flush_loop(to: ReportTo, mut rx: mpsc::Receiver<Pending>, shutdown: Can
 }
 
 #[cfg(test)]
-#[path = "reporter_tests.rs"]
 mod tests;

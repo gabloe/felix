@@ -241,5 +241,4 @@ pub async fn refresh_token_handler(
 }
 
 #[cfg(test)]
-#[path = "refresh_tests.rs"]
 mod tests;

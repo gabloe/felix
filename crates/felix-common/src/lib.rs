@@ -1,4 +1,19 @@
-// Shared data types and small helpers used across crates.
+//! The small things every Felix crate agrees on.
+//!
+//! Deliberately thin. Something belongs here only when two crates that do not
+//! depend on each other must agree on it exactly — a type crossing a process
+//! boundary, or a name an operator types.
+//!
+//! - [`membership`] — the broker-to-control-plane shapes. These cross a
+//!   process boundary as JSON, so a field renamed on one side and not the
+//!   other is a silent mismatch; sharing the types puts that back in the
+//!   compiler's hands.
+//! - [`env_registry`] — every `FELIX_*` variable the workspace reads, so a
+//!   mistyped one is reported instead of silently taking a default.
+//! - [`lifecycle`] — start-up, readiness and bounded drain, shared by both
+//!   service binaries. Feature-gated behind `lifecycle` so a library that
+//!   never runs a process does not pull in tokio.
+//! - [`ids`] and [`Error`] — identifier newtypes and the shared error shape.
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

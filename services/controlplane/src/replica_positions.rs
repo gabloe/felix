@@ -133,5 +133,4 @@ impl CaughtUp for ReplicaPositions {
 }
 
 #[cfg(test)]
-#[path = "replica_positions_tests.rs"]
 mod tests;

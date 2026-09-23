@@ -12,6 +12,8 @@
 //! Registration happens *after* the broker can serve. Registering earlier
 //! advertises a node that placement may immediately use and that cannot yet
 //! answer.
+pub mod metrics;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -22,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::MembershipConfig;
-use crate::membership_metrics as mm;
+use crate::membership::metrics as mm;
 
 /// Ceiling on heartbeat retry backoff.
 ///
@@ -532,5 +534,4 @@ pub async fn shutdown_membership(
 }
 
 #[cfg(test)]
-#[path = "membership_tests.rs"]
 mod tests;
