@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790200370614,
+  "lastUpdate": 1790200575994,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14196,6 +14196,58 @@ window.BENCHMARK_DATA = {
             "range": "46746.19",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1142194.98\nmean: 1124540.07\nstdev: 46746.19\ncv: 4.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1c8d52906020f3a10a76be88dfd9fc05ad659f19",
+          "message": "build(deps): bump the out-of-workspace-crates group across 2 directories with 2 updates (#653)\n\nBumps the out-of-workspace-crates group with 2 updates in the /demos/cross_tenant_isolation directory: [tokio](https://github.com/tokio-rs/tokio) and [rand](https://github.com/rust-random/rand).\nBumps the out-of-workspace-crates group with 2 updates in the /demos/rbac-live directory: [tokio](https://github.com/tokio-rs/tokio) and [rand](https://github.com/rust-random/rand).\n\n\nUpdates `tokio` from 1.50.0 to 1.53.1\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-1.50.0...tokio-1.53.1)\n\nUpdates `rand` from 0.10.2 to 0.10.3\n- [Release notes](https://github.com/rust-random/rand/releases)\n- [Changelog](https://github.com/rust-random/rand/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/rust-random/rand/compare/0.10.2...0.10.3)\n\nUpdates `tokio` from 1.50.0 to 1.53.1\n- [Release notes](https://github.com/tokio-rs/tokio/releases)\n- [Commits](https://github.com/tokio-rs/tokio/compare/tokio-1.50.0...tokio-1.53.1)\n\nUpdates `rand` from 0.10.2 to 0.10.3\n- [Release notes](https://github.com/rust-random/rand/releases)\n- [Changelog](https://github.com/rust-random/rand/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/rust-random/rand/compare/0.10.2...0.10.3)\n\n---\nupdated-dependencies:\n- dependency-name: tokio\n  dependency-version: 1.53.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: out-of-workspace-crates\n- dependency-name: rand\n  dependency-version: 0.10.3\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: out-of-workspace-crates\n- dependency-name: tokio\n  dependency-version: 1.53.1\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: out-of-workspace-crates\n- dependency-name: rand\n  dependency-version: 0.10.3\n  dependency-type: direct:production\n  update-type: version-update:semver-patch\n  dependency-group: out-of-workspace-crates\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-23T14:51:05-07:00",
+          "tree_id": "01f08351f4c85916ed16672f1e9d5686ec1fd4de",
+          "url": "https://github.com/gabloe/felix/commit/1c8d52906020f3a10a76be88dfd9fc05ad659f19"
+        },
+        "date": 1790200575479,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 316820,
+            "range": "14177.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316820.00\nmean: 320197.05\nstdev: 14177.73\ncv: 4.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 316820,
+            "range": "14177.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 316820.00\nmean: 320197.05\nstdev: 14177.73\ncv: 4.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 75403.18,
+            "range": "1832.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 75403.18\nmean: 76089.32\nstdev: 1832.29\ncv: 2.41%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 754031.82,
+            "range": "18322.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 754031.82\nmean: 760893.17\nstdev: 18322.93\ncv: 2.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
