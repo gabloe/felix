@@ -1,8 +1,10 @@
 # felix-transport
 
 QUIC transport primitives shared by [Felix](https://github.com/gabloe/felix)
-clients and brokers: endpoint construction, TLS defaults, and the datagram
-sizing that decides whether a connection is fast or stalled.
+clients and brokers: endpoint construction, connection and stream lifetime, and
+the datagram sizing that decides whether a connection is fast or stalled. TLS is
+the caller's: an endpoint is built from the quinn server or client config it is
+given.
 
 ## What is not obvious here
 
@@ -12,9 +14,10 @@ bytes — and a kernel that refuses an oversized batch returns `EMSGSIZE`, which
 is not recognised as a GSO failure and stalls delivery rather than degrading it.
 MTU discovery is therefore bounded below that ceiling by default.
 
-Receive buffers are sized from the socket's real capacity rather than the
-requested one, because a host that silently clamps `SO_RCVBUF` would otherwise
-be configured for a window it cannot hold.
+Socket buffer sizes are read back from the socket rather than trusted, because
+Linux silently clamps `SO_RCVBUF`/`SO_SNDBUF` to `net.core.rmem_max`/`wmem_max`.
+A clamped host gets a warning naming those sysctls, and does not get the
+loopback MTU pin, which needs the headroom to absorb bursts.
 
 ## Documentation
 

@@ -115,20 +115,32 @@ Frame, flag, feature, message, and error items are re-exported at the crate root
 
 #### felix-transport
 
-**Purpose**: QUIC transport abstraction and connection pooling.
+**Purpose**: QUIC endpoints and connections, and the transport tuning shared by
+the client and the broker.
 
 **Responsibilities**:
-- QUIC client/server setup
-- Connection lifecycle
-- Stream management
-- TLS certificate handling
-- Flow control configuration
+- QUIC client/server endpoint setup
+- Connection and stream lifetime
+- Flow-control, MTU, and UDP socket configuration
+- Dedicated I/O runtimes for quinn's driver tasks
+
+TLS is configured by the caller: endpoints are built from a quinn server or client
+config. Connection pooling lives in `felix-client`, not here.
+
+**Key modules**:
+- `server.rs` / `client.rs`: `QuicServer` and `QuicClient`
+- `connection.rs`: `QuicConnection`, `ConnectionId`, `ConnectionInfo`
+- `config.rs`: `TransportConfig`, its defaults and environment overrides;
+  `config/quinn_settings.rs` turns it into quinn settings and `config/loopback.rs`
+  holds the loopback MTU pin
+- `socket.rs`: UDP socket setup and the buffer sizes the OS actually granted
+- `io_runtime.rs`: the runtime pool quinn's driver tasks run on
 
 **Key types**:
-- `QuicClient`: Client-side connection
+- `QuicClient`: Client-side endpoint
 - `QuicServer`: Server-side listener
-- `StreamPool`: Connection pooling
-- `QuicConfig`: Transport configuration
+- `QuicConnection`: An established connection; opens and accepts streams
+- `TransportConfig`: Transport configuration
 
 **Based on**: `quinn` (QUIC implementation)
 

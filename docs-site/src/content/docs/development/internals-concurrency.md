@@ -163,7 +163,7 @@ by design, since a single stream only ever has one owning shard either way).
 
 ## The QUIC I/O runtime
 
-**File**: `crates/protocol/felix-transport/src/lib.rs`
+**File**: `crates/protocol/felix-transport/src/io_runtime.rs`
 
 Quinn's driver tasks (the endpoint receive loop and each connection's
 transmit/ACK/timer loop) do a *bounded* slice of work per poll and then

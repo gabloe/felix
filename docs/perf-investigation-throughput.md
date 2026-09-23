@@ -73,7 +73,7 @@ tokio runtime — worth remembering when reading CPU numbers.
 ## The measurement flaw (finding 1)
 
 `felix-transport` defaults `send_window` to 64 MiB
-(`crates/protocol/felix-transport/src/lib.rs:52`). Any run whose total payload volume is
+(`crates/protocol/felix-transport/src/config.rs:73`). Any run whose total payload volume is
 below that is absorbed by buffers before backpressure appears, and
 `latency-demo` stops its clock when the last event arrives.
 
@@ -1093,7 +1093,7 @@ sharing it with anything starves it; and a client's publish and event endpoints
 carry the two halves of one request/response flow, so splitting *them* makes
 every message pay two cross-thread wakes.
 
-**Fix** (`crates/protocol/felix-transport/src/lib.rs`): assignment is by role, with
+**Fix** (`crates/protocol/felix-transport/src/io_runtime.rs`): assignment is by role, with
 disjoint runtime slots that do not depend on creation order.
 
 ```rust
@@ -1653,7 +1653,7 @@ because no fix has been written yet.
 
 All uncommitted. Grouped by what would make sensible commits.
 
-**Transport (`crates/protocol/felix-transport/src/lib.rs`)**
+**Transport (`crates/protocol/felix-transport/src/`)**
 - `EndpointRole`: server endpoints get a runtime each, client endpoints share
   one. Replaces round-robin assignment (round 12).
 - Default I/O pool size available-parallelism → **2**.

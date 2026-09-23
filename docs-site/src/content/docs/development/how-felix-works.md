@@ -92,7 +92,7 @@ The important architectural boundary is:
 - `crates/sdk/felix-client/src/` implements the client-side connection pools and
   APIs.
 - `crates/protocol/felix-wire/src/` defines what the two sides exchange.
-- `crates/protocol/felix-transport/src/lib.rs` wraps the QUIC implementation.
+- `crates/protocol/felix-transport/src/` wraps the QUIC implementation.
 
 ## 2. Repository map
 
@@ -153,12 +153,14 @@ real application parallelism.
 Felix uses the [`quinn`](https://github.com/quinn-rs/quinn) Rust implementation.
 The wrapper types are:
 
-- `crates/protocol/felix-transport/src/lib.rs::QuicServer`
-- `crates/protocol/felix-transport/src/lib.rs::QuicClient`
-- `crates/protocol/felix-transport/src/lib.rs::QuicConnection`
+- `crates/protocol/felix-transport/src/server.rs::QuicServer`
+- `crates/protocol/felix-transport/src/client.rs::QuicClient`
+- `crates/protocol/felix-transport/src/connection.rs::QuicConnection`
 
 `QuicServer::bind` and `QuicClient::bind` create UDP sockets, install Quinn's
-transport configuration, and create endpoints using `quinn::TokioRuntime`.
+transport configuration, and create endpoints whose driver tasks run on a
+dedicated I/O runtime when one is configured, or on the application's Tokio
+runtime otherwise.
 
 ### 3.3 Connections and streams
 
@@ -188,7 +190,7 @@ stream must begin with `Message::Auth` before it sends publish frames.
 
 ### 3.4 Transport tuning
 
-`crates/protocol/felix-transport/src/lib.rs::TransportConfig` controls:
+`crates/protocol/felix-transport/src/config.rs::TransportConfig` controls:
 
 - maximum concurrent streams;
 - connection and per-stream flow-control windows;
@@ -1103,7 +1105,7 @@ Read in this order and follow each symbol with editor "go to definition":
    - `Frame`
    - `Message`
    - binary publish/event encoders
-2. `crates/protocol/felix-transport/src/lib.rs`
+2. `crates/protocol/felix-transport/src/`
    - `TransportConfig`
    - `QuicServer`
    - `QuicClient`
