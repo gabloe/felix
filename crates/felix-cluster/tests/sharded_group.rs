@@ -131,6 +131,9 @@ async fn a_sharded_group_delivers_and_redelivers_across_shards() {
         .into_iter()
         .filter(|claimed| claimed.record.payload.starts_with(b"job-"))
         .collect();
-    assert!(leftover.is_empty(), "finished records came back: {leftover:?}");
+    assert!(
+        leftover.is_empty(),
+        "finished records came back: {leftover:?}"
+    );
     cluster.shutdown().await;
 }
