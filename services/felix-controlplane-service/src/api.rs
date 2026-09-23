@@ -9,6 +9,7 @@ pub mod openapi;
 pub mod readiness;
 pub mod regions;
 mod router;
+pub mod shard_assignments;
 mod state;
 pub mod streams;
 pub mod system;

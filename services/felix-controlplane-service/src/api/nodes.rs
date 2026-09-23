@@ -14,13 +14,12 @@
 //! outright. Reads require
 //! `node.view:cluster:*`, since the listing exposes the cluster's network
 //! layout.
+pub(crate) mod listing;
+pub(crate) mod reports;
+
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
-use crate::api::types::{
-    NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
-    NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ReplicaStatusRequest,
-    ShardAssignmentChangesResponse, ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
-};
+use crate::api::types::{NodeRegistrationRequest, NodeRegistrationResponse};
 use crate::auth::bearer::{require_cluster_action, verified_claims};
 use crate::auth::rbac::authorize::{
     ACTION_NODE_MANAGE, ACTION_NODE_VIEW, ParsedObject, object_within_scope, parse_permission,
@@ -29,186 +28,8 @@ use crate::clock::now_millis;
 use crate::model::{Node, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
 use crate::store::StoreError;
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use std::collections::HashMap;
-
-#[utoipa::path(
-    post,
-    path = "/v1/nodes/{node_id}/heartbeat",
-    tag = "nodes",
-    params(("node_id" = String, Path, description = "Broker node identifier")),
-    request_body = NodeHeartbeatRequest,
-    responses(
-        (status = 200, description = "Heartbeat recorded", body = NodeHeartbeatResponse),
-        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse),
-        (status = 409, description = "Heartbeat is for a superseded incarnation", body = crate::api::types::ErrorResponse)
-    )
-)]
-/// Record that a broker is alive.
-///
-/// Returns the node's current lifecycle and how soon the next heartbeat is
-/// expected. A broker that finds itself `down` here has been expired and must
-/// register again before it is eligible for placement.
-///
-/// # Errors
-/// - 404 when the node is not registered.
-/// - 409 when the reported incarnation is older than the recorded one.
-pub(crate) async fn report_health(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(node_id): Path<String>,
-    Json(request): Json<NodeHeartbeatRequest>,
-) -> Result<Json<NodeHeartbeatResponse>, ApiError> {
-    require_node_manage(&state, &headers, &node_id).await?;
-    // The *store's* clock, not this instance's. Expiry is judged against the
-    // same one, and with several instances over one database those are
-    // different processes — see `ControlPlaneStore::now_millis`. Still not the
-    // caller's, which would let a broker postpone its own timeout.
-    let now = state
-        .store
-        .now_millis()
-        .await
-        .map_err(|ref err| api_internal("read the store clock", err))?;
-
-    let node = state
-        .store
-        .record_node_heartbeat(&node_id, request.incarnation, now)
-        .await
-        .map_err(|err| match err {
-            StoreError::NotFound(_) => api_not_found("node is not registered"),
-            StoreError::Conflict(ref message) => api_conflict("conflict", message),
-            ref other => api_internal("record node heartbeat", other),
-        })?;
-
-    Ok(Json(NodeHeartbeatResponse {
-        node_id: node.node_id,
-        lifecycle: node.status.lifecycle,
-        heartbeat_interval_ms: state.node_liveness.heartbeat_interval_ms,
-        expiry_timeout_ms: state.node_liveness.expiry_timeout_ms,
-    }))
-}
-
-#[utoipa::path(
-    post,
-    path = "/v1/nodes/{node_id}/replica-status",
-    tag = "nodes",
-    params(("node_id" = String, Path, description = "Broker node identifier")),
-    request_body = ReplicaStatusRequest,
-    responses(
-        (status = 204, description = "Report recorded"),
-        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse)
-    )
-)]
-/// Record which replicas a leader believes hold each of its shards.
-///
-/// Promotion is gated on this. Without it a lost leader cannot be replaced at
-/// all, and with a stale answer it can be replaced by a broker holding less
-/// than it claims — so reports expire, and the expiry is derived from the
-/// liveness settings rather than trusted from the caller.
-///
-/// Two checks, not one. A broker may speak for itself and no one else, as for
-/// a heartbeat — and it may only report on shards it currently leads. The
-/// second matters just as much: speaking for yourself about someone else's
-/// shard is still nominating yourself for promotion.
-///
-/// # Errors
-/// - 404 when the node is not registered.
-pub(crate) async fn report_replica_status(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(node_id): Path<String>,
-    Json(request): Json<ReplicaStatusRequest>,
-) -> Result<axum::http::StatusCode, ApiError> {
-    require_node_manage(&state, &headers, &node_id).await?;
-    // The store's clock, like a heartbeat, and for the same reason: the
-    // report is judged by the placement pass, which may run on a different
-    // instance, so the two sides need a clock they share. Not the caller's,
-    // which would let a broker keep its own report alive.
-    let now = state
-        .store
-        .now_millis()
-        .await
-        .map_err(|ref err| api_internal("read the store clock", err))?;
-    // Not enforced: brokers still send 0 here, because the driver that reports
-    // is spawned before registration returns an incarnation. The leadership
-    // check below is the stronger one anyway — it bounds *which* shards a
-    // broker can speak about, where the incarnation would only catch a stale
-    // report from the same broker's previous life.
-    let _ = request.incarnation;
-
-    for shard in request.shards {
-        let key = crate::model::ShardKey {
-            tenant_id: shard.tenant_id,
-            namespace: shard.namespace,
-            stream: shard.stream,
-            shard: shard.shard,
-            kind: shard.kind.into(),
-        };
-
-        // Being authorised to speak for yourself is not the same as leading
-        // this shard. Without this, any node credential can list itself as
-        // caught up for any shard and nominate itself for promotion.
-        let assignment = match state.store.get_shard_assignment(&key).await {
-            Ok(assignment) => assignment,
-            // An unplaced shard has no leader, so nobody can report on it.
-            Err(StoreError::NotFound(_)) => continue,
-            Err(ref other) => return Err(api_internal("read shard assignment", other)),
-        };
-        if assignment.leader != node_id {
-            tracing::warn!(
-                node_id = %node_id,
-                leader = %assignment.leader,
-                stream = %key.stream,
-                shard = key.shard,
-                "a broker reported replica positions for a shard it does not lead",
-            );
-            metrics::counter!("felix_replica_status_rejected_total", "reason" => "not_leader")
-                .increment(1);
-            continue;
-        }
-        // A generation past the assignment's cannot be one the broker read, and
-        // accepting it would wedge the shard: `record` drops everything older,
-        // so one report claiming u64::MAX blocks every real one after it.
-        if shard.generation > assignment.generation {
-            tracing::warn!(
-                node_id = %node_id,
-                reported = shard.generation,
-                assigned = assignment.generation,
-                stream = %key.stream,
-                shard = key.shard,
-                "a broker reported a generation ahead of the assignment",
-            );
-            metrics::counter!("felix_replica_status_rejected_total", "reason" => "future_generation")
-                .increment(1);
-            continue;
-        }
-
-        match state
-            .store
-            .record_replica_report(crate::model::ReplicaReport {
-                key,
-                generation: shard.generation,
-                caught_up: shard.caught_up.into_iter().collect(),
-                drained: shard.drained,
-                offsets: shard
-                    .replica_offsets
-                    .into_iter()
-                    .map(|replica| (replica.node_id, replica.durable_offset))
-                    .collect(),
-                reported_at_millis: now,
-            })
-            .await
-        {
-            Ok(()) => {}
-            // The assignment went between the read above and the write: the
-            // shard is nobody's to report on any more.
-            Err(StoreError::NotFound(_)) => continue,
-            Err(ref err) => return Err(api_internal("record replica report", err)),
-        }
-    }
-    Ok(axum::http::StatusCode::NO_CONTENT)
-}
 
 #[utoipa::path(
     post,
@@ -275,6 +96,48 @@ pub(crate) async fn register_node(
 }
 
 #[utoipa::path(
+    patch,
+    path = "/v1/nodes/{node_id}",
+    tag = "nodes",
+    params(("node_id" = String, Path, description = "Broker node identifier")),
+    request_body = NodePatchRequest,
+    responses(
+        (status = 200, description = "Node updated", body = crate::model::Node),
+        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse),
+        (status = 409, description = "Invalid spec or lifecycle move", body = crate::api::types::ErrorResponse)
+    )
+)]
+/// Change a node's region, labels or capacity, or move it between `live` and
+/// `draining`.
+///
+/// Setting `lifecycle` to `live` on a draining node is how an operator cancels
+/// a drain. Nothing observed is patchable: a `down` or `left` node is revived
+/// only by the broker registering.
+///
+/// # Errors
+/// - 404 when the node is not registered.
+/// - 409 when the patched spec is invalid or the lifecycle move is not one an
+///   operator may make.
+pub(crate) async fn patch_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+    Json(patch): Json<NodePatchRequest>,
+) -> Result<Json<Node>, ApiError> {
+    require_node_manage(&state, &headers, &node_id).await?;
+    state
+        .store
+        .patch_node(&node_id, patch)
+        .await
+        .map(Json)
+        .map_err(|err| match err {
+            StoreError::NotFound(_) => api_not_found("node is not registered"),
+            StoreError::Conflict(ref message) => api_conflict("conflict", message),
+            ref other => api_internal("patch node", other),
+        })
+}
+
+#[utoipa::path(
     post,
     path = "/v1/nodes/{node_id}/drain",
     tag = "nodes",
@@ -328,48 +191,6 @@ pub(crate) async fn deregister_node(
 ) -> Result<Json<Node>, ApiError> {
     require_node_manage(&state, &headers, &node_id).await?;
     set_lifecycle(&state, &node_id, NodeLifecycle::Left).await
-}
-
-#[utoipa::path(
-    patch,
-    path = "/v1/nodes/{node_id}",
-    tag = "nodes",
-    params(("node_id" = String, Path, description = "Broker node identifier")),
-    request_body = NodePatchRequest,
-    responses(
-        (status = 200, description = "Node updated", body = crate::model::Node),
-        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse),
-        (status = 409, description = "Invalid spec or lifecycle move", body = crate::api::types::ErrorResponse)
-    )
-)]
-/// Change a node's region, labels or capacity, or move it between `live` and
-/// `draining`.
-///
-/// Setting `lifecycle` to `live` on a draining node is how an operator cancels
-/// a drain. Nothing observed is patchable: a `down` or `left` node is revived
-/// only by the broker registering.
-///
-/// # Errors
-/// - 404 when the node is not registered.
-/// - 409 when the patched spec is invalid or the lifecycle move is not one an
-///   operator may make.
-pub(crate) async fn patch_node(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(node_id): Path<String>,
-    Json(patch): Json<NodePatchRequest>,
-) -> Result<Json<Node>, ApiError> {
-    require_node_manage(&state, &headers, &node_id).await?;
-    state
-        .store
-        .patch_node(&node_id, patch)
-        .await
-        .map(Json)
-        .map_err(|err| match err {
-            StoreError::NotFound(_) => api_not_found("node is not registered"),
-            StoreError::Conflict(ref message) => api_conflict("conflict", message),
-            ref other => api_internal("patch node", other),
-        })
 }
 
 #[utoipa::path(
@@ -481,220 +302,6 @@ async fn set_lifecycle(
     }
 }
 
-/// Filters accepted by the node listing.
-///
-/// Every filter is an intersection, and an absent filter matches everything.
-#[derive(Debug, Default)]
-struct NodeFilters {
-    lifecycle: Option<String>,
-    region: Option<String>,
-    /// `key=value` pairs a node must carry all of.
-    labels: Vec<(String, String)>,
-}
-
-impl NodeFilters {
-    /// `?lifecycle=live&region=us-west-2&label=rack%3Da1&label=tier%3Dhot`
-    ///
-    /// Repeating `label` intersects rather than replaces, which is what makes
-    /// "the hot racks in this region" expressible.
-    fn from_query(query: &HashMap<String, String>, raw: &str) -> Self {
-        let labels = raw
-            .split('&')
-            .filter_map(|pair| pair.strip_prefix("label="))
-            .filter_map(|value| {
-                let decoded = percent_decode(value);
-                decoded
-                    .split_once('=')
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-            })
-            .collect();
-        Self {
-            lifecycle: query.get("lifecycle").cloned(),
-            region: query.get("region").cloned(),
-            labels,
-        }
-    }
-
-    fn matches(&self, node: &crate::model::Node) -> bool {
-        if let Some(lifecycle) = &self.lifecycle
-            && !lifecycle_matches(node.status.lifecycle, lifecycle)
-        {
-            return false;
-        }
-        if let Some(region) = &self.region
-            && &node.spec.region != region
-        {
-            return false;
-        }
-        self.labels
-            .iter()
-            .all(|(key, value)| node.spec.labels.get(key) == Some(value))
-    }
-}
-
-/// Minimal `%XX` decoding for label values, which routinely contain `=` and `/`.
-fn percent_decode(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => match u8::from_str_radix(&value[i + 1..i + 3], 16) {
-                Ok(byte) => {
-                    out.push(byte);
-                    i += 3;
-                }
-                Err(_) => {
-                    out.push(bytes[i]);
-                    i += 1;
-                }
-            },
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            byte => {
-                out.push(byte);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8(out).unwrap_or_else(|_| value.to_string())
-}
-
-fn lifecycle_matches(lifecycle: NodeLifecycle, wanted: &str) -> bool {
-    let name = match lifecycle {
-        NodeLifecycle::Live => "live",
-        NodeLifecycle::Draining => "draining",
-        NodeLifecycle::Down => "down",
-        NodeLifecycle::Left => "left",
-    };
-    name.eq_ignore_ascii_case(wanted)
-}
-
-/// Explain this node's placement standing at `now`.
-fn placement_for(node: &Node, now_millis: u64, expiry_timeout_ms: u64) -> NodePlacement {
-    // Saturating: a heartbeat recorded a moment ahead of this read (two control
-    // plane instances, slightly different clocks) is an age of zero, not a
-    // wrapped enormous one.
-    let heartbeat_age_ms = now_millis.saturating_sub(node.status.last_heartbeat_at_millis);
-    let mut reasons = Vec::new();
-
-    match node.status.lifecycle {
-        NodeLifecycle::Live => {}
-        NodeLifecycle::Draining => {
-            reasons.push("node is draining and takes no new placement".into())
-        }
-        NodeLifecycle::Down => reasons.push("node missed its heartbeat window".into()),
-        NodeLifecycle::Left => reasons.push("node deregistered and left the cluster".into()),
-    }
-
-    // Reported separately from the lifecycle: between a heartbeat lapsing and
-    // the sweep noticing, a node still reads `live` while already being past
-    // its window, and that gap is exactly what an operator is trying to see.
-    if heartbeat_age_ms > expiry_timeout_ms
-        && matches!(
-            node.status.lifecycle,
-            NodeLifecycle::Live | NodeLifecycle::Draining
-        )
-    {
-        reasons.push(format!(
-            "last heartbeat was {heartbeat_age_ms}ms ago, past the {expiry_timeout_ms}ms timeout; expiry has not run yet"
-        ));
-    }
-
-    if node.spec.capacity.max_shards == Some(0) {
-        reasons.push("capacity hint max_shards is zero".into());
-    }
-    if node.spec.capacity.weight == 0 {
-        reasons.push("capacity hint weight is zero, so placement never selects it".into());
-    }
-
-    NodePlacement {
-        eligible: reasons.is_empty(),
-        reasons,
-        heartbeat_age_ms,
-    }
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/nodes",
-    tag = "nodes",
-    params(
-        ("lifecycle" = Option<String>, Query, description = "live, draining, down, or left"),
-        ("region" = Option<String>, Query, description = "Exact region match"),
-        ("label" = Option<String>, Query, description = "key=value; repeat to require several")
-    ),
-    responses((status = 200, description = "List registered nodes", body = NodeListResponse))
-)]
-/// List every registered broker and why each is, or is not, placeable.
-///
-/// Unpaginated, like the other listings in this API: a cluster has brokers in
-/// the tens, and a cursor no caller needs is a cursor every caller has to handle.
-///
-/// # Errors
-/// - 500 when the store cannot be read.
-pub(crate) async fn list_nodes(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    raw_query: axum::extract::RawQuery,
-) -> Result<Json<NodeListResponse>, ApiError> {
-    require_cluster_node_view(&state, &headers).await?;
-    let filters = NodeFilters::from_query(&query, raw_query.0.as_deref().unwrap_or_default());
-    let now = now_millis();
-    let expiry = state.node_liveness.expiry_timeout_ms;
-
-    let items = state
-        .store
-        .list_nodes()
-        .await
-        .map_err(|ref err| api_internal("failed to list nodes", err))?
-        .into_iter()
-        .filter(|node| filters.matches(node))
-        .map(|node| NodeView {
-            placement: placement_for(&node, now, expiry),
-            node,
-        })
-        .collect();
-
-    Ok(Json(NodeListResponse { items }))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/nodes/{node_id}",
-    tag = "nodes",
-    params(("node_id" = String, Path, description = "Broker node identifier")),
-    responses(
-        (status = 200, description = "Node detail", body = NodeView),
-        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse)
-    )
-)]
-/// Fetch one broker, with the same placement explanation the listing gives.
-///
-/// # Errors
-/// - 404 when the node is not registered.
-pub(crate) async fn get_node(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(node_id): Path<String>,
-) -> Result<Json<NodeView>, ApiError> {
-    require_cluster_node_view(&state, &headers).await?;
-    let node = state
-        .store
-        .get_node(&node_id)
-        .await
-        .map_err(|err| match err {
-            StoreError::NotFound(_) => api_not_found("node is not registered"),
-            ref other => api_internal("get node", other),
-        })?;
-
-    let placement = placement_for(&node, now_millis(), state.node_liveness.expiry_timeout_ms);
-    Ok(Json(NodeView { node, placement }))
-}
-
 /// Require permission to change one node's membership.
 ///
 /// The node id comes from the request -- a path segment, or the body on
@@ -739,105 +346,9 @@ async fn require_node_manage(
 /// Reads require `node.view:cluster:*`. The tenant comes from the token's own
 /// `tid` claim rather than the path, because `/v1/nodes` is not a tenant
 /// resource; see [`require_cluster_action`].
-async fn require_cluster_node_view(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+pub(super) async fn require_cluster_node_view(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), ApiError> {
     require_cluster_action(state, headers, ACTION_NODE_VIEW).await
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/shard-assignments",
-    tag = "nodes",
-    params(("leader" = Option<String>, Query, description = "Only shards this node leads")),
-    responses((status = 200, description = "List shard assignments", body = ShardAssignmentListResponse))
-)]
-/// List shard ownership.
-///
-/// Answers the two questions an operator has when placement looks wrong: who
-/// owns this shard, and what does this broker own. Requires the same
-/// `node.view:cluster:*` as the node listing, because ownership and membership
-/// are the same view of the cluster.
-///
-/// # Errors
-/// - 500 when the store cannot be read.
-pub(crate) async fn list_shard_assignments(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> Result<Json<ShardAssignmentListResponse>, ApiError> {
-    require_cluster_node_view(&state, &headers).await?;
-
-    let items = match query.get("leader") {
-        Some(leader) => state.store.list_shard_assignments_for_node(leader).await,
-        None => state.store.list_shard_assignments().await,
-    }
-    .map_err(|ref err| api_internal("failed to list shard assignments", err))?;
-
-    Ok(Json(ShardAssignmentListResponse { items }))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/shard-assignments/snapshot",
-    tag = "nodes",
-    responses((status = 200, description = "Full assignment snapshot", body = ShardAssignmentSnapshotResponse))
-)]
-/// Every current assignment, plus where to start polling.
-///
-/// A broker applies this and then polls `changes` from `next_seq`. The two
-/// together describe every committed change exactly once — the snapshot is read
-/// at a consistent point and `next_seq` is the log position at that same point.
-///
-/// # Errors
-/// - 500 when the store cannot be read.
-pub(crate) async fn shard_assignment_snapshot(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<ShardAssignmentSnapshotResponse>, ApiError> {
-    require_cluster_node_view(&state, &headers).await?;
-    let snapshot = state
-        .store
-        .shard_assignment_snapshot()
-        .await
-        .map_err(|ref err| api_internal("failed to snapshot shard assignments", err))?;
-    Ok(Json(ShardAssignmentSnapshotResponse {
-        items: snapshot.items,
-        next_seq: snapshot.next_seq,
-    }))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/shard-assignments/changes",
-    tag = "nodes",
-    params(("since" = Option<u64>, Query, description = "Last seen sequence")),
-    responses((status = 200, description = "Assignment changes", body = ShardAssignmentChangesResponse))
-)]
-/// Assignment changes at or after `since`.
-///
-/// A caller that finds the first returned `seq` above its `since`, or an empty
-/// page with `next_seq` above it, has fallen outside the retention window and
-/// must re-snapshot. `next_seq` below `since` means the sequence was reset —
-/// a control plane restarted onto a store that does not persist it.
-///
-/// # Errors
-/// - 500 when the store cannot be read.
-pub(crate) async fn shard_assignment_changes(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> Result<Json<ShardAssignmentChangesResponse>, ApiError> {
-    require_cluster_node_view(&state, &headers).await?;
-    let since = query
-        .get("since")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-    let changes = state
-        .store
-        .shard_assignment_changes(since)
-        .await
-        .map_err(|ref err| api_internal("failed to load shard assignment changes", err))?;
-    Ok(Json(ShardAssignmentChangesResponse {
-        items: changes.items,
-        next_seq: changes.next_seq,
-    }))
 }

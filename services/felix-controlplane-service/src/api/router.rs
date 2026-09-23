@@ -143,21 +143,21 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/v1/nodes",
-            axum::routing::get(api::nodes::list_nodes).post(api::nodes::register_node),
+            axum::routing::get(api::nodes::listing::list_nodes).post(api::nodes::register_node),
         )
         .route(
             "/v1/nodes/{node_id}",
-            axum::routing::get(api::nodes::get_node)
+            axum::routing::get(api::nodes::listing::get_node)
                 .patch(api::nodes::patch_node)
                 .delete(api::nodes::delete_node),
         )
         .route(
             "/v1/nodes/{node_id}/heartbeat",
-            axum::routing::post(api::nodes::report_health),
+            axum::routing::post(api::nodes::reports::report_health),
         )
         .route(
             "/v1/nodes/{node_id}/replica-status",
-            axum::routing::post(api::nodes::report_replica_status),
+            axum::routing::post(api::nodes::reports::report_replica_status),
         )
         .route(
             "/v1/nodes/{node_id}/drain",
@@ -169,15 +169,15 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/v1/shard-assignments",
-            axum::routing::get(api::nodes::list_shard_assignments),
+            axum::routing::get(api::shard_assignments::list_shard_assignments),
         )
         .route(
             "/v1/shard-assignments/snapshot",
-            axum::routing::get(api::nodes::shard_assignment_snapshot),
+            axum::routing::get(api::shard_assignments::shard_assignment_snapshot),
         )
         .route(
             "/v1/shard-assignments/changes",
-            axum::routing::get(api::nodes::shard_assignment_changes),
+            axum::routing::get(api::shard_assignments::shard_assignment_changes),
         )
         .route(
             "/v1/tenants/{tenant_id}/token/exchange",

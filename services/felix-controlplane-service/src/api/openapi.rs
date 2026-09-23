@@ -2,7 +2,7 @@
 //! here by hand — an endpoint left out is invisible to docs and generated
 //! clients, and nothing else in the build notices.
 use crate::api::{
-    caches, namespaces, nodes, regions, streams, system, tenants,
+    caches, namespaces, nodes, regions, shard_assignments, streams, system, tenants,
     types::{
         CacheChangesResponse, CacheCreateRequest, CacheListResponse, CacheSnapshotResponse,
         ErrorResponse, FeatureFlags, HealthStatus, ListRegionsResponse, NamespaceChangesResponse,
@@ -73,17 +73,17 @@ use utoipa::OpenApi;
         caches::get_cache,
         caches::patch_cache,
         caches::delete_cache,
-        nodes::report_health,
+        nodes::reports::report_health,
         nodes::register_node,
         nodes::drain_node,
         nodes::deregister_node,
-        nodes::list_nodes,
-        nodes::get_node,
+        nodes::listing::list_nodes,
+        nodes::listing::get_node,
         nodes::patch_node,
         nodes::delete_node,
-        nodes::list_shard_assignments,
-        nodes::shard_assignment_snapshot,
-        nodes::shard_assignment_changes
+        shard_assignments::list_shard_assignments,
+        shard_assignments::shard_assignment_snapshot,
+        shard_assignments::shard_assignment_changes
     ),
     components(schemas(
         FeatureFlags,
