@@ -1133,17 +1133,18 @@ outcome before SIGKILL. See [Graceful Shutdown](/felix/deployment/graceful-shutd
 
 ### `FELIX_SHUTDOWN_PREDRAIN_MS`
 
-**Description**: How long the control plane keeps serving after it starts reporting
-unready, before it stops accepting connections. Readiness-first shutdown only helps
+**Description**: How long the control plane or broker keeps serving after it starts
+reporting unready, before it stops accepting connections. Readiness-first shutdown only helps
 if something has time to act on it: a load balancer learns an instance is draining by
 polling, so closing the listener the moment readiness flips leaves requests still
 being routed to a socket that is gone.
 
-**Applies to**: Control plane.
+**Applies to**: Control plane and broker.
 
 **Type**: Non-negative integer (milliseconds); `0` skips the wait.
 
-**Default**: `5000`
+**Default**: `5000` on the control plane; `0` on the broker, whose Helm chart covers
+propagation with a preStop sleep instead (waiting twice only shortens the drain)
 
 **Example**:
 ```bash
