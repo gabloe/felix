@@ -14,10 +14,6 @@
 //!   sharded consumer got to.
 //! - [`IdempotentProducer`] re-sends across a reconnection without
 //!   duplicating.
-//! - [`InProcessClient`] talks to an embedded broker with no network at all.
-//!   Behind the `in-process` feature, off by default, because it pulls in
-//!   `felix-broker`, which is AGPL where the rest of this crate is Apache-2.0
-//!   (see LICENSING.md).
 //!
 //! # The rule that shapes this crate
 //!
@@ -36,16 +32,7 @@
 /*
 CLIENT DESIGN NOTES (felix-client)
 
-This crate provides two client flavors:
-
-1) InProcessClient (requires the `in-process` Cargo feature, off by default)
-   - Thin wrapper around an in-memory `felix_broker::Broker`.
-   - Useful for tests, benchmarks, and embedding Felix into a single process.
-   - `felix-broker` is AGPL-3.0 (unlike the rest of this crate); gated behind
-     an opt-in feature so the default build stays Apache-2.0. See LICENSING.md.
-   - No transport concerns (no framing, flow control, backpressure across the network).
-
-2) Client (QUIC network client)
+Client (QUIC network client)
    - Speaks `felix-wire` over QUIC.
    - QUIC multiplexing is powerful, but the write-side of a Quinn `SendStream` is
      effectively a single-writer resource: concurrent writes from multiple tasks
@@ -97,8 +84,6 @@ pub use client::client::Client;
 pub use client::client::{NotLeaderError, SubscribeCursorError};
 pub use client::cluster::{ClusterClient, ReconnectPolicy};
 pub use client::idempotent::IdempotentProducer;
-#[cfg(feature = "in-process")]
-pub use client::inprocess::InProcessClient;
 pub use client::publisher::Publisher;
 pub use client::sharded::{ShardEvent, ShardOffsets, ShardedSubscription};
 pub use client::sharded_group::{ShardedGroup, ShardedGroupRecord};

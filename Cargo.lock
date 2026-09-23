@@ -1150,8 +1150,6 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "bytes",
- "felix-broker",
- "felix-storage",
  "felix-transport",
  "felix-wire",
  "hashbrown 0.17.1",

@@ -24,13 +24,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 serde_yaml_ng = { workspace = true }
-# felix-broker/felix-storage are optional: they're only needed by the `in-process` feature
-# (an embedded-broker convenience mode for local dev/tests). Both are AGPL-3.0 licensed,
-# unlike the rest of this crate's dependency graph (Apache-2.0) — keeping them optional and
-# off by default means the default felix-client build has zero AGPL-3.0 transitive
-# dependencies. See LICENSING.md at the repo root.
-felix-broker = { path = "../../server/felix-broker", version = "0.6.0-preview", optional = true }
-felix-storage = { path = "../../server/felix-storage", version = "0.6.0-preview", optional = true }
 felix-transport = { path = "../../protocol/felix-transport", version = "0.6.0-preview" }
 felix-wire = { path = "../../protocol/felix-wire", version = "0.6.0-preview" }
 quinn = { workspace = true }
@@ -38,9 +31,6 @@ quinn = { workspace = true }
 [features]
 default = []
 telemetry = []
-# Embedded-broker convenience mode for local dev/tests, without a real QUIC connection.
-# Off by default — see the dependency comment above.
-in-process = ["dep:felix-broker", "dep:felix-storage"]
 
 [dev-dependencies]
 rcgen = { workspace = true }
@@ -50,7 +40,7 @@ tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [package.metadata.docs.rs]
-# `in-process` and `telemetry` are off by default; document them anyway.
+# `telemetry` is off by default; document it anyway.
 all-features = true
 
 [lints]

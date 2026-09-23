@@ -50,9 +50,6 @@ while let Some(event) = events.next_event().await? {
 ## Features
 
 - `telemetry` (off) — frame and byte counters, exported as metrics.
-- `in-process` (off) — embeds a broker directly, for tests without a network.
-  This pulls in AGPL-3.0 code; the default build does not. See
-  [LICENSING.md](https://github.com/gabloe/felix/blob/main/LICENSING.md).
 
 ## Documentation
 

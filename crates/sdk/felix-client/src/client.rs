@@ -6,8 +6,6 @@ pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod event_router;
 pub(crate) mod idempotent;
-#[cfg(feature = "in-process")]
-pub(crate) mod inprocess;
 pub(crate) mod publisher;
 pub(crate) mod sharded;
 pub(crate) mod sharded_group;

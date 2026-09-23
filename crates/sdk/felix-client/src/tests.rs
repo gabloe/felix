@@ -1,7 +1,7 @@
 //! Felix client integration and unit tests.
 //!
-//! Exercise client-side publish/subscribe/cache flows against an in-process broker or
-//! lightweight QUIC server, covering success and error paths for:
+//! Exercise client-side publish/subscribe/cache flows against a lightweight QUIC
+//! server, covering success and error paths for:
 //! - publish acks and error mapping
 //! - subscription lifecycle and decode failures
 //! - cache request/response handling
@@ -10,10 +10,6 @@
 use super::*;
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
-#[cfg(feature = "in-process")]
-use felix_broker::Broker;
-#[cfg(feature = "in-process")]
-use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use felix_wire::{AckMode, FrameHeader, Message};
 use quinn::ClientConfig as QuinnClientConfig;
@@ -60,65 +56,6 @@ fn set_client_env_with_event_pool(event_pool: usize) -> EnvGuard {
 
 fn set_client_env() -> EnvGuard {
     set_client_env_with_event_pool(1)
-}
-
-#[cfg(feature = "in-process")]
-#[tokio::test]
-async fn in_process_publish_and_subscribe() {
-    // Smoke-test the in-process path without any network transport.
-    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-    broker.register_tenant("t1").await.expect("tenant");
-    broker
-        .register_namespace("t1", "default")
-        .await
-        .expect("namespace");
-    broker
-        .register_stream("t1", "default", "updates", Default::default())
-        .await
-        .expect("register");
-    let client = InProcessClient::new(broker);
-    let mut receiver = client
-        .subscribe("t1", "default", "updates")
-        .await
-        .expect("subscribe");
-    client
-        .publish("t1", "default", "updates", Bytes::from_static(b"payload"))
-        .await
-        .expect("publish");
-    let msg = receiver.recv().await.expect("recv");
-    assert_eq!(msg, Bytes::from_static(b"payload"));
-}
-
-#[cfg(feature = "in-process")]
-#[tokio::test]
-async fn clients_share_broker_state() {
-    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-    broker.register_tenant("t1").await.expect("tenant");
-    broker
-        .register_namespace("t1", "default")
-        .await
-        .expect("namespace");
-    broker
-        .register_stream("t1", "default", "shared", Default::default())
-        .await
-        .expect("register");
-    let publisher = InProcessClient::new(broker.clone());
-    let subscriber = InProcessClient::new(broker);
-    let mut receiver = subscriber
-        .subscribe("t1", "default", "shared")
-        .await
-        .expect("subscribe");
-    publisher
-        .publish(
-            "t1",
-            "default",
-            "shared",
-            Bytes::from_static(b"from-publisher"),
-        )
-        .await
-        .expect("publish");
-    let msg = receiver.recv().await.expect("recv");
-    assert_eq!(msg, Bytes::from_static(b"from-publisher"));
 }
 
 #[tokio::test]
