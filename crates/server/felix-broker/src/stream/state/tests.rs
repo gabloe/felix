@@ -7,7 +7,7 @@
 //! subscriber than the one the caller meant — because if it can, the victim is
 //! a subscriber that did nothing wrong and cannot tell it was unsubscribed.
 use super::*;
-use crate::config::SubQueuePolicy;
+use crate::stream::SubQueuePolicy;
 
 fn stream() -> StreamState {
     StreamState::new(

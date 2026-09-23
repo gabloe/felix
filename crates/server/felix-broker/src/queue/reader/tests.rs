@@ -4,8 +4,8 @@ use super::*;
 use bytes::Bytes;
 use felix_storage::log::{FsyncMode, LogConfig};
 
-use crate::dead_letters::DeadLetters;
 use crate::durable::{DurableStorage, StreamLog};
+use crate::queue::DeadLetters;
 
 const T: &str = "t1";
 const NS: &str = "ns";

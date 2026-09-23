@@ -1,8 +1,8 @@
 //! Reading a stream shard as a consumer group.
 //!
 //! Joins the three pieces: the shard's log holds the records, the durable
-//! cursor in [`crate::consumer_groups`] says where the group has finished, and
-//! [`crate::group_delivery::GroupTracker`] holds what is currently handed out.
+//! cursor in [`ConsumerGroups`] says where the group has finished, and
+//! [`GroupTracker`] holds what is currently handed out.
 //!
 //! Everything here is about keeping those three consistent. The cursor is
 //! written only when a contiguous run of acknowledgements closes, because that
@@ -17,10 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::Mutex;
 
-use crate::consumer_groups::ConsumerGroups;
-use crate::dead_letters::DeadLetters;
+use super::cursors::ConsumerGroups;
+use super::dead_letters::DeadLetters;
+use super::tracker::GroupTracker;
 use crate::error::{BrokerError, Result};
-use crate::group_delivery::GroupTracker;
 
 /// A group reading one shard of one stream.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -286,5 +286,4 @@ impl GroupReader {
 }
 
 #[cfg(test)]
-#[path = "group_reader_tests.rs"]
 mod tests;

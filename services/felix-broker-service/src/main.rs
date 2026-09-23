@@ -308,16 +308,14 @@ where
             let dead_root = durable.root.join("dead-letters");
             Some((
                 std::sync::Arc::new(
-                    felix_broker::consumer_groups::ConsumerGroups::open(&root, durable.log.clone())
-                        .with_context(|| {
-                            format!("open the consumer-group log at {}", root.display())
-                        })?,
+                    felix_broker::ConsumerGroups::open(&root, durable.log.clone()).with_context(
+                        || format!("open the consumer-group log at {}", root.display()),
+                    )?,
                 ),
                 std::sync::Arc::new(
-                    felix_broker::dead_letters::DeadLetters::open(&dead_root, durable.log.clone())
-                        .with_context(|| {
-                            format!("open the dead-letter log at {}", dead_root.display())
-                        })?,
+                    felix_broker::DeadLetters::open(&dead_root, durable.log.clone()).with_context(
+                        || format!("open the dead-letter log at {}", dead_root.display()),
+                    )?,
                 ),
             ))
         }

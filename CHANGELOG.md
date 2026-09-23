@@ -70,6 +70,13 @@ for what the current release actually guarantees.
   are the paths to use.
 - `felix-common` drops what nothing used: `NodeConfig`, `LimitsConfig`,
   `Error::Config`, and every id type but `RegionId`.
+- `felix-broker`'s `cache_watch`, `consumer_groups`, `dead_letters`,
+  `durable`, `group_delivery` and `group_reader` modules are private. Their
+  public types are at the crate root (`felix_broker::ConsumerGroups`,
+  `felix_broker::GroupReader`, `felix_broker::DurableStorage`, ...), and the
+  group tracker that `group_delivery` exposed is internal. `replication` and
+  `timings` stay public modules. `ClaimedPublish` is now exported, since
+  `Broker::claim_publish` returns it.
 
 ## [0.6.0-preview] - 2026-09-20
 

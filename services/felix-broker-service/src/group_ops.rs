@@ -11,8 +11,7 @@
 //! the claim and the acknowledgement on different machines.
 use std::time::{Duration, Instant};
 
-use felix_broker::Broker;
-use felix_broker::group_reader::GroupKey;
+use felix_broker::{Broker, GroupKey};
 use felix_wire::GroupRecord;
 
 use crate::shard_routing::{Dispatch, dispatch};
@@ -53,8 +52,8 @@ fn reader_and_log<'a>(
     shard: u32,
 ) -> Result<
     (
-        &'a std::sync::Arc<felix_broker::group_reader::GroupReader>,
-        felix_broker::durable::StreamLog,
+        &'a std::sync::Arc<felix_broker::GroupReader>,
+        felix_broker::StreamLog,
     ),
     String,
 > {

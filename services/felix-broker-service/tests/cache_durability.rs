@@ -58,7 +58,7 @@ async fn start(root: &std::path::Path) -> Result<Running> {
 
     // Group state gets its own root under the same directory, exactly as the
     // broker binary arranges it, so this exercises the real layout.
-    let dead_letters = felix_broker::dead_letters::DeadLetters::open(
+    let dead_letters = felix_broker::DeadLetters::open(
         root.join("dead-letters"),
         LogConfig {
             fsync_mode: FsyncMode::None,
@@ -66,7 +66,7 @@ async fn start(root: &std::path::Path) -> Result<Running> {
             ..LogConfig::default()
         },
     )?;
-    let groups = felix_broker::consumer_groups::ConsumerGroups::open(
+    let groups = felix_broker::ConsumerGroups::open(
         root.join("groups"),
         LogConfig {
             fsync_mode: FsyncMode::None,
@@ -76,7 +76,7 @@ async fn start(root: &std::path::Path) -> Result<Running> {
     )?;
     // Stream logs under their own root, as the binary arranges them. A
     // consumer group reads a durable stream, so the broker needs both.
-    let storage = felix_broker::durable::DurableStorage::open(
+    let storage = felix_broker::DurableStorage::open(
         root.join("streams"),
         LogConfig {
             fsync_mode: FsyncMode::None,

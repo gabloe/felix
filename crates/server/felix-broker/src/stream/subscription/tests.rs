@@ -4,7 +4,7 @@
 //! broker's subscribe handler, the client, and the benchmarks all stop when
 //! they see it. So `None` must mean the channel closed and nothing else.
 use super::*;
-use crate::delivery::DeliveryEnvelope;
+use crate::stream::DeliveryEnvelope;
 use std::sync::Arc;
 
 fn payload(value: &str) -> Bytes {

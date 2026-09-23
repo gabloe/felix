@@ -17,16 +17,17 @@
 //! three subsystems:
 //!
 //! - [`Subscription`] and [`Cursor`] read the log forward.
-//! - [`cache_watch`] delivers each applied write in the shard's write order.
-//! - [`consumer_groups`], [`group_reader`], [`group_delivery`] and
-//!   [`dead_letters`] are the queue: a claim, an acknowledgement, a
-//!   redelivery after a visibility timeout, and an offset given up on.
-//! - [`replication`] ships committed records to the followers of a shard this
-//!   broker leads.
-//! - [`durable`] is the disk-backed side, for streams created `durable: true`.
+//! - [`CacheWatchHub`] delivers each applied write in the shard's write order.
+//! - [`GroupReader`], [`ConsumerGroups`] and [`DeadLetters`] are the queue: a
+//!   claim, an acknowledgement, a redelivery after a visibility timeout, and an
+//!   offset given up on.
+//! - [`replication`] stores what a leader shipped, on a follower.
+//! - [`DurableStorage`] is the disk-backed side, for streams created
+//!   `durable: true`.
 //!
-//! Everything public is re-exported at the crate root, so downstream code
-//! writes `felix_broker::<Name>` and never names an internal module.
+//! Apart from [`replication`] and [`timings`], everything public is
+//! re-exported at the crate root, so downstream code writes
+//! `felix_broker::<Name>`.
 //!
 //! # Invariants worth knowing before changing anything here
 //!
@@ -42,9 +43,37 @@
 mod telemetry;
 
 mod broker;
-pub mod cache_watch;
-mod config;
-pub mod consumer_groups;
+mod cache;
+mod durable;
+mod error;
+mod keys;
+mod queue;
+mod registry;
+mod stream;
+
+pub mod replication;
+pub mod timings;
+
+pub use broker::{
+    Broker, CacheMetadata, ClaimedPublish, ConsistencyLevel, HistoryRange, IdempotentOutcome,
+    JoinOffsets, PublishOutcome, ResumedSubscription, StartPosition, StreamHandle, StreamMetadata,
+};
+pub use error::{BrokerError, Result};
+pub use keys::{CacheKey, NamespaceKey, StreamKey, TopicKey};
+
+// Streams.
+pub use stream::{
+    Cursor, DeliveryEnvelope, SubQueuePolicy, Subscription, SubscriptionGuard, SubscriptionReceiver,
+};
+
+// Caches.
+pub use cache::{CacheChangeEvent, CacheWatchFilter, CacheWatchHub, CacheWatchSubscription};
+
+// Queues.
+pub use queue::{Claimed, ConsumerGroups, DeadLetters, GroupKey, GroupReader};
+
+// Durability.
+pub use durable::{DurableStorage, StreamLog};
 
 /// Which of a shard's logs a request is about.
 ///
@@ -71,33 +100,6 @@ pub enum LogKind {
     /// rides a stream shard's, so a promoted replica resumes the true sum.
     Counters,
 }
-pub mod dead_letters;
-mod delivery;
-pub mod durable;
-mod error;
-pub mod group_delivery;
-pub mod group_reader;
-mod keys;
-mod producers;
-mod registry;
-pub mod replication;
-mod stream_state;
-mod subscription;
-
-pub mod timings;
-
-pub use broker::{
-    Broker, CacheMetadata, ConsistencyLevel, HistoryRange, IdempotentOutcome, JoinOffsets,
-    PublishOutcome, ResumedSubscription, StartPosition, StreamHandle, StreamMetadata,
-};
-pub use cache_watch::{CacheChangeEvent, CacheWatchFilter, CacheWatchHub, CacheWatchSubscription};
-pub use config::SubQueuePolicy;
-pub use delivery::DeliveryEnvelope;
-pub use durable::{DurableStorage, StreamLog};
-pub use error::{BrokerError, Result};
-pub use keys::{CacheKey, NamespaceKey, StreamKey, TopicKey};
-pub use stream_state::Cursor;
-pub use subscription::{Subscription, SubscriptionGuard, SubscriptionReceiver};
 
 #[cfg(test)]
 mod tests;

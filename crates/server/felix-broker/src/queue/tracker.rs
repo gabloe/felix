@@ -1,6 +1,6 @@
 //! What a consumer group has handed out, and what it owes.
 //!
-//! The durable cursor in [`crate::consumer_groups`] says where a group has
+//! The durable cursor in [`ConsumerGroups`](crate::queue::ConsumerGroups) says where a group has
 //! finished. This is everything between there and the tail: offsets handed to a
 //! consumer and not yet settled, offsets whose consumer stopped answering, and
 //! the bookkeeping that turns acknowledgements into cursor movement.
@@ -18,17 +18,17 @@ use std::time::{Duration, Instant};
 
 /// What one `claim` produced.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct Claim {
+pub(crate) struct Claim {
     /// Offsets handed to the caller, to deliver and then settle.
-    pub offsets: Vec<u64>,
+    pub(crate) offsets: Vec<u64>,
     /// Offsets given up on, having been delivered too many times. The caller
     /// records them and then settles them.
-    pub dead_lettered: Vec<DeadLettered>,
+    pub(crate) dead_lettered: Vec<DeadLettered>,
 }
 
 /// One group's position on one shard.
 #[derive(Debug)]
-pub struct GroupTracker {
+pub(crate) struct GroupTracker {
     /// Everything below this is acknowledged and will never be handed out
     /// again. Mirrors the durable cursor.
     committed: u64,
@@ -56,16 +56,16 @@ pub struct GroupTracker {
 
 /// A record the group has given up on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeadLettered {
-    pub offset: u64,
+pub(crate) struct DeadLettered {
+    pub(crate) offset: u64,
     /// How many times it was handed out before being given up on.
-    pub attempts: u32,
+    pub(crate) attempts: u32,
 }
 
 impl GroupTracker {
     /// A group resuming at `committed`, giving up on a record after
     /// `max_attempts` deliveries.
-    pub fn new(committed: u64, max_attempts: u32) -> Self {
+    pub(crate) fn new(committed: u64, max_attempts: u32) -> Self {
         Self {
             committed,
             high_water: committed,
@@ -78,18 +78,14 @@ impl GroupTracker {
     }
 
     /// How many times `offset` has been handed out, if it is still in play.
-    pub fn attempts(&self, offset: u64) -> u32 {
+    pub(crate) fn attempts(&self, offset: u64) -> u32 {
         self.attempts.get(&offset).copied().unwrap_or(0)
     }
 
     /// Everything below this is finished.
-    pub fn committed(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn committed(&self) -> u64 {
         self.committed
-    }
-
-    /// How many offsets are handed out and unsettled.
-    pub fn in_flight(&self) -> usize {
-        self.in_flight.len()
     }
 
     /// Take up to `max` offsets to deliver, claimed until `now + visibility`.
@@ -99,7 +95,13 @@ impl GroupTracker {
     /// are precisely the records a consumer already failed to finish once.
     ///
     /// `tail` is the shard's log tail: nothing at or above it exists yet.
-    pub fn claim(&mut self, tail: u64, max: usize, now: Instant, visibility: Duration) -> Claim {
+    pub(crate) fn claim(
+        &mut self,
+        tail: u64,
+        max: usize,
+        now: Instant,
+        visibility: Duration,
+    ) -> Claim {
         self.expire(now);
 
         let deadline = now + visibility;
@@ -145,7 +147,7 @@ impl GroupTracker {
     /// Acknowledging something already settled is not an error: a consumer that
     /// answered after its claim lapsed cannot tell the difference, and the
     /// record has since been handed to someone else who will answer too.
-    pub fn ack(&mut self, offset: u64) -> Option<u64> {
+    pub(crate) fn ack(&mut self, offset: u64) -> Option<u64> {
         if offset < self.committed {
             // Below the cursor, so the run has already closed over it. That is
             // an ordinary duplicate — or a redriven record being finished, which
@@ -174,7 +176,7 @@ impl GroupTracker {
     /// Give one offset back without finishing it. It is owed again at once,
     /// rather than after the visibility timeout: the consumer has said it
     /// cannot do the work, so waiting only delays someone else trying.
-    pub fn nack(&mut self, offset: u64) {
+    pub(crate) fn nack(&mut self, offset: u64) {
         if offset < self.committed || self.acked_ahead.contains(&offset) {
             return;
         }
@@ -193,7 +195,7 @@ impl GroupTracker {
     /// Returns whether it was taken. A record at or above the cursor is refused:
     /// it has not been given up on, so it is either in play or owed already, and
     /// resetting its attempts would let it evade the bound for ever.
-    pub fn redrive(&mut self, offset: u64) -> bool {
+    pub(crate) fn redrive(&mut self, offset: u64) -> bool {
         if offset >= self.committed {
             return false;
         }
@@ -206,7 +208,7 @@ impl GroupTracker {
     ///
     /// This is what makes a consumer that stopped answering recoverable rather
     /// than a permanent hole in the group's progress.
-    pub fn expire(&mut self, now: Instant) {
+    pub(crate) fn expire(&mut self, now: Instant) {
         let lapsed: Vec<u64> = self
             .in_flight
             .iter()
@@ -221,5 +223,4 @@ impl GroupTracker {
 }
 
 #[cfg(test)]
-#[path = "group_delivery_tests.rs"]
 mod tests;

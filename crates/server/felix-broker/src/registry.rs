@@ -13,7 +13,7 @@ use crate::keys::{
     CacheKey, CacheKeyRef, NamespaceKey, NamespaceKeyRef, StreamKey, StreamKeyRef, TopicKey,
     TopicKeyRef,
 };
-use crate::stream_state::StreamState;
+use crate::stream::StreamState;
 
 /// Byte ceiling on the replay ring refill at startup.
 ///

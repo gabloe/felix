@@ -6,8 +6,8 @@ use std::collections::VecDeque;
 use std::sync::Weak;
 use tokio::sync::mpsc;
 
-use crate::delivery::{DeliveryEnvelope, QueuedDelivery};
-use crate::stream_state::StreamState;
+use super::delivery::{DeliveryEnvelope, QueuedDelivery};
+use super::state::StreamState;
 
 /// RAII handle that unregisters a stream subscriber on drop.
 #[derive(Debug)]
@@ -157,5 +157,4 @@ impl Drop for SubscriptionReceiver {
 }
 
 #[cfg(test)]
-#[path = "subscription_tests.rs"]
 mod tests;

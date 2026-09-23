@@ -7,9 +7,8 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use crate::broker::{Broker, CacheMetadata, StreamMetadata};
-use crate::config::SubQueuePolicy;
 use crate::error::BrokerError;
-use crate::stream_state::{Cursor, StreamState};
+use crate::stream::{Cursor, StreamState, SubQueuePolicy};
 
 #[tokio::test]
 async fn publish_delivers_to_subscriber() {

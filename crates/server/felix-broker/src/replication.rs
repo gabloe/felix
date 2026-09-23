@@ -187,5 +187,4 @@ async fn conflict_in(
 }
 
 #[cfg(test)]
-#[path = "replication_tests.rs"]
 mod tests;

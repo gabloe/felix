@@ -10,18 +10,21 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 
-use crate::config::{
-    DEFAULT_LOG_CAPACITY, DEFAULT_SUB_QUEUE_POLICY, DEFAULT_TOPIC_CAPACITY, SubQueuePolicy,
-};
-use crate::delivery::{DeliveryEnvelope, QueuedDelivery};
 use crate::durable::DurableStorage;
 use crate::error::{BrokerError, Result};
 use crate::keys::{CacheKey, NamespaceKey, StreamKey, TopicKey};
-use crate::stream_state::{Cursor, StreamState};
-use crate::subscription::{Subscription, SubscriptionGuard};
+use crate::stream::{
+    Cursor, DeliveryEnvelope, QueuedDelivery, Sequenced, StreamState, SubQueuePolicy, Subscription,
+    SubscriptionGuard,
+};
 use crate::telemetry::{t_now_if, t_should_sample};
 use crate::timings;
 pub use felix_wire::StartPosition;
+
+// Capacity defaults for streams this broker creates.
+const DEFAULT_TOPIC_CAPACITY: usize = 1024;
+const DEFAULT_LOG_CAPACITY: usize = 1024;
+const DEFAULT_SUB_QUEUE_POLICY: SubQueuePolicy = SubQueuePolicy::DropNew;
 
 /// In-process broker for pub/sub messaging.
 ///
@@ -85,13 +88,13 @@ pub struct Broker {
     // registration rather than silently downgraded.
     pub(crate) durable_storage: Option<DurableStorage>,
     /// Serves consumer groups, when this broker keeps their positions.
-    pub(crate) group_reader: Option<Arc<crate::group_reader::GroupReader>>,
+    pub(crate) group_reader: Option<Arc<crate::queue::GroupReader>>,
     /// Consumer-group positions, when this broker has somewhere to keep them.
     ///
     /// `None` without durable storage, and deliberately not faked in memory: a
     /// group whose position is lost on restart redelivers everything it had
     /// already processed, which is worse than refusing to run a queue at all.
-    pub(crate) consumer_groups: Option<Arc<crate::consumer_groups::ConsumerGroups>>,
+    pub(crate) consumer_groups: Option<Arc<crate::queue::ConsumerGroups>>,
     /// Counters, when this broker has somewhere to write their log.
     ///
     /// `None` without durable storage, and deliberately not faked in memory:
@@ -103,7 +106,7 @@ pub struct Broker {
     /// `None` for a store with no log: a watch's contract is built on log
     /// offsets, so offering one over an ephemeral cache would promise a resume
     /// anchor that does not exist.
-    pub(crate) cache_watches: Option<Arc<crate::cache_watch::CacheWatchHub>>,
+    pub(crate) cache_watches: Option<Arc<crate::cache::CacheWatchHub>>,
     /// Signalled after every durable append, so replication can ship without
     /// waiting for its next tick.
     ///
@@ -346,7 +349,7 @@ impl Broker {
     pub fn new(cache: Box<dyn StorageApi + Send>) -> Self {
         // Offered to the store unconditionally; the store's answer is the
         // truth about whether watches can be served over it.
-        let hub = crate::cache_watch::CacheWatchHub::new();
+        let hub = crate::cache::CacheWatchHub::new();
         let cache_watches = cache
             .set_change_observer(Arc::clone(&hub) as Arc<dyn felix_storage::CacheObserver>)
             .then_some(hub);
@@ -393,7 +396,7 @@ impl Broker {
     }
 
     /// Fanout for cache watches, if this broker's cache store can serve them.
-    pub fn cache_watches(&self) -> Option<&Arc<crate::cache_watch::CacheWatchHub>> {
+    pub fn cache_watches(&self) -> Option<&Arc<crate::cache::CacheWatchHub>> {
         self.cache_watches.as_ref()
     }
 
@@ -432,12 +435,12 @@ impl Broker {
     /// Where consumer groups keep their positions, and how long a claim stands.
     pub fn with_consumer_groups(
         mut self,
-        groups: Arc<crate::consumer_groups::ConsumerGroups>,
-        dead_letters: Arc<crate::dead_letters::DeadLetters>,
+        groups: Arc<crate::queue::ConsumerGroups>,
+        dead_letters: Arc<crate::queue::DeadLetters>,
         visibility: std::time::Duration,
         max_attempts: u32,
     ) -> Self {
-        self.group_reader = Some(Arc::new(crate::group_reader::GroupReader::new(
+        self.group_reader = Some(Arc::new(crate::queue::GroupReader::new(
             Arc::clone(&groups),
             dead_letters,
             visibility,
@@ -448,12 +451,12 @@ impl Broker {
     }
 
     /// Serves consumer groups, if this broker can.
-    pub fn group_reader(&self) -> Option<&Arc<crate::group_reader::GroupReader>> {
+    pub fn group_reader(&self) -> Option<&Arc<crate::queue::GroupReader>> {
         self.group_reader.as_ref()
     }
 
     /// Consumer-group positions, if this broker keeps any.
-    pub fn consumer_groups(&self) -> Option<&Arc<crate::consumer_groups::ConsumerGroups>> {
+    pub fn consumer_groups(&self) -> Option<&Arc<crate::queue::ConsumerGroups>> {
         self.consumer_groups.as_ref()
     }
 
@@ -571,11 +574,11 @@ impl Broker {
         let turn = producers.turn(producer_id, sequence)?;
         let _turn = turn.lock().await;
         match producers.classify(producer_id, sequence)? {
-            crate::producers::Sequenced::Duplicate(outcome) => Ok(IdempotentOutcome {
+            Sequenced::Duplicate(outcome) => Ok(IdempotentOutcome {
                 outcome,
                 duplicate: true,
             }),
-            crate::producers::Sequenced::Append => {
+            Sequenced::Append => {
                 let outcome = self.publish_batch_with_outcome(handle, payloads).await?;
                 producers.remember(producer_id, sequence, outcome);
                 Ok(IdempotentOutcome {

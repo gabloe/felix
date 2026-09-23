@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use felix_storage::LogCache;
 use felix_storage::log::LogConfig;
 
+use super::reader::GroupKey;
 use crate::error::{BrokerError, Result};
-use crate::group_reader::GroupKey;
 
 fn storage_error(err: felix_storage::StorageError) -> BrokerError {
     BrokerError::Storage(err.to_string())
@@ -205,5 +205,4 @@ fn legacy_scope(key: &GroupKey) -> String {
 }
 
 #[cfg(test)]
-#[path = "dead_letters_tests.rs"]
 mod tests;

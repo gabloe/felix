@@ -216,7 +216,7 @@ impl felix_storage::CacheObserver for CacheWatchHub {
 
 /// RAII handle that unregisters the watcher on drop.
 #[derive(Debug)]
-pub struct CacheWatchGuard {
+pub(crate) struct CacheWatchGuard {
     hub: Weak<CacheWatchHub>,
     key: WatchShardKey,
     id: u64,
@@ -261,5 +261,4 @@ impl CacheWatchSubscription {
 }
 
 #[cfg(test)]
-#[path = "cache_watch_tests.rs"]
 mod tests;

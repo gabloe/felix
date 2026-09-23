@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
-use crate::config::SubQueuePolicy;
-use crate::delivery::QueuedDelivery;
+use super::delivery::{QueuedDelivery, SubQueuePolicy};
+use super::producers::ProducerTable;
+use super::subscription::SubscriptionReceiver;
 use crate::durable::StreamLog;
-use crate::subscription::SubscriptionReceiver;
 use felix_storage::CommitSequencer;
 use felix_storage::log::LogRecord;
 
@@ -71,7 +71,7 @@ pub(crate) struct StreamState {
     /// lock.
     consistency: AtomicU8,
     /// The producers whose sequences this shard's leader remembers.
-    pub(crate) producers: crate::producers::ProducerTable,
+    pub(crate) producers: ProducerTable,
     /// Publishes claimed and not yet completed. A draining shard reports
     /// itself settled only once this is zero.
     pub(crate) in_flight: AtomicUsize,
@@ -129,7 +129,7 @@ impl StreamState {
             queued_items: Arc::new(AtomicUsize::new(0)),
             durable,
             commit_sequencer: Arc::new(CommitSequencer::new(0)),
-            producers: crate::producers::ProducerTable::default(),
+            producers: ProducerTable::default(),
             in_flight: AtomicUsize::new(0),
         }
     }
@@ -505,5 +505,4 @@ impl StreamState {
 }
 
 #[cfg(test)]
-#[path = "stream_state_tests.rs"]
 mod tests;

@@ -209,5 +209,4 @@ fn decode_offset(bytes: &[u8]) -> Result<u64> {
 }
 
 #[cfg(test)]
-#[path = "consumer_groups_tests.rs"]
 mod tests;

@@ -11,6 +11,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+/// What a publish does when a subscriber's queue is full.
+///
+/// `DropNew` is the default, so a slow subscriber costs itself records rather
+/// than slowing the publisher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubQueuePolicy {
+    /// Wait for room. Every publisher of the shard waits with it.
+    Block,
+    /// Drop the batch for this subscriber.
+    DropNew,
+    /// Treated as `DropNew`: a bounded channel cannot evict what it already holds.
+    DropOld,
+}
+
 #[derive(Debug, Clone)]
 pub struct DeliveryEnvelope {
     inner: Arc<DeliveryBatch>,
