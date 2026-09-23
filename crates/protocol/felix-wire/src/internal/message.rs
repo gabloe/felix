@@ -1,0 +1,135 @@
+//! The decoded internal message, and the shard reference most of them carry.
+
+use super::{
+    ForwardCacheError, ForwardCacheOk, ForwardCacheOp, ForwardPublish, ForwardPublishError,
+    ForwardPublishOk, Hello, HelloOk, Kind, NotLeader, ReplicateBootstrap, ReplicateError,
+    ReplicateOk, ReplicateRebuild, ReplicateRecords,
+};
+
+/// Which shard a forwarded request is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardRef {
+    pub tenant_id: String,
+    pub namespace: String,
+    pub stream: String,
+    pub shard: u32,
+    /// The assignment generation the requester resolved against.
+    ///
+    /// The owner compares this with its own. Equal proceeds; either mismatch is
+    /// an explicit typed answer, and never a successful ownership claim.
+    pub generation: u64,
+}
+
+/// A decoded internal message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InternalMessage {
+    ForwardPublish(ForwardPublish),
+    ForwardPublishOk(ForwardPublishOk),
+    ForwardPublishError(ForwardPublishError),
+    NotLeader(NotLeader),
+    Hello(Hello),
+    HelloOk(HelloOk),
+    ReplicateRecords(ReplicateRecords),
+    ReplicateOk(ReplicateOk),
+    ReplicateError(ReplicateError),
+    ReplicateBootstrap(ReplicateBootstrap),
+    ForwardCacheOp(ForwardCacheOp),
+    ForwardCacheOk(ForwardCacheOk),
+    ForwardCacheError(ForwardCacheError),
+    /// The same body as [`ReplicateRecords`], for a shard that belongs to a
+    /// cache rather than a stream.
+    ///
+    /// A separate kind rather than a field on `ShardRef`, because the protocol
+    /// evolves by adding kinds: widening an existing body would need a version
+    /// bump, and a version bump makes a rolling upgrade impossible. An old peer
+    /// answers this with "unknown kind", which is a typed refusal — the leader
+    /// stops replicating that shard and says so, rather than shipping a cache's
+    /// records into a stream's log.
+    ReplicateCacheRecords(ReplicateRecords),
+    ReplicateCacheBootstrap(ReplicateBootstrap),
+    /// The same body again, for a stream shard's consumer-group cursors.
+    ///
+    /// A third kind rather than a field, for the reason the cache pair exists:
+    /// the bodies are identical, and a follower that guessed wrong would write
+    /// one shard's log into another's.
+    ReplicateGroupRecords(ReplicateRecords),
+    ReplicateGroupBootstrap(ReplicateBootstrap),
+    /// The same body once more, for a stream shard's dead-letter list.
+    ///
+    /// A fourth kind for the reason the group pair exists: the bodies are
+    /// identical, and the kind is what stops a follower writing the offsets a
+    /// group gave up on into the cursors that say where it resumes.
+    ReplicateDeadLetterRecords(ReplicateRecords),
+    ReplicateDeadLetterBootstrap(ReplicateBootstrap),
+    /// The same body once more, for a cache shard's counter log — the kind is
+    /// what stops a follower folding counter deltas into the cache of the
+    /// same name.
+    ReplicateCounterRecords(ReplicateRecords),
+    ReplicateCounterBootstrap(ReplicateBootstrap),
+    ReplicateRebuild(ReplicateRebuild),
+}
+
+impl InternalMessage {
+    pub fn kind(&self) -> Kind {
+        match self {
+            // The credential decides the kind, so a forwarder that has one
+            // always sends the kind an owner will check it on.
+            Self::ForwardPublish(m) if m.credential.is_empty() => Kind::ForwardPublish,
+            Self::ForwardPublish(_) => Kind::AuthorizedForwardPublish,
+            Self::ForwardPublishOk(_) => Kind::ForwardPublishOk,
+            Self::ForwardPublishError(_) => Kind::ForwardPublishError,
+            Self::NotLeader(_) => Kind::NotLeader,
+            Self::Hello(_) => Kind::Hello,
+            Self::HelloOk(_) => Kind::HelloOk,
+            Self::ReplicateRecords(_) => Kind::ReplicateRecords,
+            Self::ReplicateOk(_) => Kind::ReplicateOk,
+            Self::ReplicateError(_) => Kind::ReplicateError,
+            Self::ReplicateBootstrap(_) => Kind::ReplicateBootstrap,
+            Self::ForwardCacheOp(m) if m.credential.is_empty() => Kind::ForwardCacheOp,
+            Self::ForwardCacheOp(_) => Kind::AuthorizedForwardCacheOp,
+            Self::ForwardCacheOk(_) => Kind::ForwardCacheOk,
+            Self::ForwardCacheError(_) => Kind::ForwardCacheError,
+            Self::ReplicateCacheRecords(_) => Kind::ReplicateCacheRecords,
+            Self::ReplicateCacheBootstrap(_) => Kind::ReplicateCacheBootstrap,
+            Self::ReplicateGroupRecords(_) => Kind::ReplicateGroupRecords,
+            Self::ReplicateGroupBootstrap(_) => Kind::ReplicateGroupBootstrap,
+            Self::ReplicateDeadLetterRecords(_) => Kind::ReplicateDeadLetterRecords,
+            Self::ReplicateDeadLetterBootstrap(_) => Kind::ReplicateDeadLetterBootstrap,
+            Self::ReplicateCounterRecords(_) => Kind::ReplicateCounterRecords,
+            Self::ReplicateCounterBootstrap(_) => Kind::ReplicateCounterBootstrap,
+            Self::ReplicateRebuild(_) => Kind::ReplicateRebuild,
+        }
+    }
+
+    /// The id this message answers, or carries if it is a request.
+    ///
+    /// Every message has one, which is what makes the request lifecycle
+    /// unambiguous: a response can always be matched or discarded, never left
+    /// pending.
+    pub fn correlation_id(&self) -> u64 {
+        match self {
+            Self::ForwardPublish(m) => m.correlation_id,
+            Self::ForwardPublishOk(m) => m.correlation_id,
+            Self::ForwardPublishError(m) => m.correlation_id,
+            Self::NotLeader(m) => m.correlation_id,
+            Self::Hello(m) => m.correlation_id,
+            Self::HelloOk(m) => m.correlation_id,
+            Self::ReplicateRecords(m) => m.correlation_id,
+            Self::ReplicateOk(m) => m.correlation_id,
+            Self::ReplicateError(m) => m.correlation_id,
+            Self::ReplicateBootstrap(m) => m.correlation_id,
+            Self::ForwardCacheOp(m) => m.correlation_id,
+            Self::ForwardCacheOk(m) => m.correlation_id,
+            Self::ForwardCacheError(m) => m.correlation_id,
+            Self::ReplicateCacheRecords(m) => m.correlation_id,
+            Self::ReplicateCacheBootstrap(m) => m.correlation_id,
+            Self::ReplicateGroupRecords(m) => m.correlation_id,
+            Self::ReplicateGroupBootstrap(m) => m.correlation_id,
+            Self::ReplicateDeadLetterRecords(m) => m.correlation_id,
+            Self::ReplicateDeadLetterBootstrap(m) => m.correlation_id,
+            Self::ReplicateCounterRecords(m) => m.correlation_id,
+            Self::ReplicateCounterBootstrap(m) => m.correlation_id,
+            Self::ReplicateRebuild(m) => m.correlation_id,
+        }
+    }
+}
