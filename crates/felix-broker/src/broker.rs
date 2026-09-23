@@ -323,7 +323,22 @@ pub struct ResumedSubscription {
     /// Offset of the first backlog entry, and of the live edge when the backlog
     /// is empty.
     pub backlog_start: u64,
+    /// Where delivery starts and where it turns live, for a durable stream.
+    /// `None` for an in-memory stream, whose events carry no offsets to
+    /// compare these against.
+    pub join: Option<JoinOffsets>,
     pub subscription: Subscription,
+}
+
+/// Where a resumed subscription joins its stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JoinOffsets {
+    /// The first offset delivered.
+    pub start_offset: u64,
+    /// The tail when the subscriber was registered. Records in
+    /// `[start_offset, live_offset)` were already written at join; everything
+    /// from `live_offset` on was written after.
+    pub live_offset: u64,
 }
 
 impl Broker {
@@ -1044,12 +1059,15 @@ impl Broker {
         let stream_state = handle.state;
         let durable = stream_state.durable.clone();
 
+        let tail = match &durable {
+            Some(log) => log.tail_offset().await?,
+            None => stream_state.tail_seq(),
+        };
         // Resolve the requested position to an offset before touching the ring.
+        // `Latest` is the tail read above rather than a second read, so it
+        // joins exactly where the reported live edge is.
         let requested = match start {
-            StartPosition::Latest => match &durable {
-                Some(log) => log.tail_offset().await?,
-                None => stream_state.tail_seq(),
-            },
+            StartPosition::Latest => tail,
             StartPosition::Earliest => match &durable {
                 // The oldest offset still on disk, which retention raises as it
                 // trims. Never 0 for a trimmed stream.
@@ -1064,10 +1082,6 @@ impl Broker {
         // asked for. Rejected rather than silently reinterpreted; a client that
         // wants to wait for an offset that does not exist yet should ask for
         // `Latest` and track its own position.
-        let tail = match &durable {
-            Some(log) => log.tail_offset().await?,
-            None => stream_state.tail_seq(),
-        };
         if requested > tail {
             return Err(BrokerError::CursorInFuture { requested, tail });
         }
@@ -1117,6 +1131,12 @@ impl Broker {
             history,
             backlog,
             backlog_start,
+            // `tail` was read before registering, so anything published since
+            // is at or past it and already captured: the join has no gap.
+            join: durable.as_ref().map(|_| JoinOffsets {
+                start_offset: requested,
+                live_offset: tail,
+            }),
             subscription: Subscription {
                 receiver,
                 guard,

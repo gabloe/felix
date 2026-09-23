@@ -162,6 +162,46 @@ It needs a broker advertising `FEATURE_STREAM_SHARDS`, because the shard count
 comes from asking one. A broker that has never heard of the stream reports zero
 shards and the call fails rather than reading shard 0 and calling it the stream.
 
+## A prefix watch across every shard of a cache
+
+Keys sharing a prefix hash to different shards, and a cache watch reads one.
+`ClusterClient::watch_cache_sharded` opens one prefix watch per shard, follows
+each shard's redirect to its owner, and merges them:
+
+```rust,no_run
+# use felix_client::ShardedCacheWatchItem;
+# async fn example(cluster: std::sync::Arc<felix_client::ClusterClient>) -> anyhow::Result<()> {
+let mut watch = cluster
+    .watch_cache_sharded_retained("t1", "default", "sessions", "user:")
+    .await?;
+while let Some(item) = watch.recv().await {
+    match item {
+        ShardedCacheWatchItem::Change { shard, change } => { /* apply */ }
+        ShardedCacheWatchItem::StateComplete => { /* every shard's state is in */ }
+        ShardedCacheWatchItem::Lagged { shard, .. } => { /* that shard ended */ }
+        ShardedCacheWatchItem::ShardClosed { shard } => { /* that shard ended */ }
+    }
+}
+# Ok(())
+# }
+```
+
+- **Ordering is per key.** A key's changes arrive in write order. Changes to
+  keys on different shards can arrive in any order, and each `offset` belongs
+  to its own shard's log.
+- **`StateComplete` arrives once**, after every shard has sent its retained
+  values. Shards finish at different times, so you can't work this out by
+  counting. If a shard ends partway through, it never arrives.
+- **Resume per shard.** `resume_offsets()` has one offset per shard; pass it
+  back to `watch_cache_sharded`. A shard that hadn't finished its retained
+  values resumes at 0.
+- **A shard that ends is reported, not reconnected.** You get `Lagged` or
+  `ShardClosed` for it and the other shards carry on.
+- **If any shard can't be reached, the call fails**, as with
+  `subscribe_sharded`.
+
+It needs a broker advertising `FEATURE_CACHE_SHARDS` to learn the shard count.
+
 ## A consumer group across every shard
 
 A group is bound to one shard, and only that shard's leader can serve it: the

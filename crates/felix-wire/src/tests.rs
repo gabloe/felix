@@ -650,6 +650,8 @@ fn message_all_variants_encode_decode() {
     // Test Subscribed message
     let message = Message::Subscribed {
         subscription_id: 42,
+        start_offset: None,
+        live_offset: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
@@ -1961,4 +1963,82 @@ mod binary_idempotent {
         };
         assert!(decode_acked_publish_batch(&cut).is_err());
     }
+}
+
+/// Without join offsets `subscribed` is the frame it always was, and an old
+/// broker's frame decodes with none.
+#[test]
+fn subscribed_without_join_offsets_is_unchanged() {
+    let plain = Message::Subscribed {
+        subscription_id: 42,
+        start_offset: None,
+        live_offset: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&plain).expect("serialize"),
+        r#"{"type":"subscribed","subscription_id":42}"#
+    );
+    let legacy: Message =
+        serde_json::from_str(r#"{"type":"subscribed","subscription_id":42}"#).expect("decode");
+    assert_eq!(legacy, plain);
+
+    let joined = Message::Subscribed {
+        subscription_id: 42,
+        start_offset: Some(10),
+        live_offset: Some(25),
+    };
+    let frame = joined.encode().expect("encode");
+    assert_eq!(Message::decode(frame).expect("decode"), joined);
+}
+
+/// The cache-shards bit is new and disjoint, absent from silence, and not
+/// implied by the stream-shards bit: a broker that only knows `stream_shards`
+/// has no arm for `cache_shards`.
+#[test]
+fn cache_shards_is_a_new_feature_bit_and_disturbs_nothing() {
+    let older = crate::FEATURE_TOPOLOGY
+        | crate::FEATURE_REDIRECT
+        | crate::FEATURE_CACHE_DELETE
+        | crate::FEATURE_CONSUMER_GROUP
+        | crate::FEATURE_GROUP_DEAD_LETTERS
+        | crate::FEATURE_STREAM_SHARDS
+        | crate::FEATURE_CACHE_WATCH
+        | crate::FEATURE_CACHE_WATCH_RETAINED
+        | crate::FEATURE_COUNTERS
+        | crate::FEATURE_IDEMPOTENT_PRODUCER;
+    assert_eq!(crate::FEATURE_CACHE_SHARDS & older, 0);
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_CACHE_SHARDS
+    ));
+    assert!(!crate::supports_feature(older, crate::FEATURE_CACHE_SHARDS));
+    assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_SHARDS));
+}
+
+#[test]
+fn cache_shards_round_trips() {
+    for message in [
+        Message::CacheShards {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            cache: "sessions".to_string(),
+            request_id: 3,
+        },
+        Message::CacheShardsView {
+            shards: 4,
+            request_id: 3,
+        },
+    ] {
+        let frame = message.encode().expect("encode");
+        assert_eq!(Message::decode(frame).expect("decode"), message);
+    }
+    let json = serde_json::to_string(&Message::CacheShardsView {
+        shards: 4,
+        request_id: 3,
+    })
+    .expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"type":"cache_shards_view","shards":4,"request_id":3}"#
+    );
 }

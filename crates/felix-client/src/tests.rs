@@ -362,6 +362,8 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                                 &mut send,
                                 Message::Subscribed {
                                     subscription_id: sub_id,
+                                    start_offset: None,
+                                    live_offset: None,
                                 },
                             )
                             .await?;
@@ -571,6 +573,8 @@ async fn subscribe_requests_no_id_and_adopts_server_assigned_id() -> Result<()> 
                         &mut send,
                         Message::Subscribed {
                             subscription_id: SERVER_ASSIGNED_ID,
+                            start_offset: None,
+                            live_offset: None,
                         },
                     )
                     .await?;
@@ -672,6 +676,8 @@ async fn subscription_stream_close_returns_none() -> Result<()> {
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -764,6 +770,8 @@ async fn subscription_binary_batch_mismatched_id_errors() -> Result<()> {
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -864,6 +872,8 @@ async fn subscription_decode_error_on_invalid_frame() -> Result<()> {
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -967,6 +977,8 @@ async fn subscription_legacy_event_paths_and_unexpected_message_error() -> Resul
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -1102,6 +1114,8 @@ async fn subscription_empty_event_batch_returns_none() -> Result<()> {
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -1208,6 +1222,8 @@ async fn subscription_binary_batch_decode_error_on_invalid_payload() -> Result<(
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -1313,6 +1329,8 @@ async fn subscription_binary_batch_success_records_decode_timing() -> Result<()>
                             &mut send,
                             Message::Subscribed {
                                 subscription_id: sub_id,
+                                start_offset: None,
+                                live_offset: None,
                             },
                         )
                         .await?;
@@ -2036,7 +2054,15 @@ impl TokenCheckingServer {
         write_message(&mut send, Message::Ok).await?;
         while let Some(message) = read_message(&mut recv, &mut scratch).await? {
             if let Message::Subscribe { .. } = message {
-                write_message(&mut send, Message::Subscribed { subscription_id: 7 }).await?;
+                write_message(
+                    &mut send,
+                    Message::Subscribed {
+                        subscription_id: 7,
+                        start_offset: None,
+                        live_offset: None,
+                    },
+                )
+                .await?;
                 let mut uni = connection.open_uni().await?;
                 write_message(&mut uni, Message::EventStreamHello { subscription_id: 7 }).await?;
             }

@@ -160,7 +160,8 @@ one subscription per shard; `stream_shards` says how many there are.
 
 ### Subscribed (server -> client)
 ```
-{ "type": "subscribed", "subscription_id": <number> }
+{ "type": "subscribed", "subscription_id": <number>,
+  "start_offset": <u64>?, "live_offset": <u64>? }
 ```
 
 Confirms a subscription and carries the id the broker assigned it. The same id
@@ -173,6 +174,13 @@ opens the event stream that carries its deliveries:
 which is the first message on the unidirectional stream the broker opens back,
 and is how a client matches an event stream to the subscription that asked for
 it.
+
+`start_offset` is the first offset the subscription delivers. `live_offset` is
+the stream's tail when the subscriber was registered: anything below it was
+already in the stream, anything from it on was written after, and nothing falls
+between. For `latest` the two are equal. Both are sent only for a subscribe
+with a `start`, on a durable stream, to a client that negotiated
+`FLAG_EVENT_BATCH_OFFSETS`. Otherwise the frame is unchanged.
 
 ### Event (server -> client)
 ```
@@ -275,7 +283,8 @@ uses — and ignores `shard`. A `prefix` watch reads `shard`, because keys
 sharing a prefix hash to different shards; a whole multi-shard cache is one
 watch per shard. Absent means 0 on a single-shard cache and is refused with an
 `Error` on a multi-shard one: reading shard 0 there would cover only the keys
-that hash to it while looking like a complete prefix watch.
+that hash to it while looking like a complete prefix watch. `cache_shards` says
+how many shards to watch.
 
 `from_offset` is where to resume: the first change the client has *not* seen,
 so a client checkpoints the offset it last handled plus one. Absent means from
@@ -404,6 +413,27 @@ in exactly the way any routing answer can.
 `0` means this broker knows nothing of that stream, which is **not** the same as
 one shard. A client that rounded it up would read shard 0 and call it the
 stream.
+
+### CacheShards
+```
+{ "type": "cache_shards", "tenant_id": "<string>", "namespace": "<string>",
+  "cache": "<string>", "request_id": <u64> }
+```
+
+Sent only to a broker that advertised `FEATURE_CACHE_SHARDS`.
+
+How many shards a cache has, so a client knows how many prefix watches to
+open. It's a separate request rather than a field on `stream_shards` because
+an older broker would ignore the field and answer for a stream with the same
+name. Scoped to the client's tenant and answered from the routing snapshot.
+
+### CacheShardsView (server -> client)
+```
+{ "type": "cache_shards_view", "shards": <u32>, "request_id": <u64> }
+```
+
+`0` means the broker doesn't know the cache. A registered cache that hasn't
+been placed yet counts as one shard, as it does for `cache_watch`.
 
 ### CacheValue (server -> client)
 ```
@@ -807,6 +837,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0080` | `FEATURE_CACHE_WATCH_RETAINED` | The broker serves `retained` delivery on a `cache_watch` |
 | `0x0100` | `FEATURE_COUNTERS` | The broker serves `counter_add` and `counter_get` |
 | `0x0200` | `FEATURE_IDEMPOTENT_PRODUCER` | The broker serves `producer_init` and `publish_idempotent`, and answers the latter's refusals as `publish_refused` |
+| `0x0400` | `FEATURE_CACHE_SHARDS` | The broker answers `cache_shards` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -828,8 +859,8 @@ the broker's control loop, so probing costs the connection.
 Note which features depend on what. `FEATURE_TOPOLOGY` and `FEATURE_REDIRECT`
 describe a cluster, so a standalone broker advertises neither.
 `FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
-advertised by both, as is `FEATURE_STREAM_SHARDS` — a standalone broker has one
-shard per stream and can say so. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
+advertised by both, as are `FEATURE_STREAM_SHARDS` and `FEATURE_CACHE_SHARDS` —
+a standalone broker has one shard per stream and per cache and can say so. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
 storage rather than on clustering: without it a group's position is lost on
 every restart, so a broker with none offers neither. `FEATURE_CACHE_WATCH`
 depends on the cache being log-backed, for the same shape of reason: a watch's
