@@ -18,14 +18,14 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+use crate::io::read_at;
 use crate::log::{LogRecord, Offset, SegmentId};
 use crate::segment::format::{
-    Corruption, CorruptionKind, IndexEntry, RECORD_HEADER_LEN, RecordHeader, SEGMENT_HEADER_LEN,
-    SegmentHeader, check_offset_continuity, decode_record,
+    IndexEntry, RECORD_HEADER_LEN, RecordHeader, SEGMENT_HEADER_LEN, SegmentHeader,
+    check_offset_continuity, decode_record,
 };
 use crate::segment::index::SparseIndex;
-use crate::segment::io::read_at;
-use crate::{Result, StorageError};
+use crate::{Corruption, CorruptionKind, Result, StorageError};
 
 /// Read-ahead window. Large enough that a scan of small records is dominated by
 /// memcpy rather than syscalls, small enough to stay comfortably in L2.

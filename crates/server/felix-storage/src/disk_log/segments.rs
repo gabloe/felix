@@ -8,9 +8,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::io::read_at;
 use crate::log::{AppendRecord, LogConfig, LogRecord, Offset, SegmentDescriptor, SegmentId};
 use crate::segment::format::SEGMENT_HEADER_LEN;
-use crate::segment::io::read_at;
 use crate::segment::writer::{BlankSegment, ResumeState};
 use crate::segment::{
     ReadBudget, ScanStart, SegmentReader, SegmentWriter, SparseIndex, index_file_name,
@@ -270,7 +270,7 @@ impl SegmentSet {
             dir: self.dir.clone(),
             id: self.next_segment_id.fetch_add(1, Ordering::AcqRel),
             previous_active_id: self.active.id(),
-            preallocate_bytes: self.preallocate_bytes(),
+            preallocate_bytes: self.config.preallocate_bytes(),
             index_spacing_bytes: self.config.index_spacing_bytes,
         }
     }
@@ -367,7 +367,7 @@ impl SegmentSet {
             id,
             base_offset,
             now_micros(),
-            self.preallocate_bytes(),
+            self.config.preallocate_bytes(),
             self.config.index_spacing_bytes,
         )?;
         let retired = std::mem::replace(&mut self.active, replacement);
@@ -405,14 +405,6 @@ impl SegmentSet {
 
     fn bump_next_segment_id(&self, at_least: SegmentId) {
         self.next_segment_id.fetch_max(at_least, Ordering::AcqRel);
-    }
-
-    fn preallocate_bytes(&self) -> u64 {
-        if self.config.preallocate_segments {
-            self.config.segment_size_bytes
-        } else {
-            0
-        }
     }
 
     /// Read records from `start` onward, spending at most `budget`.
@@ -707,7 +699,7 @@ impl SegmentSet {
                 id,
                 base_offset,
                 now_micros(),
-                self.preallocate_bytes(),
+                self.config.preallocate_bytes(),
                 self.config.index_spacing_bytes,
             )?
         };

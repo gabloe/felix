@@ -2,8 +2,10 @@
 //!
 //! The headline is `a_cache_survives_a_restart`: it is what "the cache is a
 //! log" buys, and what the in-memory cache could never do.
-use super::*;
 use std::time::Duration;
+
+use super::*;
+use crate::log::AppendOnlyLog;
 
 fn config() -> LogConfig {
     LogConfig {

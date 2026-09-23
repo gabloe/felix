@@ -243,7 +243,7 @@ impl StreamLog {
     }
 
     /// Where each leadership generation began here, oldest first.
-    pub fn generations(&self) -> Vec<felix_storage::disk_log::epochs::Epoch> {
+    pub fn generations(&self) -> Vec<felix_storage::log::Epoch> {
         self.log.generations()
     }
 

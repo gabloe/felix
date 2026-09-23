@@ -44,11 +44,12 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use parking_lot::{Mutex, RwLock};
 
+use crate::io::sync_data;
 use crate::log::{
     AppendOnlyLog, AppendRecord, AppendResult, BoxFuture, FsyncMode, LogConfig, LogProvider,
     LogRecord, Offset, ReadRange, SealedSegment, SegmentDescriptor, ShardKey,
 };
-use crate::segment::{ReadBudget, io::sync_data};
+use crate::segment::ReadBudget;
 use crate::{Result, StorageError, metrics_names};
 
 /// Bound on rollover retries in a single append.
@@ -362,16 +363,16 @@ impl LogInner {
         // and the blocking pool below takes over, because durability must not
         // depend on an optimisation being present (#548).
         #[cfg(target_os = "linux")]
-        let via_uring: Option<std::io::Result<()>> = if crate::uring_fsync::enabled() {
+        let via_uring: Option<std::io::Result<()>> = if crate::io::uring_fsync::enabled() {
             use std::os::unix::io::AsRawFd;
             // The retired segment first: `durable_upto` covers records in both,
             // and may not be reported until every one of them is on disk.
             let mut result = Some(Ok(()));
             if let Some(retired) = retired.as_ref() {
-                result = crate::uring_fsync::fsync(retired.as_raw_fd()).await;
+                result = crate::io::uring_fsync::fsync(retired.as_raw_fd()).await;
             }
             if matches!(result, Some(Ok(()))) {
-                result = crate::uring_fsync::fsync(handle.as_raw_fd()).await;
+                result = crate::io::uring_fsync::fsync(handle.as_raw_fd()).await;
             }
             result
         } else {
@@ -973,7 +974,7 @@ impl AppendOnlyLog for DiskLog {
         Ok(true)
     }
 
-    fn generations(&self) -> Vec<epochs::Epoch> {
+    fn generations(&self) -> Vec<crate::log::Epoch> {
         self.inner.epochs.lock().entries().to_vec()
     }
 

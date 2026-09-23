@@ -33,9 +33,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::io::sync_dir;
 use crate::log::{LogConfig, Offset, SegmentDescriptor, SegmentId};
 use crate::segment::format::SEGMENT_HEADER_LEN;
-use crate::segment::io::sync_dir;
 use crate::segment::writer::ResumeState;
 use crate::segment::{
     ScanOutcome, ScanStart, SegmentReader, SegmentWriter, SparseIndex, index_file_name,
@@ -105,7 +105,7 @@ pub fn place_empty_shard(dir: &Path, config: &LogConfig, base_offset: Offset) ->
         0,
         base_offset,
         now_micros(),
-        preallocate_bytes(config),
+        config.preallocate_bytes(),
         config.index_spacing_bytes,
     )?;
     // Flushed before anything can append to it: a base offset that did not
@@ -138,7 +138,7 @@ pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Reco
                 0,
                 0,
                 now_micros(),
-                preallocate_bytes(config),
+                config.preallocate_bytes(),
                 config.index_spacing_bytes,
             )?,
             truncated_bytes: 0,
@@ -270,14 +270,6 @@ fn discard_abandoned_preparations(
         sync_dir(dir)?;
     }
     Ok(discarded)
-}
-
-fn preallocate_bytes(config: &LogConfig) -> u64 {
-    if config.preallocate_segments {
-        config.segment_size_bytes
-    } else {
-        0
-    }
 }
 
 fn recover_existing(
@@ -434,14 +426,14 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
     // its tail is not a torn write — it is data loss in committed bytes.
     if let Some(tail) = outcome.torn_tail {
         return Err(StorageError::Corruption(
-            crate::segment::Corruption::new(tail.cause)
+            crate::Corruption::new(tail.cause)
                 .in_segment(label, id)
                 .at_position(tail.position),
         ));
     }
     if outcome.valid_bytes != file_len {
         return Err(StorageError::Corruption(
-            crate::segment::Corruption::new(crate::segment::CorruptionKind::Truncated {
+            crate::Corruption::new(crate::CorruptionKind::Truncated {
                 needed: file_len,
                 available: outcome.valid_bytes,
             })
@@ -468,12 +460,9 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
 
 fn gap_error(label: &str, id: SegmentId, expected: Offset, found: Offset) -> StorageError {
     StorageError::Corruption(
-        crate::segment::Corruption::new(crate::segment::CorruptionKind::OffsetOutOfOrder {
-            expected,
-            found,
-        })
-        .in_segment(label, id)
-        .at_position(0),
+        crate::Corruption::new(crate::CorruptionKind::OffsetOutOfOrder { expected, found })
+            .in_segment(label, id)
+            .at_position(0),
     )
 }
 
@@ -902,7 +891,7 @@ mod tests {
         };
         assert!(matches!(
             detail.kind,
-            crate::segment::CorruptionKind::OffsetOutOfOrder { .. }
+            crate::CorruptionKind::OffsetOutOfOrder { .. }
         ));
     }
 

@@ -448,8 +448,8 @@ pub fn encode_sum(sum: i64) -> Bytes {
 /// Read back what [`encode_sum`] wrote, refusing anything else.
 pub fn decode_sum(bytes: &[u8]) -> Result<i64> {
     let raw: [u8; 8] = bytes.try_into().map_err(|_| {
-        StorageError::Corruption(crate::segment::Corruption::new(
-            crate::segment::CorruptionKind::CounterRecord {
+        StorageError::Corruption(crate::Corruption::new(
+            crate::CorruptionKind::CounterRecord {
                 detail: "forwarded sum is not eight bytes",
                 found: bytes.len() as u64,
             },
@@ -459,5 +459,4 @@ pub fn decode_sum(bytes: &[u8]) -> Result<i64> {
 }
 
 #[cfg(test)]
-#[path = "counter_log/tests.rs"]
 mod tests;

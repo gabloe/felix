@@ -25,11 +25,11 @@
 
 use felix_storage::log::LogConfig;
 use felix_storage::segment::format::{
-    CorruptionKind, MAX_PAYLOAD_BYTES, RECORD_HEADER_LEN, SEGMENT_HEADER_LEN, SegmentHeader,
-    decode_record, encode_record,
+    MAX_PAYLOAD_BYTES, RECORD_HEADER_LEN, SEGMENT_HEADER_LEN, SegmentHeader, decode_record,
+    encode_record,
 };
 use felix_storage::segment::{ScanStart, scan_segment};
-use felix_storage::{StorageError, segment};
+use felix_storage::{CorruptionKind, StorageError, segment};
 use tempfile::tempdir;
 
 /// CRC-32 (IEEE), matching what the format uses for its header checksum.

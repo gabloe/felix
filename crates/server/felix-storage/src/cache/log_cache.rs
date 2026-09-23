@@ -1,0 +1,572 @@
+//! A cache that is a log.
+//!
+//! `put` and `delete` append a record; an in-memory index maps each key to the
+//! offset of the record that currently defines it; `get` reads the log at that
+//! offset. See `docs/cache-on-log.md` for the design and the reasoning behind
+//! each part of it.
+//!
+//! This is what makes "one core log, many semantics" true of the cache rather
+//! than aspirational: crash safety, group commit, the fsync policy, and
+//! eventually replication are all inherited from the log rather than
+//! reimplemented beside it.
+
+mod compaction;
+mod record;
+mod shard;
+
+pub use record::CacheOp;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use parking_lot::Mutex as SyncMutex;
+use tokio::sync::Mutex;
+
+use crate::cache::{CacheChange, CacheObserver, CacheSnapshotEntry, StorageApi};
+use crate::commit_order::CommitSequencer;
+use crate::disk_log::{DiskLog, layout};
+use crate::log::{AppendRecord, LogConfig, ShardKey};
+use crate::{Result, StorageError};
+
+use compaction::recover_interrupted_swap;
+use shard::{CacheShard, Index, ShardState, now_millis};
+
+/// A cache backed by the same log streams are.
+#[derive(Debug)]
+pub struct LogCache {
+    root: PathBuf,
+    config: LogConfig,
+    shards: SyncMutex<HashMap<CacheId, Arc<CacheShard>>>,
+    /// Told about every applied write, while the shard's write lock is held —
+    /// which is what makes the order it sees the shard's order.
+    observer: SyncMutex<Option<Arc<dyn CacheObserver>>>,
+}
+
+impl LogCache {
+    /// Open the cache store rooted at `root`.
+    ///
+    /// Callers pass the *cache* root, which is deliberately not the stream root:
+    /// a shard directory is named from a hash of its tenant, namespace and
+    /// stream, so a cache and a stream sharing a name would otherwise interleave
+    /// their records in one directory.
+    pub fn open(root: impl Into<PathBuf>, config: LogConfig) -> Result<Self> {
+        let root = root.into();
+        std::fs::create_dir_all(&root).map_err(StorageError::Io)?;
+        Ok(Self {
+            root,
+            config,
+            shards: SyncMutex::new(HashMap::new()),
+            observer: SyncMutex::new(None),
+        })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// `put`, with the failure the trait cannot express.
+    ///
+    /// The write has two halves, and the state lock spans neither fsync nor
+    /// wait. Stage under a short lock (claim an offset and a turn), commit
+    /// outside it (the fsync, group-committed with every concurrent writer),
+    /// then wait the turn out and apply under the lock again. Returning only
+    /// after `commit` keeps the ack durability-gated; applying only after
+    /// `wait` keeps index and watch order equal to disk order.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn put_checked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+        value: Bytes,
+        ttl: Option<std::time::Duration>,
+    ) -> Result<()> {
+        let shard_index = shard;
+        let shard = self.shard(tenant_id, namespace, cache, shard_index)?;
+        let expires_at_millis = ttl.map_or(0, |ttl| now_millis() + ttl.as_millis() as u64);
+        let op = CacheOp::Put {
+            key: key.to_string(),
+            value: value.clone(),
+            expires_at_millis,
+        };
+
+        let (pending, log, bytes, turn) = {
+            let mut state = shard.state.lock().await;
+            shard.ensure_index(&mut state).await?;
+            let payload = op.encode();
+            let bytes = payload.len() as u64;
+            let pending = state
+                .log
+                .append_pending(&[AppendRecord {
+                    payload,
+                    timestamp_micros: now_millis() * 1000,
+                }])
+                .await?;
+            // Claimed the moment the offsets are consumed. The guard releases
+            // the range on every exit path — error, cancellation mid-await —
+            // so a failed commit cannot strand the writers queued behind it.
+            let turn = shard
+                .sequencer
+                .reserve(pending.first_offset(), pending.last_offset() + 1);
+            state.sequenced_through = Some(pending.last_offset() + 1);
+            (pending, state.log.clone(), bytes, turn)
+        };
+
+        log.commit(&pending).await?;
+        turn.wait().await;
+
+        let mut state = shard.state.lock().await;
+        let offset = pending.first_offset();
+        CacheShard::apply_op(&mut state, &op, offset, bytes);
+        // Observed under the apply lock, in turn order: that is what makes
+        // the order watchers see the shard's disk order, and it fires only
+        // for a write that is already durable.
+        self.notify(CacheChange {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            shard: shard_index,
+            key: key.to_string(),
+            value: Some(value),
+            offset,
+            expires_at_millis,
+        });
+        shard
+            .maybe_compact(&mut state, pending.last_offset() + 1)
+            .await?;
+        Ok(())
+    }
+
+    /// `get`, with the failure the trait cannot express.
+    pub async fn get_checked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+    ) -> Result<Option<Bytes>> {
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let mut state = shard.state.lock().await;
+        shard.ensure_index(&mut state).await?;
+        let Some(entry) = state.index.entries.get(key).copied() else {
+            return Ok(None);
+        };
+        if entry.is_expired(now_millis()) {
+            // Lazy expiry, as the in-memory cache always did: reported absent
+            // now, and the space reclaimed when the log is next compacted.
+            return Ok(None);
+        }
+        shard.read_value(&state, entry).await
+    }
+
+    /// `delete`, with the failure the trait cannot express.
+    ///
+    /// Same two-half shape as [`LogCache::put_checked`]. The previous value is
+    /// read at staging time; against concurrent writers to the same key, the
+    /// delete's place in the shard's history is its disk offset.
+    pub async fn delete_checked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+    ) -> Result<Option<Bytes>> {
+        let shard_index = shard;
+        let shard = self.shard(tenant_id, namespace, cache, shard_index)?;
+        let op = CacheOp::Delete {
+            key: key.to_string(),
+        };
+
+        let (previous, pending, log, bytes, turn) = {
+            let mut state = shard.state.lock().await;
+            shard.ensure_index(&mut state).await?;
+            let Some(entry) = state.index.entries.get(key).copied() else {
+                return Ok(None);
+            };
+            let previous = if entry.is_expired(now_millis()) {
+                None
+            } else {
+                shard.read_value(&state, entry).await?
+            };
+            let payload = op.encode();
+            let bytes = payload.len() as u64;
+            let pending = state
+                .log
+                .append_pending(&[AppendRecord {
+                    payload,
+                    timestamp_micros: now_millis() * 1000,
+                }])
+                .await?;
+            let turn = shard
+                .sequencer
+                .reserve(pending.first_offset(), pending.last_offset() + 1);
+            state.sequenced_through = Some(pending.last_offset() + 1);
+            (previous, pending, state.log.clone(), bytes, turn)
+        };
+
+        log.commit(&pending).await?;
+        turn.wait().await;
+
+        let mut state = shard.state.lock().await;
+        let offset = pending.first_offset();
+        CacheShard::apply_op(&mut state, &op, offset, bytes);
+        self.notify(CacheChange {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            shard: shard_index,
+            key: key.to_string(),
+            value: None,
+            offset,
+            expires_at_millis: 0,
+        });
+        Ok(previous)
+    }
+
+    /// Every live key in one shard of one cache.
+    ///
+    /// Expired entries are excluded, for the same reason `len` excludes them: a
+    /// key nothing can read is not a key. Order is unspecified — the index is a
+    /// hash map — so a caller that needs one sorts.
+    pub async fn keys(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Vec<String>> {
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let mut state = shard.state.lock().await;
+        shard.ensure_index(&mut state).await?;
+        let now = now_millis();
+        Ok(state
+            .index
+            .entries
+            .iter()
+            .filter(|(_, entry)| !entry.is_expired(now))
+            .map(|(key, _)| key.clone())
+            .collect())
+    }
+
+    /// Every live key in one shard with its current value and offset.
+    ///
+    /// Expired entries are excluded, as they are from every other read. The
+    /// offsets are what let a watcher join this snapshot to live delivery
+    /// without doubling: a change at or past the snapshot's tail arrives live,
+    /// and one below it is already in here.
+    pub async fn live_entries_checked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Vec<CacheSnapshotEntry>> {
+        let shard = self.shard(tenant_id, namespace, cache, shard)?;
+        let mut state = shard.state.lock().await;
+        shard.ensure_index(&mut state).await?;
+        let now = now_millis();
+        let mut entries = Vec::new();
+        for (key, entry) in &state.index.entries {
+            if entry.is_expired(now) {
+                continue;
+            }
+            if let Some(value) = shard.read_value(&state, *entry).await? {
+                entries.push(CacheSnapshotEntry {
+                    key: key.clone(),
+                    value,
+                    offset: entry.offset,
+                    expires_at_millis: entry.expires_at_millis,
+                });
+            }
+        }
+        Ok(entries)
+    }
+
+    /// The log backing one cache shard.
+    ///
+    /// For replication, which ships a shard's records to followers and needs
+    /// the same log the cache writes to — a second log over the same directory
+    /// would interleave offsets and corrupt the segment.
+    ///
+    /// Returns the log as it stands now, and callers must fetch it again per
+    /// pass rather than holding it. Compaction swaps the shard directory, so a
+    /// handle kept across one keeps reading the retired log. That is harmless
+    /// but not useful: since compaction re-appends the live set at the tail,
+    /// the retired log holds only records the caller already shipped.
+    pub async fn shard_log(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<DiskLog> {
+        Ok(self
+            .shard(tenant, namespace, cache, shard)?
+            .current_log()
+            .await)
+    }
+
+    /// Like [`LogCache::shard_log`], but creates the shard's log beginning at
+    /// `base_offset` when it is not there yet.
+    ///
+    /// For a follower being given a cache whose early history the leader has
+    /// already compacted away: its log starts where the surviving records do.
+    /// An existing shard keeps the base recorded in its own first segment.
+    pub async fn shard_log_at(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Result<DiskLog> {
+        Ok(self
+            .shard_with_base(tenant, namespace, cache, shard, Some(base_offset))?
+            .current_log()
+            .await)
+    }
+
+    /// Flush every open cache. Call once during graceful shutdown.
+    pub async fn shutdown(&self) -> Result<()> {
+        let shards: Vec<Arc<CacheShard>> = self.shards.lock().values().cloned().collect();
+        for shard in shards {
+            shard.state.lock().await.log.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    fn shard(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Arc<CacheShard>> {
+        self.shard_with_base(tenant, namespace, cache, shard, None)
+    }
+
+    fn shard_with_base(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        base_offset: Option<u64>,
+    ) -> Result<Arc<CacheShard>> {
+        let id = (
+            tenant.to_string(),
+            namespace.to_string(),
+            cache.to_string(),
+            shard,
+        );
+        // Opening runs under the lock: two callers racing to open the same new
+        // cache must not both replay the log and both create segment zero.
+        let mut shards = self.shards.lock();
+        if let Some(open) = shards.get(&id) {
+            return Ok(Arc::clone(open));
+        }
+        let key = ShardKey {
+            tenant: tenant.to_string(),
+            namespace: namespace.to_string(),
+            stream: cache.to_string(),
+            shard,
+        };
+        let dir = layout::shard_dir(&self.root, &key);
+        let label = layout::shard_label(&key);
+        recover_interrupted_swap(&dir)?;
+        let log = match base_offset {
+            Some(base) => DiskLog::open_at(dir.clone(), label.clone(), self.config.clone(), base)?,
+            None => DiskLog::open(dir.clone(), label.clone(), self.config.clone())?,
+        };
+        let open = Arc::new(CacheShard {
+            dir,
+            label,
+            config: self.config.clone(),
+            state: Mutex::new(ShardState {
+                log,
+                index: Index::default(),
+                sequenced_through: None,
+            }),
+            // Aligned to the log's tail by the first `ensure_index`; until
+            // then nothing can reserve, because every writer passes through
+            // `ensure_index` first.
+            sequencer: CommitSequencer::new(0),
+        });
+        shards.insert(id, Arc::clone(&open));
+        Ok(open)
+    }
+
+    fn notify(&self, change: CacheChange) {
+        let observer = self.observer.lock().clone();
+        if let Some(observer) = observer {
+            observer.cache_changed(change);
+        }
+    }
+}
+
+#[async_trait]
+impl StorageApi for LogCache {
+    async fn put(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+        value: Bytes,
+        ttl: Option<std::time::Duration>,
+    ) {
+        if let Err(err) = self
+            .put_checked(tenant_id, namespace, cache, shard, key, value, ttl)
+            .await
+        {
+            // The trait returns nothing, so a failed write can only be reported
+            // here. Worth a loud line: the caller has been told the write
+            // succeeded and it did not.
+            tracing::error!(
+                tenant_id, namespace, cache, key, error = %err,
+                "cache write failed after the client was acknowledged",
+            );
+        }
+    }
+
+    async fn get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+    ) -> Option<Bytes> {
+        match self
+            .get_checked(tenant_id, namespace, cache, shard, key)
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::error!(
+                    tenant_id, namespace, cache, key, error = %err,
+                    "cache read failed; reporting a miss",
+                );
+                None
+            }
+        }
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        key: &str,
+    ) -> Option<Bytes> {
+        match self
+            .delete_checked(tenant_id, namespace, cache, shard, key)
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                tracing::error!(
+                    tenant_id, namespace, cache, key, error = %err,
+                    "cache delete failed",
+                );
+                None
+            }
+        }
+    }
+
+    async fn shard_log(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Option<DiskLog> {
+        match LogCache::shard_log(self, tenant_id, namespace, cache, shard).await {
+            Ok(log) => Some(log),
+            Err(err) => {
+                tracing::error!(
+                    tenant_id, namespace, cache, shard, error = %err,
+                    "could not open a cache shard's log for replication",
+                );
+                None
+            }
+        }
+    }
+
+    async fn shard_log_at(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        base_offset: u64,
+    ) -> Option<DiskLog> {
+        match LogCache::shard_log_at(self, tenant_id, namespace, cache, shard, base_offset).await {
+            Ok(log) => Some(log),
+            Err(err) => {
+                tracing::error!(
+                    tenant_id, namespace, cache, shard, error = %err,
+                    "could not open a cache shard's log to bootstrap it",
+                );
+                None
+            }
+        }
+    }
+
+    fn set_change_observer(&self, observer: Arc<dyn CacheObserver>) -> bool {
+        *self.observer.lock() = Some(observer);
+        true
+    }
+
+    async fn live_entries(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+    ) -> Result<Vec<CacheSnapshotEntry>> {
+        self.live_entries_checked(tenant_id, namespace, cache, shard)
+            .await
+    }
+
+    async fn len(&self) -> usize {
+        let shards: Vec<Arc<CacheShard>> = self.shards.lock().values().cloned().collect();
+        let now = now_millis();
+        let mut total = 0;
+        for shard in shards {
+            let mut state = shard.state.lock().await;
+            if shard.ensure_index(&mut state).await.is_err() {
+                continue;
+            }
+            // Expired entries are gone as far as any reader is concerned, so
+            // counting them would report a size nothing can observe.
+            total += state
+                .index
+                .entries
+                .values()
+                .filter(|entry| !entry.is_expired(now))
+                .count();
+        }
+        total
+    }
+
+    async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
+}
+
+/// Tenant, namespace, cache, and shard. The shard is part of the identity
+/// because each one is a separate log in a separate directory.
+type CacheId = (String, String, String, u32);
+
+#[cfg(test)]
+mod tests;

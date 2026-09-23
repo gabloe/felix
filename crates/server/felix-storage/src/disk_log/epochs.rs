@@ -13,8 +13,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::log::Offset;
-use crate::segment::io::sync_dir;
+use crate::io::sync_dir;
+use crate::log::{Epoch, Offset};
 use crate::{Result, StorageError};
 
 /// `"FLEP"`, so a stray file in a shard directory is not mistaken for one.
@@ -35,13 +35,6 @@ const MAX_ENTRIES: usize = 512;
 
 pub fn epochs_file_name() -> &'static str {
     "epochs"
-}
-
-/// One leadership generation, and the offset its first record took.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Epoch {
-    pub generation: u64,
-    pub start_offset: Offset,
 }
 
 /// A shard's generation history, newest last.
@@ -228,5 +221,4 @@ pub fn store(dir: &Path, map: &EpochMap) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "epochs_tests.rs"]
 mod tests;

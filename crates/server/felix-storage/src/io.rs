@@ -1,30 +1,35 @@
-// Platform I/O primitives the segment layer is built on.
-//
-// Three techniques, each borrowed from log-structured storage engines that have
-// already paid for the lesson:
-//
-// 1. **Positioned reads** (`pread`). A `seek` + `read` pair mutates the file
-//    cursor, so a shared descriptor cannot serve two readers at once and every
-//    read costs an extra syscall. `pread` takes the offset as an argument, which
-//    means one descriptor per segment serves any number of concurrent readers
-//    with no lock and no seek. This is why Kafka, RocksDB and LevelDB all use
-//    positioned reads on their immutable files.
-//
-// 2. **Preallocation**. Appending past the end of a file forces the filesystem
-//    to allocate blocks and update the inode's block map on the write path, and
-//    it invites fragmentation as segments from different shards interleave.
-//    Reserving the whole segment up front moves that work off the append path.
-//    Both `fallocate` and `F_PREALLOCATE` reserve blocks *without* changing the
-//    file's logical length, so recovery's "valid bytes end at EOF" reasoning
-//    still holds.
-//
-// 3. **`fdatasync` over `fsync`**. An append changes file data and the file
-//    size, but not the owner, mode, or times that a full `fsync` also flushes.
-//    `fdatasync` skips that second metadata round trip. On a spinning disk or a
-//    network volume that is a whole extra I/O per commit.
-//
-// Every platform-specific call degrades to a correct no-op or to the portable
-// equivalent, so an unsupported target loses performance and never correctness.
+//! Platform I/O primitives the storage layer is built on.
+//!
+//! Three techniques, each borrowed from log-structured storage engines that have
+//! already paid for the lesson:
+//!
+//! 1. **Positioned reads** (`pread`). A `seek` + `read` pair mutates the file
+//!    cursor, so a shared descriptor cannot serve two readers at once and every
+//!    read costs an extra syscall. `pread` takes the offset as an argument, which
+//!    means one descriptor per segment serves any number of concurrent readers
+//!    with no lock and no seek. This is why Kafka, RocksDB and LevelDB all use
+//!    positioned reads on their immutable files.
+//!
+//! 2. **Preallocation**. Appending past the end of a file forces the filesystem
+//!    to allocate blocks and update the inode's block map on the write path, and
+//!    it invites fragmentation as segments from different shards interleave.
+//!    Reserving the whole segment up front moves that work off the append path.
+//!    Both `fallocate` and `F_PREALLOCATE` reserve blocks *without* changing the
+//!    file's logical length, so recovery's "valid bytes end at EOF" reasoning
+//!    still holds.
+//!
+//! 3. **`fdatasync` over `fsync`**. An append changes file data and the file
+//!    size, but not the owner, mode, or times that a full `fsync` also flushes.
+//!    `fdatasync` skips that second metadata round trip. On a spinning disk or a
+//!    network volume that is a whole extra I/O per commit.
+//!
+//! Every platform-specific call degrades to a correct no-op or to the portable
+//! equivalent, so an unsupported target loses performance and never correctness.
+//!
+//! On Linux, `uring_fsync` can take a log's flushes off the blocking pool.
+
+#[cfg(target_os = "linux")]
+pub(crate) mod uring_fsync;
 
 use std::fs::File;
 use std::io;
@@ -37,7 +42,7 @@ use std::os::windows::fs::FileExt;
 /// Read into `buf` starting at `offset` without touching the file cursor.
 ///
 /// Returns the number of bytes read, which is short only at end of file.
-pub fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+pub(crate) fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
     #[cfg(unix)]
     {
         let mut filled = 0;
@@ -86,7 +91,7 @@ pub fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
 ///
 /// Best effort: an unsupported filesystem leaves the file untouched and appends
 /// simply allocate as they go, which is correct but slower.
-pub fn preallocate(file: &File, len: u64) -> io::Result<()> {
+pub(crate) fn preallocate(file: &File, len: u64) -> io::Result<()> {
     if len == 0 {
         return Ok(());
     }
@@ -165,7 +170,7 @@ pub fn preallocate(file: &File, len: u64) -> io::Result<()> {
 /// `FsyncMode::OnCommit` is a promise this crate makes, not one it delegates.
 /// The measured cost is the same either way (~4ms per flush on APFS), which is
 /// itself the evidence that the flush is reaching the device.
-pub fn sync_data(file: &File) -> io::Result<()> {
+pub(crate) fn sync_data(file: &File) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         use std::os::unix::io::AsRawFd;
@@ -194,7 +199,7 @@ pub fn sync_data(file: &File) -> io::Result<()> {
 /// Creating a file makes the *file* durable only once its parent directory
 /// entry is durable too; without this a crash can leave a segment that exists in
 /// the page cache but not in the directory after reboot.
-pub fn sync_dir(path: &std::path::Path) -> io::Result<()> {
+pub(crate) fn sync_dir(path: &std::path::Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         File::open(path)?.sync_all()
@@ -209,67 +214,4 @@ pub fn sync_dir(path: &std::path::Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::tempdir;
-
-    #[test]
-    fn read_at_does_not_move_the_cursor() {
-        let dir = tempdir().expect("dir");
-        let path = dir.path().join("f");
-        std::fs::write(&path, b"0123456789").expect("write");
-        let file = File::open(&path).expect("open");
-
-        let mut buf = [0u8; 4];
-        assert_eq!(read_at(&file, &mut buf, 2).expect("read"), 4);
-        assert_eq!(&buf, b"2345");
-        // A second read at the same offset returns the same bytes, which it
-        // could not if the first had advanced a shared cursor.
-        assert_eq!(read_at(&file, &mut buf, 2).expect("read"), 4);
-        assert_eq!(&buf, b"2345");
-    }
-
-    #[test]
-    fn read_at_is_short_at_end_of_file() {
-        let dir = tempdir().expect("dir");
-        let path = dir.path().join("f");
-        std::fs::write(&path, b"abc").expect("write");
-        let file = File::open(&path).expect("open");
-
-        let mut buf = [0u8; 8];
-        assert_eq!(read_at(&file, &mut buf, 1).expect("read"), 2);
-        assert_eq!(&buf[..2], b"bc");
-        assert_eq!(read_at(&file, &mut buf, 99).expect("read"), 0);
-    }
-
-    #[test]
-    fn preallocate_leaves_the_logical_length_alone() {
-        let dir = tempdir().expect("dir");
-        let path = dir.path().join("f");
-        let mut file = File::create(&path).expect("create");
-        file.write_all(b"hi").expect("write");
-
-        preallocate(&file, 1024 * 1024).expect("preallocate");
-        // Reserving blocks must not make the file look longer, or recovery would
-        // read reserved space as a torn record tail.
-        assert_eq!(file.metadata().expect("meta").len(), 2);
-    }
-
-    #[test]
-    fn preallocate_of_zero_is_a_no_op() {
-        let dir = tempdir().expect("dir");
-        let file = File::create(dir.path().join("f")).expect("create");
-        preallocate(&file, 0).expect("preallocate");
-    }
-
-    #[test]
-    fn sync_data_and_sync_dir_succeed() {
-        let dir = tempdir().expect("dir");
-        let path = dir.path().join("f");
-        let mut file = File::create(&path).expect("create");
-        file.write_all(b"data").expect("write");
-        sync_data(&file).expect("sync_data");
-        sync_dir(dir.path()).expect("sync_dir");
-    }
-}
+mod tests;

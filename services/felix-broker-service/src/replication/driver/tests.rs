@@ -374,7 +374,7 @@ async fn a_replica_added_later_starts_at_the_boundary_too() {
 
 #[test]
 fn the_comparison_point_is_one_below_where_the_generation_began() {
-    use felix_storage::disk_log::epochs::Epoch;
+    use felix_storage::log::Epoch;
     let history = [
         Epoch {
             generation: 3,

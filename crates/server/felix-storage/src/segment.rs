@@ -7,14 +7,12 @@
 
 pub mod format;
 pub mod index;
-pub mod io;
 pub mod reader;
 pub mod writer;
 
 pub use format::{
-    Corruption, CorruptionKind, CorruptionSite, DecodedRecord, FORMAT_VERSION, IndexEntry,
-    IndexHeader, MAX_PAYLOAD_BYTES, RECORD_HEADER_LEN, RecordHeader, SEGMENT_HEADER_LEN,
-    SegmentHeader,
+    DecodedRecord, FORMAT_VERSION, IndexEntry, IndexHeader, MAX_PAYLOAD_BYTES, RECORD_HEADER_LEN,
+    RecordHeader, SEGMENT_HEADER_LEN, SegmentHeader,
 };
 pub use index::{IndexWriter, SparseIndex};
 pub use reader::{

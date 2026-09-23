@@ -1,9 +1,13 @@
-use crate::{CacheEntry, CacheKey, StorageApi};
-use async_trait::async_trait;
-use bytes::Bytes;
+//! The in-memory cache a broker uses when it has no durable storage.
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use tokio::sync::RwLock;
+
+use crate::cache::StorageApi;
 
 /// Simple in-memory cache with optional TTL expiry.
 ///
@@ -41,6 +45,15 @@ impl EphemeralCache {
         Self {
             inner: RwLock::new(HashMap::new()),
             max_entries: Some(max_entries),
+        }
+    }
+}
+
+impl Default for EphemeralCache {
+    fn default() -> Self {
+        Self {
+            inner: RwLock::new(HashMap::new()),
+            max_entries: None,
         }
     }
 }
@@ -146,11 +159,38 @@ const _: () = {
     assert_send_sync::<EphemeralCache>();
 };
 
-impl Default for EphemeralCache {
-    fn default() -> Self {
+/// Identifies one entry: the tenant, namespace and cache it belongs to, and its key.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct CacheKey {
+    tenant_id: String,
+    namespace: String,
+    cache: String,
+    key: String,
+}
+
+impl CacheKey {
+    pub fn new(
+        tenant_id: impl Into<String>,
+        namespace: impl Into<String>,
+        cache: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
         Self {
-            inner: RwLock::new(HashMap::new()),
-            max_entries: None,
+            tenant_id: tenant_id.into(),
+            namespace: namespace.into(),
+            cache: cache.into(),
+            key: key.into(),
         }
     }
 }
+
+/// A stored value and when it expires.
+#[derive(Debug, Clone)]
+pub struct CacheEntry {
+    // Stored value plus optional expiration.
+    value: Bytes,
+    expires_at: Option<Instant>,
+}
+
+#[cfg(test)]
+mod tests;

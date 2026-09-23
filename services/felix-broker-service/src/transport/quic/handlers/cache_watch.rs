@@ -433,7 +433,7 @@ async fn write_replayed_changes(
                 return Ok(());
             }
             at = record.offset + 1;
-            let op = match felix_storage::log_cache::CacheOp::decode(&record.payload) {
+            let op = match felix_storage::cache::CacheOp::decode(&record.payload) {
                 Ok(op) => op,
                 Err(err) => return Err(anyhow::anyhow!("cache record did not decode: {err}")),
             };
@@ -441,7 +441,7 @@ async fn write_replayed_changes(
                 continue;
             }
             let message = match op {
-                felix_storage::log_cache::CacheOp::Put {
+                felix_storage::cache::CacheOp::Put {
                     key,
                     value,
                     expires_at_millis,
@@ -451,7 +451,7 @@ async fn write_replayed_changes(
                     offset: record.offset,
                     expires_at_millis,
                 },
-                felix_storage::log_cache::CacheOp::Delete { key } => Message::CacheEvent {
+                felix_storage::cache::CacheOp::Delete { key } => Message::CacheEvent {
                     key,
                     value: None,
                     offset: record.offset,

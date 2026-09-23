@@ -14,7 +14,7 @@
 //   is cheap; only `sync` touches the device. Keeping them apart is what lets
 //   the log amortise one device flush across many appends (see
 //   `disk_log::sync`), which is the single largest lever on durable throughput.
-// * **Blocks are reserved up front.** See `segment::io::preallocate`.
+// * **Blocks are reserved up front.** See `crate::io::preallocate`.
 // * **The staging buffer is never freed.** Steady-state appends do no
 //   allocation at all beyond growing it once to the high-water batch size.
 
@@ -24,10 +24,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::Result;
+use crate::io::{preallocate, sync_data, sync_dir};
 use crate::log::{AppendRecord, Offset, SegmentDescriptor, SegmentId};
 use crate::segment::format::{MAX_PAYLOAD_BYTES, SEGMENT_HEADER_LEN, SegmentHeader, encode_record};
 use crate::segment::index::{IndexWriter, SparseIndex};
-use crate::segment::io::{preallocate, sync_data, sync_dir};
 use crate::segment::{index_file_name, segment_file_name};
 use crate::{StorageError, metrics_names};
 

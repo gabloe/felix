@@ -144,7 +144,7 @@ fn shard_report(
 /// Zero when the history has no entry for this generation: a shard written
 /// before the history existed, or a log that could not record it. Slow, and
 /// the behaviour that was there before.
-fn compare_from(generations: &[felix_storage::disk_log::epochs::Epoch], generation: u64) -> u64 {
+fn compare_from(generations: &[felix_storage::log::Epoch], generation: u64) -> u64 {
     generations
         .iter()
         .find(|epoch| epoch.generation == generation)

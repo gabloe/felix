@@ -6,7 +6,7 @@
 //! is worse than an unreadable one.
 use bytes::{BufMut, Bytes, BytesMut};
 
-use crate::segment::{Corruption, CorruptionKind};
+use crate::{Corruption, CorruptionKind};
 
 /// The only version this build writes, and the only one it reads.
 pub(super) const VERSION: u8 = 1;

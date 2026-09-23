@@ -1,0 +1,83 @@
+//! The errors every storage operation reports.
+//!
+//! [`StorageError`] is what the crate returns. [`Corruption`] is the part of it
+//! that describes bytes on disk that did not decode, and is kept separate
+//! because decoders produce it without knowing which file they were reading.
+
+mod corruption;
+
+pub use corruption::{Corruption, CorruptionKind, CorruptionSite};
+
+use std::fmt;
+
+/// Why a storage operation failed.
+#[derive(Debug)]
+pub enum StorageError {
+    Unsupported(&'static str),
+    /// The log was asked to open with settings that cannot work. Raised at open
+    /// time, never on the append path.
+    InvalidConfig(&'static str),
+    InvalidRange,
+    /// The requested offset was discarded by retention or truncation. Distinct
+    /// from an empty range, which is a valid answer for a reader that has caught
+    /// up with the tail.
+    Trimmed {
+        requested: u64,
+        oldest: u64,
+    },
+    NotFound,
+    /// On-disk bytes did not decode. Carries the specific invariant that was
+    /// violated plus the shard/segment/position it was found at, because
+    /// "corruption detected" is not enough to act on at 3am.
+    Corruption(Corruption),
+    /// A durable append could not be acknowledged. Distinct from `Io` so callers
+    /// can tell "the write never happened" from "the write may have happened but
+    /// we could not confirm it".
+    SyncFailed(String),
+    Io(std::io::Error),
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StorageError::Unsupported(feature) => write!(f, "unsupported: {feature}"),
+            StorageError::InvalidConfig(detail) => write!(f, "invalid configuration: {detail}"),
+            StorageError::InvalidRange => write!(f, "invalid range"),
+            StorageError::Trimmed { requested, oldest } => write!(
+                f,
+                "offset {requested} is no longer available; the log starts at {oldest}"
+            ),
+            StorageError::NotFound => write!(f, "not found"),
+            StorageError::Corruption(detail) => write!(f, "corruption detected: {detail}"),
+            StorageError::SyncFailed(detail) => write!(f, "durability sync failed: {detail}"),
+            StorageError::Io(err) => write!(f, "io error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for StorageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StorageError::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<Corruption> for StorageError {
+    fn from(err: Corruption) -> Self {
+        StorageError::Corruption(err)
+    }
+}
+
+impl From<std::io::Error> for StorageError {
+    fn from(err: std::io::Error) -> Self {
+        StorageError::Io(err)
+    }
+}
+
+/// A result whose error is a [`StorageError`].
+pub type Result<T> = std::result::Result<T, StorageError>;
+
+#[cfg(test)]
+mod tests;
