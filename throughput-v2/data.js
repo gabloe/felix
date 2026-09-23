@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790192068847,
+  "lastUpdate": 1790192216144,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13832,6 +13832,58 @@ window.BENCHMARK_DATA = {
             "range": "41891.98",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 941164.76\nmean: 921223.85\nstdev: 41891.98\ncv: 4.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "feeb7c3ce0d1e88c5188275f17418a1ca5e402a4",
+          "message": "fix(broker): refuse an unaddressed prefix watch on a multi-shard cache (#647)\n\nFor #611. A prefix watch that named no shard read shard 0. On a cache with\nmore than one shard that watch covers only the keys that happen to hash to\nshard 0 and looks, to the caller, like a complete prefix watch: silently\npartial. The broker now refuses it with an error that says how many shards\nthe cache has and to open one watch per shard. A single-shard cache keeps\nthe old default, and a key watch still resolves its own shard.\n\nThis is the \"at minimum\" item on #611; the merged multi-shard watch helper\nis still to do.",
+          "timestamp": "2026-09-23T12:33:50-07:00",
+          "tree_id": "5cbc79fdf0ed2d23550955fc0622e670bbd4f3f8",
+          "url": "https://github.com/gabloe/felix/commit/feeb7c3ce0d1e88c5188275f17418a1ca5e402a4"
+        },
+        "date": 1790192215546,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 503281.19,
+            "range": "27591.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 503281.19\nmean: 498813.00\nstdev: 27591.85\ncv: 5.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 503281.19,
+            "range": "27591.85",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 503281.19\nmean: 498813.00\nstdev: 27591.85\ncv: 5.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 115313.74,
+            "range": "1753.21",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 115313.74\nmean: 115322.49\nstdev: 1753.21\ncv: 1.52%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1153137.42,
+            "range": "17532.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1153137.42\nmean: 1153224.90\nstdev: 17532.11\ncv: 1.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
