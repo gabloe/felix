@@ -46,7 +46,6 @@ pub mod api;
 pub mod model;
 
 pub mod auth;
-pub mod tls;
 
 pub mod raft;
 pub mod store;
@@ -56,7 +55,7 @@ pub mod cluster;
 pub mod clock;
 pub mod config;
 pub mod migrate;
-pub mod observability;
+pub mod server;
 
 #[cfg(test)]
 mod test_support;

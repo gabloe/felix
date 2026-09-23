@@ -21,7 +21,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 static OBS_INIT: OnceLock<()> = OnceLock::new();
 
-pub fn init_observability(service_name: &str) -> PrometheusHandle {
+pub(crate) fn init_observability(service_name: &str) -> PrometheusHandle {
     OBS_INIT.get_or_init(|| {
         global::set_text_map_propagator(
             opentelemetry_sdk::propagation::TraceContextPropagator::new(),
@@ -86,7 +86,7 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
     attrs
 }
 
-pub async fn serve_metrics<F>(
+pub(crate) async fn serve_metrics<F>(
     handle: PrometheusHandle,
     addr: SocketAddr,
     readiness: Readiness,

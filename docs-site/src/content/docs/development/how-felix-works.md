@@ -105,7 +105,7 @@ The important architectural boundary is:
 | `crates/server/felix-storage` | Cache storage abstraction and ephemeral implementation | `crates/server/felix-storage/src/lib.rs` |
 | `crates/server/felix-authz` | Token verification types and permission matching | `crates/server/felix-authz/src/lib.rs` |
 | `services/felix-broker-service` | Runnable broker, network handlers, auth, metrics, control-plane sync | `services/felix-broker-service/src/main.rs` |
-| `services/felix-controlplane-service` | Metadata APIs, token exchange, JWKS, and RBAC | `services/felix-controlplane-service/src/main.rs` |
+| `services/felix-controlplane-service` | Metadata APIs, token exchange, JWKS, and RBAC | `services/felix-controlplane-service/src/lib.rs` |
 
 `felix-router` supports the multi-node path (shard-owner resolution on the
 broker's ingress). Do not start with it when learning the current message

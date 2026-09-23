@@ -98,7 +98,7 @@ async fn serve(
     std::fs::write(&key_path, &pki.server_key_pem).expect("write key");
     std::fs::write(&ca_path, &pki.ca_pem).expect("write ca");
 
-    let tls = felix_controlplane_service::tls::load_server_config(&BootstrapTlsConfig {
+    let tls = felix_controlplane_service::server::tls::load_server_config(&BootstrapTlsConfig {
         cert_path: cert_path.to_string_lossy().into_owned(),
         key_path: key_path.to_string_lossy().into_owned(),
         client_ca_path: ca_path.to_string_lossy().into_owned(),
@@ -111,7 +111,7 @@ async fn serve(
     let port = listener.local_addr().expect("addr").port();
     let router = build_bootstrap_router(state_with_token());
     let shutdown = CancellationToken::new();
-    let task = tokio::spawn(felix_controlplane_service::tls::serve_mtls(
+    let task = tokio::spawn(felix_controlplane_service::server::tls::serve_mtls(
         listener,
         router,
         tls,
@@ -198,7 +198,7 @@ async fn a_client_certificate_from_the_configured_ca_is_required() {
 /// Startup must fail on unreadable material, not come up half-secured.
 #[test]
 fn missing_key_material_fails_config_load() {
-    let err = felix_controlplane_service::tls::load_server_config(&BootstrapTlsConfig {
+    let err = felix_controlplane_service::server::tls::load_server_config(&BootstrapTlsConfig {
         cert_path: "/nonexistent/cert.pem".to_string(),
         key_path: "/nonexistent/key.pem".to_string(),
         client_ca_path: "/nonexistent/ca.pem".to_string(),
