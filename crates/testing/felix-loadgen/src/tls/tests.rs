@@ -1,3 +1,6 @@
+//! The client config has to honour the `FELIX_PUB_*` knobs the instrument
+//! documents.
+
 use super::client_config;
 
 /// **The instrument must respond to the knobs it documents.**

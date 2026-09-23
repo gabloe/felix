@@ -28,6 +28,7 @@ pub(crate) use watch::watch;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+/// The settings every scenario shares.
 pub(crate) struct Common {
     pub brokers: Vec<SocketAddr>,
     pub tenant: String,
