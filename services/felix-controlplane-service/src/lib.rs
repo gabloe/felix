@@ -57,6 +57,7 @@ pub mod placement;
 pub mod readiness;
 pub mod replica_positions;
 
+pub mod clock;
 pub mod config;
 pub mod migrate;
 pub mod observability;

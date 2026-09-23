@@ -375,8 +375,7 @@ impl RaftHandle {
     /// no reading of ours and the real leader stamps its own.
     fn proposal_bytes(&self, command: &[u8]) -> Vec<u8> {
         let leading = self.raft.metrics().borrow().current_leader == Some(self.id);
-        if leading && let Some(stamped) = self.app.restamp(command, crate::api::nodes::now_millis())
-        {
+        if leading && let Some(stamped) = self.app.restamp(command, crate::clock::now_millis()) {
             return stamped;
         }
         command.to_vec()

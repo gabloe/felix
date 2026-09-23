@@ -25,6 +25,7 @@ use crate::auth::bearer::{require_cluster_action, verified_claims};
 use crate::auth::rbac::authorize::{
     ACTION_NODE_MANAGE, ACTION_NODE_VIEW, ParsedObject, object_within_scope, parse_permission,
 };
+use crate::clock::now_millis;
 use crate::model::{Node, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
 use crate::store::StoreError;
 use axum::Json;
@@ -207,16 +208,6 @@ pub(crate) async fn report_replica_status(
         }
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
-/// Wall-clock milliseconds since the Unix epoch.
-///
-/// Clamped at zero so a clock behind the epoch cannot panic the handler.
-pub fn now_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[utoipa::path(

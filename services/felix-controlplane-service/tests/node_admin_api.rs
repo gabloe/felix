@@ -97,7 +97,7 @@ fn node(node_id: &str, port: u16, region: &str, rack: &str) -> Node {
         },
         status: NodeStatus {
             lifecycle: NodeLifecycle::Live,
-            last_heartbeat_at_millis: felix_controlplane_service::api::nodes::now_millis(),
+            last_heartbeat_at_millis: felix_controlplane_service::clock::now_millis(),
             registered_at_millis: 1,
             incarnation: 0,
         },
@@ -295,7 +295,7 @@ async fn a_stale_heartbeat_is_reported_before_expiry_runs() {
     let (app, store, keys) = setup().await;
     let mut stale = node("broker-stale", 7001, "us-west-2", "a1");
     stale.status.last_heartbeat_at_millis =
-        felix_controlplane_service::api::nodes::now_millis() - LIVENESS.expiry_timeout_ms * 3;
+        felix_controlplane_service::clock::now_millis() - LIVENESS.expiry_timeout_ms * 3;
     store.register_node(stale).await.expect("register");
 
     let bearer = token(&keys, vec!["node.view:cluster:*"]);

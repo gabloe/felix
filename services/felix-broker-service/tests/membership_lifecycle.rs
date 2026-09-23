@@ -322,7 +322,7 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
         felix_controlplane_service::membership::expire_once(
             cluster.store.as_ref(),
             &LIVENESS,
-            felix_controlplane_service::api::nodes::now_millis(),
+            felix_controlplane_service::clock::now_millis(),
         )
         .await;
     }

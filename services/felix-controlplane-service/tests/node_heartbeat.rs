@@ -142,7 +142,7 @@ async fn a_heartbeat_records_the_control_planes_clock() {
         .register_node(node("broker-a"))
         .await
         .expect("register");
-    let before = felix_controlplane_service::api::nodes::now_millis();
+    let before = felix_controlplane_service::clock::now_millis();
 
     let token = fleet_token(&store).await;
     let app = app_with(Arc::clone(&store)).await;
