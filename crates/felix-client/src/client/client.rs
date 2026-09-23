@@ -1575,6 +1575,68 @@ impl Client {
             None => Err(anyhow::anyhow!("stream shards response missing")),
         }
     }
+
+    /// Whether this broker answers [`Client::cache_shards`].
+    pub fn supports_cache_shards(&self) -> bool {
+        felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_CACHE_SHARDS)
+    }
+
+    /// How many shards a cache was placed with.
+    ///
+    /// A prefix watch reads one shard, so this is what a client needs before it
+    /// can watch a prefix across a whole cache. `0` means this broker knows
+    /// nothing of the cache. Fails without sending anything when the broker
+    /// did not advertise [`felix_wire::FEATURE_CACHE_SHARDS`].
+    pub async fn cache_shards(&self, tenant_id: &str, namespace: &str, cache: &str) -> Result<u32> {
+        if !self.supports_cache_shards() {
+            anyhow::bail!("broker does not report cache shard counts");
+        }
+        if tenant_id != self.auth_tenant_id {
+            return Err(anyhow::anyhow!(
+                "tenant mismatch: client auth is scoped to {}",
+                self.auth_tenant_id
+            ));
+        }
+        let connection = &self.event_connections[0];
+        let (mut send, mut recv) = connection.open_bi().await?;
+        authenticate_stream(
+            &mut send,
+            &mut recv,
+            &self.auth_tenant_id,
+            &self.auth_token,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+        let request_id = self
+            .cache_request_counter
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        write_message(
+            &mut send,
+            Message::CacheShards {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                cache: cache.to_string(),
+                request_id,
+            },
+        )
+        .await
+        .context("send cache shards request")?;
+        let mut scratch = BytesMut::with_capacity(4 * 1024);
+        let answer =
+            read_message_with_limit(&mut recv, &mut scratch, self.runtime_config.max_frame_bytes)
+                .await?;
+        let _ = send.finish();
+        match answer {
+            Some(Message::CacheShardsView { shards, .. }) => Ok(shards),
+            Some(Message::Error { message }) => {
+                Err(anyhow::anyhow!("cache shards rejected: {message}"))
+            }
+            Some(other) => Err(anyhow::anyhow!(
+                "unexpected cache shards response: {other:?}"
+            )),
+            None => Err(anyhow::anyhow!("cache shards response missing")),
+        }
+    }
 }
 
 /// What one authenticated stream agreed with the broker.

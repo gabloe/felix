@@ -342,6 +342,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                                         // which is the truth for a single-node
                                         // deployment rather than a guess.
                                         | felix_wire::FEATURE_STREAM_SHARDS
+                                        | felix_wire::FEATURE_CACHE_SHARDS
                                         // Advertised unconditionally: the
                                         // sequences live with the shard's
                                         // leader, which every broker is for
@@ -677,6 +678,66 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         "felix_broker_out_ack_depth",
                         &ack_throttle_tx,
                         Outgoing::Message(Message::StreamShardsView { shards, request_id }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+            }
+            Message::CacheShards {
+                tenant_id,
+                namespace,
+                cache,
+                request_id,
+            } => {
+                let Some(ctx) = auth_ctx.as_ref() else {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "not authenticated",
+                    )
+                    .await?;
+                    return Ok(false);
+                };
+                if ctx.tenant_id != tenant_id {
+                    send_control_error(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        &ack_throttle_tx,
+                        &ack_timeout_state,
+                        &cancel_tx,
+                        "tenant mismatch",
+                    )
+                    .await?;
+                    return Ok(false);
+                }
+                // A registered cache the snapshot has not placed is served
+                // here as one shard, which is how `cache_watch` resolves it
+                // too. A cache nobody knows is 0, not 1.
+                let placed = publish_ctx.ingress.as_deref().and_then(|ingress| {
+                    ingress.placed_shards_for(
+                        crate::shard_watch::ShardKind::Cache,
+                        &tenant_id,
+                        &namespace,
+                        &cache,
+                    )
+                });
+                let shards = match placed {
+                    Some(shards) => shards,
+                    None => u32::from(broker.cache_exists(&tenant_id, &namespace, &cache).await),
+                };
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::CacheShardsView { shards, request_id }),
                     )
                     .await,
                     &ack_timeout_state,
@@ -1945,6 +2006,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             | Message::AuthOk { .. }
             | Message::TopologyView { .. }
             | Message::StreamShardsView { .. }
+            | Message::CacheShardsView { .. }
             | Message::NotLeader { .. }
             | Message::Ok => {
                 // Protocol hygiene: these message types should never arrive on the control stream

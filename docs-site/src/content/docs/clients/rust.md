@@ -673,6 +673,8 @@ while let Some(item) = watch.recv().await {
 A resume whose history compaction has collapsed begins with each matching
 key's current value instead, and `watch.resnapshot()` says so. Needs a broker
 advertising `FEATURE_CACHE_WATCH` — only brokers whose cache is log-backed do.
+A prefix watch reads one shard; on a multi-shard cache use
+`ClusterClient::watch_cache_sharded` (see [Clusters](#clusters)).
 See [Cache Features](/felix/features/cache/#7-keyed-watch) for the full
 contract.
 
@@ -847,6 +849,12 @@ that never existed. Resumption is a vector: `positions()` returns one offset per
 shard, and `resubscribe_sharded` takes it back. See
 [Multi-node client](https://github.com/gabloe/felix/blob/main/docs/multi-node-client.md)
 for the full contract.
+
+A prefix watch over a multi-shard cache works the same way:
+`watch_cache_sharded` opens one watch per shard and merges them, and
+`watch_cache_sharded_retained` marks the moment every shard's current state has
+arrived with `ShardedCacheWatchItem::StateComplete`. It needs
+`FEATURE_CACHE_SHARDS`.
 
 ## In-Process Client
 

@@ -274,7 +274,8 @@ uses — and ignores `shard`. A `prefix` watch reads `shard`, because keys
 sharing a prefix hash to different shards; a whole multi-shard cache is one
 watch per shard. Absent means 0 on a single-shard cache and is refused with an
 `Error` on a multi-shard one: reading shard 0 there would cover only the keys
-that hash to it while looking like a complete prefix watch.
+that hash to it while looking like a complete prefix watch. `cache_shards` says
+how many shards to watch.
 
 `from_offset` is where to resume: the first change the client has *not* seen,
 so a client checkpoints the offset it last handled plus one. Absent means from
@@ -403,6 +404,30 @@ in exactly the way any routing answer can.
 `0` means this broker knows nothing of that stream, which is **not** the same as
 one shard. A client that rounded it up would read shard 0 and call it the
 stream.
+
+### CacheShards
+```
+{ "type": "cache_shards", "tenant_id": "<string>", "namespace": "<string>",
+  "cache": "<string>", "request_id": <u64> }
+```
+
+Sent only to a broker that advertised `FEATURE_CACHE_SHARDS`.
+
+The cache counterpart of `stream_shards`: a prefix watch reads one shard, so
+covering a prefix of a multi-shard cache means one `cache_watch` per shard, and
+this is how a client learns how many. A separate request rather than a field on
+`stream_shards` because a broker that predates it would ignore the field and
+answer for a stream of the same name. Scoped to the client's own tenant, and
+answered from the routing snapshot.
+
+### CacheShardsView (server -> client)
+```
+{ "type": "cache_shards_view", "shards": <u32>, "request_id": <u64> }
+```
+
+`0` means this broker knows nothing of that cache. A registered cache the
+routing snapshot has not placed is one shard, which is how `cache_watch`
+resolves it too.
 
 ### CacheValue (server -> client)
 ```
@@ -786,6 +811,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0080` | `FEATURE_CACHE_WATCH_RETAINED` | The broker serves `retained` delivery on a `cache_watch` |
 | `0x0100` | `FEATURE_COUNTERS` | The broker serves `counter_add` and `counter_get` |
 | `0x0200` | `FEATURE_IDEMPOTENT_PRODUCER` | The broker serves `producer_init` and `publish_idempotent`, and answers the latter's refusals as `publish_refused` |
+| `0x0400` | `FEATURE_CACHE_SHARDS` | The broker answers `cache_shards` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -807,8 +833,8 @@ the broker's control loop, so probing costs the connection.
 Note which features depend on what. `FEATURE_TOPOLOGY` and `FEATURE_REDIRECT`
 describe a cluster, so a standalone broker advertises neither.
 `FEATURE_CACHE_DELETE` works the same on one node as on twenty, and is
-advertised by both, as is `FEATURE_STREAM_SHARDS` — a standalone broker has one
-shard per stream and can say so. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
+advertised by both, as are `FEATURE_STREAM_SHARDS` and `FEATURE_CACHE_SHARDS` —
+a standalone broker has one shard per stream and per cache and can say so. `FEATURE_CONSUMER_GROUP` and `FEATURE_GROUP_DEAD_LETTERS` depend on durable
 storage rather than on clustering: without it a group's position is lost on
 every restart, so a broker with none offers neither. `FEATURE_CACHE_WATCH`
 depends on the cache being log-backed, for the same shape of reason: a watch's

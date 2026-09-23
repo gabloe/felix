@@ -829,6 +829,20 @@ this to know how many to open; nothing else on the wire says. `0` means the
 broker knows nothing of that stream, which is **not** the same as one shard — a
 client that rounded it up would read shard 0 and call it the stream.
 
+### Cache Shards
+
+```json
+{ "type": "cache_shards", "tenant_id": "acme", "namespace": "prod",
+  "cache": "sessions", "request_id": 2 }
+{ "type": "cache_shards_view", "shards": 4, "request_id": 2 }
+```
+
+How many shards a cache was placed with. Gated by `FEATURE_CACHE_SHARDS`.
+
+A prefix watch reads **one shard**, so watching a prefix across a whole cache
+means one `cache_watch` per shard. `0` means the broker knows nothing of that
+cache.
+
 `ClusterClient::subscribe_sharded` does all of this for you: it asks, opens one
 subscription per shard, and follows each shard's own redirect.
 

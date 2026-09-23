@@ -204,6 +204,14 @@ pub const FEATURE_COUNTERS: u32 = 0x0000_0100;
 /// only to a broker that advertised it.
 pub const FEATURE_IDEMPOTENT_PRODUCER: u32 = 0x0000_0200;
 
+/// The broker answers `cache_shards`: how many shards a cache was placed with.
+///
+/// A prefix watch reads one shard, so watching a prefix across a multi-shard
+/// cache means one watch per shard, and the client has to know how many there
+/// are. A bit of its own rather than a field on `stream_shards`: a broker that
+/// predates it would ignore the field and answer for a stream of the same name.
+pub const FEATURE_CACHE_SHARDS: u32 = 0x0000_0400;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
@@ -214,7 +222,8 @@ pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_CACHE_WATCH
     | FEATURE_CACHE_WATCH_RETAINED
     | FEATURE_COUNTERS
-    | FEATURE_IDEMPOTENT_PRODUCER;
+    | FEATURE_IDEMPOTENT_PRODUCER
+    | FEATURE_CACHE_SHARDS;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

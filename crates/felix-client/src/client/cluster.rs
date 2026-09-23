@@ -649,7 +649,8 @@ impl ClusterClient {
     /// makes a watch usable against a sharded cache in a cluster at all.
     ///
     /// A prefix watch on a multi-shard cache is refused: this names no shard,
-    /// and one shard alone would miss every matching key on the others.
+    /// and one shard alone would miss every matching key on the others. Use
+    /// [`ClusterClient::watch_cache_sharded`] for that.
     ///
     /// The client this wrapper holds is **not** replaced, for the same reason
     /// a subscribe redirect does not replace it: a redirect is about one
@@ -662,8 +663,16 @@ impl ClusterClient {
         filter: crate::CacheWatchFilter,
         from_offset: Option<u64>,
     ) -> Result<crate::CacheWatch> {
-        self.watch_following_redirects(tenant_id, namespace, cache, filter, from_offset, false)
-            .await
+        self.watch_following_redirects(
+            tenant_id,
+            namespace,
+            cache,
+            filter,
+            None,
+            from_offset,
+            false,
+        )
+        .await
     }
 
     /// Like [`ClusterClient::watch_cache`], but delivering each matching key's
@@ -675,16 +684,107 @@ impl ClusterClient {
         cache: &str,
         filter: crate::CacheWatchFilter,
     ) -> Result<crate::CacheWatch> {
-        self.watch_following_redirects(tenant_id, namespace, cache, filter, None, true)
+        self.watch_following_redirects(tenant_id, namespace, cache, filter, None, None, true)
             .await
     }
 
-    async fn watch_following_redirects(
+    /// Watch a key prefix across **every** shard of a cache, merged into one
+    /// handle.
+    ///
+    /// Keys sharing a prefix hash to different shards and a watch reads one,
+    /// so this opens one prefix watch per shard and follows each shard's own
+    /// redirect to its owner. See [`crate::ShardedCacheWatch`] for ordering and
+    /// for resuming.
+    ///
+    /// `resume` comes from [`crate::ShardedCacheWatch::resume_offsets`]. A shard
+    /// it lists resumes at that offset; a shard it does not list watches from
+    /// now. `None` watches every shard from now.
+    ///
+    /// Needs a broker that advertises `FEATURE_CACHE_SHARDS`, to learn the
+    /// shard count. Fails if **any** shard cannot be opened: a watch covering
+    /// three shards of four looks complete to everything downstream.
+    pub async fn watch_cache_sharded(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        prefix: &str,
+        resume: Option<ShardOffsets>,
+    ) -> Result<crate::ShardedCacheWatch> {
+        let shards = self.cache_shard_count(tenant_id, namespace, cache).await?;
+        crate::client::sharded_watch::watch_sharded(
+            self, tenant_id, namespace, cache, prefix, shards, resume, false,
+        )
+        .await
+    }
+
+    /// Like [`ClusterClient::watch_cache_sharded`], but delivering each
+    /// matching key's current value, from every shard, before live changes.
+    ///
+    /// The shards finish their state phases at different times, so the merged
+    /// watch marks the moment all of them have with
+    /// [`crate::ShardedCacheWatchItem::StateComplete`].
+    pub async fn watch_cache_sharded_retained(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        prefix: &str,
+    ) -> Result<crate::ShardedCacheWatch> {
+        let shards = self.cache_shard_count(tenant_id, namespace, cache).await?;
+        crate::client::sharded_watch::watch_sharded(
+            self, tenant_id, namespace, cache, prefix, shards, None, true,
+        )
+        .await
+    }
+
+    /// How many shards a cache has, reconnecting once if the broker in hand
+    /// cannot answer.
+    async fn cache_shard_count(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+    ) -> Result<u32> {
+        let ask = || async {
+            let client = self.client().await;
+            anyhow::ensure!(
+                client.supports_cache_shards(),
+                "this broker does not report cache shard counts, so the number of shards to \
+                 watch cannot be established"
+            );
+            client
+                .cache_shards(tenant_id, namespace, cache)
+                .await
+                .with_context(|| format!("ask how many shards cache {cache} has"))
+        };
+        let shards = match ask().await {
+            Ok(shards) => shards,
+            Err(first) => {
+                self.reconnect().await.map_err(|reconnect_err| {
+                    first.context(format!(
+                        "and no other broker answered either: {reconnect_err:#}"
+                    ))
+                })?;
+                ask().await?
+            }
+        };
+        anyhow::ensure!(
+            shards > 0,
+            "the broker knows of no cache {cache} in {tenant_id}/{namespace}"
+        );
+        Ok(shards)
+    }
+
+    /// Open a watch on whichever broker owns its shard.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn watch_following_redirects(
         &self,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
         filter: crate::CacheWatchFilter,
+        shard: Option<u32>,
         from_offset: Option<u64>,
         retained: bool,
     ) -> Result<crate::CacheWatch> {
@@ -696,11 +796,18 @@ impl ClusterClient {
         for _ in 0..=MAX_REDIRECTS {
             let attempt = if retained {
                 client
-                    .watch_cache_retained(tenant_id, namespace, cache, filter.clone())
+                    .watch_cache_shard_retained(tenant_id, namespace, cache, filter.clone(), shard)
                     .await
             } else {
                 client
-                    .watch_cache(tenant_id, namespace, cache, filter.clone(), from_offset)
+                    .watch_cache_shard(
+                        tenant_id,
+                        namespace,
+                        cache,
+                        filter.clone(),
+                        shard,
+                        from_offset,
+                    )
                     .await
             };
             let error = match attempt {

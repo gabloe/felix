@@ -160,6 +160,48 @@ It needs a broker advertising `FEATURE_STREAM_SHARDS`, because the shard count
 comes from asking one. A broker that has never heard of the stream reports zero
 shards and the call fails rather than reading shard 0 and calling it the stream.
 
+## A prefix watch across every shard of a cache
+
+Keys sharing a prefix hash to different shards, and a cache watch reads one.
+`ClusterClient::watch_cache_sharded` opens one prefix watch per shard, follows
+each shard's redirect to its owner, and merges them:
+
+```rust,no_run
+# use felix_client::ShardedCacheWatchItem;
+# async fn example(cluster: std::sync::Arc<felix_client::ClusterClient>) -> anyhow::Result<()> {
+let mut watch = cluster
+    .watch_cache_sharded_retained("t1", "default", "sessions", "user:")
+    .await?;
+while let Some(item) = watch.recv().await {
+    match item {
+        ShardedCacheWatchItem::Change { shard, change } => { /* apply */ }
+        ShardedCacheWatchItem::StateComplete => { /* every shard's state is in */ }
+        ShardedCacheWatchItem::Lagged { shard, .. } => { /* that shard ended */ }
+        ShardedCacheWatchItem::ShardClosed { shard } => { /* that shard ended */ }
+    }
+}
+# Ok(())
+# }
+```
+
+- **Ordering is per key.** A key lives on one shard, so its changes arrive in
+  write order; changes on different shards interleave arbitrarily, and each
+  `offset` belongs to its own shard's log.
+- **Retained state completes once, for the whole prefix.** Each shard finishes
+  its state phase at its own time, interleaved with other shards' live changes,
+  so counting items cannot tell when the state is complete. `StateComplete`
+  arrives once every shard has delivered its retained values. It never arrives
+  if a shard ended mid-state.
+- **Resumption is a vector.** `resume_offsets()` is one `from_offset` per shard;
+  pass it back to `watch_cache_sharded`. A shard still in its state phase
+  resumes at 0, since its retained values can carry any older offset.
+- **A shard ending is reported, not retried.** `Lagged` or `ShardClosed` names
+  the shard; the rest keep delivering. Resume from `resume_offsets()`.
+- **An unreachable shard refuses the whole watch**, for the same reason as
+  `subscribe_sharded`.
+
+It needs a broker advertising `FEATURE_CACHE_SHARDS` to learn the shard count.
+
 ## A consumer group across every shard
 
 A group is bound to one shard, and only that shard's leader can serve it: the

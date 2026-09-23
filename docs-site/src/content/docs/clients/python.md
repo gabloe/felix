@@ -308,7 +308,8 @@ Three things in that example are load-bearing:
 
 A prefix watch reads **one shard**, so a prefix spanning a multi-shard cache
 needs one watch per shard. On a multi-shard cache the broker refuses a prefix
-watch that names no shard, rather than quietly reading shard 0.
+watch that names no shard, rather than quietly reading shard 0. The merged
+helper, `watch_cache_sharded`, is Rust-only for now.
 
 ## Multi-shard streams
 
