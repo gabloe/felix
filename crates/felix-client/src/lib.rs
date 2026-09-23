@@ -83,6 +83,7 @@ D) Protocol invariants we rely on
 #[macro_use]
 mod macros;
 
+mod auth;
 mod client;
 mod config;
 mod counters;
@@ -90,6 +91,7 @@ mod wire;
 
 pub mod timings;
 
+pub use auth::{RefreshingToken, TokenFuture, TokenProvider};
 pub use client::cache_watch::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
 pub use client::client::Client;
 pub use client::client::{NotLeaderError, SubscribeCursorError};

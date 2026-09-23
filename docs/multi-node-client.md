@@ -29,6 +29,8 @@ use felix_wire::AckMode;
 let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
 config.auth_tenant_id = Some("acme".to_string());
 config.auth_token = Some(std::env::var("FELIX_TOKEN")?);
+// For a long-running client, set `config.token_provider` so reconnects get a
+// fresh token. See docs/auth.md.
 
 // Every broker you know of. One is enough — see "Discovery" below.
 let seeds = ["10.0.0.4:5000".parse()?, "10.0.0.5:5000".parse()?];

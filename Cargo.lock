@@ -1198,6 +1198,7 @@ version = "0.6.0-preview"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
+ "base64 0.23.1",
  "bytes",
  "felix-broker",
  "felix-storage",
@@ -1209,6 +1210,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "serial_test",
  "tempfile",
