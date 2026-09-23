@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790200122141,
+  "lastUpdate": 1790200368079,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -17952,6 +17952,72 @@ window.BENCHMARK_DATA = {
             "range": "109.21",
             "unit": "us",
             "extra": "trials: 5\nmedian: 592.00\nmean: 637.40\nstdev: 109.21\ncv: 17.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "786911ddbde09d740fe8aecb56df1de2c897bb97",
+          "message": "felix-client: refresh the auth token for streams opened after connect (#652)\n\n* felix-client: refresh the auth token for streams opened after connect\n\nThe client read its token once at connect and presented it on every stream\nit opened afterwards. Subscriptions, cache watches, group requests and\nClusterClient reconnects made after the token expired all failed.\n\nClientConfig now takes an optional token_provider that the client asks for a\ntoken whenever a stream authenticates. RefreshingToken wraps a fetch\nfunction and replaces the token two thirds of the way to its exp. If the\nbroker refuses a token, the client asks the provider again and retries once\non a new stream when it gets a different token. auth_token still works as a\nfixed token.\n\ncheck-mermaid now says to run npm ci when docs-site dependencies are\nmissing, instead of dying with a module-resolution stack trace.\n\nFixes #629\n\n* chore: add felix-client's new deps to the out-of-workspace lockfiles\n\nfelix-client now depends on serde_json and base64, so the lockfiles of\nthe bindings and demo crates that build it with --locked need them too.",
+          "timestamp": "2026-09-23T14:50:38-07:00",
+          "tree_id": "99ae979edd21340b2dbb17002f7486576fc3fa69",
+          "url": "https://github.com/gabloe/felix/commit/786911ddbde09d740fe8aecb56df1de2c897bb97"
+        },
+        "date": 1790200365656,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 77,
+            "range": "2.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 77.00\nmean: 78.20\nstdev: 2.39\ncv: 3.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 112,
+            "range": "4.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 112.00\nmean: 114.20\nstdev: 4.92\ncv: 4.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 137,
+            "range": "7.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 137.00\nmean: 137.40\nstdev: 7.80\ncv: 5.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 96,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 96.00\nmean: 95.80\nstdev: 0.84\ncv: 0.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 202,
+            "range": "2.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 202.20\nstdev: 2.95\ncv: 1.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 276,
+            "range": "30.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 276.00\nmean: 278.80\nstdev: 30.42\ncv: 10.91%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
