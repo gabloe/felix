@@ -155,6 +155,23 @@ pub enum Message {
         shards: u32,
         request_id: u64,
     },
+    /// Ask how many shards a cache was placed with.
+    ///
+    /// A prefix watch reads one shard, so covering a prefix of a multi-shard
+    /// cache means one watch per shard. Only ever sent to a broker that
+    /// advertised `FEATURE_CACHE_SHARDS`.
+    CacheShards {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
+        request_id: u64,
+    },
+    /// How many shards that cache has, as this broker's routing snapshot sees
+    /// it. `0` means the broker knows nothing of the cache.
+    CacheShardsView {
+        shards: u32,
+        request_id: u64,
+    },
     // Publish a single payload to a stream.
     Publish {
         tenant_id: String,
