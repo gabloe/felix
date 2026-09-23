@@ -262,10 +262,11 @@ rather than reopened empty, because a silently empty shard *is* the data loss.
 
 :::caution[Not yet implemented]
 Everything in this section describes a target design, not current
-behavior. `felix-router` today is a simple allowlist of permitted
-region pairs; there is no encryption-boundary enforcement, audit
-logging, or metadata-level isolation wired into the broker yet, and no
-compliance claim should be inferred until this actually lands.
+behavior. No region policy is enforced today: `felix-router` defines an
+allowlist of permitted region pairs, but nothing in the broker or control
+plane consults it, and there is no encryption-boundary enforcement, audit
+logging, or metadata-level isolation either. No compliance claim should be
+inferred until this actually lands.
 :::
 The target design has Felix enforce regional isolation with explicit bridges:
 

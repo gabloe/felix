@@ -465,3 +465,170 @@ async fn shard_assignments_list_and_filter_by_leader() {
         .collect();
     assert_eq!(shards, vec![0, 2]);
 }
+
+fn send(method: &str, path: &str, bearer: &str, body: Option<serde_json::Value>) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+        .expect("request")
+}
+
+async fn lifecycle(store: &InMemoryStore, node_id: &str) -> NodeLifecycle {
+    store.get_node(node_id).await.expect("get").status.lifecycle
+}
+
+/// A drain is cancelled by patching the node back to `live`.
+#[tokio::test]
+async fn an_operator_can_cancel_a_drain() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-a", 7100, "us-west-2", "a1"))
+        .await
+        .expect("node");
+    store
+        .set_node_lifecycle("broker-a", NodeLifecycle::Draining)
+        .await
+        .expect("drain");
+    let bearer = token(&keys, vec!["node.manage:cluster:*"]);
+
+    let response = app
+        .oneshot(send(
+            "PATCH",
+            "/v1/nodes/broker-a",
+            &bearer,
+            Some(serde_json::json!({"lifecycle": "live"})),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(lifecycle(&store, "broker-a").await, NodeLifecycle::Live);
+}
+
+/// Only registration revives a node: a patch cannot claim a silent broker is
+/// alive.
+#[tokio::test]
+async fn a_patch_cannot_revive_a_down_node() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-a", 7100, "us-west-2", "a1"))
+        .await
+        .expect("node");
+    store
+        .set_node_lifecycle("broker-a", NodeLifecycle::Down)
+        .await
+        .expect("down");
+    let bearer = token(&keys, vec!["node.manage:cluster:*"]);
+
+    let response = app
+        .oneshot(send(
+            "PATCH",
+            "/v1/nodes/broker-a",
+            &bearer,
+            Some(serde_json::json!({"lifecycle": "live"})),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(lifecycle(&store, "broker-a").await, NodeLifecycle::Down);
+}
+
+#[tokio::test]
+async fn a_broker_cannot_patch_another_broker() {
+    let (app, store, keys) = setup().await;
+    for (i, id) in ["broker-a", "broker-b"].iter().enumerate() {
+        store
+            .register_node(node(id, 7100 + i as u16, "us-west-2", "a1"))
+            .await
+            .expect("node");
+    }
+    let bearer = token(&keys, vec!["node.manage:node:broker-a"]);
+
+    let response = app
+        .oneshot(send(
+            "PATCH",
+            "/v1/nodes/broker-b",
+            &bearer,
+            Some(serde_json::json!({"lifecycle": "draining"})),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(lifecycle(&store, "broker-b").await, NodeLifecycle::Live);
+}
+
+/// Removal is an operator's act on a stopped broker that no shard names. Each
+/// refusal is checked before the one that finally succeeds.
+#[tokio::test]
+async fn a_node_is_removed_only_once_stopped_and_unnamed() {
+    let (app, store, keys) = setup().await;
+    seed_shards(&store).await;
+    let operator = token(&keys, vec!["node.manage:cluster:*"]);
+    let delete = |bearer: &str| send("DELETE", "/v1/nodes/broker-b", bearer, None);
+
+    // Its own node-scoped credential is not enough.
+    let own = token(&keys, vec!["node.manage:node:broker-b"]);
+    let response = app.clone().oneshot(delete(&own)).await.expect("request");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // Still running.
+    let response = app
+        .clone()
+        .oneshot(delete(&operator))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // Stopped, but still leads shard 1.
+    store
+        .set_node_lifecycle("broker-b", NodeLifecycle::Left)
+        .await
+        .expect("left");
+    let response = app
+        .clone()
+        .oneshot(delete(&operator))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    // Leadership moved, but it is still a follower there. A follower slot
+    // naming a deleted node would never be replaced.
+    let mut moved = store
+        .list_shard_assignments_for_node("broker-b")
+        .await
+        .expect("list")
+        .pop()
+        .expect("shard 1");
+    moved.leader = "broker-a".to_string();
+    moved.replicas = vec!["broker-b".to_string()];
+    store
+        .put_shard_assignment(moved.clone())
+        .await
+        .expect("move");
+    let response = app
+        .clone()
+        .oneshot(delete(&operator))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    moved.replicas.clear();
+    store.put_shard_assignment(moved).await.expect("reseat");
+    let response = app
+        .clone()
+        .oneshot(delete(&operator))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let response = app
+        .oneshot(get(
+            "/v1/nodes/broker-b",
+            Some(&token(&keys, vec!["node.view:cluster:*"])),
+        ))
+        .await
+        .expect("request");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

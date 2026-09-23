@@ -79,6 +79,8 @@ use utoipa::OpenApi;
         nodes::deregister_node,
         nodes::list_nodes,
         nodes::get_node,
+        nodes::patch_node,
+        nodes::delete_node,
         nodes::list_shard_assignments,
         nodes::shard_assignment_snapshot,
         nodes::shard_assignment_changes
@@ -227,6 +229,8 @@ mod tests {
             ("/v1/nodes", "get"),
             ("/v1/nodes", "post"),
             ("/v1/nodes/{node_id}", "get"),
+            ("/v1/nodes/{node_id}", "patch"),
+            ("/v1/nodes/{node_id}", "delete"),
             ("/v1/nodes/{node_id}/heartbeat", "post"),
             ("/v1/nodes/{node_id}/drain", "post"),
             ("/v1/nodes/{node_id}/deregister", "post"),

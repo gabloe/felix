@@ -604,6 +604,9 @@ impl ClusterClient {
     /// that as a `NotLeader` error and stops; this follows it, which is what
     /// makes a watch usable against a sharded cache in a cluster at all.
     ///
+    /// A prefix watch on a multi-shard cache is refused: this names no shard,
+    /// and one shard alone would miss every matching key on the others.
+    ///
     /// The client this wrapper holds is **not** replaced, for the same reason
     /// a subscribe redirect does not replace it: a redirect is about one
     /// shard, not about which broker is generally worth talking to.

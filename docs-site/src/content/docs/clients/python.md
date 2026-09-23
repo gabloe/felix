@@ -307,7 +307,8 @@ Three things in that example are load-bearing:
   `resume_from` is gapless.
 
 A prefix watch reads **one shard**, so a prefix spanning a multi-shard cache
-needs one watch per shard.
+needs one watch per shard. On a multi-shard cache the broker refuses a prefix
+watch that names no shard, rather than quietly reading shard 0.
 
 ## Multi-shard streams
 

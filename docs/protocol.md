@@ -270,9 +270,11 @@ empty `prefix` is every key in the shard.
 
 A watch reads **one** shard, exactly as a stream subscription does. A `key`
 watch resolves its own shard by hashing — the same resolution a `cache_get`
-uses — and ignores `shard`. A `prefix` watch reads `shard` (absent means 0),
-because keys sharing a prefix hash to different shards; a whole multi-shard
-cache is one watch per shard.
+uses — and ignores `shard`. A `prefix` watch reads `shard`, because keys
+sharing a prefix hash to different shards; a whole multi-shard cache is one
+watch per shard. Absent means 0 on a single-shard cache and is refused with an
+`Error` on a multi-shard one: reading shard 0 there would cover only the keys
+that hash to it while looking like a complete prefix watch.
 
 `from_offset` is where to resume: the first change the client has *not* seen,
 so a client checkpoints the offset it last handled plus one. Absent means from

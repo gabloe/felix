@@ -143,9 +143,26 @@ pub(crate) async fn handle_cache_watch_message(
             )
         })
         .unwrap_or(1);
-    let shard = match &filter {
-        CacheWatchFilter::Key(key) => crate::shard_routing::shard_for(shards, Some(key.as_bytes())),
-        CacheWatchFilter::Prefix(_) => request.shard.unwrap_or(0),
+    let shard = match (&filter, request.shard) {
+        (CacheWatchFilter::Key(key), _) => {
+            crate::shard_routing::shard_for(shards, Some(key.as_bytes()))
+        }
+        (CacheWatchFilter::Prefix(_), Some(shard)) => shard,
+        (CacheWatchFilter::Prefix(_), None) if shards <= 1 => 0,
+        // Defaulting to shard 0 here would watch only the keys that happen to
+        // hash there and look like a working prefix watch: silently partial.
+        (CacheWatchFilter::Prefix(_), None) => {
+            responder
+                .send(Message::Error {
+                    message: format!(
+                        "cache {} has {shards} shards and a prefix watch reads one; name the \
+                         shard, and open one watch per shard to cover the prefix",
+                        request.cache
+                    ),
+                })
+                .await?;
+            return Ok(true);
+        }
     };
     // A shard the cache does not have is refused. Accepting it would register a
     // watch on a log nothing writes to — quiet forever, and indistinguishable

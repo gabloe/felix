@@ -12,11 +12,14 @@
 //! 16336-byte MTU (~11x a real path), which understates the endpoint driver's
 //! per-byte work and measures the wrong thing.
 //!
-//! A single-process generator cannot answer this question on its own --
-//! every client endpoint in one process shares one I/O thread
-//! (`io_runtime_index`), so the generator saturates before the broker does.
-//! Treat any run here as directional at best, never as the per-broker
-//! ceiling; see #597.
+//! On macOS this cannot answer the question: every client endpoint in one
+//! process shares one I/O thread (`io_runtime_index`), so the generator
+//! saturates before the broker does and every sweep reads flat. On Linux the
+//! I/O pool is off and client drivers spread across the test's runtime, so a
+//! run there can show a trend -- but the generator still shares the machine's
+//! cores with the broker. Treat any run here as directional, never as the
+//! per-broker ceiling, which needs generators on separate machines
+//! (`scripts/perf/azure`); see #597.
 //!
 //! Full method, prior results, and what this test's own local run found (a
 //! flat 1.00x-0.98x across 1-8 listeners, and why) are in

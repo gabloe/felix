@@ -344,6 +344,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The pairing check diffs against the PR's base.
+          fetch-depth: 0
+
+      # Model-checking proves the spec is self-consistent, not that it still
+      # describes the code. A change to the code it models has to touch the
+      # spec or say why not (#598).
+      - name: Modelled code and the spec change together
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/check_spec_pairing.py --base "${{ github.event.pull_request.base.sha }}"
 
       - name: Java
         uses: actions/setup-java@v6
