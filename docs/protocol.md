@@ -58,6 +58,7 @@ Field definitions:
   | `0x0020` | `EVENT_BATCH_OFFSETS` | Modifier on `0x0002` or `0x0004`: the batch carries a `base_offset` |
   | `0x0040` | `BINARY_PUBLISH_KEYED` | Modifier on `0x0001`: the batch carries a routing key prefix |
   | `0x0080` | `BINARY_PUBLISH_ACK_OWNER` | Modifier on `0x0010`: the batch was forwarded, and the ack names the shard's owner |
+  | `0x0100` | `BINARY_PUBLISH_IDEMPOTENT` | Modifier on `0x0008`: the batch carries an idempotent producer's id and sequence |
 
   Because these bits change how the payload is parsed, a receiver MUST reject a
   frame carrying any bit it does not recognise rather than masking it off — see
@@ -730,6 +731,26 @@ client can still correlate to its pending request.
 `ack_mode` has no encoding for "none": an unacknowledged publish uses the plain
 `0x0001` frame with no prefix, so each mode has exactly one representation on the
 wire.
+
+## Binary idempotent PublishBatch
+When `flags & 0x0100 != 0` (always together with `0x0001` and `0x0008`), the batch
+belongs to an idempotent producer, and its id and sequence follow the correlation
+header:
+
+```
+u64 request_id
+u8  ack_mode        always 2 (per_batch)
+u64 producer_id
+u64 sequence
+... then the key prefix if 0x0040 is set, then the Binary PublishBatch body
+```
+
+It means the same as `publish_idempotent` and is answered the same way: JSON
+`publish_ok`, `publish_error` or `publish_refused` on the same stream, so a refusal
+keeps its typed reason. A frame with `0x0100` but not `0x0008` is refused.
+
+**Compatibility:** clients MUST NOT send `0x0100` unless the broker advertised it.
+A client talking to an older broker sends `publish_idempotent` instead.
 
 ## Binary PublishAck
 When `flags & 0x0010 != 0`, the frame payload is a publish acknowledgement:

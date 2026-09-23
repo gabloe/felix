@@ -62,6 +62,19 @@ pub const FLAG_BINARY_PUBLISH_KEYED: u16 = 0x0040;
 /// acknowledgement for a publish that succeeded.
 pub const FLAG_BINARY_PUBLISH_ACK_OWNER: u16 = 0x0080;
 
+/// Modifier on an acked binary publish: the batch belongs to an idempotent
+/// producer, and a `u64` producer id and `u64` sequence follow the acked
+/// prefix.
+///
+/// The binary counterpart of `publish_idempotent`, so an idempotent producer
+/// no longer has to give up the binary encoding. Only valid with
+/// `FLAG_BINARY_PUBLISH_ACKED`, since a producer that never hears back cannot
+/// know what to send next. The broker answers the way it answers
+/// `publish_idempotent`, including `publish_refused`.
+///
+/// Sent only to a broker that advertised it in `AuthOk.server_flags`.
+pub const FLAG_BINARY_PUBLISH_IDEMPOTENT: u16 = 0x0100;
+
 /// Every flag bit this version understands.
 ///
 /// Frames carrying bits outside this mask are rejected rather than parsed with
@@ -79,7 +92,8 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_BINARY_PUBLISH_ACK
     | FLAG_EVENT_BATCH_OFFSETS
     | FLAG_BINARY_PUBLISH_KEYED
-    | FLAG_BINARY_PUBLISH_ACK_OWNER;
+    | FLAG_BINARY_PUBLISH_ACK_OWNER
+    | FLAG_BINARY_PUBLISH_IDEMPOTENT;
 
 /// The flag bits that existed before capability negotiation.
 ///

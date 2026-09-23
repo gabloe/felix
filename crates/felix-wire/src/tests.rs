@@ -1873,6 +1873,98 @@ fn a_truncated_owner_is_refused() {
     }
 }
 
+/// Binary idempotent publish: the producer prefix sits between the acked
+/// prefix and the key, and nothing else reads it.
+mod binary_idempotent {
+    use crate::binary::{
+        ProducerSequence, decode_acked_publish_batch, decode_publish_batch,
+        encode_idempotent_publish_batch_bytes, peek_acked_publish_prefix,
+    };
+    use crate::{AckMode, Frame};
+
+    const PRODUCER: ProducerSequence = ProducerSequence {
+        producer_id: 0xdead_beef,
+        sequence: 7,
+    };
+
+    #[test]
+    fn the_bit_is_new_and_not_assumed_of_an_old_peer() {
+        assert_eq!(
+            crate::FLAG_BINARY_PUBLISH_IDEMPOTENT
+                & (crate::KNOWN_FLAGS & !crate::FLAG_BINARY_PUBLISH_IDEMPOTENT),
+            0
+        );
+        assert!(crate::supports(
+            crate::KNOWN_FLAGS,
+            crate::FLAG_BINARY_PUBLISH_IDEMPOTENT
+        ));
+        assert_eq!(
+            crate::ORIGINAL_V1_FLAGS & crate::FLAG_BINARY_PUBLISH_IDEMPOTENT,
+            0
+        );
+    }
+
+    #[test]
+    fn round_trips_keyed_and_unkeyed() {
+        for key in [None, Some(&b"user-1"[..])] {
+            let bytes = encode_idempotent_publish_batch_bytes(
+                9,
+                PRODUCER,
+                key,
+                "t1",
+                "ns",
+                "orders",
+                &[b"a".to_vec(), b"bc".to_vec()],
+            )
+            .expect("encode");
+            let frame = Frame::decode(bytes).expect("frame");
+            // The request id stays at offset 0, so a malformed body can still
+            // be answered against the right request.
+            assert_eq!(
+                peek_acked_publish_prefix(&frame).expect("peek"),
+                (9, AckMode::PerBatch)
+            );
+            let decoded = decode_acked_publish_batch(&frame).expect("decode");
+            assert_eq!(decoded.request_id, 9);
+            assert_eq!(decoded.producer, Some(PRODUCER));
+            assert_eq!(decoded.batch.key.as_deref(), key);
+            assert_eq!(decoded.batch.stream, "orders");
+            assert_eq!(decoded.batch.payloads, vec![b"a".to_vec(), b"bc".to_vec()]);
+        }
+    }
+
+    /// Read as an unacked batch, the producer id would be taken for the
+    /// tenant length. It is refused instead.
+    #[test]
+    fn the_unacked_decoder_refuses_it() {
+        let bytes = encode_idempotent_publish_batch_bytes(
+            1,
+            PRODUCER,
+            None,
+            "t1",
+            "ns",
+            "orders",
+            &[b"a".to_vec()],
+        )
+        .expect("encode");
+        let frame = Frame::decode(bytes).expect("frame");
+        assert!(decode_publish_batch(&frame).is_err());
+    }
+
+    #[test]
+    fn a_truncated_producer_prefix_is_incomplete() {
+        let bytes =
+            encode_idempotent_publish_batch_bytes(1, PRODUCER, None, "t1", "ns", "orders", &[])
+                .expect("encode");
+        let frame = Frame::decode(bytes).expect("frame");
+        let cut = Frame {
+            header: frame.header,
+            payload: frame.payload.slice(..9 + 8),
+        };
+        assert!(decode_acked_publish_batch(&cut).is_err());
+    }
+}
+
 /// Without join offsets `subscribed` is the frame it always was, and an old
 /// broker's frame decodes with none.
 #[test]
