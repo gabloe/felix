@@ -841,7 +841,11 @@ no cluster behind it has no topology to report, and advertises `0`.
 ## Not-leader redirects
 
 A subscribe for a shard the broker does not own is answered with `not_leader`,
-naming the broker that does:
+naming the broker that does. So is every consumer-group request — `group_poll`,
+`group_ack`, `group_nack`, `group_dead_letters`, `group_discard` and
+`group_redrive` — since only the shard's leader holds its groups. Each group
+request has a stream of its own, so the answer needs no `request_id`: it answers
+the one request on that stream.
 
 ```json
 {"type":"not_leader","node_id":"broker-b","addr":"10.0.0.5:5000","generation":7}
@@ -855,6 +859,9 @@ the wrong one.
 
 `generation` is the assignment epoch the answer describes. A client holding a
 newer one has already moved on and should ignore the redirect.
+
+Only a client that offered `FEATURE_REDIRECT` receives `not_leader`. One that
+did not gets the `error` it always did, naming the owner in prose.
 
 A client following a redirect MUST bound its hops. A cluster mid-rebalance can
 name an owner that names another, and two brokers that disagree would otherwise
