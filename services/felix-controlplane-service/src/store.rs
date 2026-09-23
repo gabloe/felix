@@ -1,22 +1,10 @@
-//! Control-plane storage interfaces and shared types.
+//! The metadata store: the traits every backend implements, and the types
+//! they share.
 //!
-//! Defines the `ControlPlaneStore` trait, error types, and shared snapshot/change
-//! structs used by both in-memory and Postgres backends.
-//!
-//! Store implementors should preserve change ordering and enforce conflict/not-found
-//! semantics consistently with these trait contracts.
-use crate::auth::felix_token::TenantSigningKeys;
-use crate::auth::idp_registry::IdpIssuerConfig;
-use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
-use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
-use crate::model::{
-    Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
-    Node, NodeChange, NodePatchRequest, ReplicaReport, ShardAssignment, ShardAssignmentChange,
-    ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
-};
-use async_trait::async_trait;
-use thiserror::Error;
-
+//! Three backends implement them (`memory`, `postgres` and `raft`) and all
+//! three run the same contract tests. Callers cannot tell which backend they
+//! are talking to, so change ordering, conflicts and not-found must behave
+//! the same on each.
 pub mod export;
 pub mod memory;
 pub mod postgres;
@@ -31,63 +19,20 @@ pub(crate) mod refresh_contract;
 #[cfg(test)]
 pub(crate) mod shard_contract;
 
-#[derive(Debug, Clone)]
-pub struct StoreConfig {
-    pub changes_limit: u64,
-    pub change_retention_max_rows: Option<i64>,
-}
+use crate::auth::felix_token::TenantSigningKeys;
+use crate::auth::idp_registry::IdpIssuerConfig;
+use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
+use crate::model::{
+    Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
+    Node, NodeChange, NodePatchRequest, ReplicaReport, ShardAssignment, ShardAssignmentChange,
+    ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
+};
+use async_trait::async_trait;
+use thiserror::Error;
 
-impl StoreConfig {
-    pub fn change_window(&self) -> usize {
-        // Clamp to at least changes_limit; the DB retention may be higher but never lower.
-        self.change_retention_max_rows
-            .unwrap_or(self.changes_limit as i64)
-            .max(self.changes_limit as i64) as usize
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Snapshot<T> {
-    pub items: Vec<T>,
-    pub next_seq: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChangeSet<T> {
-    pub items: Vec<T>,
-    pub next_seq: u64,
-}
-
-#[derive(Debug, Error)]
-pub enum StoreError {
-    #[error("not found: {0}")]
-    NotFound(String),
-    #[error("conflict: {0}")]
-    Conflict(String),
-    #[error(transparent)]
-    Unexpected(#[from] anyhow::Error),
-}
-
-pub type StoreResult<T> = Result<T, StoreError>;
-
-impl From<sqlx::Error> for StoreError {
-    fn from(err: sqlx::Error) -> Self {
-        StoreError::Unexpected(err.into())
-    }
-}
-
-impl From<sqlx::migrate::MigrateError> for StoreError {
-    fn from(err: sqlx::migrate::MigrateError) -> Self {
-        StoreError::Unexpected(err.into())
-    }
-}
-
-impl From<serde_json::Error> for StoreError {
-    fn from(err: serde_json::Error) -> Self {
-        StoreError::Unexpected(err.into())
-    }
-}
-
+/// Tenants, namespaces, streams, caches, nodes and shard assignments: every
+/// operation the API and the background loops need.
 #[async_trait]
 pub trait ControlPlaneStore: Send + Sync {
     async fn list_tenants(&self) -> StoreResult<Vec<Tenant>>;
@@ -170,28 +115,6 @@ pub trait ControlPlaneStore: Send + Sync {
         incarnation: u64,
         at_millis: u64,
     ) -> StoreResult<Node>;
-    /// Mark every node whose last heartbeat predates `expiry_before_millis` as
-    /// down, and return the ones this call moved.
-    ///
-    /// Safe to run from several control-plane instances at once: each node is
-    /// moved by exactly one of them, and only that one publishes the change.
-    async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>>;
-    /// Record what a shard's leader reports about its replicas.
-    ///
-    /// A report at an older generation than the one held is dropped, not an
-    /// error: leadership moved on, and the old leader's view is about a
-    /// replica set that may no longer exist. `NotFound` when the shard has no
-    /// assignment -- nobody leads it, so nobody can report on it -- and a
-    /// deleted assignment takes its report with it, so a shard that is
-    /// removed and recreated does not inherit the old one's promotability.
-    ///
-    /// Stamp it with [`ControlPlaneStore::now_millis`]: freshness is judged
-    /// against that same clock by whichever instance runs placement, which
-    /// is the whole reason the report is in the store. Under Raft the leader
-    /// overwrites the stamp as it accepts the proposal, as for a heartbeat.
-    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()>;
-    /// Every report held, fresh or not; the reader judges freshness.
-    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>>;
     /// The clock that heartbeats are stamped with and expiry is judged against.
     ///
     /// One clock, because the two sides are compared. With several stateless
@@ -216,6 +139,12 @@ pub trait ControlPlaneStore: Send + Sync {
             .map(|since| since.as_millis() as u64)
             .unwrap_or(0))
     }
+    /// Mark every node whose last heartbeat predates `expiry_before_millis` as
+    /// down, and return the ones this call moved.
+    ///
+    /// Safe to run from several control-plane instances at once: each node is
+    /// moved by exactly one of them, and only that one publishes the change.
+    async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>>;
     /// Move a node's lifecycle from an observed signal rather than an operator.
     ///
     /// Unlike [`ControlPlaneStore::patch_node`] this may drive transitions an
@@ -262,6 +191,23 @@ pub trait ControlPlaneStore: Send + Sync {
         since: u64,
     ) -> StoreResult<ChangeSet<ShardAssignmentChange>>;
 
+    /// Record what a shard's leader reports about its replicas.
+    ///
+    /// A report at an older generation than the one held is dropped, not an
+    /// error: leadership moved on, and the old leader's view is about a
+    /// replica set that may no longer exist. `NotFound` when the shard has no
+    /// assignment -- nobody leads it, so nobody can report on it -- and a
+    /// deleted assignment takes its report with it, so a shard that is
+    /// removed and recreated does not inherit the old one's promotability.
+    ///
+    /// Stamp it with [`ControlPlaneStore::now_millis`]: freshness is judged
+    /// against that same clock by whichever instance runs placement, which
+    /// is the whole reason the report is in the store. Under Raft the leader
+    /// overwrites the stamp as it accepts the proposal, as for a heartbeat.
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()>;
+    /// Every report held, fresh or not; the reader judges freshness.
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>>;
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool>;
     async fn namespace_exists(&self, key: &NamespaceKey) -> StoreResult<bool>;
 
@@ -270,6 +216,8 @@ pub trait ControlPlaneStore: Send + Sync {
     fn backend_name(&self) -> &'static str;
 }
 
+/// Per-tenant auth state: IdP issuers, RBAC rules, signing keys, the
+/// bootstrap flag, and refresh tokens.
 #[async_trait]
 pub trait AuthStore: Send + Sync {
     async fn list_idp_issuers(&self, tenant_id: &str) -> StoreResult<Vec<IdpIssuerConfig>>;
@@ -389,6 +337,63 @@ pub struct TenantAuthSeed {
 pub trait ControlPlaneAuthStore: ControlPlaneStore + AuthStore {}
 
 impl<T> ControlPlaneAuthStore for T where T: ControlPlaneStore + AuthStore {}
+
+#[derive(Debug, Clone)]
+pub struct Snapshot<T> {
+    pub items: Vec<T>,
+    pub next_seq: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeSet<T> {
+    pub items: Vec<T>,
+    pub next_seq: u64,
+}
+
+#[derive(Debug, Error)]
+pub enum StoreError {
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error(transparent)]
+    Unexpected(#[from] anyhow::Error),
+}
+
+impl From<sqlx::Error> for StoreError {
+    fn from(err: sqlx::Error) -> Self {
+        StoreError::Unexpected(err.into())
+    }
+}
+
+impl From<sqlx::migrate::MigrateError> for StoreError {
+    fn from(err: sqlx::migrate::MigrateError) -> Self {
+        StoreError::Unexpected(err.into())
+    }
+}
+
+impl From<serde_json::Error> for StoreError {
+    fn from(err: serde_json::Error) -> Self {
+        StoreError::Unexpected(err.into())
+    }
+}
+
+pub type StoreResult<T> = Result<T, StoreError>;
+
+#[derive(Debug, Clone)]
+pub struct StoreConfig {
+    pub changes_limit: u64,
+    pub change_retention_max_rows: Option<i64>,
+}
+
+impl StoreConfig {
+    pub fn change_window(&self) -> usize {
+        // Clamp to at least changes_limit; the DB retention may be higher but never lower.
+        self.change_retention_max_rows
+            .unwrap_or(self.changes_limit as i64)
+            .max(self.changes_limit as i64) as usize
+    }
+}
 
 #[cfg(test)]
 mod tests;
