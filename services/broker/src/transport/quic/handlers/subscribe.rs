@@ -525,6 +525,7 @@ pub(crate) async fn handle_subscribe_message(
     // history needed to reach it -- see `Broker::subscribe_from`.
     // On failure, respond on the control stream (through the ack queue) and keep the stream alive.
     let mut replay = None;
+    let mut join = None;
     let mut subscription = match start {
         None => match broker
             .subscribe(&tenant_id, &namespace, &stream, shard)
@@ -550,6 +551,7 @@ pub(crate) async fn handle_subscribe_message(
         {
             Ok(resumed) => {
                 replay = Some((resumed.history, resumed.backlog, resumed.backlog_start));
+                join = resumed.join;
                 resumed.subscription
             }
             Err(err) => {
@@ -634,7 +636,17 @@ pub(crate) async fn handle_subscribe_message(
             out_ack_depth,
             "felix_broker_out_ack_depth",
             ack_throttle_tx,
-            Outgoing::Message(Message::Subscribed { subscription_id }),
+            // Only to a client that gets offsets on its events; without them
+            // there is nothing to compare these against.
+            Outgoing::Message(Message::Subscribed {
+                subscription_id,
+                start_offset: join
+                    .filter(|_| offsets_enabled)
+                    .map(|join| join.start_offset),
+                live_offset: join
+                    .filter(|_| offsets_enabled)
+                    .map(|join| join.live_offset),
+            }),
         )
         .await,
         ack_timeout_state,

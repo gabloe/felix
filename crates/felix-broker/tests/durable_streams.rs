@@ -1507,3 +1507,173 @@ async fn a_cursor_never_points_past_the_live_edge() {
 
     publishing.await.expect("join");
 }
+
+// ---------------------------------------------------------------------------
+// Where a resumed subscription joins: current position, then every change.
+// ---------------------------------------------------------------------------
+
+/// Collect `want` records off a resume -- history, backlog, then live --
+/// failing on a timeout rather than reporting it as a lost record.
+async fn collect_resume(
+    broker: &Broker,
+    stream: &str,
+    resumed: &mut ResumedSubscription,
+    want: usize,
+) -> Vec<String> {
+    let mut seen = drain_resume(broker, stream, resumed).await;
+    while seen.len() < want {
+        match tokio::time::timeout(Duration::from_secs(30), resumed.subscription.recv()).await {
+            Ok(Some(msg)) => seen.push(String::from_utf8(msg.to_vec()).expect("utf8")),
+            Ok(None) => break,
+            Err(_) => panic!(
+                "timed out after {} of {want} records -- the machine was too slow to \
+                 conclude anything about the join",
+                seen.len()
+            ),
+        }
+    }
+    seen
+}
+
+/// A publisher that runs until told to stop, so a join made while it is
+/// running really does race it. Returns how many it published; record `vNNNN`
+/// is at offset NNNN.
+fn spawn_publisher(
+    broker: &Arc<Broker>,
+    from: u64,
+) -> (
+    Arc<std::sync::atomic::AtomicU64>,
+    Arc<std::sync::atomic::AtomicBool>,
+    tokio::task::JoinHandle<u64>,
+) {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    let published = Arc::new(AtomicU64::new(from));
+    let stop = Arc::new(AtomicBool::new(false));
+    let task = {
+        let (broker, published, stop) = (
+            Arc::clone(broker),
+            Arc::clone(&published),
+            Arc::clone(&stop),
+        );
+        tokio::spawn(async move {
+            let mut i = from;
+            while !stop.load(Ordering::Relaxed) {
+                broker
+                    .publish("t1", "default", "orders", payload(&format!("v{i:05}")))
+                    .await
+                    .expect("publish");
+                i += 1;
+                published.store(i, Ordering::Relaxed);
+            }
+            i
+        })
+    };
+    (published, stop, task)
+}
+
+/// Let the publisher get going, join, then let it run on past the join.
+async fn join_mid_flight(
+    broker: &Arc<Broker>,
+    from: u64,
+    start: StartPosition,
+) -> (ResumedSubscription, u64) {
+    use std::sync::atomic::Ordering;
+    let (published, stop, task) = spawn_publisher(broker, from);
+    while published.load(Ordering::Relaxed) < from + 50 {
+        tokio::task::yield_now().await;
+    }
+    let resumed = broker
+        .subscribe_from("t1", "default", "orders", 0, start)
+        .await
+        .expect("subscribe");
+    let at_join = published.load(Ordering::Relaxed);
+    while published.load(Ordering::Relaxed) < at_join + 100 {
+        tokio::task::yield_now().await;
+    }
+    stop.store(true, Ordering::Relaxed);
+    let total = task.await.expect("publisher");
+    (resumed, total)
+}
+
+/// `Latest` is the stream's current position and every record after it. Joined
+/// while a publisher runs flat out, the reported live edge is exactly where
+/// delivery starts, nothing at or after it is missed, and nothing before it is
+/// delivered.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn latest_joins_at_the_reported_live_edge_under_concurrent_publishes() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 8).await;
+    register(&broker, "orders", true).await;
+
+    let (mut resumed, total) = join_mid_flight(&broker, 0, StartPosition::Latest).await;
+    let join = resumed
+        .join
+        .expect("a durable stream reports where it joined");
+    assert_eq!(join.start_offset, join.live_offset);
+    assert!(
+        join.live_offset >= 50,
+        "joined before the publisher started"
+    );
+
+    let from = join.live_offset;
+    let seen = collect_resume(&broker, "orders", &mut resumed, (total - from) as usize).await;
+    let expected: Vec<String> = (from..total).map(|i| format!("v{i:05}")).collect();
+    assert_eq!(seen, expected, "the join at offset {from} was not gap-free");
+}
+
+/// Resuming from an offset under concurrent publishes: delivery starts at the
+/// requested offset, and the reported live edge splits what was already
+/// written at join from what came after, with nothing lost across it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_offset_resume_reports_where_catch_up_ends_under_concurrent_publishes() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 8).await;
+    register(&broker, "orders", true).await;
+
+    let (mut resumed, total) = join_mid_flight(&broker, 0, StartPosition::Offset(10)).await;
+    let join = resumed
+        .join
+        .expect("a durable stream reports where it joined");
+    assert_eq!(join.start_offset, 10);
+    assert!(join.live_offset >= 50 && join.live_offset <= total);
+
+    let seen = collect_resume(&broker, "orders", &mut resumed, (total - 10) as usize).await;
+    let expected: Vec<String> = (10..total).map(|i| format!("v{i:05}")).collect();
+    assert_eq!(seen, expected);
+}
+
+/// An empty stream joined at `Latest` is a definite "nothing yet": start and
+/// live edge are both 0, and the first publish is the first record delivered.
+#[tokio::test]
+async fn latest_on_an_empty_stream_joins_at_zero() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 8).await;
+    register(&broker, "orders", true).await;
+    let mut resumed = broker
+        .subscribe_from("t1", "default", "orders", 0, StartPosition::Latest)
+        .await
+        .expect("subscribe");
+    let join = resumed.join.expect("join offsets");
+    assert_eq!((join.start_offset, join.live_offset), (0, 0));
+    broker
+        .publish("t1", "default", "orders", payload("first"))
+        .await
+        .expect("publish");
+    assert_eq!(
+        collect_resume(&broker, "orders", &mut resumed, 1).await,
+        ["first"]
+    );
+}
+
+/// An in-memory stream's events carry no offsets, so it reports none.
+#[tokio::test]
+async fn an_in_memory_stream_reports_no_join_offsets() {
+    let dir = tempdir().expect("dir");
+    let broker = broker_with_small_ring(&dir, 8).await;
+    register(&broker, "ephemeral", false).await;
+    let resumed = broker
+        .subscribe_from("t1", "default", "ephemeral", 0, StartPosition::Latest)
+        .await
+        .expect("subscribe");
+    assert_eq!(resumed.join, None);
+}

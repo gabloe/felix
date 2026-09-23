@@ -159,7 +159,8 @@ one subscription per shard; `stream_shards` says how many there are.
 
 ### Subscribed (server -> client)
 ```
-{ "type": "subscribed", "subscription_id": <number> }
+{ "type": "subscribed", "subscription_id": <number>,
+  "start_offset": <u64>?, "live_offset": <u64>? }
 ```
 
 Confirms a subscription and carries the id the broker assigned it. The same id
@@ -172,6 +173,13 @@ opens the event stream that carries its deliveries:
 which is the first message on the unidirectional stream the broker opens back,
 and is how a client matches an event stream to the subscription that asked for
 it.
+
+`start_offset` is the first offset the subscription delivers. `live_offset` is
+the stream's tail when the subscriber was registered: anything below it was
+already in the stream, anything from it on was written after, and nothing falls
+between. For `latest` the two are equal. Both are sent only for a subscribe
+with a `start`, on a durable stream, to a client that negotiated
+`FLAG_EVENT_BATCH_OFFSETS`. Otherwise the frame is unchanged.
 
 ### Event (server -> client)
 ```

@@ -374,7 +374,9 @@ async fn handle_subscribe_message_sends_event_stream_binary_batch() -> Result<()
         .context("ack timeout")?
         .context("ack missing")?;
     match ack {
-        Outgoing::Message(Message::Subscribed { subscription_id }) => {
+        Outgoing::Message(Message::Subscribed {
+            subscription_id, ..
+        }) => {
             assert_eq!(subscription_id, 7);
         }
         _ => panic!("unexpected ack"),
@@ -688,7 +690,9 @@ async fn lane_fanout_preserves_order_for_multiple_subscribers() -> Result<()> {
             .context("ack timeout")?
             .context("ack missing")?;
         match ack {
-            Outgoing::Message(Message::Subscribed { subscription_id }) => {
+            Outgoing::Message(Message::Subscribed {
+                subscription_id, ..
+            }) => {
                 subscribed.push(subscription_id);
             }
             Outgoing::Message(other) => panic!("unexpected ack message: {other:?}"),
@@ -883,7 +887,9 @@ async fn handle_subscribe_message_hashed_pool_with_generated_id() -> Result<()> 
     let connection = client.connect(addr, "localhost").await?;
 
     let subscription_id = match out_ack_rx.recv().await.context("missing ack")? {
-        Outgoing::Message(Message::Subscribed { subscription_id }) => subscription_id,
+        Outgoing::Message(Message::Subscribed {
+            subscription_id, ..
+        }) => subscription_id,
         _ => panic!("unexpected ack"),
     };
     assert!(subscription_id > 0);
