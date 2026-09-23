@@ -1,9 +1,10 @@
 //! The in-flight byte budget every publish is admitted against.
 //!
-//! Shared by all of a client's publishers. A publish holds its bytes from
-//! before it is queued until the broker answers, so a slow broker makes
-//! callers wait for room rather than letting the client buffer without
-//! limit, and a publish larger than the whole budget fails at once.
+//! Shared by all of a client's publishers. A publish takes its bytes before
+//! it is queued and gives them back once it is written, or once the broker
+//! answers if it asked for an ack. So a slow broker makes callers wait for
+//! room rather than letting the client buffer without limit, and a publish
+//! larger than the whole budget fails at once.
 
 use std::sync::Arc;
 

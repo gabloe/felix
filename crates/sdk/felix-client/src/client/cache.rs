@@ -14,6 +14,18 @@ use super::Client;
 use crate::cache::{CacheRequest, CacheWorker};
 
 impl Client {
+    /// Cache requests in flight on each cache connection, for metrics.
+    ///
+    /// Approximate: the count is raised after a request is queued and lowered
+    /// by the worker that answers it, and the two can race.
+    pub fn cache_conn_counts(&self) -> Vec<usize> {
+        self.cache_conn_counts
+            .iter()
+            .map(|count| count.load(Ordering::Relaxed))
+            .collect()
+    }
+
+    /// Store `value` under `key`, expiring after `ttl_ms` when one is given.
     pub async fn cache_put(
         &self,
         tenant_id: &str,
@@ -60,6 +72,7 @@ impl Client {
             .map_err(|_| anyhow::anyhow!("cache put response dropped"))?
     }
 
+    /// The value stored under `key`, or `None` when there is none.
     pub async fn cache_get(
         &self,
         tenant_id: &str,
@@ -214,13 +227,6 @@ impl Client {
             request_id,
         };
         self.counter_round_trip(message, request_id).await
-    }
-
-    pub fn cache_conn_counts(&self) -> Vec<usize> {
-        self.cache_conn_counts
-            .iter()
-            .map(|count| count.load(Ordering::Relaxed))
-            .collect()
     }
 
     async fn counter_round_trip(&self, message: Message, request_id: u64) -> Result<Option<i64>> {

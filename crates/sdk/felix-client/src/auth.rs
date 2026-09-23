@@ -4,6 +4,7 @@
 //! after connect (subscriptions, watches, group requests, reconnects). Access
 //! tokens last 900s by default, so the client asks a [`TokenProvider`] for the
 //! current token each time instead of holding the one it connected with.
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -63,14 +64,6 @@ pub struct RefreshingToken {
     fetch: Fetch,
     state: Mutex<Option<Held>>,
     fetching: tokio::sync::Mutex<()>,
-}
-
-struct Held {
-    token: String,
-    /// Unix seconds. `None` means the token did not say when it expires.
-    expires_at: Option<i64>,
-    /// When to stop answering from this token and fetch again.
-    refresh_at: Option<i64>,
 }
 
 impl RefreshingToken {
@@ -154,6 +147,14 @@ impl TokenProvider for RefreshingToken {
             *state = None;
         }
     }
+}
+
+struct Held {
+    token: String,
+    /// Unix seconds. `None` means the token did not say when it expires.
+    expires_at: Option<i64>,
+    /// When to stop answering from this token and fetch again.
+    refresh_at: Option<i64>,
 }
 
 impl Held {

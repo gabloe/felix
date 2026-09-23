@@ -73,6 +73,7 @@ impl std::fmt::Display for NotLeaderError {
 /// a different stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub struct SubscribeCursorError {
+    /// Whether the offset was too old or not yet written.
     pub reason: CursorErrorReason,
     /// The offset that was asked for.
     pub requested: u64,

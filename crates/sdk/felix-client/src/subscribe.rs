@@ -136,9 +136,13 @@ impl Drop for Subscription {
 
 /// One record delivered to a [`Subscription`].
 pub struct Event {
+    /// The tenant of the stream the event was read from.
     pub tenant_id: Arc<str>,
+    /// The namespace of the stream the event was read from.
     pub namespace: Arc<str>,
+    /// The stream the event was read from.
     pub stream: Arc<str>,
+    /// The record as it was published.
     pub payload: Bytes,
     /// Log offset of this event on a durable stream, or `None` for an in-memory
     /// one and for any broker that did not negotiate offsets.

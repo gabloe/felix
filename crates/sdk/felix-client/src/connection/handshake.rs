@@ -83,17 +83,17 @@ pub(crate) struct Negotiated {
 #[error("auth rejected: {0}")]
 struct AuthRejected(String);
 
-/// Authenticate a stream and negotiate frame-flag capabilities.
+/// Authenticate a stream and negotiate capabilities.
 ///
-/// Returns the flag bits the broker supports. Capability negotiation rides on
-/// the auth handshake because it is already the first round trip on every
-/// stream, so it costs no extra latency.
+/// Returns what the broker agreed to: its frame-flag and feature bits, and its
+/// listener ports. Negotiation rides on the auth handshake because that is
+/// already the first round trip on every stream, so it costs no extra latency.
 ///
 /// A broker that predates negotiation ignores `client_flags` (serde skips
-/// unknown fields) and answers with a plain `Ok`. That silence is not treated as
-/// "supports everything" — it resolves to [`felix_wire::ORIGINAL_V1_FLAGS`], the three bits
-/// that existed before negotiation, which is the only assumption that is safe
-/// against a broker we cannot interrogate.
+/// unknown fields) and answers with a plain `Ok`. That silence is not treated
+/// as "supports everything": it resolves to [`felix_wire::ORIGINAL_V1_FLAGS`],
+/// the three bits that existed before negotiation, which is the only
+/// assumption that is safe against a broker we cannot interrogate.
 async fn authenticate_stream(
     send: &mut SendStream,
     recv: &mut RecvStream,

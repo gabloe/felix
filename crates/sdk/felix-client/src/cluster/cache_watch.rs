@@ -96,7 +96,7 @@ impl ClusterClient {
     ///
     /// The shards finish their state phases at different times, so the merged
     /// watch marks the moment all of them have with
-    /// [`ShardedCacheWatchItem::StateComplete`].
+    /// [`crate::ShardedCacheWatchItem::StateComplete`].
     pub async fn watch_cache_sharded_retained(
         self: &Arc<Self>,
         tenant_id: &str,

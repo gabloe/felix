@@ -1,10 +1,11 @@
 //! Logs the first few frames that fail to decode, with a preview of their
-//! bytes, so a protocol mismatch is visible without flooding stderr.
-
-use felix_wire::Frame;
+//! bytes, so a protocol mismatch is visible without flooding stderr. Only
+//! with the `telemetry` feature.
 
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::AtomicUsize;
+
+use felix_wire::Frame;
 
 #[cfg(feature = "telemetry")]
 const DECODE_ERROR_LOG_LIMIT: usize = 20;

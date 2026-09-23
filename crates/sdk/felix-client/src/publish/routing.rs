@@ -20,7 +20,11 @@ pub(super) const STREAM_SHARD_CACHE_CAPACITY: usize = 1024;
 /// How a publisher spreads publishes across its streams.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishSharding {
+    /// Rotate through the streams. Publishes to one stream can reach the
+    /// broker out of order.
     RoundRobin,
+    /// Pick the stream by hashing the stream's name, so each stream's
+    /// publishes share one writer and stay in order. The default.
     HashStream,
 }
 

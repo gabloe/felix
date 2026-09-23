@@ -9,6 +9,10 @@ use super::Client;
 use crate::publish::{IdempotentProducer, Publisher, PublisherInner};
 
 impl Client {
+    /// A publisher over this client's publish streams.
+    ///
+    /// Cheap to make: every publisher from one client shares its streams and
+    /// its in-flight byte budget.
     pub async fn publisher(&self) -> Result<crate::publish::Publisher> {
         Ok(Publisher {
             inner: Arc::new(PublisherInner::with_runtime_config(

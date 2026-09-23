@@ -47,7 +47,7 @@ pub(crate) fn listener_targets(dialled: SocketAddr, ports: &[u16]) -> Vec<Socket
 /// The listener one pool connection at `index` should dial, noting it in
 /// `listeners` the first time any pool lands on it.
 ///
-/// Shared by the publish, cache and event pools below: each spreads its
+/// Shared by the publish, cache and event pools: each spreads its
 /// connections across `targets` the same way and needs the same bookkeeping
 /// for `Client::listeners_in_use`.
 pub(crate) fn pool_target(

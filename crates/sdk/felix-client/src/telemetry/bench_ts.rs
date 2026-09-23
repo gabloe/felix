@@ -2,11 +2,12 @@
 //! bytes of the payload, and a subscriber turns that into an end-to-end
 //! latency sample. Only with `bench_embed_ts` and the `telemetry` feature.
 
-use bytes::Bytes;
 #[cfg(feature = "telemetry")]
 use std::sync::OnceLock;
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
+
+use bytes::Bytes;
 
 #[cfg(feature = "telemetry")]
 use crate::timings;

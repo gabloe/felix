@@ -4,27 +4,22 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "telemetry")]
-#[derive(Default)]
-pub(crate) struct FrameCounters {
-    pub(crate) frames_in_ok: AtomicU64,
-    pub(crate) frames_in_err: AtomicU64,
-    pub(crate) frames_out_ok: AtomicU64,
-    pub(crate) bytes_in: AtomicU64,
-    pub(crate) bytes_out: AtomicU64,
-    pub(crate) pub_frames_out_ok: AtomicU64,
-    pub(crate) pub_frames_out_err: AtomicU64,
-    pub(crate) pub_items_out_ok: AtomicU64,
-    pub(crate) pub_items_out_err: AtomicU64,
-    pub(crate) pub_batches_out_ok: AtomicU64,
-    pub(crate) pub_batches_out_err: AtomicU64,
-    pub(crate) sub_frames_in_ok: AtomicU64,
-    pub(crate) sub_items_in_ok: AtomicU64,
-    pub(crate) sub_batches_in_ok: AtomicU64,
-    pub(crate) ack_frames_in_ok: AtomicU64,
-    pub(crate) ack_items_in_ok: AtomicU64,
-    pub(crate) binary_encode_reallocs: AtomicU64,
-    pub(crate) text_encode_reallocs: AtomicU64,
-}
+static FRAME_COUNTERS: std::sync::OnceLock<FrameCounters> = std::sync::OnceLock::new();
+
+/// Publishes the broker forwarded, as reported on their acks.
+///
+/// **Always on**, unlike the frame counters, which are behind `telemetry`. One
+/// relaxed increment per *forwarded* publish -- not per publish -- and it is the
+/// answer to "am I paying the forwarding tax", which is a question worth being
+/// able to ask of a build that was not compiled for measurement. A client that
+/// cannot answer it is exactly the blindness the hint was added to remove
+/// (#536).
+///
+/// Non-zero means this client is publishing to a broker that does not own the
+/// shard, and each of those records is decrypted, re-encrypted and decrypted
+/// again on the way -- roughly half the throughput per core. Zero means either
+/// the connections are landing on the owners, or the broker predates the hint.
+static PUBLISHES_FORWARDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Totals of the client's frame and byte counters at one moment.
 ///
@@ -52,11 +47,26 @@ pub struct FrameCountersSnapshot {
 }
 
 #[cfg(feature = "telemetry")]
-static FRAME_COUNTERS: std::sync::OnceLock<FrameCounters> = std::sync::OnceLock::new();
-
-#[cfg(feature = "telemetry")]
-pub(crate) fn frame_counters() -> &'static FrameCounters {
-    FRAME_COUNTERS.get_or_init(FrameCounters::default)
+#[derive(Default)]
+pub(crate) struct FrameCounters {
+    pub(crate) frames_in_ok: AtomicU64,
+    pub(crate) frames_in_err: AtomicU64,
+    pub(crate) frames_out_ok: AtomicU64,
+    pub(crate) bytes_in: AtomicU64,
+    pub(crate) bytes_out: AtomicU64,
+    pub(crate) pub_frames_out_ok: AtomicU64,
+    pub(crate) pub_frames_out_err: AtomicU64,
+    pub(crate) pub_items_out_ok: AtomicU64,
+    pub(crate) pub_items_out_err: AtomicU64,
+    pub(crate) pub_batches_out_ok: AtomicU64,
+    pub(crate) pub_batches_out_err: AtomicU64,
+    pub(crate) sub_frames_in_ok: AtomicU64,
+    pub(crate) sub_items_in_ok: AtomicU64,
+    pub(crate) sub_batches_in_ok: AtomicU64,
+    pub(crate) ack_frames_in_ok: AtomicU64,
+    pub(crate) ack_items_in_ok: AtomicU64,
+    pub(crate) binary_encode_reallocs: AtomicU64,
+    pub(crate) text_encode_reallocs: AtomicU64,
 }
 
 /// The frame and byte counters so far. All zero without the `telemetry` feature.
@@ -136,26 +146,16 @@ pub fn reset_frame_counters() {
     }
 }
 
-/// Publishes the broker forwarded, as reported on their acks.
-///
-/// **Always on**, unlike the counters above, which are behind `telemetry`. One
-/// relaxed increment per *forwarded* publish -- not per publish -- and it is the
-/// answer to "am I paying the forwarding tax", which is a question worth being
-/// able to ask of a build that was not compiled for measurement. A client that
-/// cannot answer it is exactly the blindness the hint was added to remove
-/// (#536).
-///
-/// Non-zero means this client is publishing to a broker that does not own the
-/// shard, and each of those records is decrypted, re-encrypted and decrypted
-/// again on the way -- roughly half the throughput per core. Zero means either
-/// the connections are landing on the owners, or the broker predates the hint.
-static PUBLISHES_FORWARDED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-pub(crate) fn record_publish_forwarded() {
-    PUBLISHES_FORWARDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// How many publishes this process has had forwarded since it started.
 pub fn publishes_forwarded() -> u64 {
     PUBLISHES_FORWARDED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(feature = "telemetry")]
+pub(crate) fn frame_counters() -> &'static FrameCounters {
+    FRAME_COUNTERS.get_or_init(FrameCounters::default)
+}
+
+pub(crate) fn record_publish_forwarded() {
+    PUBLISHES_FORWARDED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }

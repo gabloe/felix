@@ -5,11 +5,11 @@
 //! types an application consumes.
 
 use bytes::{Bytes, BytesMut};
+use felix_wire::Message;
 use quinn::RecvStream;
 use tokio::sync::mpsc;
 
 use crate::frame_io::read_message_with_limit;
-use felix_wire::Message;
 
 /// A live cache watch. Dropping it ends the watch.
 #[derive(Debug)]
@@ -92,6 +92,7 @@ pub enum CacheWatchFilter {
 /// One change delivered on a watch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CacheChange {
+    /// The key that changed.
     pub key: String,
     /// The value the key now holds; `None` means the key was deleted.
     pub value: Option<Bytes>,
@@ -108,12 +109,19 @@ pub struct CacheChange {
 /// What a watch yields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheWatchItem {
+    /// A key took a new value or was deleted.
     Change(CacheChange),
     /// The watch fell behind and the broker ended it after this. Re-watching
     /// with `from_offset = resume_from` is gapless.
-    Lagged {
-        resume_from: u64,
-    },
+    Lagged { resume_from: u64 },
+}
+
+/// The `key` and `prefix` fields a watch request carries for `filter`.
+pub(crate) fn filter_fields(filter: &CacheWatchFilter) -> (Option<String>, Option<String>) {
+    match filter {
+        CacheWatchFilter::Key(key) => (Some(key.clone()), None),
+        CacheWatchFilter::Prefix(prefix) => (None, Some(prefix.clone())),
+    }
 }
 
 async fn run_watch_pump(
@@ -161,13 +169,5 @@ async fn run_watch_pump(
             // after it is worth waiting for.
             break;
         }
-    }
-}
-
-/// The `key` and `prefix` fields a watch request carries for `filter`.
-pub(crate) fn filter_fields(filter: &CacheWatchFilter) -> (Option<String>, Option<String>) {
-    match filter {
-        CacheWatchFilter::Key(key) => (Some(key.clone()), None),
-        CacheWatchFilter::Prefix(prefix) => (None, Some(prefix.clone())),
     }
 }

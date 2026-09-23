@@ -1,12 +1,13 @@
+use std::sync::Mutex;
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
+
 use bytes::Bytes;
 use felix_wire::{Frame, FrameHeader};
-use std::sync::Mutex;
 
 #[cfg(not(feature = "telemetry"))]
 use super::macros::{NoopCounter, NoopGauge, NoopHistogram};
 use super::*;
-#[cfg(feature = "telemetry")]
-use std::sync::atomic::Ordering;
 
 static COUNTER_TEST_GUARD: Mutex<()> = Mutex::new(());
 

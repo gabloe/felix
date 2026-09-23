@@ -1,19 +1,17 @@
-//! Cache client worker implementations and request handling.
+//! The cache worker: one task that owns one bi-directional stream and runs
+//! one request/response round trip at a time on it.
 //!
-//! Manages the per-connection cache stream, serializing cache requests and
-//! returning responses to callers while recording optional timings.
-//!
-//! # Design notes
-//! A single bi-directional stream is used per cache worker to preserve request
-//! ordering and simplify response matching. Backpressure is handled by the
-//! mpsc queue and per-connection inflight counters.
+//! Strictly sequential exchanges keep each response next to its request, so
+//! matching them is just a request-id check. Callers reach a worker through a
+//! bounded queue, which is what pushes back when it falls behind.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use felix_wire::Message;
 use quinn::{RecvStream, SendStream};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
@@ -106,8 +104,6 @@ pub(crate) async fn run_cache_worker_with_limit(
     }
     let _ = send.finish();
     debug!(conn_index, "cache worker exited");
-    // We should probably use a connection-level atomic that we decremented when work completes so
-    // that we can track inflight ops more accurately.
 }
 
 async fn handle_cache_request(

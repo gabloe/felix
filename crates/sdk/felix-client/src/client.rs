@@ -2,7 +2,7 @@
 //!
 //! Publish, cache and event traffic each get their own connection pool, so
 //! one workload cannot head-of-line block another and each can be tuned
-//! separately. The files below split `Client`'s API by area; the struct and
+//! separately. The child modules split `Client`'s API by area; the struct and
 //! its fields live here.
 
 mod cache;
@@ -25,7 +25,10 @@ use crate::config::ClientRuntimeConfig;
 use crate::connection::{Credentials, EventRouterCommand};
 use crate::publish::{PublishAdmission, PublishSharding, PublishWorker};
 
-/// Network client that speaks felix-wire over QUIC.
+/// A client of one broker, over pooled QUIC connections.
+///
+/// Built with [`Client::connect`]. For a client that survives losing that
+/// broker, use [`crate::ClusterClient`].
 pub struct Client {
     // We keep three QUIC clients primarily to allow different transport tuning knobs per workload.
 
@@ -61,11 +64,9 @@ pub struct Client {
     event_pool_size: usize,
     cache_worker_rr: AtomicUsize,
 
-    // NOTE: the semantics of these counters are currently muddled.
-    // - cache_conn_counts is incremented but never decremented.
-    // - a single cache worker currently resets the entire connection count on exit.
-    // We probably need track inflight (inc on dispatch, dec on completion), and never
-    // reset a shared connection counter from one worker.
+    // In-flight work per connection, for the gauges. A cache count is raised
+    // once a request is queued and lowered by the worker that answers it; the
+    // two race, so the value is approximate.
     cache_conn_counts: Arc<Vec<AtomicUsize>>,
     event_conn_counts: Arc<Vec<AtomicUsize>>,
     auth_tenant_id: String,

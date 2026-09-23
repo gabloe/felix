@@ -10,6 +10,8 @@ use std::sync::{Mutex, OnceLock};
 
 use super::{ClientCacheTimingSamples, ClientTimingSamples};
 
+static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
+
 struct TimingCollector {
     publish_enqueue_wait_ns: Mutex<Vec<u64>>,
     encode_ns: Mutex<Vec<u64>>,
@@ -43,8 +45,6 @@ struct TimingCollector {
     enabled: AtomicBool,
     counter: AtomicUsize,
 }
-
-static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
 
 /// Start collecting, sampling one operation in every `sample_every`.
 ///

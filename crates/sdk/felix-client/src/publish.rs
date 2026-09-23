@@ -195,6 +195,7 @@ impl Publisher {
         .map(|_| ())
     }
 
+    /// Publish a batch as one binary frame, without asking for an ack.
     pub async fn publish_batch_binary(
         &self,
         tenant_id: &str,
@@ -207,6 +208,7 @@ impl Publisher {
             .map(|_| ())
     }
 
+    /// [`Publisher::publish_batch_binary`] for payloads already held as [`Bytes`].
     pub async fn publish_batch_binary_bytes(
         &self,
         tenant_id: &str,
@@ -361,6 +363,11 @@ impl Publisher {
             .map(|_| ())
     }
 
+    /// Close the publish streams once everything already queued has been
+    /// written and, if it asked for one, acknowledged.
+    ///
+    /// The streams are shared by every publisher from the same client, so this
+    /// ends publishing for all of them.
     pub async fn finish(&self) -> Result<()> {
         let mut handles = Vec::new();
         for worker in self.inner.workers.iter() {

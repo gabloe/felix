@@ -22,6 +22,10 @@ use crate::connection::{
 use crate::publish::{PublishAdmission, PublishWorker, run_publisher_writer_with_limit};
 
 impl Client {
+    /// Connect to the broker at `addr` with default transport settings.
+    ///
+    /// Every pool is built before this returns. `client_config` must name a
+    /// tenant and a token or token provider.
     pub async fn connect(
         addr: SocketAddr,
         server_name: &str,
@@ -94,6 +98,7 @@ impl Client {
         ))
     }
 
+    /// [`Client::connect`] with an explicit transport configuration.
     pub async fn connect_with_transport(
         addr: SocketAddr,
         server_name: &str,

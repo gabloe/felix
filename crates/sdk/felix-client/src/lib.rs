@@ -28,7 +28,6 @@
 //!
 //! The frame codec and message types are `felix-wire`; the QUIC layer is
 //! `felix-transport`. This crate is the application-facing shape over both.
-
 //!
 //! # Where things live
 //!

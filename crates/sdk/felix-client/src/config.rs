@@ -29,13 +29,22 @@ use yaml::ClientConfigOverride;
 /// [`ClientConfig::from_env_or_yaml`] and adjust fields from there.
 #[derive(Clone)]
 pub struct ClientConfig {
+    /// TLS and QUIC settings shared by every connection.
     pub quinn: quinn::ClientConfig,
+    /// Publish connections per client.
     pub publish_conn_pool: usize,
+    /// Publish streams per publish connection, each with its own writer task.
     pub publish_streams_per_conn: usize,
+    /// Not used: publish frames are written whole.
     pub publish_chunk_bytes: usize,
+    /// Publishes queued per publish stream before the next one waits for room.
     pub publish_queue_depth: usize,
+    /// Bytes of publishes sent but not yet answered, across the whole client.
+    /// A publish waits for room in this budget before it is queued.
     pub publish_inflight_bytes: usize,
+    /// How publishes are spread across the publish streams.
     pub publish_sharding: PublishSharding,
+    /// The tenant every stream authenticates as. Required to connect.
     pub auth_tenant_id: Option<String>,
     /// A fixed token for every stream. Clients that run longer than the
     /// token lasts should use `token_provider`.
@@ -43,23 +52,42 @@ pub struct ClientConfig {
     /// Supplies the token each time a stream authenticates. Overrides
     /// `auth_token`. See [`crate::RefreshingToken`].
     pub token_provider: Option<Arc<dyn TokenProvider>>,
+    /// Cache connections per client.
     pub cache_conn_pool: usize,
+    /// Cache streams per cache connection, each with its own worker.
     pub cache_streams_per_conn: usize,
+    /// Connections that carry subscriptions and cache watches.
     pub event_conn_pool: usize,
+    /// QUIC receive window per event connection, in bytes.
     pub event_conn_recv_window: u64,
+    /// QUIC receive window per event stream, in bytes.
     pub event_stream_recv_window: u64,
+    /// QUIC send window per event connection, in bytes.
     pub event_send_window: u64,
+    /// QUIC receive window per cache connection, in bytes.
     pub cache_conn_recv_window: u64,
+    /// QUIC receive window per cache stream, in bytes.
     pub cache_stream_recv_window: u64,
+    /// QUIC send window per cache connection, in bytes.
     pub cache_send_window: u64,
+    /// How many registrations and unclaimed event streams one event
+    /// connection holds before refusing more.
     pub event_router_max_pending: usize,
+    /// Capacity of each subscription's internal queues.
     pub client_sub_queue_capacity: usize,
+    /// What a subscription does when one of those queues is full.
     pub client_sub_queue_policy: ClientSubQueuePolicy,
+    /// Largest frame the client will read. A bigger one fails the stream
+    /// rather than being allocated.
     pub max_frame_bytes: usize,
+    /// Append a send timestamp to every publish payload, for end-to-end
+    /// latency measurement. Benchmarks only: it changes what subscribers
+    /// receive. Has no effect without the `telemetry` feature.
     pub bench_embed_ts: bool,
 }
 
 impl ClientConfig {
+    /// The defaults, with no credentials set.
     pub fn optimized_defaults(quinn: quinn::ClientConfig) -> Self {
         Self {
             quinn,
@@ -95,6 +123,10 @@ impl ClientConfig {
         }
     }
 
+    /// The defaults, then the `FELIX_*` environment overrides, then the YAML
+    /// file at `config_path` (or `FELIX_CLIENT_CONFIG`) when one is named.
+    ///
+    /// Fails if a named file cannot be read or parsed.
     pub fn from_env_or_yaml(quinn: quinn::ClientConfig, config_path: Option<&str>) -> Result<Self> {
         let mut config = Self::from_env(quinn);
         let override_path = config_path
@@ -143,8 +175,14 @@ impl ClientConfig {
 /// What a subscription does when its bounded queue is full.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientSubQueuePolicy {
+    /// Wait for room, which stops reading the event stream until the
+    /// application catches up.
     Block,
+    /// Drop the arriving item. The default.
     DropNew,
+    /// Meant to drop the oldest queued item. It currently drops the arriving
+    /// one, exactly as `DropNew` does, and counts it under
+    /// `felix_client_sub_queue_drop_old_emulated_total`.
     DropOld,
 }
 

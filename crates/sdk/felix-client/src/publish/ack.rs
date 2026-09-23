@@ -27,6 +27,18 @@ use crate::timings;
 /// all, not a competing deadline.
 const ACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// What a publish's ack says, beyond success or failure.
+///
+/// `forwarded_to` is the shard's owner when this broker was not it and passed
+/// the batch on. A client that routes to the owner next time stops paying the
+/// decrypt/re-encrypt/decrypt a forward costs -- roughly half the throughput
+/// per core (#536).
+#[derive(Debug)]
+pub(crate) struct AckRead {
+    pub(crate) message: Message,
+    pub(crate) forwarded_to: Option<felix_wire::binary::PublishOwner>,
+}
+
 /// Wait for the broker's ack to the publish sent as `request_id`.
 ///
 /// Acks arrive on the publish stream strictly in request order, so the next
@@ -99,18 +111,6 @@ pub(crate) async fn wait_for_ack(
         }) if ack_id == request_id => Err(crate::PublishRefused { reason, message }.into()),
         other => Err(anyhow::anyhow!("publish failed: {other:?}")),
     }
-}
-
-/// What a publish's ack says, beyond success or failure.
-///
-/// `forwarded_to` is the shard's owner when this broker was not it and passed
-/// the batch on. A client that routes to the owner next time stops paying the
-/// decrypt/re-encrypt/decrypt a forward costs -- roughly half the throughput
-/// per core (#536).
-#[derive(Debug)]
-pub(crate) struct AckRead {
-    pub(crate) message: Message,
-    pub(crate) forwarded_to: Option<felix_wire::binary::PublishOwner>,
 }
 
 pub(crate) async fn read_ack_message_with_timing(

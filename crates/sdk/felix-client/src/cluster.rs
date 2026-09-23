@@ -56,7 +56,7 @@ use tokio::sync::RwLock;
 use crate::client::Client;
 use crate::config::ClientConfig;
 
-/// How many times a subscribe will follow a redirect before giving up.
+/// How many times a subscribe or watch will follow a redirect before giving up.
 ///
 /// A correct cluster needs one hop. More than that means the answer is moving
 /// while it is being followed, and a bound is what turns "the cluster has not

@@ -1,13 +1,16 @@
 //! What a client does when it cannot keep up with its own subscription.
 //!
-//! The queue between the read loop and the application is bounded, so one of
-//! three things happens when it fills, and which one is the application's
-//! choice. Getting it wrong is quiet: the events simply are not there.
+//! The queues between the read loop and the application are bounded, and
+//! what happens when one fills is the application's choice
+//! ([`crate::ClientSubQueuePolicy`]). Getting it wrong is quiet: the events
+//! simply are not there.
 
 use tokio::sync::mpsc;
 
 use crate::config::ClientSubQueuePolicy;
 
+/// Queue `item` under `policy`, counting the outcome on the named metrics.
+/// `false` means the receiver is gone and the subscription is over.
 pub(super) async fn enqueue_with_policy<T>(
     tx: &mpsc::Sender<T>,
     item: T,

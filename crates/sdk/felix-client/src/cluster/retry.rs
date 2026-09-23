@@ -12,6 +12,7 @@ pub struct ReconnectPolicy {
     /// The first retry waits somewhere in `[0, backoff]`. The ceiling doubles
     /// each attempt up to `max_backoff`.
     pub backoff: Duration,
+    /// The longest any one wait can be.
     pub max_backoff: Duration,
     /// A ceiling on the whole operation, across every attempt and every sleep.
     ///

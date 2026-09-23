@@ -57,6 +57,21 @@ pub(crate) enum PublishRequest {
     },
 }
 
+/// A publish that has been written to the stream but whose broker ack has not
+/// arrived yet. The admission permit rides along so the in-flight byte budget
+/// stays reserved until the broker answers, not merely until the frame is
+/// written.
+struct PendingAck {
+    request_id: u64,
+    response: oneshot::Sender<AckOutcome>,
+    _permit: OwnedSemaphorePermit,
+    // Read only by the telemetry counters in the ack reader.
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    batch_count: u64,
+    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
+    item_count: u64,
+}
+
 pub(crate) async fn run_publisher_writer_with_limit(
     mut send: SendStream,
     mut recv: RecvStream,
@@ -583,19 +598,4 @@ pub(crate) async fn finish_publisher_stream(
         }
     }
     Ok(())
-}
-
-/// A publish that has been written to the stream but whose broker ack has not
-/// arrived yet. The admission permit rides along so the in-flight byte budget
-/// stays reserved until the broker answers, not merely until the frame is
-/// written.
-struct PendingAck {
-    request_id: u64,
-    response: oneshot::Sender<AckOutcome>,
-    _permit: OwnedSemaphorePermit,
-    // Read only by the telemetry counters in the ack reader.
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
-    batch_count: u64,
-    #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
-    item_count: u64,
 }

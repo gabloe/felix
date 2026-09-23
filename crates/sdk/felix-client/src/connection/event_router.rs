@@ -11,11 +11,12 @@
 //! `EventStreamHello { subscription_id }`, and nothing after it names the
 //! subscription again, so the stream itself is the binding.
 
+use std::collections::HashMap;
+
 use bytes::BytesMut;
 use felix_transport::QuicConnection;
 use felix_wire::Message;
 use quinn::RecvStream;
-use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::EVENT_ROUTER_QUEUE_DEPTH;
