@@ -413,21 +413,18 @@ stream.
 
 Sent only to a broker that advertised `FEATURE_CACHE_SHARDS`.
 
-The cache counterpart of `stream_shards`: a prefix watch reads one shard, so
-covering a prefix of a multi-shard cache means one `cache_watch` per shard, and
-this is how a client learns how many. A separate request rather than a field on
-`stream_shards` because a broker that predates it would ignore the field and
-answer for a stream of the same name. Scoped to the client's own tenant, and
-answered from the routing snapshot.
+How many shards a cache has, so a client knows how many prefix watches to
+open. It's a separate request rather than a field on `stream_shards` because
+an older broker would ignore the field and answer for a stream with the same
+name. Scoped to the client's tenant and answered from the routing snapshot.
 
 ### CacheShardsView (server -> client)
 ```
 { "type": "cache_shards_view", "shards": <u32>, "request_id": <u64> }
 ```
 
-`0` means this broker knows nothing of that cache. A registered cache the
-routing snapshot has not placed is one shard, which is how `cache_watch`
-resolves it too.
+`0` means the broker doesn't know the cache. A registered cache that hasn't
+been placed yet counts as one shard, as it does for `cache_watch`.
 
 ### CacheValue (server -> client)
 ```

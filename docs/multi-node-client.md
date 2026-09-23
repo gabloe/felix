@@ -186,20 +186,18 @@ while let Some(item) = watch.recv().await {
 # }
 ```
 
-- **Ordering is per key.** A key lives on one shard, so its changes arrive in
-  write order; changes on different shards interleave arbitrarily, and each
-  `offset` belongs to its own shard's log.
-- **Retained state completes once, for the whole prefix.** Each shard finishes
-  its state phase at its own time, interleaved with other shards' live changes,
-  so counting items cannot tell when the state is complete. `StateComplete`
-  arrives once every shard has delivered its retained values. It never arrives
-  if a shard ended mid-state.
-- **Resumption is a vector.** `resume_offsets()` is one `from_offset` per shard;
-  pass it back to `watch_cache_sharded`. A shard still in its state phase
-  resumes at 0, since its retained values can carry any older offset.
-- **A shard ending is reported, not retried.** `Lagged` or `ShardClosed` names
-  the shard; the rest keep delivering. Resume from `resume_offsets()`.
-- **An unreachable shard refuses the whole watch**, for the same reason as
+- **Ordering is per key.** A key's changes arrive in write order. Changes to
+  keys on different shards can arrive in any order, and each `offset` belongs
+  to its own shard's log.
+- **`StateComplete` arrives once**, after every shard has sent its retained
+  values. Shards finish at different times, so you can't work this out by
+  counting. If a shard ends partway through, it never arrives.
+- **Resume per shard.** `resume_offsets()` has one offset per shard; pass it
+  back to `watch_cache_sharded`. A shard that hadn't finished its retained
+  values resumes at 0.
+- **A shard that ends is reported, not reconnected.** You get `Lagged` or
+  `ShardClosed` for it and the other shards carry on.
+- **If any shard can't be reached, the call fails**, as with
   `subscribe_sharded`.
 
 It needs a broker advertising `FEATURE_CACHE_SHARDS` to learn the shard count.

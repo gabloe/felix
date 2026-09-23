@@ -850,11 +850,10 @@ shard, and `resubscribe_sharded` takes it back. See
 [Multi-node client](https://github.com/gabloe/felix/blob/main/docs/multi-node-client.md)
 for the full contract.
 
-A prefix watch over a multi-shard cache works the same way:
-`watch_cache_sharded` opens one watch per shard and merges them, and
-`watch_cache_sharded_retained` marks the moment every shard's current state has
-arrived with `ShardedCacheWatchItem::StateComplete`. It needs
-`FEATURE_CACHE_SHARDS`.
+Prefix watches on a multi-shard cache work the same way. `watch_cache_sharded`
+opens one watch per shard and merges them. The retained version sends
+`ShardedCacheWatchItem::StateComplete` once every shard's current values have
+arrived. Needs `FEATURE_CACHE_SHARDS`.
 
 ## In-Process Client
 
