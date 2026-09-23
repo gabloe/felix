@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790195300720,
+  "lastUpdate": 1790196236596,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13988,6 +13988,58 @@ window.BENCHMARK_DATA = {
             "range": "44114.52",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 950344.57\nmean: 937818.40\nstdev: 44114.52\ncv: 4.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16cd529169b69185253b363e2fb1da049fc02668",
+          "message": "feat(client): one consumer group across every shard of a stream (#649)\n\n* feat(client): one consumer group across every shard of a stream\n\nCloses #610. A group is bound to one shard and only that shard's leader can\nserve it, so consuming a multi-shard stream through a group meant finding\neach shard's owner and routing every ack by hand. Worse, a non-leader\nanswered a group request with a prose refusal, so there was nothing typed to\nfollow.\n\nThe broker now answers all six group requests for a shard it does not lead\nwith `NotLeader`, to clients that offered FEATURE_REDIRECT (everyone else\nkeeps the old refusal). Each group request has its own stream, so the\nredirect needs no request id. The client maps it to NotLeaderError.\n\n`ClusterClient::group_sharded` returns a `ShardedGroup`: one group per shard,\neach shard's leader found by following its redirect and remembered until it\nfails. `poll` visits shards in turn and returns one shard's batch, tagged\nwith the shard, so `ack`/`nack` go back to the right leader.\n\n* style: rustfmt the sharded group test",
+          "timestamp": "2026-09-23T13:41:10-07:00",
+          "tree_id": "ceda461f8ebc7a9a9bf1d77f0803077a024d9b41",
+          "url": "https://github.com/gabloe/felix/commit/16cd529169b69185253b363e2fb1da049fc02668"
+        },
+        "date": 1790196235677,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 405896.25,
+            "range": "10920.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 405896.25\nmean: 404073.18\nstdev: 10920.91\ncv: 2.70%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 405896.25,
+            "range": "10920.91",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 405896.25\nmean: 404073.18\nstdev: 10920.91\ncv: 2.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93576.41,
+            "range": "1835.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93576.41\nmean: 93026.15\nstdev: 1835.98\ncv: 1.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 935764.1,
+            "range": "18359.78",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 935764.10\nmean: 930261.49\nstdev: 18359.78\ncv: 1.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
