@@ -12,9 +12,9 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::config::BrokerConfig;
+use crate::observability::timings;
 use crate::serving::auth::BrokerAuth;
 use crate::shards::routing::IngressRouter;
-use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;
 use super::handlers::publish::{

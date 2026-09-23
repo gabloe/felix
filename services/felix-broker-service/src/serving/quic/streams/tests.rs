@@ -47,6 +47,7 @@ use super::hooks::test_hooks;
 use super::uni::{UniLoopArgs, run_uni_loop};
 use super::writer::run_writer_loop;
 use crate::config::BrokerConfig;
+use crate::observability::timings;
 use crate::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use crate::serving::quic::handlers::publish::{
     AckEncoding, AckTimeoutState, AckWaiterMessage, Outgoing, PublishAdmission, PublishContext,
@@ -55,7 +56,6 @@ use crate::serving::quic::handlers::publish::{
 use crate::serving::quic::handlers::subscribe::WriterLaneManager;
 use crate::serving::quic::telemetry;
 use crate::serving::quic::{ACK_HI_WATER, ACK_LO_WATER};
-use crate::timings;
 
 const TEST_PRIVATE_KEY: [u8; 32] = [13u8; 32];
 

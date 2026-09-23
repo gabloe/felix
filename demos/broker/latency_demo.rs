@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::timings as broker_publish_timings;
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::timings as broker_timings;
+use felix_broker_service::observability::timings as broker_timings;
 use felix_client::timings as client_timings;
 use felix_client::{Client, ClientConfig, PublishSharding, Publisher, Subscription};
 use felix_storage::EphemeralCache;

@@ -5,7 +5,7 @@ use std::time::Instant;
 #[cfg(feature = "telemetry")]
 use super::{DECODE_ERROR_LOG_LIMIT, DECODE_ERROR_LOGS};
 #[cfg(feature = "telemetry")]
-use crate::timings;
+use crate::observability::timings;
 #[cfg(feature = "telemetry")]
 use std::sync::Arc;
 #[cfg(feature = "telemetry")]

@@ -37,11 +37,11 @@ use tokio_util::task::TaskTracker;
 
 use crate::cluster::credential;
 use crate::cluster::membership;
+use crate::config::{self, DurableStorageConfig};
 use crate::peer;
 use crate::replication;
 use crate::serving::{auth::BrokerAuth, quic};
 use crate::shards::{lifecycle as shard_lifecycle, routing as shard_routing, watch as shard_watch};
-use crate::{config, durable_config::DurableStorageConfig};
 
 /// Start the broker and run until the provided `shutdown` future resolves.
 ///

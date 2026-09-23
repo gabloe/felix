@@ -5,10 +5,10 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+use crate::observability::timings;
 use crate::serving::quic::handlers::subscribe::config::EventWriterConfig;
 use crate::serving::quic::handlers::subscribe::writer::write_parts;
 use crate::serving::quic::telemetry::{t_counter, t_histogram, t_now_if, t_should_sample};
-use crate::timings;
 
 /// Drain subscriber events from an `mpsc` queue and write them onto a uni QUIC stream.
 ///

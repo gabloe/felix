@@ -5,6 +5,8 @@
 //! Metrics serving is asynchronous and uses `axum` to handle requests.
 //! In tests, metrics recorder initialization is cached to avoid conflicts, and subscriber initialization is adapted accordingly.
 
+pub mod timings;
+
 use felix_common::lifecycle::Readiness;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_exporter_prometheus::PrometheusHandle;

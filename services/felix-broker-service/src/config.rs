@@ -1,3 +1,7 @@
+pub mod durable;
+
+pub use durable::DurableStorageConfig;
+
 use anyhow::{Context, Result};
 use felix_broker::SubQueuePolicy;
 use serde::{Deserialize, Serialize};

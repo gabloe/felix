@@ -28,10 +28,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, watch};
 
+use crate::observability::timings;
 use crate::serving::quic::GLOBAL_ACK_DEPTH;
 use crate::serving::quic::handlers::publish::{Outgoing, decrement_depth};
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
-use crate::timings;
 
 use super::hooks::{
     encode_cache_message_with_hook, should_reset_throttle, write_frame_with_hook,

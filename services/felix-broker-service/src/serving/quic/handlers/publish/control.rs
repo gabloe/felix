@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
+use crate::observability::timings;
 use crate::serving::auth::AuthContext;
 use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::handlers::publish::ack::{
@@ -26,7 +27,6 @@ use crate::serving::quic::handlers::publish::{
 use crate::serving::quic::telemetry::{
     log_decode_error, t_consume_instant, t_counter, t_histogram, t_now_if,
 };
-use crate::timings;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_binary_publish_batch_control(

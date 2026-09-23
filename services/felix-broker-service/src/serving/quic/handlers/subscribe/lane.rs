@@ -8,12 +8,12 @@ use std::sync::{Arc, Weak};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
+use crate::observability::timings;
 use crate::serving::quic::handlers::subscribe::conn_counts::{
     connection_subscriber_unregister, hash64,
 };
 use crate::serving::quic::handlers::subscribe::writer::{run_connection_writer, run_writer_lane};
 use crate::serving::quic::telemetry::{t_counter, t_histogram};
-use crate::timings;
 
 #[derive(Debug)]
 pub(super) struct LaneSubscriber {

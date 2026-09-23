@@ -7,9 +7,9 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::{Broker, CacheMetadata};
+use felix_broker_service::observability::timings as broker_timings;
 use felix_broker_service::serving::auth::{BrokerAuth, demo::demo_auth_for_tenant};
 use felix_broker_service::serving::quic;
-use felix_broker_service::timings as broker_timings;
 use felix_client::timings as client_timings;
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;

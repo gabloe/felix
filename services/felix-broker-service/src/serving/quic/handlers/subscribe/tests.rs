@@ -178,8 +178,8 @@ async fn writer_parts_match_legacy_encoded_bytes() -> Result<()> {
 
 #[tokio::test]
 async fn run_event_writer_single_closes_on_channel_close() -> Result<()> {
-    crate::timings::enable_collection(1);
-    crate::timings::set_enabled(true);
+    crate::observability::timings::enable_collection(1);
+    crate::observability::timings::set_enabled(true);
 
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
@@ -218,8 +218,8 @@ async fn run_event_writer_single_closes_on_channel_close() -> Result<()> {
 
 #[tokio::test]
 async fn run_event_writer_single_binary_uses_batch_encoding() -> Result<()> {
-    crate::timings::enable_collection(1);
-    crate::timings::set_enabled(true);
+    crate::observability::timings::enable_collection(1);
+    crate::observability::timings::set_enabled(true);
 
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
@@ -258,8 +258,8 @@ async fn run_event_writer_single_binary_uses_batch_encoding() -> Result<()> {
 
 #[tokio::test]
 async fn run_event_writer_batches_with_pending_payload() -> Result<()> {
-    crate::timings::enable_collection(1);
-    crate::timings::set_enabled(true);
+    crate::observability::timings::enable_collection(1);
+    crate::observability::timings::set_enabled(true);
 
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
@@ -1452,7 +1452,7 @@ async fn run_connection_writer_coalesces_multiple_deliveries() -> Result<()> {
 
     drop(tx);
     writer_task.await.context("writer join")?;
-    let _ = crate::timings::take_samples();
+    let _ = crate::observability::timings::take_samples();
     Ok(())
 }
 
@@ -1514,7 +1514,7 @@ async fn run_connection_writer_handles_write_error() -> Result<()> {
     tokio::time::sleep(Duration::from_millis(50)).await;
     drop(tx);
     writer_task.await.context("writer join")?;
-    let _ = crate::timings::take_samples();
+    let _ = crate::observability::timings::take_samples();
     Ok(())
 }
 
@@ -1619,6 +1619,6 @@ async fn run_connection_writer_unregister_drops_late_deliveries() -> Result<()> 
 
     drop(tx);
     writer_task.await.context("writer join")?;
-    let _ = crate::timings::take_samples();
+    let _ = crate::observability::timings::take_samples();
     Ok(())
 }

@@ -1,8 +1,15 @@
+//! Opt-in per-stage latency sampling for the hot paths, for demos and perf
+//! work rather than production metrics.
+//!
+//! With the `telemetry` feature the collector records samples once it is
+//! enabled. Without it every function here is a no-op and the `take_*`
+//! functions return `None`, so call sites need no feature gates.
+
 #[cfg(feature = "telemetry")]
-mod telemetry;
+mod collector;
 
 #[cfg(not(feature = "telemetry"))]
-mod telemetry {
+mod collector {
     pub type BrokerTimingSamples = (
         Vec<u64>,
         Vec<u64>,
@@ -59,7 +66,7 @@ mod telemetry {
     }
 }
 
-pub use telemetry::*;
+pub use collector::*;
 
 #[cfg(test)]
 mod tests;

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 
+use crate::observability::timings;
 use crate::serving::quic::handlers::subscribe::conn_counts::{
     connection_subscriber_register, connection_subscriber_unregister,
 };
@@ -18,7 +19,6 @@ use crate::serving::quic::handlers::subscribe::lane::{
     WriterLaneManager,
 };
 use crate::serving::quic::telemetry::{t_counter, t_histogram, t_now_if, t_should_sample};
-use crate::timings;
 
 #[cfg(test)]
 pub(super) async fn write_parts_to<W>(

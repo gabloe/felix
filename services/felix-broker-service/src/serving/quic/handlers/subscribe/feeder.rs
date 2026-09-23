@@ -5,11 +5,11 @@ use felix_broker::{DeliveryEnvelope, SubscriptionReceiver};
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
+use crate::observability::timings;
 use crate::serving::quic::handlers::publish::SubscriptionLimiter;
 use crate::serving::quic::handlers::subscribe::config::EventWriterConfig;
 use crate::serving::quic::handlers::subscribe::lane::{LaneCommand, WriterLaneManager};
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
-use crate::timings;
 
 pub(super) async fn run_lane_feeder(
     mut event_rx: SubscriptionReceiver,

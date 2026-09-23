@@ -48,8 +48,8 @@
 //! also what tells the control plane which replicas hold the log, which is
 //! what a failover and a planned move both read.
 //!
-//! [`config`] parses the environment, [`timings`] is the opt-in per-stage
-//! latency instrumentation, and [`durable_config`] decides where logs live.
+//! [`config`] parses the environment and decides where logs live, and
+//! [`observability::timings`] is the opt-in per-stage latency instrumentation.
 //!
 //! Each module owns its own tests at `<module>/tests.rs` and its own metrics
 //! at `<module>/metrics.rs`.
@@ -69,10 +69,8 @@ pub mod replication;
 
 // --- Process-wide -------------------------------------------------------
 pub mod config;
-pub mod durable_config;
 pub mod node;
 pub mod observability;
-pub mod timings;
 
 #[cfg(test)]
 // Test utilities live alongside the library for reuse in integration tests.

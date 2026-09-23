@@ -46,6 +46,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
 use crate::config::BrokerConfig;
+use crate::observability::timings;
 use crate::serving::auth::{AuthContext, BrokerAuth};
 use crate::serving::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::serving::quic::handlers::publish::{
@@ -56,7 +57,6 @@ use crate::serving::quic::handlers::publish::{
 };
 use crate::serving::quic::handlers::subscribe::handle_subscribe_message;
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
-use crate::timings;
 
 use super::frame_source::FrameSource;
 
