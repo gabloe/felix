@@ -229,6 +229,33 @@ chain immediately.
 To cut off a principal without waiting out any token's expiry, revoke its
 refresh tokens for the tenant; every chain it holds ends at once.
 
+### In the Rust client
+
+Each client stream authenticates when it opens, and clients open streams long
+after connecting: subscriptions, cache watches, group requests, and
+`ClusterClient` reconnects. A fixed `ClientConfig::auth_token` stops working for
+those once it expires, so long-running clients should set
+`ClientConfig::token_provider` instead. The client asks it for a token every
+time a stream authenticates.
+
+`RefreshingToken` is a provider that takes a function to fetch a token
+(normally the `/token/refresh` call above). It fetches a new one when two
+thirds of the current token's lifetime has passed, based on `exp`. If a fetch
+fails it keeps using the current token until that expires. If the broker
+refuses a token, the client asks for a new one and retries once.
+
+```rust,ignore
+config.token_provider = Some(Arc::new(RefreshingToken::with_initial(
+    access_token,
+    move || refresh_with_control_plane(http.clone(), refresh_chain.clone()),
+)));
+```
+
+The broker only checks the token when a stream opens, so a stream that is
+already open keeps working after the token expires. Forwarded publishes are the
+exception. When a broker forwards a publish to the shard owner, the owner checks
+the token the publish stream opened with and rejects it once it has expired.
+
 ## Bootstrap Mode (Day-0)
 
 Felix includes a **one-time operator bootstrap** flow to initialize tenant auth before any admin tokens exist.
