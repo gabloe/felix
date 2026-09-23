@@ -23,6 +23,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 // Static test keypair used to make JWT/JWKS tests deterministic and self-contained.
 const TEST_PRIVATE_KEY: [u8; 32] = [21u8; 32];
 
+/// A tenant, a token for it, and the broker auth that accepts that token.
 pub(crate) struct AuthFixture {
     pub(crate) tenant_id: String,
     pub(crate) token: String,

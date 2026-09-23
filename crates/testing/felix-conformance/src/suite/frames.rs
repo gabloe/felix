@@ -11,6 +11,7 @@ use felix_wire::{
 };
 use quinn::{ReadExactError, RecvStream};
 
+/// The one read [`read_frame`] needs, so a test can stand in for a quinn stream.
 pub(crate) trait FrameReader {
     fn read_exact<'a>(
         &'a mut self,

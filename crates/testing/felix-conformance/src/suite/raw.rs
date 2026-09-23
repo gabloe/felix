@@ -86,50 +86,6 @@ pub(crate) async fn run_pubsub(
     Ok(())
 }
 
-async fn publish(
-    connection: &felix_transport::QuicConnection,
-    auth: &AuthFixture,
-    payload: &[u8],
-) -> Result<()> {
-    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-    let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let (mut send, mut recv) = connection.open_bi().await?;
-    let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
-    quic::write_message(
-        &mut send,
-        Message::Auth {
-            tenant_id: auth.tenant_id.clone(),
-            token: auth.token.clone(),
-            // Legacy handshake: no capabilities offered, so the broker
-            // answers with a plain `Ok`.
-            client_flags: None,
-            client_features: None,
-        },
-    )
-    .await?;
-    let auth_response =
-        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
-    ensure_ok_response(auth_response, "auth")?;
-    quic::write_message(
-        &mut send,
-        Message::Publish {
-            tenant_id: "t1".to_string(),
-            namespace: "default".to_string(),
-            stream: "conformance".to_string(),
-            payload: payload.to_vec(),
-            request_id: Some(request_id),
-            ack: Some(AckMode::PerMessage),
-            key: None,
-        },
-    )
-    .await?;
-    send.finish()?;
-    let response =
-        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
-    ensure_publish_ok(response, request_id)?;
-    Ok(())
-}
-
 pub(crate) async fn run_cache(
     connection: &felix_transport::QuicConnection,
     auth: &AuthFixture,
@@ -176,6 +132,50 @@ pub(crate) async fn run_cache(
     tokio::time::sleep(Duration::from_millis(150)).await;
     let expired = cache_get(connection, auth, "conformance-key").await?;
     ensure_cache_expired(expired, "cache entry should be expired")?;
+    Ok(())
+}
+
+async fn publish(
+    connection: &felix_transport::QuicConnection,
+    auth: &AuthFixture,
+    payload: &[u8],
+) -> Result<()> {
+    static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    let request_id = REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let (mut send, mut recv) = connection.open_bi().await?;
+    let mut frame_scratch = BytesMut::with_capacity(MAX_TEST_FRAME_BYTES.min(64 * 1024));
+    quic::write_message(
+        &mut send,
+        Message::Auth {
+            tenant_id: auth.tenant_id.clone(),
+            token: auth.token.clone(),
+            // Legacy handshake: no capabilities offered, so the broker
+            // answers with a plain `Ok`.
+            client_flags: None,
+            client_features: None,
+        },
+    )
+    .await?;
+    let auth_response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    ensure_ok_response(auth_response, "auth")?;
+    quic::write_message(
+        &mut send,
+        Message::Publish {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "conformance".to_string(),
+            payload: payload.to_vec(),
+            request_id: Some(request_id),
+            ack: Some(AckMode::PerMessage),
+            key: None,
+        },
+    )
+    .await?;
+    send.finish()?;
+    let response =
+        quic::read_message_limited(&mut recv, MAX_TEST_FRAME_BYTES, &mut frame_scratch).await?;
+    ensure_publish_ok(response, request_id)?;
     Ok(())
 }
 

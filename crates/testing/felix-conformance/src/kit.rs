@@ -33,6 +33,7 @@ pub struct Catalogue {
     pub scenarios: Vec<Scenario>,
 }
 
+/// One semantic a client must (or may) implement, keyed by a stable `id`.
 #[derive(Debug, Deserialize)]
 pub struct Scenario {
     pub id: String,
@@ -40,6 +41,13 @@ pub struct Scenario {
     pub title: String,
     #[serde(default)]
     pub detail: String,
+}
+
+/// The catalogue that ships with this crate.
+pub fn catalogue() -> Result<Catalogue> {
+    let raw = include_str!("../scenarios.toml");
+    let catalogue: Catalogue = toml::from_str(raw).context("parse scenarios.toml")?;
+    Ok(catalogue)
 }
 
 /// What a client-under-test reports back.
@@ -52,6 +60,7 @@ pub struct Results {
     pub outcomes: Vec<Outcome>,
 }
 
+/// A client's result for one scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Outcome {
     pub id: String,
@@ -63,6 +72,7 @@ pub struct Outcome {
     pub detail: Option<String>,
 }
 
+/// Whether a scenario passed, failed, or was not run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -71,11 +81,19 @@ pub enum Status {
     Skip,
 }
 
-/// The catalogue that ships with this crate.
-pub fn catalogue() -> Result<Catalogue> {
-    let raw = include_str!("../scenarios.toml");
-    let catalogue: Catalogue = toml::from_str(raw).context("parse scenarios.toml")?;
-    Ok(catalogue)
+/// Read a results file a client-under-test produced.
+pub fn read_results(path: &Path) -> Result<Results> {
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("read the results file {}", path.display()))?;
+    let results: Results = serde_json::from_str(&raw)
+        .with_context(|| format!("parse {} as conformance results", path.display()))?;
+    if results.outcomes.is_empty() {
+        bail!(
+            "{} reported no outcomes; a client that ran nothing is not conformant",
+            path.display()
+        );
+    }
+    Ok(results)
 }
 
 /// Check a client's results against the catalogue.
@@ -151,6 +169,7 @@ pub fn verify(catalogue: &Catalogue, results: &Results) -> Result<Report> {
     Ok(report)
 }
 
+/// The verdict: each scenario filed by how the client did on it.
 #[derive(Debug, Default)]
 pub struct Report {
     pub passed: Vec<String>,
@@ -160,14 +179,6 @@ pub struct Report {
     pub missing_required: Vec<Finding>,
     pub missing_optional: Vec<Finding>,
     pub unknown: Vec<String>,
-}
-
-#[derive(Debug)]
-pub struct Finding {
-    pub id: String,
-    pub title: String,
-    pub required: bool,
-    pub detail: Option<String>,
 }
 
 impl Report {
@@ -180,6 +191,7 @@ impl Report {
             && self.unknown.is_empty()
     }
 
+    /// Print the report as the `verify` subcommand shows it.
     pub fn print(&self, client: &str) {
         println!("== Felix client conformance: {client} ==\n");
         println!("  passed              {}", self.passed.len());
@@ -235,19 +247,13 @@ impl Report {
     }
 }
 
-/// Read a results file a client-under-test produced.
-pub fn read_results(path: &Path) -> Result<Results> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("read the results file {}", path.display()))?;
-    let results: Results = serde_json::from_str(&raw)
-        .with_context(|| format!("parse {} as conformance results", path.display()))?;
-    if results.outcomes.is_empty() {
-        bail!(
-            "{} reported no outcomes; a client that ran nothing is not conformant",
-            path.display()
-        );
-    }
-    Ok(results)
+/// A scenario that did not pass, with the client's reason when it gave one.
+#[derive(Debug)]
+pub struct Finding {
+    pub id: String,
+    pub title: String,
+    pub required: bool,
+    pub detail: Option<String>,
 }
 
 /// What a client-under-test needs in order to connect.
