@@ -1872,3 +1872,29 @@ fn a_truncated_owner_is_refused() {
         }
     }
 }
+
+/// Without join offsets `subscribed` is the frame it always was, and an old
+/// broker's frame decodes with none.
+#[test]
+fn subscribed_without_join_offsets_is_unchanged() {
+    let plain = Message::Subscribed {
+        subscription_id: 42,
+        start_offset: None,
+        live_offset: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&plain).expect("serialize"),
+        r#"{"type":"subscribed","subscription_id":42}"#
+    );
+    let legacy: Message =
+        serde_json::from_str(r#"{"type":"subscribed","subscription_id":42}"#).expect("decode");
+    assert_eq!(legacy, plain);
+
+    let joined = Message::Subscribed {
+        subscription_id: 42,
+        start_offset: Some(10),
+        live_offset: Some(25),
+    };
+    let frame = joined.encode().expect("encode");
+    assert_eq!(Message::decode(frame).expect("decode"), joined);
+}
