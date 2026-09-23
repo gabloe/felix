@@ -363,3 +363,38 @@ fn a_zero_client_port_is_rejected() {
         Err(NodeValidationError::ZeroClientPort)
     ));
 }
+
+/// An operator can put a draining broker back into placement...
+#[test]
+fn a_patch_can_undrain_a_draining_node() {
+    let mut before = node();
+    before.status.lifecycle = NodeLifecycle::Draining;
+    let patch = NodePatchRequest {
+        lifecycle: Some(NodeLifecycle::Live),
+        ..NodePatchRequest::default()
+    };
+
+    let after = patch.apply(&before).expect("patch");
+    assert_eq!(after.status.lifecycle, NodeLifecycle::Live);
+}
+
+/// ...but not declare a silent one alive. Only registration revives a node.
+#[test]
+fn a_patch_cannot_revive_a_node_nothing_has_heard_from() {
+    for from in [NodeLifecycle::Down, NodeLifecycle::Left] {
+        let mut before = node();
+        before.status.lifecycle = from;
+        let patch = NodePatchRequest {
+            lifecycle: Some(NodeLifecycle::Live),
+            ..NodePatchRequest::default()
+        };
+
+        assert_eq!(
+            patch.apply(&before),
+            Err(NodeValidationError::UnsupportedTransition {
+                from,
+                to: NodeLifecycle::Live,
+            }),
+        );
+    }
+}
