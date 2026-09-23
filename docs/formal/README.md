@@ -130,7 +130,16 @@ change, and the spec can model a behaviour wrongly while every citation
 resolves. This makes drift harder to introduce silently; it does not detect it.
 Checking that the implementation *conforms* to the spec needs trace validation —
 emitting protocol events and checking recorded runs are behaviours of the
-spec — which is a different and much larger mechanism. Tracked in #598.
+spec — which is a different and much larger mechanism.
+
+**Trace validation is not planned.** It needs the broker and control plane to
+emit protocol events behind a test-only feature, a mapping from those events
+onto the spec's variables, and TLC in trace mode in CI — a project, not a
+check. And what it buys is bounded: it shows the runs the tests happened to
+make are behaviours the spec permits, and says nothing about paths no test
+exercises. The drift that actually occurred (#268) is what the two checks
+above catch. Worth revisiting if the protocol grows another mechanism of the
+size of the planned handoff, or if drift gets past both checks once.
 
 ### The interval that is load-bearing
 
