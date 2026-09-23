@@ -7,17 +7,22 @@
 //! EdDSA/Ed25519 only, and permission strings follow `action:resource` with
 //! wildcards.
 
+// Authorization: what a permission grants and whether a request matches it.
 mod action;
-mod errors;
-mod jwks;
 mod matcher;
 mod permission;
 mod resource;
+
+// Authentication: who is asking, and proving it with a signed token.
+mod ids;
+mod jwks;
 mod token;
-mod types;
+
+mod error;
 
 pub use action::Action;
-pub use errors::{AuthzError, AuthzResult};
+pub use error::{AuthzError, AuthzResult};
+pub use ids::{CacheScope, Namespace, StreamName, TenantId};
 pub use jwks::{Jwk, Jwks, KeyUse};
 pub use matcher::{PermissionMatcher, wildcard_match};
 pub use permission::{Permission, PermissionPattern};
@@ -26,4 +31,3 @@ pub use token::{
     FelixClaims, FelixTokenIssuer, FelixTokenVerifier, TenantKeyCache, TenantKeyMaterial,
     TenantKeyStore, TenantSigningKey, TenantVerificationKey,
 };
-pub use types::{CacheScope, Namespace, StreamName, TenantId};
