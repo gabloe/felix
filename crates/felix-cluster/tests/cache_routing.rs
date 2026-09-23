@@ -190,3 +190,51 @@ async fn a_cache_named_after_a_stream_is_a_different_thing() {
         .await
         .expect("publish to the stream of the same name");
 }
+
+/// A prefix spans shards, since keys sharing one hash apart. A prefix watch
+/// that names no shard used to read shard 0 and look like it was working while
+/// missing every key elsewhere; it is refused instead, and naming the shard
+/// still works.
+#[tokio::test]
+#[serial]
+async fn a_prefix_watch_on_a_multi_shard_cache_must_name_its_shard() {
+    let cluster = Cluster::start(with_cache()).await.expect("start cluster");
+    let owners = cluster
+        .cache_shard_owners(CACHE)
+        .await
+        .expect("cache shard owners");
+    let prefix = || felix_client::CacheWatchFilter::Prefix("user:".to_string());
+
+    let client = cluster
+        .client_on(&cluster.node_ids()[0])
+        .await
+        .expect("client");
+    let err = client
+        .watch_cache(
+            &cluster.tenant_id,
+            &cluster.namespace,
+            CACHE,
+            prefix(),
+            None,
+        )
+        .await
+        .expect_err("an unaddressed prefix watch on a multi-shard cache must be refused");
+    assert!(
+        err.to_string().contains(&format!("has {SHARDS} shards")),
+        "the refusal should say why: {err}",
+    );
+
+    let (shard, owner) = owners.iter().next().expect("a shard");
+    let client = cluster.client_on(owner).await.expect("client on owner");
+    client
+        .watch_cache_shard(
+            &cluster.tenant_id,
+            &cluster.namespace,
+            CACHE,
+            prefix(),
+            Some(*shard),
+            None,
+        )
+        .await
+        .expect("a prefix watch naming its shard, on that shard's owner, is served");
+}
