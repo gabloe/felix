@@ -180,6 +180,15 @@ config. Connection pooling lives in `felix-client`, not here.
 - `InProcessClient`: Embedded testing client
 - `ClientConfig`: Client configuration
 
+**Key modules**:
+- `client.rs`, `client/`: `Client`, with its API split by area
+- `connection.rs`, `connection/`: where pooled connections go, stream authentication, event stream routing
+- `publish.rs`, `publish/`: `Publisher`, its writer tasks, admission, acks, and the idempotent producer
+- `subscribe.rs`, `subscribe/`: `Subscription` and the pipeline that feeds it
+- `cache.rs`, `cache/`: cache workers and cache watches
+- `cluster.rs`, `cluster/`: `ClusterClient` and the sharded subscription, group and watch views
+- `config.rs`, `config/`: `ClientConfig`, its defaults, and the env and YAML overrides
+
 **Example usage**:
 ```rust
 use felix_client::{Client, ClientConfig};

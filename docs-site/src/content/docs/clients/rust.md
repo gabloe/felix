@@ -969,10 +969,10 @@ use felix_client::{frame_counters_snapshot, reset_frame_counters};
 
 // Get current frame counters
 let counters = frame_counters_snapshot();
-println!("Publish frames: {}", counters.publish_frames);
-println!("Event frames: {}", counters.event_frames);
-println!("Cache put frames: {}", counters.cache_put_frames);
-println!("Cache get frames: {}", counters.cache_get_frames);
+println!("Frames out: {}", counters.frames_out_ok);
+println!("Frames in: {}", counters.frames_in_ok);
+println!("Publish batches acked: {}", counters.pub_batches_out_ok);
+println!("Events received: {}", counters.sub_items_in_ok);
 
 // Reset counters
 reset_frame_counters();
@@ -983,13 +983,15 @@ reset_frame_counters();
 ```rust
 use felix_client::timings;
 
-// Get timing snapshots
-let publish_timings = timings::publish_timings_snapshot();
-println!("Publish p50: {:?}", publish_timings.p50);
-println!("Publish p99: {:?}", publish_timings.p99);
-
-let subscribe_timings = timings::subscribe_timings_snapshot();
-println!("Event delivery p50: {:?}", subscribe_timings.p50);
+// Sample one operation in every 100, then drain what was recorded. Each
+// field of the returned tuple is one stage's samples in nanoseconds; the
+// order is documented on `timings::ClientTimingSamples`.
+timings::enable_collection(100);
+// ... run the workload ...
+if let Some(samples) = timings::take_samples() {
+    let e2e_latency_ns = &samples.17;
+    println!("end-to-end samples: {}", e2e_latency_ns.len());
+}
 ```
 
 :::caution[Telemetry Overhead]

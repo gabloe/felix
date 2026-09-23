@@ -100,7 +100,7 @@ The important architectural boundary is:
 |---|---|---|
 | `crates/protocol/felix-wire` | Frame header, protocol messages, binary fast paths | `crates/protocol/felix-wire/src/lib.rs` |
 | `crates/protocol/felix-transport` | QUIC endpoint, connection, stream, flow-control, and UDP configuration | `crates/protocol/felix-transport/src/lib.rs` |
-| `crates/sdk/felix-client` | Publisher, subscription, and cache client APIs | `crates/sdk/felix-client/src/client/client.rs` |
+| `crates/sdk/felix-client` | Publisher, subscription, and cache client APIs | `crates/sdk/felix-client/src/lib.rs` |
 | `crates/server/felix-broker` | Stream registry, in-memory log, subscriber registry, fanout | `crates/server/felix-broker/src/lib.rs` |
 | `crates/server/felix-storage` | Cache storage abstraction and ephemeral implementation | `crates/server/felix-storage/src/lib.rs` |
 | `crates/server/felix-authz` | Token verification types and permission matching | `crates/server/felix-authz/src/lib.rs` |
@@ -367,7 +367,7 @@ harness measured before this was fixed (see §16.1).
 
 ## 7. Client connection architecture
 
-`crates/sdk/felix-client/src/client/client.rs::Client::connect_with_transport`
+`crates/sdk/felix-client/src/client/connect.rs::Client::connect_with_transport`
 constructs three separate pools.
 
 ### 7.1 Publish pool
@@ -377,7 +377,7 @@ bidirectional streams. Each stream:
 
 1. is authenticated by `authenticate_stream`;
 2. receives a bounded `mpsc` queue; and
-3. gets one `run_publisher_writer` task that exclusively owns its Quinn
+3. gets one `run_publisher_writer_with_limit` task that exclusively owns its Quinn
    `SendStream` and `RecvStream`.
 
 The single-writer ownership is intentional. It avoids interleaved writes and
@@ -386,7 +386,7 @@ preserves the enqueue order of requests assigned to that worker.
 ### 7.2 Cache pool
 
 The cache pool also uses multiple connections and multiple bidirectional
-streams per connection. Every stream has a `run_cache_worker` task. Each worker
+streams per connection. Every stream has a `run_cache_worker_with_limit` task. Each worker
 performs sequential request/response exchanges, while separate workers allow
 independent cache operations to progress concurrently.
 
@@ -442,11 +442,12 @@ The application obtains a handle using
 - `Publisher::publish`; or
 - `Publisher::publish_batch`.
 
-In `crates/sdk/felix-client/src/client/publisher.rs`:
+In `crates/sdk/felix-client/src/publish.rs` and `publish/send.rs`:
 
 - `AckMode::None` selects binary encoding.
-- `AckMode::PerMessage` and `AckMode::PerBatch` currently select JSON because
-  binary acknowledgement framing has not been negotiated.
+- `AckMode::PerMessage` and `AckMode::PerBatch` select the acked binary frame
+  (`FLAG_BINARY_PUBLISH_ACKED`) when the broker advertised it during auth, and
+  fall back to JSON when it did not.
 
 ### 9.2 Client worker selection
 
@@ -484,7 +485,7 @@ For unacknowledged traffic,
 `felix_wire::binary::encode_publish_batch_bytes_with_stats`, then enqueues
 `PublishRequest::BinaryBytes`.
 
-`run_publisher_writer` is the only task writing to that publish stream. For
+`run_publisher_writer_with_limit` is the only task writing to that publish stream. For
 JSON requests it constructs the frame in reusable scratch storage. For binary
 requests it writes the already encoded bytes.
 
@@ -658,7 +659,7 @@ acknowledgement error as proof that the event was not published.
 
 ### 11.1 Client subscribe request
 
-`crates/sdk/felix-client/src/client/client.rs::Client::subscribe`:
+`crates/sdk/felix-client/src/client/subscribe.rs::Client::subscribe`:
 
 1. checks that the requested tenant matches the client's authenticated tenant;
 2. selects an event connection round-robin;
@@ -707,7 +708,7 @@ rebuilds the snapshot.
 
 The broker may open the unidirectional event stream before or after the client
 has processed `Subscribed`. Therefore
-`crates/sdk/felix-client/src/client/event_router.rs::run_event_router` maintains two
+`crates/sdk/felix-client/src/connection/event_router.rs::run_event_router` maintains two
 bounded maps:
 
 - registrations waiting for streams;
@@ -879,7 +880,7 @@ Each call:
 3. enqueues a `CacheRequest`; and
 4. waits on a one-shot response channel.
 
-`crates/sdk/felix-client/src/client/cache.rs::run_cache_worker` owns one
+`crates/sdk/felix-client/src/cache/worker.rs::run_cache_worker_with_limit` owns one
 bidirectional QUIC stream and performs sequential round trips:
 
 ```text
@@ -1070,7 +1071,7 @@ Assume one application publishes a binary batch of 64 payloads to
 3. The batch is encoded once into a binary Felix frame.
 4. Client `PublishAdmission` reserves the encoded byte count.
 5. The request enters that worker's bounded channel.
-6. `run_publisher_writer` writes the bytes to its authenticated QUIC stream.
+6. `run_publisher_writer_with_limit` writes the bytes to its authenticated QUIC stream.
 7. The broker control loop recognizes `FLAG_BINARY_PUBLISH_BATCH`.
 8. The broker verifies the authenticated tenant and publish permission.
 9. `resolve_stream_cached` obtains the stream's `StreamHandle`.
@@ -1110,13 +1111,13 @@ Read in this order and follow each symbol with editor "go to definition":
    - `QuicServer`
    - `QuicClient`
    - `QuicConnection`
-3. `crates/sdk/felix-client/src/client/client.rs`
-   - `Client::connect_with_transport`
-   - `Client::subscribe`
-4. `crates/sdk/felix-client/src/client/publisher.rs`
-   - `Publisher::select_worker`
-   - `Publisher::publish_batch_binary`
-   - `run_publisher_writer`
+3. `crates/sdk/felix-client/src/client/`
+   - `Client::connect_with_transport` (`connect.rs`)
+   - `Client::subscribe` (`subscribe.rs`)
+4. `crates/sdk/felix-client/src/publish/`
+   - `Publisher::select_worker` (`routing.rs`)
+   - `Publisher::publish_batch_binary` (`publish.rs`)
+   - `run_publisher_writer_with_limit` (`writer.rs`)
 5. `services/felix-broker-service/src/transport/quic/conn.rs`
    - `serve_with_shutdown`
    - `build_publish_context`
@@ -1138,9 +1139,9 @@ Read in this order and follow each symbol with editor "go to definition":
     - `run_lane_feeder` (`feeder.rs`)
     - `run_writer_lane` (`writer.rs`)
     - `run_connection_writer` (`writer.rs`)
-11. `crates/sdk/felix-client/src/client/event_router.rs`
+11. `crates/sdk/felix-client/src/connection/event_router.rs`
     - `run_event_router`
-12. `crates/sdk/felix-client/src/client/subscription.rs`
+12. `crates/sdk/felix-client/src/subscribe/pipeline.rs`
     - `Subscription::spawn_pipeline`
     - `run_subscription_io_task`
     - `run_subscription_dispatch_task`
