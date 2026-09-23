@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790126594107,
+  "lastUpdate": 1790192066237,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -17490,6 +17490,72 @@ window.BENCHMARK_DATA = {
             "range": "543.78",
             "unit": "us",
             "extra": "trials: 5\nmedian: 568.00\nmean: 817.40\nstdev: 543.78\ncv: 66.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e68304587bdf96d991e3095e3e619025322bcbba",
+          "message": "ci(formal): a change to the modelled code must touch the spec or say why not (#642)\n\n* ci(formal): a change to the modelled code must touch the spec or say why not\n\nTier 1 of #598. Evidence citations catch a renamed test, not the drift that\nhappened in #268: a protocol change that touched neither the spec nor a cited\ntest. A PR touching the lease, replication, shard lifecycle, placement or\nreplica-position code now has to touch docs/formal/ too, or carry a\n`Spec-Unaffected: <why>` line in a commit message or the PR description.\n\nRuns in the TLA+ job on pull requests; `task tla:pairing` locally.\n\n* docs(formal): say trace validation is not planned, and when to revisit it\n\nCloses the last open item on #598: the decision on Tier 3 is recorded where\nsomeone reading the model's limits will find it.",
+          "timestamp": "2026-09-23T12:31:55-07:00",
+          "tree_id": "8d445fdf92af9243fbbcdfbd07affea5019818ba",
+          "url": "https://github.com/gabloe/felix/commit/e68304587bdf96d991e3095e3e619025322bcbba"
+        },
+        "date": 1790192063573,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 159,
+            "range": "1.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 159.00\nmean: 159.80\nstdev: 1.30\ncv: 0.82%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 200,
+            "range": "2.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 200.20\nstdev: 2.59\ncv: 1.29%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 245,
+            "range": "18.60",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 245.00\nmean: 248.40\nstdev: 18.60\ncv: 7.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 197,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 197.00\nmean: 197.20\nstdev: 0.84\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 391,
+            "range": "13.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 391.00\nmean: 397.40\nstdev: 13.61\ncv: 3.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 559,
+            "range": "1099.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 559.00\nmean: 1328.40\nstdev: 1099.85\ncv: 82.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
