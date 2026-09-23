@@ -1,307 +1,260 @@
-//! Cache client worker implementations and request handling.
+//! Cache and counter requests through a [`Client`].
 //!
-//! Manages the per-connection cache stream, serializing cache requests and
-//! returning responses to callers while recording optional timings.
-//!
-//! # Design notes
-//! A single bi-directional stream is used per cache worker to preserve request
-//! ordering and simplify response matching. Backpressure is handled by the
-//! mpsc queue and per-connection inflight counters.
+//! Each goes to one of the client's cache workers, round-robin; see
+//! `crate::cache` for how a worker carries it.
+
+use std::sync::atomic::Ordering;
+
 use anyhow::{Context, Result};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use felix_wire::Message;
-use quinn::{RecvStream, SendStream};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{mpsc, oneshot};
-use tracing::debug;
+use tokio::sync::oneshot;
 
-#[cfg(feature = "telemetry")]
-use crate::timings;
-use crate::wire::{read_frame_cache_timed_into_with_limit, write_frame_parts};
+use super::Client;
+use crate::cache::{CacheRequest, CacheWorker};
 
-pub(crate) struct CacheWorker {
-    pub(crate) tx: mpsc::Sender<CacheRequest>,
-    pub(crate) conn_index: usize,
-}
+impl Client {
+    pub async fn cache_put(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+        value: Bytes,
+        ttl_ms: Option<u64>,
+    ) -> Result<()> {
+        // Cache ops are delegated to a pool of single-writer cache workers.
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::CachePut {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            key: key.to_string(),
+            value,
+            request_id: Some(request_id),
+            ttl_ms,
+        };
+        let (response_tx, response_rx) = oneshot::channel();
+        let (worker, conn_index) = self.cache_worker();
+        worker
+            .tx
+            .send(CacheRequest::Put {
+                request_id,
+                message,
+                response: response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("cache worker closed"))?;
 
-pub(crate) enum CacheRequest {
-    Put {
-        request_id: u64,
-        message: Message,
-        response: oneshot::Sender<Result<()>>,
-    },
-    /// A request answered with `CacheValue`: a read, or a delete reporting what
-    /// it removed. One variant because the exchange is identical — only the
-    /// message sent differs, and the worker does not need to know which.
-    Get {
-        request_id: u64,
-        message: Message,
-        response: oneshot::Sender<Result<Option<Bytes>>>,
-    },
-    /// A request answered with `CounterValue`: an add reporting the sum it
-    /// produced, or a read of the current one. Same exchange, different
-    /// answer shape.
-    Counter {
-        request_id: u64,
-        message: Message,
-        response: oneshot::Sender<Result<Option<i64>>>,
-    },
-}
-
-pub(crate) async fn run_cache_worker_with_limit(
-    conn_index: usize,
-    mut send: SendStream,
-    mut recv: RecvStream,
-    mut rx: mpsc::Receiver<CacheRequest>,
-    cache_conn_counts: Arc<Vec<AtomicUsize>>,
-    max_frame_bytes: usize,
-) {
-    // Single writer for a cache stream; handles sequential request/response pairs.
-    let sample = crate::t_should_sample();
-    #[cfg(not(feature = "telemetry"))]
-    let _ = sample;
-    #[cfg(feature = "telemetry")]
-    if sample {
-        let open_ns = 0;
-        timings::record_cache_open_stream_ns(open_ns);
-    }
-    let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
-    debug!(conn_index, "cache worker started");
-    while let Some(request) = rx.recv().await {
-        debug!(conn_index, "cache worker received request");
-        let result = handle_cache_request(
-            &mut send,
-            &mut recv,
-            request,
-            &mut frame_scratch,
-            max_frame_bytes,
+        // Track the connection since it counts as inflight.
+        let current = self.cache_conn_counts[conn_index].fetch_add(1, Ordering::Relaxed) + 1;
+        t_gauge!("felix_client_cache_conn_ops", "conn" => conn_index.to_string())
+            .set(current as f64);
+        t_counter!(
+            "felix_client_cache_conn_ops_total",
+            "conn" => conn_index.to_string()
         )
-        .await;
-
-        // Decrement "in-flight ops" gauge for this connection, saturating at 0.
-        let counter = &cache_conn_counts[conn_index];
-        let mut current = counter.load(Ordering::Relaxed);
-        while current > 0 {
-            match counter.compare_exchange(
-                current,
-                current - 1,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    t_gauge!("felix_client_cache_conn_ops", "conn" => conn_index.to_string())
-                        .set((current - 1) as f64);
-                    break;
-                }
-                Err(next) => current = next,
-            }
-        }
-
-        if let Err(err) = result {
-            debug!(conn_index, error = %err, "cache worker request failed");
-            break;
-        }
+        .increment(1);
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("cache put response dropped"))?
     }
-    let _ = send.finish();
-    debug!(conn_index, "cache worker exited");
-    // We should probably use a connection-level atomic that we decremented when work completes so
-    // that we can track inflight ops more accurately.
-}
 
-async fn handle_cache_request(
-    send: &mut SendStream,
-    recv: &mut RecvStream,
-    request: CacheRequest,
-    frame_scratch: &mut BytesMut,
-    max_frame_bytes: usize,
-) -> Result<()> {
-    let sample = crate::t_should_sample();
-    match request {
-        CacheRequest::Put {
-            request_id,
-            message,
-            response,
-        } => {
-            let result = cache_round_trip(
-                send,
-                recv,
-                message,
-                sample,
-                request_id,
-                frame_scratch,
-                max_frame_bytes,
-            )
-            .await;
-            match result {
-                Ok(_) => {
-                    let _ = response.send(Ok(()));
-                    Ok(())
-                }
-                Err(err) => {
-                    let _ = response.send(Err(err));
-                    Err(anyhow::anyhow!("cache stream failed"))
-                }
-            }
-        }
-        CacheRequest::Get {
-            request_id,
-            message,
-            response,
-        } => {
-            let result = cache_round_trip(
-                send,
-                recv,
-                message,
-                sample,
-                request_id,
-                frame_scratch,
-                max_frame_bytes,
-            )
-            .await;
-            match result {
-                Ok(value) => {
-                    let _ = response.send(Ok(value));
-                    Ok(())
-                }
-                Err(err) => {
-                    let _ = response.send(Err(err));
-                    Err(anyhow::anyhow!("cache stream failed"))
-                }
-            }
-        }
-        CacheRequest::Counter {
-            request_id,
-            message,
-            response,
-        } => {
-            let result = counter_round_trip(
-                send,
-                recv,
-                message,
-                sample,
-                request_id,
-                frame_scratch,
-                max_frame_bytes,
-            )
-            .await;
-            match result {
-                Ok(value) => {
-                    let _ = response.send(Ok(value));
-                    Ok(())
-                }
-                Err(err) => {
-                    let _ = response.send(Err(err));
-                    Err(anyhow::anyhow!("cache stream failed"))
-                }
-            }
-        }
-    }
-}
-
-/// The counter exchange: identical plumbing, a `CounterValue` answer.
-async fn counter_round_trip(
-    send: &mut SendStream,
-    recv: &mut RecvStream,
-    message: Message,
-    sample: bool,
-    request_id: u64,
-    frame_scratch: &mut BytesMut,
-    max_frame_bytes: usize,
-) -> Result<Option<i64>> {
-    let frame = message.encode().context("encode message")?;
-    write_frame_parts(send, &frame).await?;
-    let frame =
-        match read_frame_cache_timed_into_with_limit(recv, sample, frame_scratch, max_frame_bytes)
-            .await?
-        {
-            Some(frame) => frame,
-            None => return Err(anyhow::anyhow!("counter response closed")),
+    pub async fn cache_get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<Bytes>> {
+        // Cache ops are delegated to a pool of single-writer cache workers.
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::CacheGet {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            key: key.to_string(),
+            request_id: Some(request_id),
         };
-    match Message::decode(frame).context("decode message")? {
-        Message::CounterValue {
-            value,
-            request_id: resp_id,
-        } => {
-            if resp_id != request_id {
-                return Err(anyhow::anyhow!("counter request id mismatch"));
-            }
-            Ok(value)
-        }
-        Message::Error { message } => Err(anyhow::anyhow!("counter error: {message}")),
-        other => Err(anyhow::anyhow!("counter response unexpected: {other:?}")),
-    }
-}
+        let (response_tx, response_rx) = oneshot::channel();
+        let (worker, conn_index) = self.cache_worker();
+        worker
+            .tx
+            .send(CacheRequest::Get {
+                request_id,
+                message,
+                response: response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("cache worker closed"))?;
 
-async fn cache_round_trip(
-    send: &mut SendStream,
-    recv: &mut RecvStream,
-    message: Message,
-    sample: bool,
-    request_id: u64,
-    frame_scratch: &mut BytesMut,
-    max_frame_bytes: usize,
-) -> Result<Option<Bytes>> {
-    // Encode -> write -> read -> decode in one stream round trip.
-    let encode_start = crate::t_now_if(sample);
-    #[cfg(not(feature = "telemetry"))]
-    let _ = encode_start;
-    let frame = message.encode().context("encode message")?;
-    #[cfg(feature = "telemetry")]
-    if let Some(start) = encode_start {
-        let encode_ns = start.elapsed().as_nanos() as u64;
-        timings::record_cache_encode_ns(encode_ns);
+        // Now it's *actually* enqueued, so it counts as inflight.
+        let current = self.cache_conn_counts[conn_index].fetch_add(1, Ordering::Relaxed) + 1;
+        t_gauge!("felix_client_cache_conn_ops", "conn" => conn_index.to_string())
+            .set(current as f64);
+        t_counter!(
+            "felix_client_cache_conn_ops_total",
+            "conn" => conn_index.to_string()
+        )
+        .increment(1);
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("cache get response dropped"))?
     }
-    let write_start = crate::t_now_if(sample);
-    #[cfg(not(feature = "telemetry"))]
-    let _ = write_start;
-    write_frame_parts(send, &frame).await?;
-    #[cfg(feature = "telemetry")]
-    if let Some(start) = write_start {
-        let write_ns = start.elapsed().as_nanos() as u64;
-        timings::record_cache_write_ns(write_ns);
-    }
-    let frame =
-        match read_frame_cache_timed_into_with_limit(recv, sample, frame_scratch, max_frame_bytes)
-            .await?
-        {
-            Some(frame) => frame,
-            None => return Err(anyhow::anyhow!("cache response closed")),
+
+    /// Remove a key, reporting the value it held.
+    ///
+    /// `Ok(None)` means the key was not there. Both are answers: a delete is not
+    /// an error just because there was nothing to remove.
+    ///
+    /// Fails without sending anything when the broker did not advertise
+    /// [`felix_wire::FEATURE_CACHE_DELETE`]. An unrecognised message type is
+    /// fatal to a broker's control loop, so probing one that predates this would
+    /// cost the connection rather than return an error.
+    pub async fn cache_delete(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<Bytes>> {
+        if !felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_CACHE_DELETE) {
+            return Err(anyhow::anyhow!("this broker does not support cache delete",));
+        }
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::CacheDelete {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            key: key.to_string(),
+            request_id: Some(request_id),
         };
-    let decode_start = crate::t_now_if(sample);
-    #[cfg(not(feature = "telemetry"))]
-    let _ = decode_start;
-    let response = Message::decode(frame).context("decode message")?;
-    #[cfg(feature = "telemetry")]
-    if let Some(start) = decode_start {
-        let decode_ns = start.elapsed().as_nanos() as u64;
-        timings::record_cache_decode_ns(decode_ns);
+        let (response_tx, response_rx) = oneshot::channel();
+        let (worker, conn_index) = self.cache_worker();
+        worker
+            .tx
+            .send(CacheRequest::Get {
+                request_id,
+                message,
+                response: response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("cache worker closed"))?;
+
+        let current = self.cache_conn_counts[conn_index].fetch_add(1, Ordering::Relaxed) + 1;
+        t_gauge!("felix_client_cache_conn_ops", "conn" => conn_index.to_string())
+            .set(current as f64);
+        t_counter!(
+            "felix_client_cache_conn_ops_total",
+            "conn" => conn_index.to_string()
+        )
+        .increment(1);
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("cache delete response dropped"))?
     }
-    match response {
-        Message::CacheOk {
-            request_id: resp_id,
-        } => {
-            if resp_id != request_id {
-                return Err(anyhow::anyhow!("cache put request id mismatch"));
-            }
-            Ok(None)
+
+    /// Add a signed delta to a counter, answering with the sum including it.
+    ///
+    /// A counter is scoped exactly as a cache key is — same registered cache
+    /// scope, same key-to-shard routing, same owner — but lives beside the
+    /// cache, not in it: a counter and a cache value may share a key and are
+    /// unrelated. **Delivery is at least once**: a retry after a lost
+    /// acknowledgement counts twice, because deltas carry no dedupe identity.
+    /// An application that cannot tolerate that keeps its own idempotency key
+    /// outside the counter.
+    ///
+    /// Fails without sending anything when the broker did not advertise
+    /// [`felix_wire::FEATURE_COUNTERS`] — probing an older broker would cost
+    /// the connection.
+    pub async fn counter_add(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+        delta: i64,
+    ) -> Result<i64> {
+        if !felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_COUNTERS) {
+            return Err(anyhow::anyhow!("this broker does not support counters"));
         }
-        Message::Ok => Err(anyhow::anyhow!(
-            "cache response missing request id (protocol violation)"
-        )),
-        Message::CacheValue {
-            value,
-            request_id: resp_id,
-            ..
-        } => {
-            if let Some(resp_id) = resp_id
-                && resp_id != request_id
-            {
-                return Err(anyhow::anyhow!("cache get request id mismatch"));
-            }
-            Ok(value)
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::CounterAdd {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            key: key.to_string(),
+            delta,
+            request_id,
+        };
+        self.counter_round_trip(message, request_id)
+            .await?
+            .context("an add always answers with the sum it produced")
+    }
+
+    /// Read a counter's sum. `Ok(None)` means the counter has never been
+    /// written — a different answer from a sum of zero, exactly as a cache
+    /// miss differs from a stored empty value.
+    pub async fn counter_get(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        key: &str,
+    ) -> Result<Option<i64>> {
+        if !felix_wire::supports_feature(self.server_features, felix_wire::FEATURE_COUNTERS) {
+            return Err(anyhow::anyhow!("this broker does not support counters"));
         }
-        Message::Error { message } => Err(anyhow::anyhow!("cache error: {message}")),
-        other => Err(anyhow::anyhow!("cache response unexpected: {other:?}")),
+        let request_id = self.cache_request_counter.fetch_add(1, Ordering::Relaxed);
+        let message = Message::CounterGet {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            key: key.to_string(),
+            request_id,
+        };
+        self.counter_round_trip(message, request_id).await
+    }
+
+    pub fn cache_conn_counts(&self) -> Vec<usize> {
+        self.cache_conn_counts
+            .iter()
+            .map(|count| count.load(Ordering::Relaxed))
+            .collect()
+    }
+
+    async fn counter_round_trip(&self, message: Message, request_id: u64) -> Result<Option<i64>> {
+        let (response_tx, response_rx) = oneshot::channel();
+        let (worker, conn_index) = self.cache_worker();
+        worker
+            .tx
+            .send(CacheRequest::Counter {
+                request_id,
+                message,
+                response: response_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("cache worker closed"))?;
+        let current = self.cache_conn_counts[conn_index].fetch_add(1, Ordering::Relaxed) + 1;
+        t_gauge!("felix_client_cache_conn_ops", "conn" => conn_index.to_string())
+            .set(current as f64);
+        t_counter!(
+            "felix_client_cache_conn_ops_total",
+            "conn" => conn_index.to_string()
+        )
+        .increment(1);
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("counter response dropped"))?
+    }
+
+    fn cache_worker(&self) -> (&CacheWorker, usize) {
+        // Round-robin pick only.
+        //
+        // IMPORTANT: do not mutate metrics/counters here.
+        // We only consider an op "in-flight" once it is successfully enqueued.
+        let index = self.cache_worker_rr.fetch_add(1, Ordering::Relaxed) % self.cache_workers.len();
+        let worker = &self.cache_workers[index];
+        (worker, worker.conn_index)
     }
 }

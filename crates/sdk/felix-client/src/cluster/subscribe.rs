@@ -1,0 +1,246 @@
+//! Subscribing through a [`ClusterClient`], following each shard to the
+//! broker that owns it.
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+
+use super::sharded::{ShardOffsets, ShardedGroup, ShardedSubscription};
+use super::{ClusterClient, MAX_REDIRECTS};
+use crate::client::Client;
+
+impl ClusterClient {
+    /// Subscribe, following the cluster to whichever broker owns the shard.
+    ///
+    /// A broker that does not own it answers `NotLeader` naming the one that
+    /// does; this connects there and asks again. The returned [`Client`] must
+    /// be kept alive for as long as the subscription: dropping it closes the
+    /// connection the events arrive on.
+    ///
+    /// The client this wrapper holds is **not** replaced. A redirect is about
+    /// one shard, not about which broker is generally worth talking to, and
+    /// moving every future publish because one stream lives elsewhere would be
+    /// a much larger claim than the answer supports.
+    pub async fn subscribe(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<(Arc<Client>, crate::Subscription)> {
+        self.subscribe_shard_following_redirects(tenant_id, namespace, stream, 0, None)
+            .await
+    }
+
+    /// Like [`ClusterClient::subscribe`], but starting where the caller says.
+    ///
+    /// `None` is the tail, identical to `subscribe`. An offset is the first
+    /// record the caller has *not* seen, so a client resuming after a
+    /// disconnect passes the offset it last handled plus one.
+    pub async fn subscribe_from(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<felix_wire::StartPosition>,
+    ) -> Result<(Arc<Client>, crate::Subscription)> {
+        self.subscribe_shard_following_redirects(tenant_id, namespace, stream, 0, start)
+            .await
+    }
+
+    /// Subscribe to **every** shard of a stream, merged into one channel.
+    ///
+    /// A subscription reads one shard, so this opens one per shard and follows
+    /// each shard's own redirect to its owner. What comes back states its
+    /// ordering guarantee rather than letting a caller infer one: see
+    /// [`ShardedSubscription`].
+    ///
+    /// The shard count is asked of the broker, so this needs one that advertises
+    /// `FEATURE_STREAM_SHARDS`. A broker that does not know the stream reports
+    /// zero shards and this fails, rather than reading shard 0 and calling it
+    /// the stream.
+    ///
+    /// Fails if **any** shard cannot be opened. A partial subscription looks
+    /// exactly like a complete one to everything downstream, which makes quiet
+    /// incompleteness the worst of the available answers.
+    pub async fn subscribe_sharded(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<felix_wire::StartPosition>,
+    ) -> Result<ShardedSubscription> {
+        self.subscribe_sharded_inner(tenant_id, namespace, stream, start, None)
+            .await
+    }
+
+    /// Resume a sharded subscription from where each shard had reached.
+    ///
+    /// `offsets` comes from [`ShardedSubscription::positions`]. Each listed
+    /// shard resumes at `offset + 1`; a shard not listed starts wherever
+    /// `start` says, which is what a shard that had delivered nothing should do.
+    pub async fn resubscribe_sharded(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        offsets: ShardOffsets,
+        start: Option<felix_wire::StartPosition>,
+    ) -> Result<ShardedSubscription> {
+        self.subscribe_sharded_inner(tenant_id, namespace, stream, start, Some(offsets))
+            .await
+    }
+
+    /// One consumer group read across **every** shard of a stream.
+    ///
+    /// A group is bound to one shard, and only that shard's leader serves it,
+    /// so this keeps one group per shard and follows each shard's own redirect
+    /// to its leader. See [`ShardedGroup`] for how shards are visited
+    /// and what ordering is promised.
+    ///
+    /// Needs a broker that advertises `FEATURE_STREAM_SHARDS`, to learn the
+    /// shard count, and brokers that answer a group request for a shard they do
+    /// not lead with a redirect rather than a refusal.
+    pub async fn group_sharded(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        group: &str,
+    ) -> Result<ShardedGroup> {
+        let shards = self
+            .stream_shard_count(tenant_id, namespace, stream)
+            .await?;
+        Ok(ShardedGroup::new(
+            Arc::clone(self),
+            tenant_id,
+            namespace,
+            stream,
+            group,
+            shards,
+        ))
+    }
+
+    /// One shard, following the cluster to whichever broker owns *that shard*.
+    ///
+    /// The redirect loop is per shard because ownership is: two shards of one
+    /// stream can live on two brokers, and an answer about one says nothing
+    /// about the other.
+    pub(crate) async fn subscribe_shard_following_redirects(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        start: Option<felix_wire::StartPosition>,
+    ) -> Result<(Arc<Client>, crate::Subscription)> {
+        let mut client = self.client().await;
+        // Every broker this attempt has already asked. A cluster mid-rebalance
+        // can name an owner that names another, and two brokers that disagree
+        // would otherwise bounce a client between them until its deadline.
+        let mut visited: Vec<String> = Vec::new();
+
+        for _ in 0..=MAX_REDIRECTS {
+            let error = match client
+                .subscribe_shard(tenant_id, namespace, stream, shard, start)
+                .await
+            {
+                Ok(subscription) => return Ok((client, subscription)),
+                Err(err) => err,
+            };
+            let Some(redirect) = error.downcast_ref::<crate::NotLeaderError>().cloned() else {
+                return Err(error);
+            };
+            if visited.iter().any(|seen| seen == &redirect.node_id) {
+                return Err(error.context(format!(
+                    "redirected back to {}, which has already been asked",
+                    redirect.node_id
+                )));
+            }
+            let Some(addr) = redirect.addr.clone() else {
+                return Err(error.context(
+                    "the owner's client address is not published, so there is nowhere to follow to",
+                ));
+            };
+            let addr: SocketAddr = addr
+                .parse()
+                .with_context(|| format!("the owner's address {addr:?} is not usable"))?;
+            visited.push(redirect.node_id.clone());
+            client = Arc::new(
+                Client::connect(addr, &self.server_name, self.config.clone())
+                    .await
+                    .with_context(|| format!("connect to the shard owner at {addr}"))?,
+            );
+        }
+
+        Err(anyhow::anyhow!(
+            "still being redirected after {MAX_REDIRECTS} hops; the cluster has not settled on an owner"
+        ))
+    }
+
+    async fn subscribe_sharded_inner(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<felix_wire::StartPosition>,
+        resume: Option<ShardOffsets>,
+    ) -> Result<ShardedSubscription> {
+        let shards = self
+            .stream_shard_count(tenant_id, namespace, stream)
+            .await?;
+        super::sharded::subscribe_sharded(self, tenant_id, namespace, stream, shards, start, resume)
+            .await
+    }
+
+    /// How many shards a stream has, reconnecting once if the broker in hand
+    /// cannot answer.
+    async fn stream_shard_count(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<u32> {
+        // Asking costs a round trip to whichever broker this client holds, and
+        // that broker can be the one that just died. Reconnect and ask again
+        // rather than reporting its death as an answer about the stream —
+        // reconnecting is the whole reason this wrapper exists.
+        let shards = match self.stream_shards_once(tenant_id, namespace, stream).await {
+            Ok(shards) => shards,
+            Err(first) => {
+                self.reconnect().await.map_err(|reconnect_err| {
+                    first.context(format!(
+                        "and no other broker answered either: {reconnect_err:#}"
+                    ))
+                })?;
+                self.stream_shards_once(tenant_id, namespace, stream)
+                    .await
+                    .with_context(|| format!("ask how many shards {stream} has"))?
+            }
+        };
+        anyhow::ensure!(
+            shards > 0,
+            "the broker knows of no stream {stream} in {tenant_id}/{namespace}"
+        );
+        Ok(shards)
+    }
+
+    /// Ask the broker in hand how many shards a stream has, once.
+    async fn stream_shards_once(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<u32> {
+        let client = self.client().await;
+        anyhow::ensure!(
+            client.supports_stream_shards(),
+            "this broker does not report stream shard counts, so the number of shards to \
+             subscribe to cannot be established"
+        );
+        client
+            .stream_shards(tenant_id, namespace, stream)
+            .await
+            .with_context(|| format!("ask how many shards {stream} has"))
+    }
+}

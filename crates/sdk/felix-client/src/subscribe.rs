@@ -1,0 +1,160 @@
+//! Subscriptions: [`Subscription`] and [`Event`], and the pipeline that
+//! feeds them.
+//!
+//! A subscribe request goes out on a short-lived bi-directional stream. The
+//! broker then opens a uni stream for the events, which the connection's
+//! event router hands to the waiting subscription (see
+//! `crate::connection`). Each subscription reads its uni stream with one I/O
+//! task and decodes with one dispatch task, joined by bounded queues whose
+//! overflow behaviour is the configured [`crate::ClientSubQueuePolicy`].
+
+mod pipeline;
+mod queue;
+
+pub(crate) use pipeline::SubscriptionPipelineConfig;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "telemetry")]
+use std::time::Instant;
+
+use anyhow::Result;
+use bytes::Bytes;
+use tokio::sync::mpsc;
+
+use crate::telemetry::record_e2e_latency;
+#[cfg(feature = "telemetry")]
+use crate::timings;
+
+/// Events from one shard of one stream.
+///
+/// Built by [`crate::Client::subscribe`] and its variants; read with
+/// [`Subscription::next_event`].
+pub struct Subscription {
+    event_rx: mpsc::Receiver<QueuedEvent>,
+    #[cfg(feature = "telemetry")]
+    pub(crate) last_poll: Option<Instant>,
+    pub(crate) tenant_id: Arc<str>,
+    pub(crate) namespace: Arc<str>,
+    pub(crate) stream: Arc<str>,
+    pub(crate) event_conn_index: usize,
+    pub(crate) event_conn_counts: Arc<Vec<AtomicUsize>>,
+    #[cfg(feature = "telemetry")]
+    bench_embed_ts: bool,
+    start_offset: Option<u64>,
+    live_offset: Option<u64>,
+}
+
+impl Subscription {
+    pub(crate) fn with_join(mut self, start_offset: Option<u64>, live_offset: Option<u64>) -> Self {
+        self.start_offset = start_offset;
+        self.live_offset = live_offset;
+        self
+    }
+
+    /// The first offset this subscription delivers.
+    ///
+    /// `None` for a plain tail subscribe, an in-memory stream, or an older
+    /// broker.
+    pub fn start_offset(&self) -> Option<u64> {
+        self.start_offset
+    }
+
+    /// The stream's tail when this subscription was registered.
+    ///
+    /// An event below it was already in the stream; one at or past it was
+    /// written after, and none are skipped in between. From `Latest` this
+    /// equals [`Self::start_offset`].
+    pub fn live_offset(&self) -> Option<u64> {
+        self.live_offset
+    }
+
+    /// The next event, or `None` once the event stream has closed.
+    ///
+    /// An error is the last thing a subscription yields: the pipeline stops
+    /// after reporting it.
+    pub async fn next_event(&mut self) -> Result<Option<Event>> {
+        #[cfg(feature = "telemetry")]
+        {
+            let now = Instant::now();
+            if let Some(last) = self.last_poll {
+                let gap_ns = now.duration_since(last).as_nanos() as u64;
+                t_histogram!("client_sub_consumer_gap_ns").record(gap_ns as f64);
+                timings::record_sub_consumer_gap_ns(gap_ns);
+            }
+            self.last_poll = Some(now);
+        }
+
+        let Some(queued) = self.event_rx.recv().await else {
+            return Ok(None);
+        };
+        match queued {
+            QueuedEvent::Payload(payload, offset) => {
+                record_e2e_latency(
+                    &payload,
+                    #[cfg(feature = "telemetry")]
+                    self.bench_embed_ts,
+                );
+                Ok(Some(Event {
+                    tenant_id: Arc::clone(&self.tenant_id),
+                    namespace: Arc::clone(&self.namespace),
+                    stream: Arc::clone(&self.stream),
+                    payload,
+                    offset,
+                }))
+            }
+            QueuedEvent::Error(err) => Err(err),
+        }
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        // Update connection-level subscription counts for metrics.
+        let counter = &self.event_conn_counts[self.event_conn_index];
+        let mut current = counter.load(Ordering::Relaxed);
+        while current > 0 {
+            match counter.compare_exchange(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    t_gauge!(
+                        "felix_client_event_conn_subscriptions",
+                        "conn" => self.event_conn_index.to_string()
+                    )
+                    .set((current - 1) as f64);
+                    break;
+                }
+                Err(next) => current = next,
+            }
+        }
+    }
+}
+
+/// One record delivered to a [`Subscription`].
+pub struct Event {
+    pub tenant_id: Arc<str>,
+    pub namespace: Arc<str>,
+    pub stream: Arc<str>,
+    pub payload: Bytes,
+    /// Log offset of this event on a durable stream, or `None` for an in-memory
+    /// one and for any broker that did not negotiate offsets.
+    ///
+    /// Two uses. Record it to resume from `offset + 1` after a reconnect. And
+    /// because offsets are contiguous, a jump between consecutive events is a
+    /// gap -- the subscriber queue dropped something, which is otherwise
+    /// invisible.
+    pub offset: Option<u64>,
+}
+
+enum QueuedEvent {
+    /// A payload and, for a durable stream, the log offset it sits at.
+    Payload(Bytes, Option<u64>),
+    Error(anyhow::Error),
+}
+
+#[cfg(test)]
+mod tests;

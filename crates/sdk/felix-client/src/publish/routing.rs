@@ -1,0 +1,152 @@
+//! Which of a publisher's streams a publish goes to.
+//!
+//! Hashing by stream keeps every publish to one stream on one writer, which
+//! is what keeps them in order. The hash is cached per stream so a hot
+//! stream does not rehash on every publish.
+
+use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::Ordering;
+
+use ahash::{AHasher, RandomState};
+use anyhow::Result;
+use hashbrown::HashMap;
+
+use super::Publisher;
+use super::writer::PublishWorker;
+
+pub(super) const STREAM_SHARD_CACHE_CAPACITY: usize = 1024;
+
+/// How a publisher spreads publishes across its streams.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublishSharding {
+    RoundRobin,
+    HashStream,
+}
+
+impl PublishSharding {
+    pub(crate) fn from_env() -> Option<Self> {
+        let value = std::env::var("FELIX_PUB_SHARDING").ok()?;
+        match value.as_str() {
+            "rr" => Some(Self::RoundRobin),
+            "hash_stream" => Some(Self::HashStream),
+            _ => None,
+        }
+    }
+}
+
+impl Publisher {
+    pub(super) fn select_worker(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<&PublishWorker> {
+        let workers = &self.inner.workers;
+        if workers.is_empty() {
+            return Err(anyhow::anyhow!("publish pool is empty"));
+        }
+        let worker_count = workers.len();
+        let index = match self.inner.sharding {
+            PublishSharding::RoundRobin => {
+                self.inner.rr.fetch_add(1, Ordering::Relaxed) % worker_count
+            }
+            PublishSharding::HashStream => {
+                if let Ok(mut cache) = self.inner.stream_cache.try_lock() {
+                    if let Some(index) = cache.get(StreamKeyRef::new(tenant_id, namespace, stream))
+                    {
+                        return Ok(&workers[index]);
+                    }
+                    let index = hash_stream_index(tenant_id, namespace, stream, worker_count);
+                    cache.insert(StreamKey::new(tenant_id, namespace, stream), index);
+                    return Ok(&workers[index]);
+                }
+                hash_stream_index(tenant_id, namespace, stream, worker_count)
+            }
+        };
+        Ok(&workers[index])
+    }
+}
+
+pub(super) struct StreamShardCache {
+    capacity: usize,
+    order: VecDeque<StreamKey>,
+    entries: HashMap<StreamKey, usize, RandomState>,
+}
+
+impl StreamShardCache {
+    pub(super) fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            order: VecDeque::with_capacity(capacity.min(64)),
+            entries: HashMap::with_capacity_and_hasher(capacity, RandomState::new()),
+        }
+    }
+
+    pub(super) fn get(&self, key: StreamKeyRef<'_>) -> Option<usize> {
+        self.entries.get(&key).copied()
+    }
+
+    pub(super) fn insert(&mut self, key: StreamKey, worker_index: usize) {
+        if self.capacity == 0 || self.entries.contains_key(&key) {
+            return;
+        }
+        if self.entries.len() == self.capacity
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.entries.remove(&evicted);
+        }
+        self.order.push_back(key.clone());
+        self.entries.insert(key, worker_index);
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct StreamKey {
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+}
+
+impl StreamKey {
+    pub(super) fn new(tenant_id: &str, namespace: &str, stream: &str) -> Self {
+        Self {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct StreamKeyRef<'a> {
+    tenant_id: &'a str,
+    namespace: &'a str,
+    stream: &'a str,
+}
+
+impl<'a> StreamKeyRef<'a> {
+    pub(super) fn new(tenant_id: &'a str, namespace: &'a str, stream: &'a str) -> Self {
+        Self {
+            tenant_id,
+            namespace,
+            stream,
+        }
+    }
+}
+
+impl<'a> hashbrown::Equivalent<StreamKey> for StreamKeyRef<'a> {
+    fn equivalent(&self, key: &StreamKey) -> bool {
+        self.tenant_id == key.tenant_id
+            && self.namespace == key.namespace
+            && self.stream == key.stream
+    }
+}
+
+fn hash_stream_index(tenant_id: &str, namespace: &str, stream: &str, worker_count: usize) -> usize {
+    let mut hasher = AHasher::default();
+    tenant_id.hash(&mut hasher);
+    namespace.hash(&mut hasher);
+    stream.hash(&mut hasher);
+    (hasher.finish() as usize) % worker_count
+}

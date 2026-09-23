@@ -1,0 +1,214 @@
+//! Subscribing through a [`Client`]: one shard of one stream per subscription.
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use anyhow::{Context, Result};
+use bytes::BytesMut;
+use felix_wire::{Message, StartPosition};
+use tokio::sync::oneshot;
+
+use super::Client;
+use crate::connection::EventRouterCommand;
+use crate::frame_io::{read_message_with_limit, write_message};
+use crate::subscribe::{Subscription, SubscriptionPipelineConfig};
+use crate::{NotLeaderError, SubscribeCursorError};
+
+impl Client {
+    /// Subscribe from the live tail, delivering only what is published from now.
+    pub async fn subscribe(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Result<Subscription> {
+        self.subscribe_from(tenant_id, namespace, stream, None)
+            .await
+    }
+
+    /// Subscribe from a chosen position, resuming a durable stream.
+    ///
+    /// `start: None` is exactly [`Client::subscribe`]. Pass
+    /// `Some(StartPosition::Offset(n))` to resume at the first record not yet
+    /// seen -- an application that checkpoints the offset of the last event it
+    /// handled resumes at that offset plus one.
+    ///
+    /// Fails with a `CursorTooOld` error if retention has already discarded the
+    /// requested offset, rather than silently restarting at the tail: a resume
+    /// that quietly skips records is the failure mode this exists to remove.
+    pub async fn subscribe_from(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        start: Option<StartPosition>,
+    ) -> Result<Subscription> {
+        self.subscribe_shard(tenant_id, namespace, stream, 0, start)
+            .await
+    }
+
+    /// Subscribe to one shard of a stream.
+    ///
+    /// A subscription reads a single shard. A stream's shards can have
+    /// different owners and a subscription is bound to one connection, so
+    /// reading a whole multi-shard stream means one of these per shard — see
+    /// #297, which is about doing that for the caller.
+    ///
+    /// Shard 0 is every record of a single-shard stream, which is what
+    /// [`Client::subscribe`] asks for.
+    pub async fn subscribe_shard(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        start: Option<StartPosition>,
+    ) -> Result<Subscription> {
+        if tenant_id != self.auth_tenant_id {
+            return Err(anyhow::anyhow!(
+                "tenant mismatch: client auth is scoped to {}",
+                self.auth_tenant_id
+            ));
+        }
+        // Round-robin subscriptions across the event connection pool. This local
+        // counter picks the connection only -- it must NOT be used as the
+        // subscription id itself. It starts at 1 in every Client instance, so two
+        // independent clients against the same broker would both request id 1, 2,
+        // ... and collide: the broker keys its own subscription/lane bookkeeping on
+        // the id the client asks for, and the client silently discards any event
+        // batch whose subscription_id doesn't match (see `subscribe::pipeline`), so a
+        // collision manifests as events vanishing rather than any visible error.
+        // The broker assigns globally-unique ids from its own atomic counter when we
+        // send `subscription_id: None`, so let it do that and use what it returns.
+        let rr = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
+        let connection_index = rr as usize % self.event_pool_size;
+        let connection = &self.event_connections[connection_index];
+        let (mut send, mut recv, negotiated) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
+        let server_flags = negotiated.server_flags;
+
+        // A broker that predates resume ignores the unknown `start` field and
+        // subscribes at the tail, then answers `Subscribed` -- so the client
+        // would report success while silently losing everything published
+        // during the disconnect. That is worse than an error, because the
+        // application has no way to notice. `Latest` is safe to send either
+        // way: it is what an old broker does anyway.
+        let needs_replay = matches!(
+            start,
+            Some(StartPosition::Earliest) | Some(StartPosition::Offset(_))
+        );
+        if needs_replay && !felix_wire::supports(server_flags, felix_wire::FLAG_EVENT_BATCH_OFFSETS)
+        {
+            return Err(anyhow::anyhow!(
+                "broker does not support resumable subscriptions (negotiated flags {server_flags:#06x}); \
+                 resuming from a position would silently start at the tail instead"
+            ));
+        }
+        let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+        write_message(
+            &mut send,
+            Message::Subscribe {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: stream.to_string(),
+                subscription_id: None,
+                start,
+                // Absent for shard 0, so a subscribe to a single-shard stream
+                // is byte-identical to what a client sent before sharding.
+                shard: (shard != 0).then_some(shard),
+            },
+        )
+        .await?;
+        send.finish()?;
+        let response = read_message_with_limit(
+            &mut recv,
+            &mut frame_scratch,
+            self.runtime_config.max_frame_bytes,
+        )
+        .await?;
+        let (subscription_id, start_offset, live_offset) = match response {
+            Some(Message::Subscribed {
+                subscription_id,
+                start_offset,
+                live_offset,
+            }) => (subscription_id, start_offset, live_offset),
+            Some(Message::Ok) => {
+                return Err(anyhow::anyhow!(
+                    "subscribe response missing subscription id"
+                ));
+            }
+            Some(Message::SubscribeCursorError {
+                reason,
+                requested,
+                available,
+            }) => {
+                // Surfaced as a typed error rather than a debug-formatted
+                // message, because the two reasons have opposite remedies and an
+                // application has to be able to tell them apart in code.
+                return Err(SubscribeCursorError {
+                    reason,
+                    requested,
+                    available,
+                }
+                .into());
+            }
+            Some(Message::NotLeader {
+                node_id,
+                addr,
+                generation,
+            }) => {
+                // Typed, for the same reason as the cursor error above: this is
+                // not a failure but an instruction, and the only thing an
+                // application can do with a formatted string is fail.
+                return Err(NotLeaderError {
+                    node_id,
+                    addr,
+                    generation,
+                }
+                .into());
+            }
+            other => return Err(anyhow::anyhow!("subscribe failed: {other:?}")),
+        };
+        let tenant_id = Arc::<str>::from(tenant_id);
+        let namespace = Arc::<str>::from(namespace);
+        let stream = Arc::<str>::from(stream);
+        let (stream_tx, stream_rx) = oneshot::channel();
+        self.event_stream_routers[connection_index]
+            .send(EventRouterCommand::Register {
+                subscription_id,
+                response: stream_tx,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("event stream router closed"))?;
+        let recv = stream_rx.await.context("event stream response dropped")??;
+        let current = self.event_conn_counts[connection_index].fetch_add(1, Ordering::Relaxed) + 1;
+        t_gauge!(
+            "felix_client_event_conn_subscriptions",
+            "conn" => connection_index.to_string()
+        )
+        .set(current as f64);
+        t_counter!(
+            "felix_client_event_conn_subscriptions_total",
+            "conn" => connection_index.to_string()
+        )
+        .increment(1);
+        Ok(Subscription::spawn_pipeline(SubscriptionPipelineConfig {
+            recv,
+            connection: connection.clone(),
+            queue_capacity: self.runtime_config.client_sub_queue_capacity.max(1),
+            queue_policy: self.runtime_config.client_sub_queue_policy,
+            subscription_id,
+            tenant_id,
+            namespace,
+            stream,
+            event_conn_index: connection_index,
+            event_conn_counts: Arc::clone(&self.event_conn_counts),
+            max_frame_bytes: self.runtime_config.max_frame_bytes,
+            #[cfg(feature = "telemetry")]
+            bench_embed_ts: self.runtime_config.bench_embed_ts,
+        })
+        .with_join(start_offset, live_offset))
+    }
+}

@@ -1,0 +1,389 @@
+//! The two tasks behind a subscription: an I/O task that reads frames off
+//! the event stream, and a dispatch task that decodes them into events.
+//!
+//! The I/O task runs colocated with the connection's transport drivers,
+//! since it is woken per slice of arriving data; dispatch stays on the
+//! application's runtime.
+
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use anyhow::Context;
+use bytes::{Bytes, BytesMut};
+use felix_wire::{Frame, Message};
+use quinn::RecvStream;
+use tokio::sync::mpsc;
+
+use super::queue::enqueue_with_policy;
+use super::{QueuedEvent, Subscription};
+use crate::config::ClientSubQueuePolicy;
+use crate::frame_io::read_frame_into_with_limit;
+#[cfg(feature = "telemetry")]
+use crate::telemetry::frame_counters;
+use crate::telemetry::log_decode_error;
+#[cfg(feature = "telemetry")]
+use crate::timings;
+
+pub(crate) struct SubscriptionPipelineConfig {
+    pub(crate) recv: RecvStream,
+    /// Connection whose transport drivers deliver this stream's data; the read
+    /// task is colocated with them via `spawn_pump`.
+    pub(crate) connection: felix_transport::QuicConnection,
+    pub(crate) queue_capacity: usize,
+    pub(crate) queue_policy: ClientSubQueuePolicy,
+    pub(crate) subscription_id: u64,
+    pub(crate) tenant_id: Arc<str>,
+    pub(crate) namespace: Arc<str>,
+    pub(crate) stream: Arc<str>,
+    pub(crate) event_conn_index: usize,
+    pub(crate) event_conn_counts: Arc<Vec<AtomicUsize>>,
+    pub(crate) max_frame_bytes: usize,
+    #[cfg(feature = "telemetry")]
+    pub(crate) bench_embed_ts: bool,
+}
+
+impl Subscription {
+    pub(crate) fn spawn_pipeline(config: SubscriptionPipelineConfig) -> Self {
+        let capacity = config.queue_capacity.max(1);
+        let (frame_tx, frame_rx) = mpsc::channel(capacity);
+        let (event_tx, event_rx) = mpsc::channel(capacity);
+
+        // The io task is woken per slice of arriving stream data, so it runs
+        // colocated with the connection's drivers; dispatch has no
+        // transport-facing wakeups and stays on the app runtime.
+        config.connection.spawn_pump(run_subscription_io_task(
+            config.recv,
+            frame_tx,
+            config.queue_policy,
+            capacity,
+            config.max_frame_bytes,
+        ));
+        tokio::spawn(run_subscription_dispatch_task(
+            frame_rx,
+            event_tx,
+            config.queue_policy,
+            capacity,
+            config.subscription_id,
+        ));
+
+        Self {
+            event_rx,
+            #[cfg(feature = "telemetry")]
+            last_poll: None,
+            tenant_id: config.tenant_id,
+            namespace: config.namespace,
+            stream: config.stream,
+            event_conn_index: config.event_conn_index,
+            event_conn_counts: config.event_conn_counts,
+            #[cfg(feature = "telemetry")]
+            bench_embed_ts: config.bench_embed_ts,
+            start_offset: None,
+            live_offset: None,
+        }
+    }
+}
+
+struct QueuedFrame {
+    frame: Frame,
+    enqueued_at: Instant,
+}
+
+async fn run_subscription_io_task(
+    mut recv: RecvStream,
+    frame_tx: mpsc::Sender<QueuedFrame>,
+    queue_policy: ClientSubQueuePolicy,
+    queue_capacity: usize,
+    max_frame_bytes: usize,
+) {
+    let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+    #[cfg(feature = "telemetry")]
+    let mut last_poll = Instant::now();
+    loop {
+        #[cfg(feature = "telemetry")]
+        {
+            let now = Instant::now();
+            let poll_gap_ns = now.duration_since(last_poll).as_nanos() as u64;
+            last_poll = now;
+            timings::record_sub_poll_gap_ns(poll_gap_ns);
+            t_histogram!("client_sub_poll_gap_ns").record(poll_gap_ns as f64);
+        }
+
+        let first =
+            match read_frame_into_with_limit(&mut recv, &mut frame_scratch, true, max_frame_bytes)
+                .await
+            {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
+                Err(err) => {
+                    tracing::debug!(error = %err, "subscription io task stopped");
+                    break;
+                }
+            };
+        if !enqueue_frame(
+            &frame_tx,
+            QueuedFrame {
+                frame: first,
+                enqueued_at: Instant::now(),
+            },
+            queue_policy,
+            queue_capacity,
+        )
+        .await
+        {
+            break;
+        }
+    }
+}
+
+async fn run_subscription_dispatch_task(
+    mut frame_rx: mpsc::Receiver<QueuedFrame>,
+    event_tx: mpsc::Sender<QueuedEvent>,
+    queue_policy: ClientSubQueuePolicy,
+    queue_capacity: usize,
+    subscription_id: u64,
+) {
+    while let Some(queued_frame) = frame_rx.recv().await {
+        let queue_wait_ns = queued_frame.enqueued_at.elapsed().as_nanos() as u64;
+        #[cfg(feature = "telemetry")]
+        {
+            timings::record_sub_queue_wait_ns(queue_wait_ns);
+            t_histogram!("client_sub_queue_wait_ns").record(queue_wait_ns as f64);
+            timings::record_sub_time_in_queue_ns(queue_wait_ns);
+            t_histogram!("client_sub_time_in_queue_ns").record(queue_wait_ns as f64);
+        }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = queue_wait_ns;
+        metrics::counter!("felix_client_sub_queue_dequeued_total").increment(1);
+        metrics::gauge!("felix_client_sub_queue_len")
+            .set((queue_capacity.saturating_sub(frame_rx.capacity())) as f64);
+
+        #[cfg(feature = "telemetry")]
+        let sample = crate::telemetry::t_should_sample();
+        #[cfg(feature = "telemetry")]
+        let decode_start = crate::telemetry::t_now_if(sample);
+
+        let (payloads, base_offset) =
+            if queued_frame.frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH_SHARED != 0 {
+                match felix_wire::binary::decode_shared_event_batch(&queued_frame.frame)
+                    .context("decode shared binary event batch")
+                {
+                    Ok(batch) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .sub_items_in_ok
+                                .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
+                        }
+                        (batch.payloads, batch.base_offset)
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                        }
+                        log_decode_error("shared_binary_event_batch", &err, &queued_frame.frame);
+                        let _ = enqueue_event(
+                            &event_tx,
+                            QueuedEvent::Error(err.context("decode shared binary event batch")),
+                            queue_policy,
+                            queue_capacity,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            } else if queued_frame.frame.header.flags & felix_wire::FLAG_BINARY_EVENT_BATCH != 0 {
+                match felix_wire::binary::decode_event_batch(&queued_frame.frame)
+                    .context("decode binary event batch")
+                {
+                    Ok(batch) => {
+                        if batch.subscription_id != subscription_id {
+                            tracing::debug!(
+                                expected = subscription_id,
+                                got = batch.subscription_id,
+                                "subscription id mismatch in dispatch"
+                            );
+                            let _ = enqueue_event(
+                                &event_tx,
+                                QueuedEvent::Error(anyhow::anyhow!(
+                                    "subscription id mismatch: expected {} got {}",
+                                    subscription_id,
+                                    batch.subscription_id
+                                )),
+                                queue_policy,
+                                queue_capacity,
+                            )
+                            .await;
+                            return;
+                        }
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .sub_items_in_ok
+                                .fetch_add(batch.payloads.len() as u64, Ordering::Relaxed);
+                        }
+                        (batch.payloads, batch.base_offset)
+                    }
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                        }
+                        log_decode_error("binary_event_batch", &err, &queued_frame.frame);
+                        let _ = enqueue_event(
+                            &event_tx,
+                            QueuedEvent::Error(err.context("decode binary event batch")),
+                            queue_policy,
+                            queue_capacity,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            } else {
+                let message =
+                    match Message::decode(queued_frame.frame.clone()).context("decode message") {
+                        Ok(message) => message,
+                        Err(err) => {
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let counters = frame_counters();
+                                counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                            }
+                            log_decode_error("event_message", &err, &queued_frame.frame);
+                            let _ = enqueue_event(
+                                &event_tx,
+                                QueuedEvent::Error(err.context("decode message")),
+                                queue_policy,
+                                queue_capacity,
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                #[cfg(feature = "telemetry")]
+                {
+                    let counters = frame_counters();
+                    counters.sub_frames_in_ok.fetch_add(1, Ordering::Relaxed);
+                }
+                match message {
+                    Message::Event {
+                        payload, offset, ..
+                    } => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters.sub_items_in_ok.fetch_add(1, Ordering::Relaxed);
+                        }
+                        (vec![Bytes::from(payload)], offset)
+                    }
+                    Message::EventBatch {
+                        payloads,
+                        base_offset,
+                        ..
+                    } => {
+                        #[cfg(feature = "telemetry")]
+                        {
+                            let counters = frame_counters();
+                            counters.sub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .sub_items_in_ok
+                                .fetch_add(payloads.len() as u64, Ordering::Relaxed);
+                        }
+                        (payloads.into_iter().map(Bytes::from).collect(), base_offset)
+                    }
+                    _ => {
+                        let _ = enqueue_event(
+                            &event_tx,
+                            QueuedEvent::Error(anyhow::anyhow!(
+                                "unexpected message on subscription stream"
+                            )),
+                            queue_policy,
+                            queue_capacity,
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            };
+
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = decode_start {
+            let decode_ns = start.elapsed().as_nanos() as u64;
+            timings::record_sub_decode_ns(decode_ns);
+            t_histogram!("sub_decode_ns").record(decode_ns as f64);
+        }
+
+        #[cfg(feature = "telemetry")]
+        let dispatch_start = crate::telemetry::t_now_if(sample);
+        for (index, payload) in payloads.into_iter().enumerate() {
+            // Offsets in a batch are contiguous by construction, so each event's
+            // offset is the batch base plus its position.
+            let offset = base_offset.map(|base| base + index as u64);
+            if !enqueue_event(
+                &event_tx,
+                QueuedEvent::Payload(payload, offset),
+                queue_policy,
+                queue_capacity,
+            )
+            .await
+            {
+                return;
+            }
+        }
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = dispatch_start {
+            let dispatch_ns = start.elapsed().as_nanos() as u64;
+            timings::record_sub_dispatch_ns(dispatch_ns);
+            t_histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
+        }
+    }
+}
+
+async fn enqueue_frame(
+    tx: &mpsc::Sender<QueuedFrame>,
+    item: QueuedFrame,
+    policy: ClientSubQueuePolicy,
+    queue_capacity: usize,
+) -> bool {
+    enqueue_with_policy(
+        tx,
+        item,
+        policy,
+        queue_capacity,
+        "felix_client_sub_queue_enqueued_total",
+        "felix_client_sub_queue_dropped_total",
+        "felix_client_sub_queue_drop_old_emulated_total",
+    )
+    .await
+}
+
+async fn enqueue_event(
+    tx: &mpsc::Sender<QueuedEvent>,
+    item: QueuedEvent,
+    policy: ClientSubQueuePolicy,
+    queue_capacity: usize,
+) -> bool {
+    enqueue_with_policy(
+        tx,
+        item,
+        policy,
+        queue_capacity,
+        "felix_client_sub_dispatch_enqueued_total",
+        "felix_client_sub_dispatch_dropped_total",
+        "felix_client_sub_dispatch_drop_old_emulated_total",
+    )
+    .await
+}

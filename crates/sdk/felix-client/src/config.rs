@@ -1,94 +1,32 @@
-//! Client-side defaults and transport configuration helpers.
+//! Client configuration: pool sizes, stream windows, queue limits and
+//! credentials.
 //!
-//! Holds configuration defaults, env/YAML parsing, and transport tuning knobs
-//! for the Felix client. These settings control connection pools, stream
-//! windows, sharding behavior, and safety caps.
-//!
-//! # Design notes
-//! Defaults favor throughput for publish and low latency for cache and event
-//! streams, while providing hard caps to protect against oversized frames.
-use anyhow::{Context, Result};
-use felix_transport::TransportConfig;
-use serde::Deserialize;
+//! [`ClientConfig::optimized_defaults`] is the starting point;
+//! [`ClientConfig::from_env_or_yaml`] layers `FELIX_*` environment variables
+//! and then a YAML file over it. Defaults favor throughput for publish and low
+//! latency for cache and event streams, with hard caps against oversized
+//! frames.
+
+mod defaults;
+mod env;
+mod yaml;
+
+pub(crate) use defaults::*;
+
 use std::fs;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
+use felix_transport::TransportConfig;
+
 use crate::auth::{StaticToken, TokenProvider};
-use crate::client::sharding::PublishSharding;
+use crate::publish::PublishSharding;
+use yaml::ClientConfigOverride;
 
-pub(crate) const DEFAULT_PUBLISH_QUEUE_DEPTH: usize = 64;
-pub(crate) const DEFAULT_PUBLISH_INFLIGHT_BYTES: usize = 4 * 1024 * 1024;
-pub(crate) const CACHE_WORKER_QUEUE_DEPTH: usize = 1024;
-pub(crate) const EVENT_ROUTER_QUEUE_DEPTH: usize = 1024;
-pub(crate) const DEFAULT_PUBLISH_CHUNK_BYTES: usize = 16 * 1024;
-/// Publish connections per client.
+/// Everything a [`crate::Client`] is built from.
 ///
-/// Four, and measurement says leave it there. An Azure session swept 4 against
-/// 16 and the 16-connection runs were **void** -- the generator was ignoring
-/// client environment config (#553), so the override never took effect and both
-/// runs were really 4. The re-test on a fixed generator put every valid
-/// configuration between 842 and 926 MB/s, inside the ~3% run-to-run spread
-/// that two identical configurations showed. Raising the *broker's* publish
-/// worker pool 4 -> 16 measured slightly worse.
-///
-/// Worth knowing before raising it: each publisher builds its own client with
-/// its own pool, so 32 publishers is 128 connections per generator. At that
-/// shape three of four generators failed to connect at all
-/// (`docs/perf-investigation-sharding-ceiling.md`, run J). More connections is
-/// not free, and on the evidence it is not faster either.
-pub(crate) const DEFAULT_PUB_CONN_POOL: usize = 4;
-pub(crate) const DEFAULT_PUB_STREAMS_PER_CONN: usize = 2;
-pub(crate) const DEFAULT_EVENT_CONN_POOL: usize = 8;
-pub(crate) const DEFAULT_CACHE_CONN_POOL: usize = 8;
-pub(crate) const DEFAULT_CACHE_STREAMS_PER_CONN: usize = 4;
-pub(crate) const DEFAULT_EVENT_CONN_RECV_WINDOW: u64 = 256 * 1024 * 1024;
-pub(crate) const DEFAULT_EVENT_STREAM_RECV_WINDOW: u64 = 64 * 1024 * 1024;
-pub(crate) const DEFAULT_EVENT_SEND_WINDOW: u64 = 256 * 1024 * 1024;
-pub(crate) const DEFAULT_CACHE_CONN_RECV_WINDOW: u64 = 256 * 1024 * 1024;
-pub(crate) const DEFAULT_CACHE_STREAM_RECV_WINDOW: u64 = 64 * 1024 * 1024;
-pub(crate) const DEFAULT_CACHE_SEND_WINDOW: u64 = 256 * 1024 * 1024;
-// See also DEFAULT_MAX_FRAME_BYTES and DEFAULT_EVENT_ROUTER_MAX_PENDING below.
-
-/// Hard safety cap for any single felix-wire frame.
-///
-/// Rationale:
-/// - `read_frame_into` and friends allocate a buffer sized by `header.length`.
-/// - Without a cap, a malicious / buggy peer can advertise an enormous length and
-///   trigger OOM or allocator churn (DoS).
-///
-/// Override with `FELIX_MAX_FRAME_BYTES`.
-pub(crate) const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
-
-/// Upper bound on how many pending subscription registrations/streams the event
-/// router will hold.
-///
-/// Rationale:
-/// - `pending_waiters` grows when the app registers but the server never opens the uni stream.
-/// - `pending_streams` grows when the server opens uni streams for ids the app never registers.
-///
-/// Either case can happen due to bugs or a malicious peer; we cap memory usage.
-/// Override with `FELIX_EVENT_ROUTER_MAX_PENDING`.
-pub(crate) const DEFAULT_EVENT_ROUTER_MAX_PENDING: usize = 16 * 1024;
-pub(crate) const DEFAULT_CLIENT_SUB_QUEUE_CAPACITY: usize = 256;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientSubQueuePolicy {
-    Block,
-    DropNew,
-    DropOld,
-}
-
-impl ClientSubQueuePolicy {
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "block" => Some(Self::Block),
-            "drop_new" => Some(Self::DropNew),
-            "drop_old" => Some(Self::DropOld),
-            _ => None,
-        }
-    }
-}
-
+/// Build one with [`ClientConfig::optimized_defaults`] or
+/// [`ClientConfig::from_env_or_yaml`] and adjust fields from there.
 #[derive(Clone)]
 pub struct ClientConfig {
     pub quinn: quinn::ClientConfig,
@@ -121,65 +59,7 @@ pub struct ClientConfig {
     pub bench_embed_ts: bool,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct ClientRuntimeConfig {
-    pub(crate) event_router_max_pending: usize,
-    pub(crate) max_frame_bytes: usize,
-    pub(crate) client_sub_queue_capacity: usize,
-    pub(crate) client_sub_queue_policy: ClientSubQueuePolicy,
-    pub(crate) bench_embed_ts: bool,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-struct ClientConfigOverride {
-    publish_conn_pool: Option<usize>,
-    publish_streams_per_conn: Option<usize>,
-    publish_chunk_bytes: Option<usize>,
-    publish_queue_depth: Option<usize>,
-    publish_inflight_bytes: Option<usize>,
-    publish_sharding: Option<String>,
-    auth_tenant_id: Option<String>,
-    auth_token: Option<String>,
-    cache_conn_pool: Option<usize>,
-    cache_streams_per_conn: Option<usize>,
-    event_conn_pool: Option<usize>,
-    event_conn_recv_window: Option<u64>,
-    event_stream_recv_window: Option<u64>,
-    event_send_window: Option<u64>,
-    cache_conn_recv_window: Option<u64>,
-    cache_stream_recv_window: Option<u64>,
-    cache_send_window: Option<u64>,
-    event_router_max_pending: Option<usize>,
-    client_sub_queue_capacity: Option<usize>,
-    client_sub_queue_policy: Option<String>,
-    max_frame_bytes: Option<usize>,
-    bench_embed_ts: Option<bool>,
-}
-
 impl ClientConfig {
-    pub fn from_env_or_yaml(quinn: quinn::ClientConfig, config_path: Option<&str>) -> Result<Self> {
-        let mut config = Self::from_env(quinn);
-        let override_path = config_path
-            .map(|value| value.to_string())
-            .or_else(|| std::env::var("FELIX_CLIENT_CONFIG").ok());
-        let contents = match override_path.as_deref() {
-            Some(path) => match fs::read_to_string(path) {
-                Ok(contents) => Some(contents),
-                Err(err) => {
-                    return Err(err).with_context(|| format!("read client config: {path}"));
-                }
-            },
-            None => None,
-        };
-        if let Some(contents) = contents {
-            let override_cfg: ClientConfigOverride =
-                serde_yaml_ng::from_str(&contents).context("parse client config yaml")?;
-            override_cfg.apply(&mut config);
-        }
-        Ok(config)
-    }
-
     pub fn optimized_defaults(quinn: quinn::ClientConfig) -> Self {
         Self {
             quinn,
@@ -215,83 +95,26 @@ impl ClientConfig {
         }
     }
 
-    fn from_env(quinn: quinn::ClientConfig) -> Self {
-        let mut config = Self::optimized_defaults(quinn);
-        if let Some(value) = read_usize_env("FELIX_PUB_CONN_POOL") {
-            config.publish_conn_pool = value;
+    pub fn from_env_or_yaml(quinn: quinn::ClientConfig, config_path: Option<&str>) -> Result<Self> {
+        let mut config = Self::from_env(quinn);
+        let override_path = config_path
+            .map(|value| value.to_string())
+            .or_else(|| std::env::var("FELIX_CLIENT_CONFIG").ok());
+        let contents = match override_path.as_deref() {
+            Some(path) => match fs::read_to_string(path) {
+                Ok(contents) => Some(contents),
+                Err(err) => {
+                    return Err(err).with_context(|| format!("read client config: {path}"));
+                }
+            },
+            None => None,
+        };
+        if let Some(contents) = contents {
+            let override_cfg: ClientConfigOverride =
+                serde_yaml_ng::from_str(&contents).context("parse client config yaml")?;
+            override_cfg.apply(&mut config);
         }
-        if let Some(value) = read_usize_env("FELIX_PUB_STREAMS_PER_CONN") {
-            config.publish_streams_per_conn = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_PUBLISH_CHUNK_BYTES") {
-            config.publish_chunk_bytes = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_PUBLISH_QUEUE_DEPTH") {
-            config.publish_queue_depth = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_PUBLISH_INFLIGHT_BYTES") {
-            config.publish_inflight_bytes = value;
-        }
-        if let Some(value) = PublishSharding::from_env() {
-            config.publish_sharding = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_CACHE_CONN_POOL") {
-            config.cache_conn_pool = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_CACHE_STREAMS_PER_CONN") {
-            config.cache_streams_per_conn = value;
-        }
-        if let Some(value) =
-            read_usize_env("FELIX_EVENT_CONN_POOL").or_else(|| read_usize_env("FELIX_SUB_CONNS"))
-        {
-            config.event_conn_pool = value;
-        }
-        if let Some(value) = read_u64_env("FELIX_EVENT_CONN_RECV_WINDOW") {
-            config.event_conn_recv_window = value;
-        }
-        if let Some(value) = read_u64_env("FELIX_EVENT_STREAM_RECV_WINDOW") {
-            config.event_stream_recv_window = value;
-        }
-        if let Some(value) = read_u64_env("FELIX_EVENT_SEND_WINDOW") {
-            config.event_send_window = value;
-        }
-        if let Some(value) = read_u64_env("FELIX_CACHE_CONN_RECV_WINDOW") {
-            config.cache_conn_recv_window = value;
-        }
-        if let Some(value) = read_u64_env("FELIX_CACHE_STREAM_RECV_WINDOW") {
-            config.cache_stream_recv_window = value;
-        }
-        if let Some(value) = read_u64_env("FELIX_CACHE_SEND_WINDOW") {
-            config.cache_send_window = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_EVENT_ROUTER_MAX_PENDING") {
-            config.event_router_max_pending = value;
-        }
-        if let Some(value) = read_usize_env("FELIX_CLIENT_SUB_QUEUE_CAPACITY") {
-            config.client_sub_queue_capacity = value;
-        }
-        if let Ok(value) = std::env::var("FELIX_CLIENT_SUB_QUEUE_POLICY")
-            && let Some(policy) = ClientSubQueuePolicy::parse(value.as_str())
-        {
-            config.client_sub_queue_policy = policy;
-        }
-        if let Some(value) = read_usize_env("FELIX_MAX_FRAME_BYTES") {
-            config.max_frame_bytes = value;
-        }
-        if let Some(value) = read_bool_env("FELIX_BENCH_EMBED_TS") {
-            config.bench_embed_ts = value;
-        }
-        if let Ok(value) = std::env::var("FELIX_AUTH_TENANT")
-            && !value.trim().is_empty()
-        {
-            config.auth_tenant_id = Some(value);
-        }
-        if let Ok(value) = std::env::var("FELIX_AUTH_TOKEN")
-            && !value.trim().is_empty()
-        {
-            config.auth_token = Some(value);
-        }
-        config
+        Ok(config)
     }
 
     /// The token source streams authenticate with.
@@ -317,121 +140,32 @@ impl ClientConfig {
     }
 }
 
-impl ClientConfigOverride {
-    fn apply(&self, config: &mut ClientConfig) {
-        if let Some(value) = self.publish_conn_pool
-            && value > 0
-        {
-            config.publish_conn_pool = value;
-        }
-        if let Some(value) = self.publish_streams_per_conn
-            && value > 0
-        {
-            config.publish_streams_per_conn = value;
-        }
-        if let Some(value) = self.publish_chunk_bytes
-            && value > 0
-        {
-            config.publish_chunk_bytes = value;
-        }
-        if let Some(value) = self.publish_queue_depth
-            && value > 0
-        {
-            config.publish_queue_depth = value;
-        }
-        if let Some(value) = self.publish_inflight_bytes
-            && value > 0
-        {
-            config.publish_inflight_bytes = value;
-        }
-        if let Some(value) = &self.publish_sharding
-            && let Some(parsed) = parse_sharding(value)
-        {
-            config.publish_sharding = parsed;
-        }
-        if let Some(value) = &self.auth_tenant_id {
-            config.auth_tenant_id = Some(value.clone());
-        }
-        if let Some(value) = &self.auth_token {
-            config.auth_token = Some(value.clone());
-        }
-        if let Some(value) = self.cache_conn_pool
-            && value > 0
-        {
-            config.cache_conn_pool = value;
-        }
-        if let Some(value) = self.cache_streams_per_conn
-            && value > 0
-        {
-            config.cache_streams_per_conn = value;
-        }
-        if let Some(value) = self.event_conn_pool
-            && value > 0
-        {
-            config.event_conn_pool = value;
-        }
-        if let Some(value) = self.event_conn_recv_window
-            && value > 0
-        {
-            config.event_conn_recv_window = value;
-        }
-        if let Some(value) = self.event_stream_recv_window
-            && value > 0
-        {
-            config.event_stream_recv_window = value;
-        }
-        if let Some(value) = self.event_send_window
-            && value > 0
-        {
-            config.event_send_window = value;
-        }
-        if let Some(value) = self.cache_conn_recv_window
-            && value > 0
-        {
-            config.cache_conn_recv_window = value;
-        }
-        if let Some(value) = self.cache_stream_recv_window
-            && value > 0
-        {
-            config.cache_stream_recv_window = value;
-        }
-        if let Some(value) = self.cache_send_window
-            && value > 0
-        {
-            config.cache_send_window = value;
-        }
-        if let Some(value) = self.event_router_max_pending
-            && value > 0
-        {
-            config.event_router_max_pending = value;
-        }
-        if let Some(value) = self.client_sub_queue_capacity
-            && value > 0
-        {
-            config.client_sub_queue_capacity = value;
-        }
-        if let Some(value) = &self.client_sub_queue_policy
-            && let Some(policy) = ClientSubQueuePolicy::parse(value.as_str())
-        {
-            config.client_sub_queue_policy = policy;
-        }
-        if let Some(value) = self.max_frame_bytes
-            && value > 0
-        {
-            config.max_frame_bytes = value;
-        }
-        if let Some(value) = self.bench_embed_ts {
-            config.bench_embed_ts = value;
+/// What a subscription does when its bounded queue is full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientSubQueuePolicy {
+    Block,
+    DropNew,
+    DropOld,
+}
+
+impl ClientSubQueuePolicy {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "block" => Some(Self::Block),
+            "drop_new" => Some(Self::DropNew),
+            "drop_old" => Some(Self::DropOld),
+            _ => None,
         }
     }
 }
 
-fn parse_sharding(value: &str) -> Option<PublishSharding> {
-    match value {
-        "rr" => Some(PublishSharding::RoundRobin),
-        "hash_stream" => Some(PublishSharding::HashStream),
-        _ => None,
-    }
+#[derive(Clone, Copy)]
+pub(crate) struct ClientRuntimeConfig {
+    pub(crate) event_router_max_pending: usize,
+    pub(crate) max_frame_bytes: usize,
+    pub(crate) client_sub_queue_capacity: usize,
+    pub(crate) client_sub_queue_policy: ClientSubQueuePolicy,
+    pub(crate) bench_embed_ts: bool,
 }
 
 pub(crate) fn event_transport_config(
@@ -454,64 +188,5 @@ pub(crate) fn cache_transport_config(
     base
 }
 
-fn read_u64_env(key: &str) -> Option<u64> {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-}
-
-fn read_usize_env(key: &str) -> Option<usize> {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-}
-
-fn read_bool_env(key: &str) -> Option<bool> {
-    std::env::var(key)
-        .ok()
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-}
-
 #[cfg(test)]
-mod runtime_config_tests {
-    use super::*;
-
-    #[test]
-    fn runtime_config_is_per_client_and_order_independent() -> Result<()> {
-        let quinn = quinn::ClientConfig::try_with_platform_verifier()?;
-        let mut block = ClientConfig::optimized_defaults(quinn.clone());
-        block.client_sub_queue_policy = ClientSubQueuePolicy::Block;
-        block.client_sub_queue_capacity = 11;
-        block.event_router_max_pending = 13;
-        block.max_frame_bytes = 17;
-        block.bench_embed_ts = true;
-
-        let mut drop_new = ClientConfig::optimized_defaults(quinn);
-        drop_new.client_sub_queue_policy = ClientSubQueuePolicy::DropNew;
-        drop_new.client_sub_queue_capacity = 19;
-        drop_new.event_router_max_pending = 23;
-        drop_new.max_frame_bytes = 29;
-
-        for (first, second) in [(&block, &drop_new), (&drop_new, &block)] {
-            let first = first.runtime_config();
-            let second = second.runtime_config();
-            assert_ne!(
-                first.client_sub_queue_policy,
-                second.client_sub_queue_policy
-            );
-            assert_ne!(
-                first.client_sub_queue_capacity,
-                second.client_sub_queue_capacity
-            );
-            assert_ne!(
-                first.event_router_max_pending,
-                second.event_router_max_pending
-            );
-            assert_ne!(first.max_frame_bytes, second.max_frame_bytes);
-            assert_ne!(first.bench_embed_ts, second.bench_embed_ts);
-        }
-        Ok(())
-    }
-}
+mod tests;

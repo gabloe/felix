@@ -23,100 +23,61 @@
 //! serialized by a mutex inside Quinn, which is a performance cliff under
 //! load. So every stream here has one writer loop, fed through a bounded
 //! queue, and parallelism comes from *more* connections or *more* streams —
-//! never from writing to one stream from two tasks. The notes below record
-//! how that is enforced.
+//! never from writing to one stream from two tasks. The docs of the modules
+//! that own each kind of stream say how they hold to that.
 //!
 //! The frame codec and message types are `felix-wire`; the QUIC layer is
 //! `felix-transport`. This crate is the application-facing shape over both.
 
-/*
-CLIENT DESIGN NOTES (felix-client)
+//!
+//! # Where things live
+//!
+//! - `client`: [`Client`] itself, one file per area of its API.
+//! - `connection`: where pooled connections go, stream authentication, and
+//!   the router that hands server-opened event streams to subscriptions.
+//! - `publish`: [`Publisher`], its writer tasks, admission, acks, and
+//!   [`IdempotentProducer`].
+//! - `subscribe`: [`Subscription`] and the pipeline that feeds it.
+//! - `cache`: the cache workers and [`CacheWatch`].
+//! - `cluster`: [`ClusterClient`] and the sharded views built on it.
+//! - `config`: [`ClientConfig`], its defaults, and the env and YAML overrides.
+//! - `telemetry` and [`timings`]: counters and sampled timings, mostly
+//!   compiled out unless the `telemetry` feature is on.
 
-Client (QUIC network client)
-   - Speaks `felix-wire` over QUIC.
-   - QUIC multiplexing is powerful, but the write-side of a Quinn `SendStream` is
-     effectively a single-writer resource: concurrent writes from multiple tasks
-     create lock contention and can introduce expensive serialization.
-
-Key decisions in this implementation:
-
-A) Single-writer per QUIC stream
-   - Cache: each cache worker owns exactly one bi-directional stream and performs
-     strictly sequential request/response round-trips on that stream.
-   - Publish: `Publisher` owns one bi-directional stream and a single writer task
-     serializes publishes, optionally waiting for acks.
-   - Subscribe: subscribe control happens on a short-lived bi stream; events arrive
-     on a server-opened uni stream, which we route based on an initial
-     `EventStreamHello { subscription_id }`.
-
-B) Connection pooling to reduce HOL and improve concurrency
-   - Cache ops are latency-sensitive and can become head-of-line blocked if a slow
-     cache response sits ahead of faster ones on the same stream.
-   - We pool cache connections, then open multiple streams per connection, and
-     assign each stream a single-writer worker.
-   - Subscriptions are round-robined across event connections; each subscription
-     still gets its own server-opened uni stream for events.
-
-C) Backpressure via bounded queues
-   - Cache workers use bounded channels to apply pressure back to callers.
-   - Publisher uses a bounded queue so we fail fast rather than buffer unboundedly.
-
-D) Protocol invariants we rely on
-   - Any acked publish (AckMode != None) must have a request_id.
-   - Acks must match request_id (server is allowed to pipeline / reorder).
-   - For subscriptions, the first frame on the uni stream must be EventStreamHello.
-   - Subsequent shared event batches are bound by that stream and carry no subscription_id.
-*/
+// First, and `#[macro_use]`: the `t_*` metric macros are textually scoped, and
+// importing them by path would leave the import unused in whichever build
+// compiles their call sites out.
 #[macro_use]
-mod macros;
+mod telemetry;
 
 mod auth;
+mod cache;
 mod client;
+mod cluster;
 mod config;
-mod counters;
-mod wire;
+mod connection;
+mod error;
+mod frame_io;
+mod publish;
+mod subscribe;
+#[cfg(test)]
+mod test_support;
 
 pub mod timings;
 
 pub use auth::{RefreshingToken, TokenFuture, TokenProvider};
-pub use client::cache_watch::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
-pub use client::client::Client;
-pub use client::client::{NotLeaderError, SubscribeCursorError};
-pub use client::cluster::{ClusterClient, ReconnectPolicy};
-pub use client::idempotent::IdempotentProducer;
-pub use client::publisher::Publisher;
-pub use client::sharded::{ShardEvent, ShardOffsets, ShardedSubscription};
-pub use client::sharded_group::{ShardedGroup, ShardedGroupRecord};
-pub use client::sharded_watch::{ShardedCacheWatch, ShardedCacheWatchItem};
-pub use client::sharding::PublishSharding;
-pub use client::subscription::{Event, Subscription};
+pub use cache::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
+pub use client::Client;
+pub use cluster::{
+    ClusterClient, ReconnectPolicy, ShardEvent, ShardOffsets, ShardedCacheWatch,
+    ShardedCacheWatchItem, ShardedGroup, ShardedGroupRecord, ShardedSubscription,
+};
 pub use config::{ClientConfig, ClientSubQueuePolicy};
-pub use counters::{
+pub use error::{NotLeaderError, PublishRefused, SubscribeCursorError};
+pub use publish::{IdempotentProducer, PublishSharding, Publisher};
+pub use subscribe::{Event, Subscription};
+pub use telemetry::{
     FrameCountersSnapshot, frame_counters_snapshot, publishes_forwarded, reset_frame_counters,
 };
+
 pub use felix_wire::{CursorErrorReason, PublishRefusalReason, StartPosition};
-
-/// The broker would not append an idempotent publish, and said why.
-///
-/// Carried as a typed error so a producer can act on the reason rather than
-/// parse the message: a sequence gap means stop, an unknown producer means
-/// start again under a new id, and neither is a transport failure to retry.
-/// Recover it from an `anyhow::Error` with `downcast_ref`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishRefused {
-    pub reason: PublishRefusalReason,
-    pub message: String,
-}
-
-impl std::fmt::Display for PublishRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "publish refused ({:?}): {}", self.reason, self.message)
-    }
-}
-
-impl std::error::Error for PublishRefused {}
-
-pub(crate) use macros::{t_now_if, t_should_sample};
-
-#[cfg(test)]
-mod tests;
