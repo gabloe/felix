@@ -46,24 +46,23 @@ mod broker;
 mod cache;
 mod durable;
 mod error;
-mod keys;
 mod queue;
-mod registry;
 mod stream;
 
 pub mod replication;
 pub mod timings;
 
 pub use broker::{
-    Broker, CacheMetadata, ClaimedPublish, ConsistencyLevel, HistoryRange, IdempotentOutcome,
-    JoinOffsets, PublishOutcome, ResumedSubscription, StartPosition, StreamHandle, StreamMetadata,
+    Broker, CacheMetadata, ClaimedPublish, ConsistencyLevel, IdempotentOutcome, LogKind,
+    PublishOutcome, StreamHandle, StreamMetadata,
 };
 pub use error::{BrokerError, Result};
-pub use keys::{CacheKey, NamespaceKey, StreamKey, TopicKey};
 
 // Streams.
+pub use broker::{Cursor, HistoryRange, JoinOffsets, ResumedSubscription};
+pub use felix_wire::StartPosition;
 pub use stream::{
-    Cursor, DeliveryEnvelope, SubQueuePolicy, Subscription, SubscriptionGuard, SubscriptionReceiver,
+    DeliveryEnvelope, SubQueuePolicy, Subscription, SubscriptionGuard, SubscriptionReceiver,
 };
 
 // Caches.
@@ -74,32 +73,3 @@ pub use queue::{Claimed, ConsumerGroups, DeadLetters, GroupKey, GroupReader};
 
 // Durability.
 pub use durable::{DurableStorage, StreamLog};
-
-/// Which of a shard's logs a request is about.
-///
-/// A stream shard has two: the records themselves, and the consumer-group
-/// cursors kept beside them. Both have to reach a replica, or a promoted leader
-/// serves the records and has no idea where any group had got to — it starts
-/// them at the beginning and redelivers everything already finished.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LogKind {
-    /// A stream's records.
-    Stream,
-    /// A cache's records.
-    Cache,
-    /// The consumer-group cursors belonging to a stream shard.
-    GroupCursors,
-    /// The dead-letter list belonging to a stream shard: the offsets its
-    /// groups gave up on. Beside the cursors for the same reason the cursors
-    /// are beside the records — a promoted leader that serves the stream but
-    /// has lost which records its groups abandoned would silently redrive
-    /// nothing and list nothing.
-    GroupDeadLetters,
-    /// The counter log belonging to a cache shard: signed deltas folded into
-    /// running sums. Rides the cache shard's replica set the way group state
-    /// rides a stream shard's, so a promoted replica resumes the true sum.
-    Counters,
-}
-
-#[cfg(test)]
-mod tests;

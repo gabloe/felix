@@ -130,3 +130,37 @@ fn the_fanout_snapshot_keeps_a_stable_order() {
     assert_eq!(ids, sorted);
     assert!(!ids.contains(&victim));
 }
+
+#[test]
+fn append_batch_keeps_monotonic_sequences_and_trims_once() {
+    let stream = StreamState::new(1, 8, SubQueuePolicy::DropNew, None, Default::default());
+    let first = vec![
+        Bytes::from_static(b"a"),
+        Bytes::from_static(b"b"),
+        Bytes::from_static(b"c"),
+        Bytes::from_static(b"d"),
+        Bytes::from_static(b"e"),
+    ];
+    stream.append_batch(&first, 3);
+    let second = vec![Bytes::from_static(b"f"), Bytes::from_static(b"g")];
+    stream.append_batch(&second, 3);
+
+    let state = stream.log_state.lock();
+    let seqs = state.log.iter().map(|entry| entry.seq).collect::<Vec<_>>();
+    let payloads = state
+        .log
+        .iter()
+        .map(|entry| entry.payload.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(state.next_seq, 7);
+    assert_eq!(seqs, vec![4, 5, 6]);
+    assert_eq!(
+        payloads,
+        vec![
+            Bytes::from_static(b"e"),
+            Bytes::from_static(b"f"),
+            Bytes::from_static(b"g")
+        ]
+    );
+}

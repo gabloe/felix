@@ -83,3 +83,6 @@ pub enum BrokerError {
     #[error("sequence {sequence} is older than the window this broker keeps")]
     SequenceExpired { sequence: u64 },
 }
+
+#[cfg(test)]
+mod tests;

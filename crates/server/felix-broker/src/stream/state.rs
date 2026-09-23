@@ -17,17 +17,6 @@ use crate::durable::StreamLog;
 use felix_storage::CommitSequencer;
 use felix_storage::log::LogRecord;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Cursor {
-    pub(crate) next_seq: u64,
-}
-
-impl Cursor {
-    pub fn next_seq(&self) -> u64 {
-        self.next_seq
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct LogEntry {
     pub(crate) seq: u64,

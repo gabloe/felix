@@ -76,7 +76,9 @@ for what the current release actually guarantees.
   `felix_broker::GroupReader`, `felix_broker::DurableStorage`, ...), and the
   group tracker that `group_delivery` exposed is internal. `replication` and
   `timings` stay public modules. `ClaimedPublish` is now exported, since
-  `Broker::claim_publish` returns it.
+  `Broker::claim_publish` returns it. The registry keys (`CacheKey`,
+  `NamespaceKey`, `StreamKey`, `TopicKey`) are no longer public; nothing
+  outside the broker used them.
 
 ## [0.6.0-preview] - 2026-09-20
 

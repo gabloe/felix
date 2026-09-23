@@ -13,7 +13,6 @@ mod state;
 mod subscription;
 
 pub use delivery::{DeliveryEnvelope, SubQueuePolicy};
-pub use state::Cursor;
 pub use subscription::{Subscription, SubscriptionGuard, SubscriptionReceiver};
 
 pub(crate) use delivery::QueuedDelivery;

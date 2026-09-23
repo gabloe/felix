@@ -1,14 +1,14 @@
-// Owned map keys plus borrowed `*Ref` twins used for allocation-free lookups.
-// The `Equivalent` impls let `hashbrown` probe an owned-key map with borrowed data.
+//! Owned map keys plus borrowed `*Ref` twins used for allocation-free lookups.
+//! The `Equivalent` impls let `hashbrown` probe an owned-key map with borrowed data.
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct NamespaceKey {
+pub(crate) struct NamespaceKey {
     pub(crate) tenant_id: String,
     pub(crate) namespace: String,
 }
 
 impl NamespaceKey {
-    pub fn new(tenant_id: impl Into<String>, namespace: impl Into<String>) -> Self {
+    pub(crate) fn new(tenant_id: impl Into<String>, namespace: impl Into<String>) -> Self {
         Self {
             tenant_id: tenant_id.into(),
             namespace: namespace.into(),
@@ -38,14 +38,14 @@ impl<'a> hashbrown::Equivalent<NamespaceKey> for NamespaceKeyRef<'a> {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct StreamKey {
+pub(crate) struct StreamKey {
     pub(crate) tenant_id: String,
     pub(crate) namespace: String,
     pub(crate) stream: String,
 }
 
 impl StreamKey {
-    pub fn new(
+    pub(crate) fn new(
         tenant_id: impl Into<String>,
         namespace: impl Into<String>,
         stream: impl Into<String>,
@@ -93,7 +93,7 @@ impl<'a> hashbrown::Equivalent<StreamKey> for StreamKeyRef<'a> {
 /// Conflating the two is what made every shard share shard 0's log while
 /// replication shipped the real one.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct TopicKey {
+pub(crate) struct TopicKey {
     pub(crate) tenant_id: String,
     pub(crate) namespace: String,
     pub(crate) stream: String,
@@ -101,7 +101,7 @@ pub struct TopicKey {
 }
 
 impl TopicKey {
-    pub fn new(
+    pub(crate) fn new(
         tenant_id: impl Into<String>,
         namespace: impl Into<String>,
         stream: impl Into<String>,
@@ -146,14 +146,14 @@ impl<'a> hashbrown::Equivalent<TopicKey> for TopicKeyRef<'a> {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct CacheKey {
+pub(crate) struct CacheKey {
     pub(crate) tenant_id: String,
     pub(crate) namespace: String,
     pub(crate) cache: String,
 }
 
 impl CacheKey {
-    pub fn new(
+    pub(crate) fn new(
         tenant_id: impl Into<String>,
         namespace: impl Into<String>,
         cache: impl Into<String>,
