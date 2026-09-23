@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790200124770,
+  "lastUpdate": 1790200370614,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14144,6 +14144,58 @@ window.BENCHMARK_DATA = {
             "range": "44237.01",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 929378.09\nmean: 913767.71\nstdev: 44237.01\ncv: 4.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "786911ddbde09d740fe8aecb56df1de2c897bb97",
+          "message": "felix-client: refresh the auth token for streams opened after connect (#652)\n\n* felix-client: refresh the auth token for streams opened after connect\n\nThe client read its token once at connect and presented it on every stream\nit opened afterwards. Subscriptions, cache watches, group requests and\nClusterClient reconnects made after the token expired all failed.\n\nClientConfig now takes an optional token_provider that the client asks for a\ntoken whenever a stream authenticates. RefreshingToken wraps a fetch\nfunction and replaces the token two thirds of the way to its exp. If the\nbroker refuses a token, the client asks the provider again and retries once\non a new stream when it gets a different token. auth_token still works as a\nfixed token.\n\ncheck-mermaid now says to run npm ci when docs-site dependencies are\nmissing, instead of dying with a module-resolution stack trace.\n\nFixes #629\n\n* chore: add felix-client's new deps to the out-of-workspace lockfiles\n\nfelix-client now depends on serde_json and base64, so the lockfiles of\nthe bindings and demo crates that build it with --locked need them too.",
+          "timestamp": "2026-09-23T14:50:38-07:00",
+          "tree_id": "99ae979edd21340b2dbb17002f7486576fc3fa69",
+          "url": "https://github.com/gabloe/felix/commit/786911ddbde09d740fe8aecb56df1de2c897bb97"
+        },
+        "date": 1790200370013,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 545060.77,
+            "range": "35201.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 545060.77\nmean: 539632.23\nstdev: 35201.56\ncv: 6.52%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 545060.77,
+            "range": "35201.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 545060.77\nmean: 539632.23\nstdev: 35201.56\ncv: 6.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 114219.5,
+            "range": "4674.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 114219.50\nmean: 112454.01\nstdev: 4674.62\ncv: 4.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1142194.98,
+            "range": "46746.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1142194.98\nmean: 1124540.07\nstdev: 46746.19\ncv: 4.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
