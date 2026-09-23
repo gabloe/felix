@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790198225459,
+  "lastUpdate": 1790200124770,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14092,6 +14092,58 @@ window.BENCHMARK_DATA = {
             "range": "6356.38",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 919198.07\nmean: 918970.99\nstdev: 6356.38\ncv: 0.69%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46cbb62f5975f93e489244c9321d1703abdc84e5",
+          "message": "build(deps): bump jsonwebtoken in the cargo-minor-and-patch group (#651)\n\nBumps the cargo-minor-and-patch group with 1 update: [jsonwebtoken](https://github.com/Keats/jsonwebtoken).\n\n\nUpdates `jsonwebtoken` from 11.0.0 to 11.1.0\n- [Changelog](https://github.com/Keats/jsonwebtoken/blob/master/CHANGELOG.md)\n- [Commits](https://github.com/Keats/jsonwebtoken/compare/v11.0.0...v11.1.0)\n\n---\nupdated-dependencies:\n- dependency-name: jsonwebtoken\n  dependency-version: 11.1.0\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n  dependency-group: cargo-minor-and-patch\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-23T14:43:25-07:00",
+          "tree_id": "037a277f0d615ef7049ca0af96873b11358c1da2",
+          "url": "https://github.com/gabloe/felix/commit/46cbb62f5975f93e489244c9321d1703abdc84e5"
+        },
+        "date": 1790200123992,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 391631.39,
+            "range": "17020.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391631.39\nmean: 390613.16\nstdev: 17020.34\ncv: 4.36%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 391631.39,
+            "range": "17020.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391631.39\nmean: 390613.16\nstdev: 17020.34\ncv: 4.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 92937.81,
+            "range": "4423.70",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 92937.81\nmean: 91376.77\nstdev: 4423.70\ncv: 4.84%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 929378.09,
+            "range": "44237.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 929378.09\nmean: 913767.71\nstdev: 44237.01\ncv: 4.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
