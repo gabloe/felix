@@ -75,10 +75,7 @@ use super::publish::{Outgoing, SubscriptionLimiter, send_outgoing_critical};
 use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::write_message;
 use crate::transport::quic::telemetry::t_counter;
-/// Report a failed subscribe on the control stream and keep the stream alive.
-///
-/// Extracted because the tail-only and resume paths fail identically, and
-/// duplicating the ack-queue plumbing between them is how the two drift apart.
+
 /// Turn a broker error into the most specific protocol message available.
 ///
 /// A cursor rejection is machine-readable so the client can choose a remedy;
@@ -105,6 +102,10 @@ fn subscribe_error_message(err: felix_broker::BrokerError) -> Message {
     }
 }
 
+/// Report a failed subscribe on the control stream and keep the stream alive.
+///
+/// Extracted because the tail-only and resume paths fail identically, and
+/// duplicating the ack-queue plumbing between them is how the two drift apart.
 #[allow(clippy::too_many_arguments)]
 async fn subscribe_failed(
     message: Message,

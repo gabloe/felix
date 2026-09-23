@@ -2,11 +2,7 @@ use anyhow::{Context, Result};
 use felix_broker::SubQueuePolicy;
 use serde::{Deserialize, Serialize};
 
-/// Never write a secret into a dump meant to be shared.
-///
-/// `--print-config` is for pasting into an issue or a ticket, so a credential
-/// that appears in it has been published. Shown as a fixed marker rather than
-/// omitted: an operator has to be able to see that a token *is* set.
+/// The config-file spelling of a queue policy, for `--print-config`.
 fn queue_policy<S: serde::Serializer>(
     value: &SubQueuePolicy,
     serializer: S,
@@ -21,6 +17,11 @@ fn queue_policy<S: serde::Serializer>(
     })
 }
 
+/// Never write a secret into a dump meant to be shared.
+///
+/// `--print-config` is for pasting into an issue or a ticket, so a credential
+/// that appears in it has been published. Shown as a fixed marker rather than
+/// omitted: an operator has to be able to see that a token *is* set.
 fn redacted<S: serde::Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(if value.is_empty() {
         "<unset>"
@@ -106,35 +107,35 @@ fn warn_on_unreachable_advertise(
     }
 }
 
-// Broker service configuration sourced from environment variables.
-//
-// `Serialize` is for `--print-config`, and it is *derived* rather than written
-// out by hand so the dump cannot drift from the struct — a listing that quietly
-// stops mentioning a setting is the same class of problem as a documented
-// variable nothing reads.
+/// Broker service configuration sourced from environment variables.
+///
+/// `Serialize` is for `--print-config`, and it is *derived* rather than written
+/// out by hand so the dump cannot drift from the struct — a listing that quietly
+/// stops mentioning a setting is the same class of problem as a documented
+/// variable nothing reads.
 #[derive(Debug, Clone, Serialize)]
 pub struct BrokerConfig {
-    // QUIC listener bind address. With `quic_listeners > 1` this is the *first*
-    // of a consecutive run of ports; see [`BrokerConfig::quic_binds`].
+    /// QUIC listener bind address. With `quic_listeners > 1` this is the *first*
+    /// of a consecutive run of ports; see [`BrokerConfig::quic_binds`].
     pub quic_bind: SocketAddr,
-    // An explicit `FELIX_IO_RUNTIME_THREADS`, when the operator set one.
-    //
-    // Kept so `validate` can see it: the pool size and the listener count must
-    // hold a relationship, and a pool too small for the listeners silently puts
-    // every listener's driver on one thread. Unset means derived.
+    /// An explicit `FELIX_IO_RUNTIME_THREADS`, when the operator set one.
+    ///
+    /// Kept so `validate` can see it: the pool size and the listener count must
+    /// hold a relationship, and a pool too small for the listeners silently puts
+    /// every listener's driver on one thread. Unset means derived.
     pub io_runtime_threads: Option<usize>,
-    // How many client-facing QUIC listeners to bind, on consecutive ports from
-    // `quic_bind`.
-    //
-    // One socket means one `quinn::Endpoint`, and an endpoint's driver is a
-    // single task that reads every inbound datagram and routes it by connection
-    // id. That task cannot use more than one core, and it is what holds a
-    // broker to ~900 MB/s while the rest of the machine idles (#557). Separate
-    // ports are separate sockets, and separate sockets are separate drivers.
+    /// How many client-facing QUIC listeners to bind, on consecutive ports from
+    /// `quic_bind`.
+    ///
+    /// One socket means one `quinn::Endpoint`, and an endpoint's driver is a
+    /// single task that reads every inbound datagram and routes it by connection
+    /// id. That task cannot use more than one core, and it is what holds a
+    /// broker to ~900 MB/s while the rest of the machine idles (#557). Separate
+    /// ports are separate sockets, and separate sockets are separate drivers.
     pub quic_listeners: usize,
-    // Metrics HTTP listener bind address.
+    /// Metrics HTTP listener bind address.
     pub metrics_bind: SocketAddr,
-    // Optional control-plane base URL.
+    /// Optional control-plane base URL.
     pub controlplane_url: Option<String>,
     /// Credential this broker presents to the control plane; empty when none
     /// was given.
@@ -149,20 +150,20 @@ pub struct BrokerConfig {
     /// Never printed. `--print-config` exists to be pasted into an issue.
     #[serde(serialize_with = "redacted")]
     pub controlplane_token: String,
-    // Poll interval for control-plane changes.
+    /// Poll interval for control-plane changes.
     pub controlplane_sync_interval_ms: u64,
-    // Cluster membership identity, when this broker joins one.
+    /// Cluster membership identity, when this broker joins one.
     pub membership: Option<MembershipConfig>,
-    // Broker-internal transport, present only when this broker joins a cluster.
-    // A broker with no peers has nothing to listen for.
+    /// Broker-internal transport, present only when this broker joins a cluster.
+    /// A broker with no peers has nothing to listen for.
     pub peer_transport: Option<crate::peer::PeerTransportConfig>,
-    // If true, publish acks are sent after commit.
+    /// If true, publish acks are sent after commit.
     pub ack_on_commit: bool,
-    // Max frame size accepted on QUIC streams.
+    /// Max frame size accepted on QUIC streams.
     pub max_frame_bytes: usize,
-    // Max time to wait when backpressuring publish enqueue.
+    /// Max time to wait when backpressuring publish enqueue.
     pub publish_queue_wait_timeout_ms: u64,
-    // Max time to wait for ack-on-commit publish completion.
+    /// Max time to wait for ack-on-commit publish completion.
     pub ack_wait_timeout_ms: u64,
     /// How long a consumer group's claim on a record stands before the record
     /// is handed to someone else.
@@ -184,83 +185,83 @@ pub struct BrokerConfig {
     /// shorter wait gets one. It exists so a client cannot hold a broker stream
     /// open indefinitely.
     pub group_max_wait_ms: u64,
-    // Disable timing collection for lower overhead.
+    /// Disable timing collection for lower overhead.
     pub disable_timings: bool,
-    // Max time to wait for control-stream writer to drain.
+    /// Max time to wait for control-stream writer to drain.
     pub control_stream_drain_timeout_ms: u64,
-    // Total budget for draining in-flight work after SIGTERM/SIGINT before
-    // remaining tasks are force-cancelled.
+    /// Total budget for draining in-flight work after SIGTERM/SIGINT before
+    /// remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,
-    // How long to keep accepting connections after readiness goes false, so a
-    // load balancer polling `/ready` has time to stop routing here.
+    /// How long to keep accepting connections after readiness goes false, so a
+    /// load balancer polling `/ready` has time to stop routing here.
     pub shutdown_predrain_ms: u64,
-    // Cache connection flow-control window.
+    /// Cache connection flow-control window.
     pub cache_conn_recv_window: u64,
-    // Cache stream flow-control window.
+    /// Cache stream flow-control window.
     pub cache_stream_recv_window: u64,
-    // Cache connection send window.
+    /// Cache connection send window.
     pub cache_send_window: u64,
-    // Max events per batched subscription frame.
+    /// Max events per batched subscription frame.
     pub event_batch_max_events: usize,
-    // Max bytes per batched subscription frame.
+    /// Max bytes per batched subscription frame.
     pub event_batch_max_bytes: usize,
-    // Max delay before flushing a subscription batch.
+    /// Max delay before flushing a subscription batch.
     pub event_batch_max_delay_us: u64,
-    // Fanout batch size for subscription sending.
+    /// Fanout batch size for subscription sending.
     pub fanout_batch_size: usize,
-    // Publish worker count per QUIC connection.
+    /// Publish worker count per QUIC connection.
     pub pub_workers_per_conn: usize,
     /// Durable publishes one worker may have awaiting their device flush at
     /// once. Offsets are still claimed serially, so this does not affect the
     /// order records land in -- it decides how many flushes group commit gets
     /// to coalesce. `1` restores the old behaviour of one flush at a time.
     pub pub_flush_concurrency: usize,
-    // Per-worker publish queue depth.
+    /// Per-worker publish queue depth.
     pub pub_queue_depth: usize,
-    // Shared in-flight publish byte budget across all publish workers (process-wide).
+    /// Shared in-flight publish byte budget across all publish workers (process-wide).
     pub pub_inflight_bytes: usize,
-    // Per-connection share of the in-flight publish byte budget. Bounds how much of the
-    // process-wide `pub_inflight_bytes` budget a single connection can occupy at once, so one
-    // connection can't starve every other connection's publishes under load.
+    /// Per-connection share of the in-flight publish byte budget. Bounds how much of the
+    /// process-wide `pub_inflight_bytes` budget a single connection can occupy at once, so one
+    /// connection can't starve every other connection's publishes under load.
     pub pub_conn_inflight_bytes: usize,
-    // If true, un-acked publishes wait (bounded) for ingress capacity instead of shedding.
-    // Off by default: fire-and-forget load should shed visibly under overload.
+    /// If true, un-acked publishes wait (bounded) for ingress capacity instead of shedding.
+    /// Off by default: fire-and-forget load should shed visibly under overload.
     pub pub_ingress_wait: bool,
-    // Number of core-pinned shard executors owning stream work (0 = disabled).
-    // When enabled, publish workers and subscription lane feeders run on the
-    // shard owning their stream, keeping the per-message path core-local.
+    /// Number of core-pinned shard executors owning stream work (0 = disabled).
+    /// When enabled, publish workers and subscription lane feeders run on the
+    /// shard owning their stream, keeping the per-message path core-local.
     pub core_shards: usize,
-    // Per-subscriber queue capacity in broker core.
+    /// Per-subscriber queue capacity in broker core.
     pub subscriber_queue_capacity: usize,
-    // Max concurrent subscriptions a single QUIC connection may hold. Prevents a single
-    // connection from unboundedly growing broker memory via subscriber queues/writer-lane
-    // registrations.
+    /// Max concurrent subscriptions a single QUIC connection may hold. Prevents a single
+    /// connection from unboundedly growing broker memory via subscriber queues/writer-lane
+    /// registrations.
     pub max_subscriptions_per_conn: usize,
-    // Subscriber queue policy for publish->fanout enqueue.
+    /// Subscriber queue policy for publish->fanout enqueue.
     #[serde(serialize_with = "queue_policy")]
     pub subscriber_queue_policy: SubQueuePolicy,
-    // Number of outbound subscriber writer lanes.
+    /// Number of outbound subscriber writer lanes.
     pub subscriber_writer_lanes: usize,
-    // Bounded queue depth per writer lane.
+    /// Bounded queue depth per writer lane.
     pub subscriber_lane_queue_depth: usize,
-    // Queue policy for lane ingress.
+    /// Queue policy for lane ingress.
     #[serde(serialize_with = "queue_policy")]
     pub subscriber_lane_queue_policy: SubQueuePolicy,
-    // Upper bound to prevent over-sharding lane counts that can regress p99/p999 under load.
+    /// Upper bound to prevent over-sharding lane counts that can regress p99/p999 under load.
     pub max_subscriber_writer_lanes: usize,
-    // Deterministic policy for assigning subscribers to writer lanes.
+    /// Deterministic policy for assigning subscribers to writer lanes.
     pub subscriber_lane_shard: SubscriberLaneShard,
-    // If true, route all subscribers on the same QUIC connection to one writer lane.
+    /// If true, route all subscribers on the same QUIC connection to one writer lane.
     pub subscriber_single_writer_per_conn: bool,
-    // Max queued items drained per lane flush.
+    /// Max queued items drained per lane flush.
     pub subscriber_flush_max_items: usize,
-    // Max time spent waiting for a lane flush fill.
+    /// Max time spent waiting for a lane flush fill.
     pub subscriber_flush_max_delay_us: u64,
-    // Upper bound for coalesced bytes per write call.
+    /// Upper bound for coalesced bytes per write call.
     pub subscriber_max_bytes_per_write: usize,
-    // Number of delivery streams to use per connection in hashed-pool mode.
+    /// Number of delivery streams to use per connection in hashed-pool mode.
     pub sub_streams_per_conn: usize,
-    // Strategy for mapping subscribers to streams.
+    /// Strategy for mapping subscribers to streams.
     pub sub_stream_mode: SubStreamMode,
     /// How long a publish to a `Quorum` stream waits for a majority before the
     /// broker says it cannot vouch for the write.
@@ -421,12 +422,6 @@ impl SubscriberLaneShard {
     }
 }
 
-/// The control-plane credential, from `FELIX_NODE_TOKEN_FILE` or
-/// `FELIX_NODE_TOKEN`; empty when neither is set.
-///
-/// The file form exists so a token can arrive as a mounted secret rather than
-/// an environment variable visible in a process listing. Whitespace is trimmed,
-/// and a blank value is treated as no credential rather than as an empty one.
 /// How many client-facing QUIC listeners to bind.
 ///
 /// Defaults to 1, which is exactly today's behaviour: one socket, one endpoint
@@ -460,6 +455,12 @@ fn quic_listeners_from_env(quic_bind: SocketAddr) -> Result<usize> {
     Ok(count)
 }
 
+/// The control-plane credential, from `FELIX_NODE_TOKEN_FILE` or
+/// `FELIX_NODE_TOKEN`; empty when neither is set.
+///
+/// The file form exists so a token can arrive as a mounted secret rather than
+/// an environment variable visible in a process listing. Whitespace is trimmed,
+/// and a blank value is treated as no credential rather than as an empty one.
 fn controlplane_token_from_env() -> std::io::Result<String> {
     match std::env::var("FELIX_NODE_TOKEN_FILE")
         .ok()

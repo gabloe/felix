@@ -965,15 +965,6 @@ where
     Ok(())
 }
 
-/// Build the QUIC server TLS configuration.
-///
-/// Current behavior:
-/// - Generates a fresh self-signed certificate for `localhost` at startup.
-/// - Configures Quinn/Rustls with that certificate.
-///
-/// This is convenient for local development but **not appropriate for production**.
-/// Production should load a real certificate chain and private key (and should avoid
-/// regenerating keys on each start).
 /// The initial lease: conservative, and invalid until the first heartbeat.
 ///
 /// The real duration comes from the control plane's expiry window on the first
@@ -983,6 +974,15 @@ fn peer_lease_state() -> felix_broker_service::lease::LeaseState {
     felix_broker_service::lease::LeaseState::new(Duration::from_secs(10))
 }
 
+/// Build the QUIC server TLS configuration.
+///
+/// Current behavior:
+/// - Generates a fresh self-signed certificate for `localhost` at startup.
+/// - Configures Quinn/Rustls with that certificate.
+///
+/// This is convenient for local development but **not appropriate for production**.
+/// Production should load a real certificate chain and private key (and should avoid
+/// regenerating keys on each start).
 fn build_server_config() -> Result<ServerConfig> {
     // Dev-only self-signed TLS config for QUIC endpoints.
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;

@@ -335,6 +335,23 @@ struct Cache {
     consistency: Option<String>,
 }
 
+/// Polls the control plane forever, applying changes as they arrive.
+///
+/// Kept as the plain entry point because it is part of this crate's public API
+/// and has consumers outside the workspace — `demos/rbac-live` is a standalone
+/// crate, so a workspace-scoped lint cannot see that it is used. `dead_code`
+/// reports it unused and `unreachable_pub` wants it demoted; both are wrong
+/// here, and demoting it breaks `task demo:check`.
+#[allow(dead_code, unreachable_pub)]
+pub async fn start_sync(
+    broker: Arc<Broker>,
+    base_url: String,
+    interval: Duration,
+    credential: Option<NodeCredential>,
+) -> Result<()> {
+    start_sync_with_signal(broker, base_url, interval, None, credential).await
+}
+
 /// Starts the control-plane sync loop as a background task.
 ///
 /// This function runs forever, periodically fetching control-plane snapshots and change feeds,
@@ -355,23 +372,7 @@ struct Cache {
 /// invites an orchestrator to route traffic at an instance whose durable
 /// streams are, as far as any client can tell, missing. Pass `None` to start
 /// syncing without gating anything on it.
-/// Polls the control plane forever, applying changes as they arrive.
 ///
-/// Kept as the plain entry point because it is part of this crate's public API
-/// and has consumers outside the workspace — `demos/rbac-live` is a standalone
-/// crate, so a workspace-scoped lint cannot see that it is used. `dead_code`
-/// reports it unused and `unreachable_pub` wants it demoted; both are wrong
-/// here, and demoting it breaks `task demo:check`.
-#[allow(dead_code, unreachable_pub)]
-pub async fn start_sync(
-    broker: Arc<Broker>,
-    base_url: String,
-    interval: Duration,
-    credential: Option<NodeCredential>,
-) -> Result<()> {
-    start_sync_with_signal(broker, base_url, interval, None, credential).await
-}
-
 /// `credential` is what the feeds are read with. They require
 /// `node.view:cluster:*`, so without one every poll is refused; the holder is
 /// read on each iteration, so a refresh is picked up without a restart.

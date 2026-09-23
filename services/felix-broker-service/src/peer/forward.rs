@@ -20,7 +20,7 @@
 //! the `request_id` and is the only layer that could deduplicate. A client that
 //! wants a retry can reissue and know it did.
 //!
-//! Retries are bounded by [`MAX_ATTEMPTS`] so a shard being reassigned converges
+//! Retries are bounded by `MAX_ATTEMPTS` so a shard being reassigned converges
 //! or fails explicitly, rather than chasing `NotLeader` around a cluster.
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
