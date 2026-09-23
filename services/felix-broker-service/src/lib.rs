@@ -1,10 +1,11 @@
 //! The broker process: everything around [`felix_broker::Broker`] that makes
 //! it a node in a cluster.
 //!
-//! **The entry point is `main.rs`**, next door — `run_with_shutdown` there
-//! starts the listeners and the background tasks and owns the shutdown order.
-//! This crate is the subsystems it wires together, exposed as a library so the
-//! integration tests in `tests/` can drive them without a process.
+//! **The entry point is [`node::run_with_shutdown`]**: it starts the listeners
+//! and the background tasks and owns the shutdown order. `main.rs` is argument
+//! handling around it. The rest of the crate is the subsystems it wires
+//! together, exposed as a library so the integration tests in `tests/` can
+//! drive them without a process.
 //!
 //! `felix-broker` holds the semantics — streams, caches, queues, the publish
 //! path. Nothing in that crate knows about sockets, the control plane, or
@@ -80,6 +81,8 @@ pub mod replication;
 // --- Process-wide -------------------------------------------------------
 pub mod config;
 pub mod durable_config;
+pub mod node;
+pub mod observability;
 pub mod timings;
 
 /// A worked example of the authorization rules, used by `demos/rbac-live`.
