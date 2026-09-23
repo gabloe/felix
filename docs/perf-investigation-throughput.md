@@ -73,7 +73,7 @@ tokio runtime — worth remembering when reading CPU numbers.
 ## The measurement flaw (finding 1)
 
 `felix-transport` defaults `send_window` to 64 MiB
-(`crates/protocol/felix-transport/src/config.rs:73`). Any run whose total payload volume is
+(`crates/protocol/felix-transport/src/config.rs:14`). Any run whose total payload volume is
 below that is absorbed by buffers before backpressure appears, and
 `latency-demo` stops its clock when the last event arrives.
 

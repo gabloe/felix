@@ -41,6 +41,8 @@ pub struct QuicServer {
 }
 
 impl QuicServer {
+    /// Bind a server endpoint to `addr`, with `transport`'s tuning applied to
+    /// `server_config`.
     pub fn bind(
         addr: SocketAddr,
         mut server_config: ServerConfig,
@@ -84,8 +86,8 @@ impl QuicServer {
         })
     }
 
+    /// Wait for the next client to connect and finish its handshake.
     pub async fn accept(&self) -> Result<QuicConnection> {
-        // Block until a client connects and finishes the handshake.
         let incoming = self
             .endpoint
             .accept()
@@ -102,6 +104,8 @@ impl QuicServer {
         Ok(QuicConnection::new(connection, self.io_handle.clone()))
     }
 
+    /// The address the endpoint is bound to, including the port the OS chose
+    /// for a bind to port 0.
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.endpoint
             .local_addr()

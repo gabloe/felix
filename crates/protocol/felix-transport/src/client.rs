@@ -40,6 +40,8 @@ pub struct QuicClient {
 }
 
 impl QuicClient {
+    /// Bind a client endpoint to `addr`, with `transport`'s tuning applied to
+    /// `client_config`.
     pub fn bind(
         addr: SocketAddr,
         mut client_config: ClientConfig,
@@ -79,8 +81,9 @@ impl QuicClient {
         })
     }
 
+    /// Connect to `addr` and complete the handshake, verifying the server as
+    /// `server_name`.
     pub async fn connect(&self, addr: SocketAddr, server_name: &str) -> Result<QuicConnection> {
-        // Initiate and await a QUIC handshake.
         let connecting = match &self.loopback_config {
             Some(config) if addr.ip().is_loopback() => self
                 .endpoint

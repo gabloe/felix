@@ -7,35 +7,6 @@ use std::sync::OnceLock;
 use anyhow::{Context, Result};
 use quinn::{Connection, RecvStream, SendStream};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-/// Stable connection identifier used for tracing/logging.
-///
-/// ```
-/// use felix_transport::ConnectionId;
-///
-/// let id = ConnectionId(7);
-/// assert_eq!(id.0, 7);
-/// ```
-pub struct ConnectionId(pub u64);
-
-#[derive(Debug, Clone)]
-/// Metadata about a live QUIC connection.
-///
-/// ```
-/// use felix_transport::{ConnectionId, ConnectionInfo};
-/// use std::net::SocketAddr;
-///
-/// let info = ConnectionInfo {
-///     id: ConnectionId(42),
-///     peer_addr: "127.0.0.1:4433".parse::<SocketAddr>().expect("addr"),
-/// };
-/// assert_eq!(info.id.0, 42);
-/// ```
-pub struct ConnectionInfo {
-    pub id: ConnectionId,
-    pub peer_addr: SocketAddr,
-}
-
 /// Active QUIC connection wrapper with convenience helpers.
 ///
 /// ```no_run
@@ -70,6 +41,7 @@ impl QuicConnection {
         }
     }
 
+    /// The id and peer address this connection is logged under.
     pub fn info(&self) -> &ConnectionInfo {
         &self.info
     }
@@ -98,16 +70,11 @@ impl QuicConnection {
         }
     }
 
+    /// quinn's counters for this connection.
     pub fn stats(&self) -> quinn::ConnectionStats {
         self.inner.stats()
     }
 
-    /// The ALPN protocol the handshake settled on, if any.
-    ///
-    /// `None` means the peer offered no ALPN, which TLS treats as success. An
-    /// endpoint that uses ALPN to separate roles must therefore check this
-    /// rather than assume the handshake did it — see the broker's internal
-    /// listener.
     /// The certificate chain the peer presented, leaf first, when the
     /// endpoint's TLS config asked for one.
     pub fn peer_certificates(&self) -> Option<Vec<rustls::pki_types::CertificateDer<'static>>> {
@@ -118,6 +85,12 @@ impl QuicConnection {
             .map(|certs| *certs)
     }
 
+    /// The ALPN protocol the handshake settled on, if any.
+    ///
+    /// `None` means the peer offered no ALPN, which TLS treats as success. An
+    /// endpoint that uses ALPN to separate roles must therefore check this
+    /// rather than assume the handshake did it — see the broker's internal
+    /// listener.
     pub fn negotiated_protocol(&self) -> Option<Vec<u8>> {
         self.inner
             .handshake_data()?
@@ -216,6 +189,35 @@ impl QuicConnection {
         self.inner.accept_uni().await.context("accept uni stream")
     }
 }
+
+/// Metadata about a live QUIC connection.
+///
+/// ```
+/// use felix_transport::{ConnectionId, ConnectionInfo};
+/// use std::net::SocketAddr;
+///
+/// let info = ConnectionInfo {
+///     id: ConnectionId(42),
+///     peer_addr: "127.0.0.1:4433".parse::<SocketAddr>().expect("addr"),
+/// };
+/// assert_eq!(info.id.0, 42);
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConnectionInfo {
+    pub id: ConnectionId,
+    pub peer_addr: SocketAddr,
+}
+
+/// Stable connection identifier used for tracing/logging.
+///
+/// ```
+/// use felix_transport::ConnectionId;
+///
+/// let id = ConnectionId(7);
+/// assert_eq!(id.0, 7);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub u64);
 
 #[cfg(test)]
 mod tests;

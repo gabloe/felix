@@ -12,6 +12,17 @@
 
 use std::sync::{Arc, OnceLock};
 
+/// How many server endpoints this process has said it will bind.
+///
+/// One unless a process declares otherwise, which is what a single-listener
+/// broker and every test binding one server are.
+static PLANNED_SERVER_ENDPOINTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(1);
+
+/// Built once, on the first endpoint. Module scope so [`plan_server_endpoints`]
+/// can tell whether it is already too late to size it.
+static IO_RUNTIMES: OnceLock<Vec<tokio::runtime::Runtime>> = OnceLock::new();
+
 /// Whether an endpoint accepts connections or makes them.
 ///
 /// Assignment is not round-robin across both: a server endpoint multiplexes
@@ -28,26 +39,32 @@ pub(crate) enum EndpointRole {
     Client,
 }
 
-/// Which runtime in a pool of `pool_len` an endpoint gets. The last one is
-/// reserved for clients.
-fn io_runtime_index(role: EndpointRole, sequence: usize, pool_len: usize) -> usize {
-    if pool_len <= 1 {
-        return 0;
-    }
-    match role {
-        // The final runtime is permanently reserved for clients. Server
-        // creation history must never let a server drift onto it.
-        EndpointRole::Server => sequence % (pool_len - 1),
-        EndpointRole::Client => pool_len - 1,
-    }
+/// `quinn::Runtime` that runs driver tasks on the dedicated I/O runtime.
+/// Timers and the UDP socket are created in that runtime's context so they
+/// register with its reactor; application-facing stream futures are unaffected.
+#[derive(Debug)]
+struct IoRuntime {
+    handle: tokio::runtime::Handle,
 }
 
-/// How many server endpoints this process has said it will bind.
-///
-/// One unless a process declares otherwise, which is what a single-listener
-/// broker and every test binding one server are.
-static PLANNED_SERVER_ENDPOINTS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(1);
+impl quinn::Runtime for IoRuntime {
+    fn new_timer(&self, i: std::time::Instant) -> std::pin::Pin<Box<dyn quinn::AsyncTimer>> {
+        let _guard = self.handle.enter();
+        quinn::TokioRuntime.new_timer(i)
+    }
+
+    fn spawn(&self, future: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>) {
+        self.handle.spawn(future);
+    }
+
+    fn wrap_udp_socket(
+        &self,
+        t: std::net::UdpSocket,
+    ) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
+        let _guard = self.handle.enter();
+        quinn::TokioRuntime.wrap_udp_socket(t)
+    }
+}
 
 /// The I/O runtime pool a process binding `server_endpoints` needs.
 ///
@@ -86,9 +103,35 @@ pub fn plan_server_endpoints(count: usize) {
     }
 }
 
-/// Built once, on the first endpoint. Module scope so [`plan_server_endpoints`]
-/// can tell whether it is already too late to size it.
-static IO_RUNTIMES: OnceLock<Vec<tokio::runtime::Runtime>> = OnceLock::new();
+/// The quinn runtime new endpoints should use, honouring the isolation switch.
+/// Also returns the chosen handle so the endpoint can offer it to pump tasks.
+pub(crate) fn quinn_runtime(
+    role: EndpointRole,
+) -> (Arc<dyn quinn::Runtime>, Option<tokio::runtime::Handle>) {
+    match io_runtime_handle(role) {
+        Some(handle) => (
+            Arc::new(IoRuntime {
+                handle: handle.clone(),
+            }),
+            Some(handle),
+        ),
+        None => (Arc::new(quinn::TokioRuntime), None),
+    }
+}
+
+/// Which runtime in a pool of `pool_len` an endpoint gets. The last one is
+/// reserved for clients.
+fn io_runtime_index(role: EndpointRole, sequence: usize, pool_len: usize) -> usize {
+    if pool_len <= 1 {
+        return 0;
+    }
+    match role {
+        // The final runtime is permanently reserved for clients. Server
+        // creation history must never let a server drift onto it.
+        EndpointRole::Server => sequence % (pool_len - 1),
+        EndpointRole::Client => pool_len - 1,
+    }
+}
 
 fn io_runtime_pool_built() -> bool {
     IO_RUNTIMES.get().is_some()
@@ -193,49 +236,6 @@ fn io_runtime_handle(role: EndpointRole) -> Option<tokio::runtime::Handle> {
         "assigned QUIC endpoint to I/O runtime"
     );
     Some(pool[index].handle().clone())
-}
-
-/// `quinn::Runtime` that runs driver tasks on the dedicated I/O runtime.
-/// Timers and the UDP socket are created in that runtime's context so they
-/// register with its reactor; application-facing stream futures are unaffected.
-#[derive(Debug)]
-struct IoRuntime {
-    handle: tokio::runtime::Handle,
-}
-
-impl quinn::Runtime for IoRuntime {
-    fn new_timer(&self, i: std::time::Instant) -> std::pin::Pin<Box<dyn quinn::AsyncTimer>> {
-        let _guard = self.handle.enter();
-        quinn::TokioRuntime.new_timer(i)
-    }
-
-    fn spawn(&self, future: std::pin::Pin<Box<dyn Future<Output = ()> + Send>>) {
-        self.handle.spawn(future);
-    }
-
-    fn wrap_udp_socket(
-        &self,
-        t: std::net::UdpSocket,
-    ) -> std::io::Result<Arc<dyn quinn::AsyncUdpSocket>> {
-        let _guard = self.handle.enter();
-        quinn::TokioRuntime.wrap_udp_socket(t)
-    }
-}
-
-/// The quinn runtime new endpoints should use, honouring the isolation switch.
-/// Also returns the chosen handle so the endpoint can offer it to pump tasks.
-pub(crate) fn quinn_runtime(
-    role: EndpointRole,
-) -> (Arc<dyn quinn::Runtime>, Option<tokio::runtime::Handle>) {
-    match io_runtime_handle(role) {
-        Some(handle) => (
-            Arc::new(IoRuntime {
-                handle: handle.clone(),
-            }),
-            Some(handle),
-        ),
-        None => (Arc::new(quinn::TokioRuntime), None),
-    }
 }
 
 #[cfg(test)]
