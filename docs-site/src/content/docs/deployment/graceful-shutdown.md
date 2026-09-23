@@ -92,10 +92,12 @@ There are two ways to cover that gap, and you want one of them, not both stacked
 
 - A **`preStop` hook** that sleeps before SIGTERM is delivered. This is the standard
   Kubernetes pattern and it works for the broker and the control plane alike.
-- **`FELIX_SHUTDOWN_PREDRAIN_MS`** on the control plane, which does the same waiting
-  after SIGTERM, with readiness already false. Prefer this outside Kubernetes, where
-  nothing removes an instance from rotation except its readiness probe failing and
-  there is no preStop hook to configure.
+- **`FELIX_SHUTDOWN_PREDRAIN_MS`**, which does the same waiting after SIGTERM, with
+  readiness already false and the listener still admitting. Prefer this outside
+  Kubernetes, where nothing removes an instance from rotation except its readiness
+  probe failing and there is no preStop hook to configure. The control plane
+  defaults it to 5 s; the broker defaults it to 0, because the chart covers brokers
+  with a preStop sleep instead.
 
 The example below uses `preStop`, so it turns the in-process hold-off off:
 
@@ -145,9 +147,6 @@ Tracked under [#139](https://github.com/gabloe/felix/issues/139):
   contract; they end when their connection task ends.
 - The "an acknowledged publish is never lost solely because SIGTERM arrived"
   guarantee is not yet verified by a test.
-- `FELIX_SHUTDOWN_PREDRAIN_MS` is control-plane only. The broker still closes its
-  accept loop immediately after the readiness flip and depends on a `preStop` hook
-  to cover propagation.
 - Broker coverage is at the accept-loop and readiness level
   (`services/broker/tests/graceful_shutdown.rs`). There is no process-level test
   that spawns the real broker binary, sends it SIGTERM under active

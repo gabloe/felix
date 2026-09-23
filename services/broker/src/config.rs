@@ -191,6 +191,9 @@ pub struct BrokerConfig {
     // Total budget for draining in-flight work after SIGTERM/SIGINT before
     // remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,
+    // How long to keep accepting connections after readiness goes false, so a
+    // load balancer polling `/ready` has time to stop routing here.
+    pub shutdown_predrain_ms: u64,
     // Cache connection flow-control window.
     pub cache_conn_recv_window: u64,
     // Cache stream flow-control window.
@@ -342,6 +345,7 @@ impl Default for BrokerConfig {
             disable_timings: DEFAULT_DISABLE_TIMINGS,
             control_stream_drain_timeout_ms: DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS,
             shutdown_drain_timeout_ms: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS,
+            shutdown_predrain_ms: DEFAULT_SHUTDOWN_PREDRAIN_MS,
             cache_conn_recv_window: DEFAULT_CACHE_CONN_RECV_WINDOW,
             cache_stream_recv_window: DEFAULT_CACHE_STREAM_RECV_WINDOW,
             cache_send_window: DEFAULT_CACHE_SEND_WINDOW,
@@ -614,6 +618,11 @@ const DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS: u64 = 50;
 // exit before being killed. Deployments that raise the grace period should raise
 // this to match.
 const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
+// Off by default, unlike the control plane's. Kubernetes removes a terminating
+// pod from its endpoints without consulting readiness, and the chart's preStop
+// sleep covers that; a hold-off here would stack on top of it. Set it for a load
+// balancer that learns about draining only by polling `/ready`.
+const DEFAULT_SHUTDOWN_PREDRAIN_MS: u64 = 0;
 const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 // Enough to keep a device flush busy with company without letting a burst put
 // unbounded concurrent callers into shared broker state. `sync_batch_appends`
@@ -656,6 +665,7 @@ struct BrokerConfigOverride {
     disable_timings: Option<bool>,
     control_stream_drain_timeout_ms: Option<u64>,
     shutdown_drain_timeout_ms: Option<u64>,
+    shutdown_predrain_ms: Option<u64>,
     cache_conn_recv_window: Option<u64>,
     cache_stream_recv_window: Option<u64>,
     cache_send_window: Option<u64>,
@@ -804,6 +814,11 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS);
+        // Zero is meaningful here: no hold-off.
+        let shutdown_predrain_ms = std::env::var("FELIX_SHUTDOWN_PREDRAIN_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SHUTDOWN_PREDRAIN_MS);
         let cache_conn_recv_window = std::env::var("FELIX_CACHE_CONN_RECV_WINDOW")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
@@ -973,6 +988,7 @@ impl BrokerConfig {
             disable_timings,
             control_stream_drain_timeout_ms,
             shutdown_drain_timeout_ms,
+            shutdown_predrain_ms,
             cache_conn_recv_window,
             cache_stream_recv_window,
             cache_send_window,
@@ -1223,6 +1239,9 @@ impl BrokerConfig {
             && value > 0
         {
             config.shutdown_drain_timeout_ms = value;
+        }
+        if let Some(value) = override_cfg.shutdown_predrain_ms {
+            config.shutdown_predrain_ms = value;
         }
         if let Some(value) = override_cfg.cache_conn_recv_window
             && value > 0
