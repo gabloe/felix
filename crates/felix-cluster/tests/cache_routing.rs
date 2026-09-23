@@ -9,8 +9,11 @@
 //! prove the routing decision; these prove the thing a user would notice.
 //!
 //! Run with `cargo test -p felix-cluster --test cache_routing`.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
 
+use felix_client::{ShardedCacheWatch, ShardedCacheWatchItem};
 use felix_cluster::{CacheSpec, Cluster, ClusterConfig, StreamSpec};
 use serial_test::serial;
 
@@ -237,4 +240,165 @@ async fn a_prefix_watch_on_a_multi_shard_cache_must_name_its_shard() {
         )
         .await
         .expect("a prefix watch naming its shard, on that shard's owner, is served");
+}
+
+async fn cluster_client(cluster: &Cluster) -> Arc<felix_client::ClusterClient> {
+    Arc::new(
+        felix_cluster::client::connect_cluster(
+            &cluster.broker_addrs(),
+            &cluster.tenant_id,
+            &cluster.client_token,
+        )
+        .await
+        .expect("connect a cluster client"),
+    )
+}
+
+async fn next_item(watch: &mut ShardedCacheWatch) -> ShardedCacheWatchItem {
+    tokio::time::timeout(Duration::from_secs(20), watch.recv())
+        .await
+        .expect("the sharded watch went quiet")
+        .expect("the sharded watch ended")
+}
+
+/// One prefix watch through `watch_cache_sharded` sees a write to every shard
+/// the prefix spans, each shard's watch served by that shard's own owner, and
+/// nothing outside the prefix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn a_sharded_prefix_watch_sees_writes_to_every_shard() {
+    let cluster = Cluster::start(with_cache()).await.expect("start cluster");
+    let owners = cluster
+        .cache_shard_owners(CACHE)
+        .await
+        .expect("cache shard owners");
+    assert!(
+        owners.values().collect::<HashSet<_>>().len() > 1,
+        "every shard has one owner, so no redirect would be followed: {owners:?}",
+    );
+
+    let client = cluster_client(&cluster).await;
+    let mut watch = client
+        .watch_cache_sharded(&cluster.tenant_id, &cluster.namespace, CACHE, "user:", None)
+        .await
+        .expect("sharded prefix watch");
+    assert_eq!(watch.shards(), SHARDS);
+    assert_eq!(watch.retained_count(), None);
+
+    let via = cluster.node_ids()[0].clone();
+    cluster
+        .cache_put_via(&via, CACHE, "other:ignored", b"x")
+        .await
+        .expect("put outside the prefix");
+    let keys: Vec<String> = (0..40).map(|n| format!("user:{n}")).collect();
+    for key in &keys {
+        cluster
+            .cache_put_via(&via, CACHE, key, key.as_bytes())
+            .await
+            .expect("cache put");
+    }
+
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    while seen.len() < keys.len() {
+        match next_item(&mut watch).await {
+            ShardedCacheWatchItem::Change { shard, change } => {
+                assert!(change.key.starts_with("user:"), "{} leaked in", change.key);
+                assert_eq!(change.value.as_deref(), Some(change.key.as_bytes()));
+                seen.insert(change.key, shard);
+            }
+            other => panic!("unexpected item {other:?}"),
+        }
+    }
+    let shards_seen: HashSet<u32> = seen.values().copied().collect();
+    assert_eq!(
+        shards_seen.len(),
+        SHARDS as usize,
+        "40 keys should reach every shard, got {shards_seen:?}",
+    );
+
+    // Every shard has moved past what it delivered, so resuming from here
+    // replays nothing already seen.
+    let resume = watch.resume_offsets();
+    assert_eq!(resume.len(), SHARDS as usize);
+    drop(watch);
+    cluster
+        .cache_put_via(&via, CACHE, "user:after", b"user:after")
+        .await
+        .expect("put while not watching");
+    let mut resumed = client
+        .watch_cache_sharded(
+            &cluster.tenant_id,
+            &cluster.namespace,
+            CACHE,
+            "user:",
+            Some(resume),
+        )
+        .await
+        .expect("resume the sharded watch");
+    match next_item(&mut resumed).await {
+        ShardedCacheWatchItem::Change { change, .. } => assert_eq!(change.key, "user:after"),
+        other => panic!("expected the write made while away, got {other:?}"),
+    }
+}
+
+/// Retained delivery across shards: every shard's current values arrive, then
+/// one `StateComplete` once all of them have, then live changes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn a_sharded_retained_watch_marks_when_every_shard_holds_its_state() {
+    let cluster = Cluster::start(with_cache()).await.expect("start cluster");
+    let via = cluster.node_ids()[0].clone();
+    let keys: Vec<String> = (0..20).map(|n| format!("user:{n}")).collect();
+    for key in &keys {
+        cluster
+            .cache_put_via(&via, CACHE, key, key.as_bytes())
+            .await
+            .expect("cache put");
+    }
+
+    let client = cluster_client(&cluster).await;
+    let mut watch = client
+        .watch_cache_sharded_retained(&cluster.tenant_id, &cluster.namespace, CACHE, "user:")
+        .await
+        .expect("sharded retained watch");
+    assert_eq!(watch.retained_count(), Some(keys.len() as u64));
+
+    let mut retained: HashSet<String> = HashSet::new();
+    loop {
+        match next_item(&mut watch).await {
+            ShardedCacheWatchItem::Change { change, .. } => {
+                retained.insert(change.key);
+            }
+            ShardedCacheWatchItem::StateComplete => break,
+            other => panic!("unexpected item {other:?}"),
+        }
+    }
+    assert_eq!(retained, keys.iter().cloned().collect::<HashSet<_>>());
+
+    cluster
+        .cache_put_via(&via, CACHE, "user:live", b"live")
+        .await
+        .expect("live put");
+    match next_item(&mut watch).await {
+        ShardedCacheWatchItem::Change { change, .. } => assert_eq!(change.key, "user:live"),
+        other => panic!("expected the live change, got {other:?}"),
+    }
+}
+
+/// An empty prefix is a definite zero on every shard, so the state is complete
+/// before anything arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn a_sharded_retained_watch_on_an_empty_prefix_is_complete_at_once() {
+    let cluster = Cluster::start(with_cache()).await.expect("start cluster");
+    let client = cluster_client(&cluster).await;
+    let mut watch = client
+        .watch_cache_sharded_retained(&cluster.tenant_id, &cluster.namespace, CACHE, "nobody:")
+        .await
+        .expect("sharded retained watch");
+    assert_eq!(watch.retained_count(), Some(0));
+    assert_eq!(
+        next_item(&mut watch).await,
+        ShardedCacheWatchItem::StateComplete
+    );
 }
