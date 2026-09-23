@@ -2,7 +2,7 @@
 // init_observability and serve_metrics tests removed per request.
 
 use super::*;
-use crate::test_support::http_test::{
+use crate::test_support::{
     build_test_client, get_with_context, spawn_axum_with_shutdown, wait_for_listen,
 };
 use serial_test::serial;

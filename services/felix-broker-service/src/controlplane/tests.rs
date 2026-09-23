@@ -1,8 +1,6 @@
 // Tests cover error tolerance (skipping on fetch errors), deletion propagation, and cursor advancement.
 use super::*;
-use crate::test_support::http_test::{
-    build_test_client, spawn_axum_with_shutdown, wait_for_listen,
-};
+use crate::test_support::{build_test_client, spawn_axum_with_shutdown, wait_for_listen};
 use axum::{Json, Router, http::StatusCode, routing::get};
 use felix_storage::EphemeralCache;
 use std::net::SocketAddr;
