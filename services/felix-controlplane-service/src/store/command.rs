@@ -10,7 +10,7 @@
 //! proposed: heartbeat and expiry carry their timestamps, bootstrap carries
 //! its candidate signing keys. Applying a command reads nothing but the
 //! command and prior state, which is the property the determinism harness in
-//! `state_machine_tests.rs` enforces.
+//! `state_machine/tests.rs` enforces.
 //!
 //! That leaves the question of *whose* clock a carried timestamp is. For the
 //! ones that get compared against a reading taken elsewhere, the answer has

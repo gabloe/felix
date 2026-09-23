@@ -237,12 +237,6 @@ impl PostgresStore {
         Ok(Self { pool, config })
     }
 
-    /// The newest migration this build carries.
-    ///
-    /// A database *ahead* of it is fine — that is the first half of a rolling
-    /// deploy, and the old code keeps working against the new schema because
-    /// migrations are additive. Behind it is not: this build would use a column
-    /// that is not there yet.
     /// Build a [`RefreshToken`] from a row, with the two flags supplied.
     ///
     /// The flags are passed rather than read because the `UPDATE ... RETURNING`
@@ -269,6 +263,12 @@ impl PostgresStore {
         })
     }
 
+    /// The newest migration this build carries.
+    ///
+    /// A database *ahead* of it is fine — that is the first half of a rolling
+    /// deploy, and the old code keeps working against the new schema because
+    /// migrations are additive. Behind it is not: this build would use a column
+    /// that is not there yet.
     fn newest_migration() -> i64 {
         sqlx::migrate!("./migrations")
             .iter()

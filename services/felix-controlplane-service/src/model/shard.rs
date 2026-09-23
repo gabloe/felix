@@ -249,9 +249,6 @@ pub enum ShardAssignmentChangeOp {
     Unassigned,
 }
 
-#[cfg(test)]
-mod tests;
-
 /// What a shard's leader last reported about its replicas.
 ///
 /// Promotion is gated on this. It lives in the store rather than in one
@@ -278,3 +275,6 @@ pub struct ReplicaReport {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drained: bool,
 }
+
+#[cfg(test)]
+mod tests;
