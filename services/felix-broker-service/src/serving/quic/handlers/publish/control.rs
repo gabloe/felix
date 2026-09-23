@@ -20,10 +20,11 @@ use crate::serving::quic::handlers::publish::ack::{
     handle_ack_enqueue_result, send_outgoing_best_effort, send_outgoing_critical,
 };
 use crate::serving::quic::handlers::publish::ingress::{PublishTarget, enqueue_publish};
-use crate::serving::quic::handlers::publish::{
-    PublishContext, PublishJob, PublishRoute, StreamHandleCache, internal_ack, publish_target,
-    resolve_route,
+use crate::serving::quic::handlers::publish::route::{
+    PublishRoute, internal_ack, local_shard_key, needs_quorum, publish_target, resolve_route,
+    resolve_shard,
 };
+use crate::serving::quic::handlers::publish::{PublishContext, PublishJob, StreamHandleCache};
 use crate::serving::quic::telemetry::{
     log_decode_error, t_consume_instant, t_counter, t_histogram, t_now_if,
 };
@@ -315,38 +316,6 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
     .await
 }
 
-/// Which shard a record with this routing key belongs to.
-///
-/// The stream's width comes from the router's own snapshot rather than the
-/// stream catalog: it is an `ArcSwap` read with no lock, on a path that resolves
-/// a shard for every publish, and the router is already the thing that decides
-/// how the cluster is divided.
-///
-/// A broker with no cluster behind it has one shard, so every key lands on 0 —
-/// which is also what a stream placed with one shard does, and is why adding a
-/// key to a single-shard stream changes nothing.
-pub(crate) fn resolve_shard(
-    publish_ctx: &PublishContext,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    key: Option<&[u8]>,
-) -> u32 {
-    let shards = publish_ctx
-        .ingress
-        .as_ref()
-        .map(|ingress| {
-            ingress.shards_for(
-                crate::shards::ShardKind::Stream,
-                tenant_id,
-                namespace,
-                stream,
-            )
-        })
-        .unwrap_or(1);
-    crate::shards::routing::shard_for(shards, key)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_publish_message(
     broker: &Broker,
@@ -512,7 +481,7 @@ pub(crate) async fn handle_publish_message(
     // nowhere. The client is told the record is on a majority the moment it is
     // queued. `ack_on_commit` is off by default, so that was every direct
     // `Quorum` publish.
-    let quorum = super::needs_quorum(&target);
+    let quorum = needs_quorum(&target);
     let (response_tx, response_rx) =
         if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding || quorum) {
             let (response_tx, response_rx) = oneshot::channel();
@@ -914,7 +883,7 @@ pub(crate) async fn handle_publish_batch_message(
         Some((producer_id, sequence)) => match route {
             PublishRoute::Local(handle) => Some(PublishTarget::Idempotent {
                 handle,
-                shard: super::local_shard_key(publish_ctx, &tenant_id, &namespace, &stream, shard),
+                shard: local_shard_key(publish_ctx, &tenant_id, &namespace, &stream, shard),
                 producer_id,
                 sequence,
             }),
@@ -1002,7 +971,7 @@ pub(crate) async fn handle_publish_batch_message(
         }
         _ => None,
     };
-    let quorum = super::needs_quorum(&target);
+    let quorum = needs_quorum(&target);
     let Some(target) = target else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {

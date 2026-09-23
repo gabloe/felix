@@ -1,13 +1,26 @@
 // Unit tests for the publish path: admission, sharding, enqueue policy, depth
 // accounting, ack handling, and the control/uni handler entry points.
 
+use super::ingress::{enqueue_publish, publish_worker_index};
+use super::route::{PublishRoute, publish_target, resolve_route};
+use super::stream_cache::{push_decimal, push_stream_cache_key};
 use super::*;
+use crate::serving::auth::AuthContext;
+use crate::serving::forward::ForwardTarget;
+use crate::serving::quic::errors::AckEnqueueError;
+use crate::serving::quic::{
+    ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
+};
 use bytes::Bytes;
 use felix_authz::PermissionMatcher;
+use felix_broker::Broker;
 use felix_storage::EphemeralCache;
+use felix_wire::{Frame, Message};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, Semaphore};
 use tokio::sync::{mpsc, watch};
 
 // These publish-path tests don't exercise subscription delivery; this just gives
@@ -3079,7 +3092,7 @@ mod ownership_gate {
 fn push_decimal_matches_formatting() {
     for value in [0u32, 1, 7, 9, 10, 99, 100, 4095, 65_535, u32::MAX] {
         let mut buf = String::new();
-        super::push_decimal(&mut buf, value);
+        push_decimal(&mut buf, value);
         assert_eq!(buf, value.to_string(), "encoding {value}");
     }
 }
@@ -3098,7 +3111,7 @@ fn push_decimal_matches_formatting() {
 fn no_two_distinct_tuples_share_a_cache_key() {
     fn key(tenant: &str, namespace: &str, stream: &str, shard: u32) -> String {
         let mut buf = String::new();
-        super::push_stream_cache_key(&mut buf, tenant, namespace, stream, shard);
+        push_stream_cache_key(&mut buf, tenant, namespace, stream, shard);
         buf
     }
 
@@ -3143,7 +3156,7 @@ fn cache_keys_are_injective_over_an_alphabet_containing_nul() {
             for stream in parts {
                 for shard in [0u32, 1, 10] {
                     let mut buf = String::new();
-                    super::push_stream_cache_key(&mut buf, tenant, namespace, stream, shard);
+                    push_stream_cache_key(&mut buf, tenant, namespace, stream, shard);
                     let tuple = (tenant, namespace, stream, shard);
                     if let Some(previous) = seen.insert(buf.clone(), tuple) {
                         panic!("{previous:?} and {tuple:?} share the key {buf:?}");

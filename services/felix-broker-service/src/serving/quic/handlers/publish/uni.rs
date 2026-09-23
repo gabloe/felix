@@ -9,11 +9,11 @@ use felix_wire::Frame;
 use std::sync::atomic::Ordering;
 
 use crate::serving::auth::AuthContext;
-use crate::serving::quic::handlers::publish::control::resolve_shard;
 use crate::serving::quic::handlers::publish::ingress::enqueue_publish;
-use crate::serving::quic::handlers::publish::{
-    PublishContext, PublishJob, StreamHandleCache, UNKEYED_SHARD, publish_target, resolve_route,
+use crate::serving::quic::handlers::publish::route::{
+    UNKEYED_SHARD, publish_target, resolve_route, resolve_shard,
 };
+use crate::serving::quic::handlers::publish::{PublishContext, PublishJob, StreamHandleCache};
 use crate::serving::quic::telemetry::{log_decode_error, t_counter};
 
 pub(crate) async fn handle_binary_publish_batch_uni(

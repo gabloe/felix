@@ -24,179 +24,55 @@
 //! - Outbound ack queue maintains a high-water throttle signal (`ack_throttle_tx`) and records
 //!   enqueue failures/timeouts to decide when to cooperatively cancel the control stream.
 //! - Depth counters are tracked both per-stream and globally to support observability and tuning.
-
-// Submodules:
-// - `admission`: byte-budget admission control and the subscription cap.
-// - `ingress`: worker sharding, bounded enqueue, in-flight depth accounting.
-// - `ack`: ack envelopes, waiter protocol, and the ack timeout window.
-// - `control`: acked publish handlers on the bi-directional control stream.
-// - `uni`: fire-and-forget publish handlers on uni-directional streams.
-//
-// The connection and stream layers address these through the re-exports below,
-// so `handlers::publish::<name>` stays the stable path for the whole transport.
+//!
+//! Submodules:
+//! - `admission`: byte-budget admission control and the subscription cap.
+//! - `ingress`: worker sharding, bounded enqueue, in-flight depth accounting.
+//! - `ack`: ack envelopes, waiter protocol, and the ack timeout window.
+//! - `route`: whether a publish is served here, forwarded, or refused.
+//! - `stream_cache`: the per-connection cache of resolved stream handles.
+//! - `control`: acked publish handlers on the bi-directional control stream.
+//! - `uni`: fire-and-forget publish handlers on uni-directional streams.
+//!
+//! The connection and stream layers address these through the re-exports below,
+//! so `handlers::publish::<name>` stays the stable path for the whole transport.
 
 mod ack;
 mod admission;
 mod control;
 mod ingress;
+mod route;
+mod stream_cache;
 mod uni;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use ack::{
-    AckTimeoutState, AckWaiterMessage, AckWaiterResult, Outgoing, handle_ack_enqueue_result,
-    send_outgoing_best_effort, send_outgoing_critical,
+    AckEncoding, AckTimeoutState, AckWaiterMessage, AckWaiterResult, Outgoing,
+    handle_ack_enqueue_result, send_outgoing_best_effort, send_outgoing_critical,
 };
 pub(crate) use admission::{PublishAdmission, SubscriptionLimiter};
-
-pub(crate) use ack::AckEncoding;
-use ack::EnqueuePolicy;
-use admission::AdmissionPermit;
 pub(crate) use control::{
     handle_acked_binary_publish_batch_control, handle_binary_publish_batch_control,
     handle_publish_batch_message, handle_publish_message,
 };
 pub(crate) use ingress::{PublishTarget, decrement_depth, reset_local_depth_only};
+pub(crate) use stream_cache::StreamHandleCache;
 pub(crate) use uni::{
     handle_binary_publish_batch_uni, handle_publish_batch_message_uni, handle_publish_message_uni,
 };
 
-/// Count a publish that arrived on the JSON encoding.
-///
-/// The data path is binary as of 0.5.0 and no Felix client emits a JSON publish
-/// unless it is talking to a broker that never advertised the binary frame. The
-/// arm cannot be removed on that reasoning alone, though: `ORIGINAL_V1_FLAGS` is
-/// frozen, so a client older than the flags is entitled to keep sending JSON
-/// forever. This counter is what turns "nothing should be sending these" into
-/// "nothing in this deployment is", which is the precondition for ever dropping
-/// it. `frame` separates the single publish from the batch, because a client
-/// still on the single form is a different (older) client.
-pub(crate) fn record_json_publish(frame: &'static str) {
-    metrics::counter!("felix_broker_json_publishes_total", "frame" => frame).increment(1);
-}
-
-// Re-exported so the test module (and its `use super::*`) reaches the internals it
-// exercises directly, without widening them for the rest of the crate.
-#[cfg(test)]
-use crate::serving::auth::AuthContext;
-use crate::serving::forward::ForwardTarget;
-#[cfg(test)]
-use crate::serving::quic::errors::AckEnqueueError;
-#[cfg(test)]
-use crate::serving::quic::{
-    ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
-};
-use crate::shards::routing::{Dispatch, IngressRouter, dispatch};
-use crate::shards::{ShardKey, ShardKind};
-#[cfg(test)]
-use felix_wire::{Frame, Message};
-#[cfg(test)]
-use ingress::{enqueue_publish, publish_worker_index};
-#[cfg(test)]
-use tokio::sync::{Mutex, Semaphore};
-
 use anyhow::Result;
 use bytes::Bytes;
-use felix_broker::{Broker, StreamHandle};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::shards::routing::IngressRouter;
+use ack::EnqueuePolicy;
+use admission::AdmissionPermit;
+use route::Authority;
+
 use super::subscribe::WriterLaneManager;
-
-use crate::serving::quic::STREAM_CACHE_TTL;
-use crate::serving::quic::telemetry::t_counter;
-
-pub(crate) type StreamHandleCache = HashMap<String, (Option<StreamHandle>, Instant)>;
-
-/// Append `value` as ASCII decimal, without `core::fmt`.
-///
-/// On the publish path, where the difference between this and `write!` is the
-/// whole formatting machinery for a number that is almost always one digit.
-fn push_decimal(buf: &mut String, mut value: u32) {
-    // Almost every value here is one digit — a shard number, or the length of a
-    // short identifier — and going straight to a byte push skips building a
-    // slice and validating it as UTF-8 for a single character.
-    if value < 10 {
-        buf.push((b'0' + value as u8) as char);
-        return;
-    }
-    let mut digits = [0u8; 10];
-    let mut at = digits.len();
-    loop {
-        at -= 1;
-        digits[at] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    // Pushed one at a time rather than as a validated `&str`: these are ASCII
-    // digits, so each is one byte, and `from_utf8` would rescan them.
-    for &digit in &digits[at..] {
-        buf.push(digit as char);
-    }
-}
-
-/// Build the stream-handle cache key for one `(tenant, namespace, stream, shard)`.
-///
-/// **Every part is length-prefixed**, because nothing forbids a `\0` inside a
-/// tenant id, namespace or stream name. Joining the parts with a separator
-/// alone made tenant `"a\0b"` namespace `"c"` produce the same key as tenant
-/// `"a"` namespace `"b\0c"`, and a cache hit would then hand a publish the
-/// handle of a *different stream* (#295). A length says where a part ends
-/// whatever bytes are inside it, so no two distinct tuples can collide.
-///
-/// Same reasoning, and the same shape, as `layout::shard_dir_name` in the
-/// storage layer.
-///
-/// Written by hand rather than through `write!`: this key is rebuilt on every
-/// publish, and `core::fmt` is heavy next to the `push_str` calls the rest of
-/// it is deliberately made of.
-fn push_stream_cache_key(
-    buf: &mut String,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    shard: u32,
-) {
-    buf.clear();
-    // Three lengths, three separators, and the shard: a handful of bytes beyond
-    // the parts themselves.
-    let needed = tenant_id.len() + namespace.len() + stream.len() + 32;
-    if buf.capacity() < needed {
-        buf.reserve(needed - buf.capacity());
-    }
-    for part in [tenant_id, namespace, stream] {
-        push_decimal(buf, part.len() as u32);
-        buf.push('\0');
-        buf.push_str(part);
-    }
-    // No separator needed: the part before it has a declared length, so the
-    // digits that follow can only be the shard.
-    push_decimal(buf, shard);
-}
-
-/// Work item consumed by publish workers.
-///
-/// A publish job is the unit the broker’s ingress pipeline processes:
-/// - It identifies the target stream with a resolved handle.
-/// - It carries one or more payloads (single publish or batch).
-/// - `response` is **only** used when the publish was received on the control stream and the
-///   client requested an ack in commit-ack mode (`ack_on_commit = true`).
-///
-/// For uni-stream publishes and enqueue-ack mode, `response` is `None`.
-pub(crate) struct PublishJob {
-    pub(crate) target: PublishTarget,
-    pub(crate) payloads: Vec<Bytes>,
-    pub(crate) response: Option<oneshot::Sender<Result<()>>>,
-    /// Held from `enqueue_publish` admission until this job finishes processing (or is dropped
-    /// without ever being enqueued). See [`PublishAdmission`].
-    pub(crate) admission_permit: Option<AdmissionPermit>,
-}
 
 /// Shared publish-ingress configuration and worker queue handles.
 ///
@@ -298,131 +174,7 @@ impl PublishContext {
             EnqueuePolicy::Drop
         }
     }
-}
 
-/// Turn a resolved route into a publish target.
-///
-/// `None` means this broker cannot serve the publish: the stream did not
-/// resolve, or the shard belongs to a peer this broker has no transport to.
-/// Callers answer that the same way they always answered an unresolvable
-/// stream.
-/// True when this publish must not be acknowledged until a majority holds it.
-///
-/// `Quorum` is the stream that said "accepted by this broker is not good
-/// enough", so the local ack-on-commit policy cannot answer for it.
-pub(crate) fn needs_quorum(target: &Option<PublishTarget>) -> bool {
-    matches!(
-        target,
-        Some(PublishTarget::Resolved { handle, .. } | PublishTarget::Idempotent { handle, .. })
-            if handle.consistency() == felix_broker::ConsistencyLevel::Quorum
-    )
-}
-
-/// The shard a local publish waits on for its quorum, when this broker is in
-/// a cluster. Built the same way `resolve_route` built the key it dispatched
-/// on, so the shard a publish waits for is the shard it landed on. `None` on a
-/// single-node broker, which has no replica set and so nothing to wait for.
-pub(crate) fn local_shard_key(
-    publish_ctx: &PublishContext,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    shard: u32,
-) -> Option<ShardKey> {
-    publish_ctx.ingress.as_ref().map(|_| ShardKey {
-        tenant_id: tenant_id.to_string(),
-        namespace: namespace.to_string(),
-        stream: stream.to_string(),
-        shard,
-        kind: ShardKind::Stream,
-    })
-}
-
-/// The shard a publish that carries no routing key belongs to.
-///
-/// The same answer `shard_for` gives for `None`. Named so the keyless paths say
-/// which shard they mean instead of each recomputing it, because route and batch
-/// disagreeing about the shard is precisely the bug this replaced.
-pub(crate) const UNKEYED_SHARD: u32 = 0;
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn publish_target(
-    route: PublishRoute,
-    publish_ctx: &PublishContext,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    // The shard `resolve_route` resolved and dispatched on. It has to travel
-    // with the batch: the owner writes it to the shard this names, so a
-    // hardcoded 0 here sends every keyed publish to shard 0's owner no matter
-    // which shard the key belongs to.
-    shard: u32,
-    ack: felix_wire::internal::AckMode,
-    // The publisher's own token. It travels with a forward so the owner can
-    // check it rather than trust that this broker did.
-    credential: &str,
-) -> Option<PublishTarget> {
-    match route {
-        PublishRoute::Local(handle) => Some(PublishTarget::Resolved {
-            handle,
-            shard: local_shard_key(publish_ctx, tenant_id, namespace, stream, shard),
-        }),
-        PublishRoute::Forward(target) => {
-            if publish_ctx.peers.is_none() {
-                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
-                tracing::debug!(
-                    tenant_id, namespace, stream,
-                    owner = %target.node_id,
-                    "publish refused: shard is owned by another broker and this one cannot forward",
-                );
-                return None;
-            }
-            t_counter!("felix_publish_requests_total", "result" => "forwarded").increment(1);
-            Some(PublishTarget::Forward {
-                target,
-                key: crate::serving::forward::ForwardKey {
-                    tenant_id: tenant_id.to_string(),
-                    namespace: namespace.to_string(),
-                    stream: stream.to_string(),
-                    // The shard the route was resolved for. The owner appends to
-                    // exactly this shard, so it must match what `resolve_route`
-                    // dispatched on or the record lands in another shard's log.
-                    shard,
-                },
-                ack,
-                credential: credential.to_string(),
-            })
-        }
-        PublishRoute::Refused => None,
-    }
-}
-
-/// How the owner should treat a forwarded batch, from what the client asked of
-/// this broker.
-///
-/// Anything other than "no ack" becomes `OnCommit`, because the owner's write
-/// path is durable-then-answer either way: a weaker mode would describe the
-/// answer inaccurately rather than make it cheaper.
-pub(crate) fn internal_ack(ack: Option<felix_wire::AckMode>) -> felix_wire::internal::AckMode {
-    match ack {
-        Some(felix_wire::AckMode::None) => felix_wire::internal::AckMode::None,
-        _ => felix_wire::internal::AckMode::OnCommit,
-    }
-}
-
-/// What decides whether this broker may serve a publish at all.
-///
-/// The two travel together because they answer halves of one question — the
-/// router says whether this broker *should* hold the shard, the lease says
-/// whether it still *may* act on that. Separating them at a call site is how one
-/// gets forgotten.
-#[derive(Clone, Copy)]
-pub(crate) struct Authority<'a> {
-    pub(crate) ingress: Option<&'a IngressRouter>,
-    pub(crate) lease: Option<&'a crate::cluster::lease::LeaseState>,
-}
-
-impl PublishContext {
     pub(crate) fn authority(&self) -> Authority<'_> {
         Authority {
             ingress: self.ingress.as_deref(),
@@ -431,127 +183,37 @@ impl PublishContext {
     }
 }
 
-/// Where a publish should be applied.
-#[derive(Debug)]
-pub(crate) enum PublishRoute {
-    /// This broker owns the shard and the stream resolved here.
-    Local(StreamHandle),
-    /// Another broker owns it.
-    Forward(ForwardTarget),
-    /// Nobody can take it right now, or the stream does not resolve.
-    Refused,
-}
-
-/// Resolve a stream, or say where else the publish belongs.
+/// Work item consumed by publish workers.
 ///
-/// The single chokepoint every publish path funnels through, which is why the
-/// ownership gate is here: nothing reaches storage without passing it.
+/// A publish job is the unit the broker’s ingress pipeline processes:
+/// - It identifies the target stream with a resolved handle.
+/// - It carries one or more payloads (single publish or batch).
+/// - `response` is **only** used when the publish was received on the control stream and the
+///   client requested an ack in commit-ack mode (`ack_on_commit = true`).
 ///
-/// Ownership is checked *outside* the handle cache, deliberately. The cache
-/// exists to avoid a registry lookup and holds for `STREAM_CACHE_TTL`; ownership
-/// changes the instant the control plane says so, and caching it would keep a
-/// broker serving a reassigned shard for up to a TTL. The check is two atomic
-/// loads, so paying it per publish costs less than reasoning about staleness.
-// Six of these are the shard's identity plus the two things needed to resolve
-// it. Bundling them into a struct would move the argument list rather than
-// shorten it, and the same allow is already on the publish handlers.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn resolve_route(
-    broker: &Broker,
-    authority: Authority<'_>,
-    cache: &mut StreamHandleCache,
-    key_scratch: &mut String,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    shard: u32,
-) -> PublishRoute {
-    // Single-node brokers short-circuit on a null check; a cluster member pays
-    // two loads. Either way there is no lock and no await.
-    let Authority { ingress, lease } = authority;
-
-    // The admission fence. Cheap and possibly stale, so it only sheds early --
-    // the authoritative check happens again before the record is committed. See
-    // `crate::cluster::lease`.
-    if let Some(lease) = lease
-        && !lease.looks_valid()
-    {
-        crate::cluster::lease::metrics::record_refusal(
-            crate::cluster::lease::metrics::BOUNDARY_ADMISSION,
-        );
-        tracing::debug!(
-            tenant_id,
-            namespace,
-            stream,
-            "publish refused: this broker no longer holds a lease on the shards it led",
-        );
-        return PublishRoute::Refused;
-    }
-
-    if ingress.is_some() {
-        let key = ShardKey {
-            tenant_id: tenant_id.to_string(),
-            namespace: namespace.to_string(),
-            stream: stream.to_string(),
-            // The shard the caller resolved. Dispatch and the log this publish
-            // lands in must agree on it, or a record is written to one shard's
-            // log and replicated from another's.
-            shard,
-            kind: ShardKind::Stream,
-        };
-        match dispatch(ingress, &key) {
-            Dispatch::Local => {}
-            Dispatch::Forward {
-                node_id,
-                advertise_addr,
-                generation,
-            } => {
-                return PublishRoute::Forward(ForwardTarget {
-                    node_id,
-                    advertise_addr,
-                    generation,
-                });
-            }
-            Dispatch::Unavailable(reason) => {
-                t_counter!("felix_publish_requests_total", "result" => "unroutable").increment(1);
-                tracing::debug!(
-                    tenant_id, namespace, stream,
-                    reason = %reason,
-                    "publish refused: shard is not servable here",
-                );
-                return PublishRoute::Refused;
-            }
-        }
-    }
-
-    // Short-lived cache to avoid repeated stream lookups on hot paths.
-    //
-    // Keyed by shard as well as stream: a broker can own several shards of one
-    // stream, they are separate logs, and a cache that ignored the shard would
-    // hand a publish for one of them the handle of another.
-    push_stream_cache_key(key_scratch, tenant_id, namespace, stream, shard);
-    if let Some((handle, expires)) = cache.get(key_scratch.as_str())
-        && *expires > Instant::now()
-        && handle.as_ref().is_none_or(StreamHandle::is_active)
-    {
-        return PublishRoute::from(handle.clone());
-    }
-    let handle = broker
-        .resolve_stream_handle(tenant_id, namespace, stream, shard)
-        .await
-        .ok();
-    cache.insert(
-        key_scratch.clone(),
-        (handle.clone(), Instant::now() + STREAM_CACHE_TTL),
-    );
-    PublishRoute::from(handle)
+/// For uni-stream publishes and enqueue-ack mode, `response` is `None`.
+pub(crate) struct PublishJob {
+    pub(crate) target: PublishTarget,
+    pub(crate) payloads: Vec<Bytes>,
+    pub(crate) response: Option<oneshot::Sender<Result<()>>>,
+    /// Held from `enqueue_publish` admission until this job finishes processing (or is dropped
+    /// without ever being enqueued). See [`PublishAdmission`].
+    pub(crate) admission_permit: Option<AdmissionPermit>,
 }
 
-impl From<Option<StreamHandle>> for PublishRoute {
-    fn from(handle: Option<StreamHandle>) -> Self {
-        match handle {
-            Some(handle) => Self::Local(handle),
-            None => Self::Refused,
-        }
-    }
+/// Count a publish that arrived on the JSON encoding.
+///
+/// The data path is binary as of 0.5.0 and no Felix client emits a JSON publish
+/// unless it is talking to a broker that never advertised the binary frame. The
+/// arm cannot be removed on that reasoning alone, though: `ORIGINAL_V1_FLAGS` is
+/// frozen, so a client older than the flags is entitled to keep sending JSON
+/// forever. This counter is what turns "nothing should be sending these" into
+/// "nothing in this deployment is", which is the precondition for ever dropping
+/// it. `frame` separates the single publish from the batch, because a client
+/// still on the single form is a different (older) client.
+pub(crate) fn record_json_publish(frame: &'static str) {
+    metrics::counter!("felix_broker_json_publishes_total", "frame" => frame).increment(1);
 }
+
+#[cfg(test)]
+mod tests;
