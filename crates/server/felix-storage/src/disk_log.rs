@@ -52,16 +52,15 @@ use std::sync::atomic::AtomicU8;
 
 use parking_lot::{Mutex, RwLock};
 
+use self::append::RollState;
+use self::segments::SegmentSet;
+use self::sync::{Durability, PeriodicSyncer};
 use crate::log::{
     AppendOnlyLog, AppendRecord, AppendResult, BoxFuture, Epoch, FsyncMode, LogConfig, LogRecord,
     Offset, ReadRange, SealedSegment, SegmentDescriptor,
 };
 use crate::segment::ReadBudget;
 use crate::{Result, StorageError, metrics_names};
-
-use append::RollState;
-use segments::SegmentSet;
-use sync::{Durability, PeriodicSyncer};
 
 /// A durable, segmented, append-only log for one shard.
 ///

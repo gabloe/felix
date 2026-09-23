@@ -33,6 +33,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::now_micros;
+use super::segments::SealedEntry;
 use crate::io::sync_dir;
 use crate::log::{LogConfig, Offset, SegmentDescriptor, SegmentId};
 use crate::segment::format::SEGMENT_HEADER_LEN;
@@ -41,10 +43,7 @@ use crate::segment::{
     ScanOutcome, ScanStart, SegmentReader, SegmentWriter, SparseIndex, index_file_name,
     parse_segment_file_name, read_segment_header, scan_segment, segment_file_name,
 };
-use crate::{Result, StorageError, metrics_names};
-
-use super::now_micros;
-use super::segments::SealedEntry;
+use crate::{Corruption, CorruptionKind, Result, StorageError, metrics_names};
 
 /// The outcome of recovering one shard directory.
 #[derive(Debug)]
@@ -57,63 +56,13 @@ pub struct Recovered {
     pub index_rebuilds: usize,
 }
 
-/// Segment ids present in `dir`, in ascending numeric order.
-///
-/// Directory iteration order is filesystem-defined and must never be relied on:
-/// on some filesystems it is hash order, which would interleave segments and
-/// make the log look shuffled.
-pub fn discover_segment_ids(dir: &Path) -> Result<Vec<SegmentId>> {
-    let mut ids = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if let Some(id) = parse_segment_file_name(name) {
-            ids.push(id);
-        }
-    }
-    ids.sort_unstable();
-    // Two files cannot share an id, but a corrupt listing should not produce a
-    // duplicate that later code treats as two segments.
-    ids.dedup();
-    Ok(ids)
+struct OpenedSealed {
+    entry: SealedEntry,
+    rebuilt_index: bool,
 }
 
-/// Create a shard's first segment so its log begins at `base_offset`.
-///
-/// A no-op when the directory already holds segments: a shard that is already
-/// here keeps the base recorded in its own first segment, and a restart must
-/// not reinterpret it. Only an empty directory is a shard being placed.
-///
-/// The segment carries `base_offset` in its header, so recovery reads it back
-/// without needing to be told again.
-pub fn place_empty_shard(dir: &Path, config: &LogConfig, base_offset: Offset) -> Result<bool> {
-    std::fs::create_dir_all(dir)?;
-    if let Some(parent) = dir.parent() {
-        sync_dir(parent)?;
-    }
-    if !discover_segment_ids(dir)?.is_empty() {
-        return Ok(false);
-    }
-    let mut writer = SegmentWriter::create(
-        dir,
-        0,
-        base_offset,
-        now_micros(),
-        config.preallocate_bytes(),
-        config.index_spacing_bytes,
-    )?;
-    // Flushed before anything can append to it: a base offset that did not
-    // survive a crash would leave the shard reading back as one starting at
-    // zero, which is a hole rather than a shorter log.
-    writer.sync()?;
-    Ok(true)
-}
+/// Report of what a scan found, re-exported so callers can log it.
+pub type SegmentScan = ScanOutcome;
 
 /// Open, validate and repair every segment for one shard.
 pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Recovered> {
@@ -165,6 +114,69 @@ pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Reco
             .increment(recovered.index_rebuilds as u64);
     }
     Ok(recovered)
+}
+
+/// Create a shard's first segment so its log begins at `base_offset`.
+///
+/// A no-op when the directory already holds segments: a shard that is already
+/// here keeps the base recorded in its own first segment, and a restart must
+/// not reinterpret it. Only an empty directory is a shard being placed.
+///
+/// The segment carries `base_offset` in its header, so recovery reads it back
+/// without needing to be told again.
+pub fn place_empty_shard(dir: &Path, config: &LogConfig, base_offset: Offset) -> Result<bool> {
+    std::fs::create_dir_all(dir)?;
+    if let Some(parent) = dir.parent() {
+        sync_dir(parent)?;
+    }
+    if !discover_segment_ids(dir)?.is_empty() {
+        return Ok(false);
+    }
+    let mut writer = SegmentWriter::create(
+        dir,
+        0,
+        base_offset,
+        now_micros(),
+        config.preallocate_bytes(),
+        config.index_spacing_bytes,
+    )?;
+    // Flushed before anything can append to it: a base offset that did not
+    // survive a crash would leave the shard reading back as one starting at
+    // zero, which is a hole rather than a shorter log.
+    writer.sync()?;
+    Ok(true)
+}
+
+/// Segment ids present in `dir`, in ascending numeric order.
+///
+/// Directory iteration order is filesystem-defined and must never be relied on:
+/// on some filesystems it is hash order, which would interleave segments and
+/// make the log look shuffled.
+pub fn discover_segment_ids(dir: &Path) -> Result<Vec<SegmentId>> {
+    let mut ids = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Some(id) = parse_segment_file_name(name) {
+            ids.push(id);
+        }
+    }
+    ids.sort_unstable();
+    // Two files cannot share an id, but a corrupt listing should not produce a
+    // duplicate that later code treats as two segments.
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Path to a shard directory's data file for `id`. Exposed for tests and tools.
+pub fn segment_path(dir: &Path, id: SegmentId) -> PathBuf {
+    dir.join(segment_file_name(id))
 }
 
 /// Remove trailing segments that a rollover created but never installed.
@@ -369,11 +381,6 @@ fn recover_existing(
     })
 }
 
-struct OpenedSealed {
-    entry: SealedEntry,
-    rebuilt_index: bool,
-}
-
 /// Validate one sealed segment and prepare it for reads.
 fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Result<OpenedSealed> {
     let path = dir.join(segment_file_name(id));
@@ -427,14 +434,14 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
     // its tail is not a torn write — it is data loss in committed bytes.
     if let Some(tail) = outcome.torn_tail {
         return Err(StorageError::Corruption(
-            crate::Corruption::new(tail.cause)
+            Corruption::new(tail.cause)
                 .in_segment(label, id)
                 .at_position(tail.position),
         ));
     }
     if outcome.valid_bytes != file_len {
         return Err(StorageError::Corruption(
-            crate::Corruption::new(crate::CorruptionKind::Truncated {
+            Corruption::new(CorruptionKind::Truncated {
                 needed: file_len,
                 available: outcome.valid_bytes,
             })
@@ -461,19 +468,11 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
 
 fn gap_error(label: &str, id: SegmentId, expected: Offset, found: Offset) -> StorageError {
     StorageError::Corruption(
-        crate::Corruption::new(crate::CorruptionKind::OffsetOutOfOrder { expected, found })
+        Corruption::new(CorruptionKind::OffsetOutOfOrder { expected, found })
             .in_segment(label, id)
             .at_position(0),
     )
 }
-
-/// Path to a shard directory's data file for `id`. Exposed for tests and tools.
-pub fn segment_path(dir: &Path, id: SegmentId) -> PathBuf {
-    dir.join(segment_file_name(id))
-}
-
-/// Report of what a scan found, re-exported so callers can log it.
-pub type SegmentScan = ScanOutcome;
 
 #[cfg(test)]
 mod tests;

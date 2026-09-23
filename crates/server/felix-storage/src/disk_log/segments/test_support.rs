@@ -3,10 +3,9 @@
 use bytes::Bytes;
 use tempfile::TempDir;
 
+use super::SegmentSet;
 use crate::log::{AppendRecord, FsyncMode, LogConfig, Offset};
 use crate::segment::{ReadBudget, SegmentWriter};
-
-use super::SegmentSet;
 
 pub(super) fn record(payload: &str) -> AppendRecord {
     AppendRecord {

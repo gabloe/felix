@@ -35,6 +35,31 @@ impl SparseIndex {
         }
     }
 
+    /// Load an index file, returning `None` when it is absent or unusable.
+    ///
+    /// A `None` here is not an error: the caller rebuilds from the segment,
+    /// which is the same work a first-ever open would do.
+    pub fn load(path: &Path, base_offset: Offset) -> Option<Self> {
+        let mut buf = Vec::new();
+        File::open(path).ok()?.read_to_end(&mut buf).ok()?;
+        let header = IndexHeader::decode(&buf).ok()?;
+        if header.base_offset != base_offset {
+            // Index belongs to a different segment generation; rebuild.
+            return None;
+        }
+
+        let mut index = Self::new(base_offset);
+        let mut at = INDEX_HEADER_LEN as usize;
+        // A torn final entry is expected after a crash — stop at the last whole
+        // one instead of discarding the file.
+        while at + (INDEX_ENTRY_LEN as usize) <= buf.len() {
+            let entry = IndexEntry::decode(&buf[at..]).ok()?;
+            index.push(entry);
+            at += INDEX_ENTRY_LEN as usize;
+        }
+        Some(index)
+    }
+
     pub fn base_offset(&self) -> Offset {
         self.base_offset
     }
@@ -91,31 +116,6 @@ impl SparseIndex {
             Err(0) => SEGMENT_HEADER_LEN,
             Err(idx) => self.entries[idx - 1].position,
         }
-    }
-
-    /// Load an index file, returning `None` when it is absent or unusable.
-    ///
-    /// A `None` here is not an error: the caller rebuilds from the segment,
-    /// which is the same work a first-ever open would do.
-    pub fn load(path: &Path, base_offset: Offset) -> Option<Self> {
-        let mut buf = Vec::new();
-        File::open(path).ok()?.read_to_end(&mut buf).ok()?;
-        let header = IndexHeader::decode(&buf).ok()?;
-        if header.base_offset != base_offset {
-            // Index belongs to a different segment generation; rebuild.
-            return None;
-        }
-
-        let mut index = Self::new(base_offset);
-        let mut at = INDEX_HEADER_LEN as usize;
-        // A torn final entry is expected after a crash — stop at the last whole
-        // one instead of discarding the file.
-        while at + (INDEX_ENTRY_LEN as usize) <= buf.len() {
-            let entry = IndexEntry::decode(&buf[at..]).ok()?;
-            index.push(entry);
-            at += INDEX_ENTRY_LEN as usize;
-        }
-        Some(index)
     }
 
     /// Write the whole index out, replacing whatever was there.

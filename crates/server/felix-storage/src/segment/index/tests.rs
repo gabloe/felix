@@ -1,5 +1,6 @@
-use super::*;
 use tempfile::tempdir;
+
+use super::*;
 
 fn index_with(base: Offset, entries: &[(Offset, u64)]) -> SparseIndex {
     let mut index = SparseIndex::new(base);

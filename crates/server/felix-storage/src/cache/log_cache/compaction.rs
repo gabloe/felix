@@ -8,13 +8,12 @@ use std::path::Path;
 
 use bytes::Bytes;
 
+use super::CacheOp;
+use super::shard::{CacheShard, Entry, Index, ShardState, now_millis};
 use crate::disk_log::DiskLog;
 use crate::io::sync_dir;
 use crate::log::{AppendOnlyLog, AppendRecord, Offset};
 use crate::{Result, StorageError};
-
-use super::CacheOp;
-use super::shard::{CacheShard, Entry, Index, ShardState, now_millis};
 
 /// How much larger than its live bytes a log may grow before it is compacted.
 ///

@@ -1,7 +1,8 @@
-use super::*;
-use crate::segment::{ScanOutcome, ScanStart, scan_segment};
 use bytes::Bytes;
 use tempfile::{TempDir, tempdir};
+
+use super::*;
+use crate::segment::{ScanOutcome, ScanStart, scan_segment};
 
 fn record(payload: &str) -> AppendRecord {
     AppendRecord {

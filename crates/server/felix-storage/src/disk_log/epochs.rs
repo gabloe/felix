@@ -33,10 +33,6 @@ const EPOCH_ENTRY_LEN: usize = 16;
 /// open.
 const MAX_ENTRIES: usize = 512;
 
-pub fn epochs_file_name() -> &'static str {
-    "epochs"
-}
-
 /// A shard's generation history, newest last.
 ///
 /// Absent on disk is a valid state, not an error: every shard written before
@@ -166,10 +162,6 @@ impl EpochMap {
     }
 }
 
-fn path_in(dir: &Path) -> PathBuf {
-    dir.join(epochs_file_name())
-}
-
 /// Read a shard's generation history.
 ///
 /// An absent, short, or corrupt file reads as empty rather than failing the
@@ -218,6 +210,14 @@ pub fn store(dir: &Path, map: &EpochMap) -> Result<()> {
     std::fs::rename(&temporary, &path).map_err(StorageError::Io)?;
     sync_dir(dir).map_err(StorageError::Io)?;
     Ok(())
+}
+
+pub fn epochs_file_name() -> &'static str {
+    "epochs"
+}
+
+fn path_in(dir: &Path) -> PathBuf {
+    dir.join(epochs_file_name())
 }
 
 #[cfg(test)]

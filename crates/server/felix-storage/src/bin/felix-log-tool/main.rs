@@ -23,7 +23,7 @@ mod args;
 mod commands;
 mod payload;
 
-use args::Command;
+use self::args::Command;
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {

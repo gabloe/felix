@@ -8,12 +8,11 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use super::segments::RollOutcome;
+use super::{DiskLog, LogInner, PendingAppend};
 use crate::log::{AppendRecord, AppendResult};
 use crate::segment::SegmentWriter;
 use crate::{Result, StorageError, metrics_names};
-
-use super::segments::RollOutcome;
-use super::{DiskLog, LogInner, PendingAppend};
 
 /// Bound on rollover retries in a single append.
 ///

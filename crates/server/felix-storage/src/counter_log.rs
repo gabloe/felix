@@ -15,6 +15,11 @@
 //! Everything the cache's log bought, this inherits by construction: crash
 //! safety, group commit, offsets that never rewind across compaction, and
 //! replication that ships records at their offsets.
+
+mod record;
+
+pub use record::CounterOp;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,10 +31,7 @@ use tokio::sync::Mutex;
 
 use crate::disk_log::{DiskLog, layout};
 use crate::log::{AppendOnlyLog, AppendRecord, LogConfig, Offset, ReadRange, ShardKey};
-use crate::{Result, StorageError};
-
-mod record;
-pub use record::CounterOp;
+use crate::{Corruption, CorruptionKind, Result, StorageError};
 
 /// How much larger than its live bytes a log may grow before it is compacted.
 /// The same proportional rule the cache uses, for the same reason: cost scales
@@ -39,56 +41,8 @@ const COMPACT_WHEN_TIMES_LIVE: u64 = 4;
 /// Below this there is nothing worth reclaiming, whatever the ratio says.
 const COMPACT_FLOOR_BYTES: u64 = 64 * 1024;
 
-/// One counter's state in the index.
-#[derive(Debug, Clone, Copy)]
-struct Entry {
-    /// The fold over every record for this key up to `covered_through`.
-    sum: i64,
-    /// What one checkpoint for this key costs on disk, for deciding when to
-    /// compact: the live set is exactly one checkpoint per key.
-    checkpoint_bytes: u64,
-}
-
-/// The fold over one shard's log, and the accounting compaction needs.
-#[derive(Debug, Default)]
-struct Index {
-    entries: HashMap<String, Entry>,
-    /// Bytes one checkpoint per live key would occupy.
-    live_bytes: u64,
-    /// Bytes appended since the log was last compacted, live or not.
-    log_bytes: u64,
-    /// The offset this index has folded up to. `None` means nothing read yet.
-    covered_through: Option<u64>,
-}
-
-/// One shard's log and the sum folded from it.
-struct CounterShard {
-    dir: PathBuf,
-    label: String,
-    config: LogConfig,
-    /// Held across a write and across compaction, exactly as the cache holds
-    /// its shard lock: a counter write is serialised here anyway, and the
-    /// read-fold-append of `add` has to be atomic or two adds could both fold
-    /// from the same starting sum.
-    state: Mutex<ShardState>,
-}
-
-struct ShardState {
-    log: DiskLog,
-    index: Index,
-}
-
-impl std::fmt::Debug for CounterShard {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CounterShard")
-            .field("label", &self.label)
-            .finish()
-    }
-}
-
-/// Tenant, namespace, scope, shard — each one a separate log in a separate
-/// directory, exactly as the cache lays its shards out.
-type CounterId = (String, String, String, u32);
+/// How much of the log one fold or compaction pass reads at a time.
+const SCAN_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 
 /// Every counter this broker holds, on a root of its own.
 #[derive(Debug)]
@@ -262,15 +216,21 @@ impl CounterStore {
     }
 }
 
-fn now_micros() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|since| since.as_micros() as u64)
-        .unwrap_or(0)
-}
+/// Tenant, namespace, scope, shard — each one a separate log in a separate
+/// directory, exactly as the cache lays its shards out.
+type CounterId = (String, String, String, u32);
 
-/// How much of the log one fold or compaction pass reads at a time.
-const SCAN_CHUNK_BYTES: usize = 4 * 1024 * 1024;
+/// One shard's log and the sum folded from it.
+struct CounterShard {
+    dir: PathBuf,
+    label: String,
+    config: LogConfig,
+    /// Held across a write and across compaction, exactly as the cache holds
+    /// its shard lock: a counter write is serialised here anyway, and the
+    /// read-fold-append of `add` has to be atomic or two adds could both fold
+    /// from the same starting sum.
+    state: Mutex<ShardState>,
+}
 
 impl CounterShard {
     async fn current_log(&self) -> DiskLog {
@@ -437,6 +397,41 @@ impl CounterShard {
     }
 }
 
+impl std::fmt::Debug for CounterShard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CounterShard")
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+struct ShardState {
+    log: DiskLog,
+    index: Index,
+}
+
+/// The fold over one shard's log, and the accounting compaction needs.
+#[derive(Debug, Default)]
+struct Index {
+    entries: HashMap<String, Entry>,
+    /// Bytes one checkpoint per live key would occupy.
+    live_bytes: u64,
+    /// Bytes appended since the log was last compacted, live or not.
+    log_bytes: u64,
+    /// The offset this index has folded up to. `None` means nothing read yet.
+    covered_through: Option<u64>,
+}
+
+/// One counter's state in the index.
+#[derive(Debug, Clone, Copy)]
+struct Entry {
+    /// The fold over every record for this key up to `covered_through`.
+    sum: i64,
+    /// What one checkpoint for this key costs on disk, for deciding when to
+    /// compact: the live set is exactly one checkpoint per key.
+    checkpoint_bytes: u64,
+}
+
 /// The eight bytes a forwarded counter answer travels as.
 ///
 /// Big-endian, matching the wire's integer convention; a sum crosses brokers
@@ -448,14 +443,19 @@ pub fn encode_sum(sum: i64) -> Bytes {
 /// Read back what [`encode_sum`] wrote, refusing anything else.
 pub fn decode_sum(bytes: &[u8]) -> Result<i64> {
     let raw: [u8; 8] = bytes.try_into().map_err(|_| {
-        StorageError::Corruption(crate::Corruption::new(
-            crate::CorruptionKind::CounterRecord {
-                detail: "forwarded sum is not eight bytes",
-                found: bytes.len() as u64,
-            },
-        ))
+        StorageError::Corruption(Corruption::new(CorruptionKind::CounterRecord {
+            detail: "forwarded sum is not eight bytes",
+            found: bytes.len() as u64,
+        }))
     })?;
     Ok(i64::from_be_bytes(raw))
+}
+
+fn now_micros() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_micros() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

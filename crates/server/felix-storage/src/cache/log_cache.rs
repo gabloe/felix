@@ -25,14 +25,13 @@ use bytes::Bytes;
 use parking_lot::Mutex as SyncMutex;
 use tokio::sync::Mutex;
 
+use self::compaction::recover_interrupted_swap;
+use self::shard::{CacheShard, Index, ShardState, now_millis};
 use crate::cache::{CacheChange, CacheObserver, CacheSnapshotEntry, StorageApi};
 use crate::commit_order::CommitSequencer;
 use crate::disk_log::{DiskLog, layout};
 use crate::log::{AppendRecord, LogConfig, ShardKey};
 use crate::{Result, StorageError};
-
-use compaction::recover_interrupted_swap;
-use shard::{CacheShard, Index, ShardState, now_millis};
 
 /// A cache backed by the same log streams are.
 #[derive(Debug)]

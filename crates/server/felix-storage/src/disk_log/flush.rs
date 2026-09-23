@@ -5,11 +5,10 @@
 
 use std::sync::Arc;
 
+use super::LogInner;
 use crate::io::sync_data;
 use crate::log::Offset;
 use crate::{Result, StorageError, metrics_names};
-
-use super::LogInner;
 
 impl LogInner {
     /// Flush the active segment and report the exclusive offset bound now

@@ -37,17 +37,19 @@ use tokio::sync::oneshot;
 /// this simply queues, which is what the blocking pool did anyway.
 const RING_ENTRIES: u32 = 256;
 
-struct Submission {
-    fd: RawFd,
-    reply: oneshot::Sender<io::Result<()>>,
-}
+static RING: OnceLock<Option<Ring>> = OnceLock::new();
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The process-wide ring's submission side; the service thread owns the rest.
 struct Ring {
     tx: std::sync::mpsc::Sender<Submission>,
 }
 
-static RING: OnceLock<Option<Ring>> = OnceLock::new();
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// One flush waiting to be pushed into the ring, and where to send its result.
+struct Submission {
+    fd: RawFd,
+    reply: oneshot::Sender<io::Result<()>>,
+}
 
 /// Whether flushes should go through `io_uring`.
 ///
@@ -61,6 +63,24 @@ pub(crate) fn enabled() -> bool {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     })
+}
+
+/// `fsync` the descriptor through the ring.
+///
+/// `None` means the ring is unavailable and the caller should use its own
+/// fallback.
+pub(crate) async fn fsync(fd: RawFd) -> Option<io::Result<()>> {
+    let ring = ring()?;
+    let (reply, wait) = oneshot::channel();
+    // A send failure means the service thread is gone, which is the same
+    // situation as no ring at all.
+    if ring.tx.send(Submission { fd, reply }).is_err() {
+        return None;
+    }
+    match wait.await {
+        Ok(outcome) => Some(outcome),
+        Err(_) => Some(Err(io::Error::other("io_uring service thread stopped"))),
+    }
 }
 
 /// Start the ring and its service thread, once.
@@ -160,22 +180,4 @@ fn push(
             .send(Err(io::Error::other("io_uring submission queue full")));
     }
     pushed
-}
-
-/// `fsync` the descriptor through the ring.
-///
-/// `None` means the ring is unavailable and the caller should use its own
-/// fallback.
-pub(crate) async fn fsync(fd: RawFd) -> Option<io::Result<()>> {
-    let ring = ring()?;
-    let (reply, wait) = oneshot::channel();
-    // A send failure means the service thread is gone, which is the same
-    // situation as no ring at all.
-    if ring.tx.send(Submission { fd, reply }).is_err() {
-        return None;
-    }
-    match wait.await {
-        Ok(outcome) => Some(outcome),
-        Err(_) => Some(Err(io::Error::other("io_uring service thread stopped"))),
-    }
 }

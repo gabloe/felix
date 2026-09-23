@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
 
+use super::{DiskLog, layout};
 use crate::Result;
 use crate::log::{BoxFuture, LogConfig, LogProvider, Offset, ShardKey};
-
-use super::{DiskLog, layout};
 
 /// Opens one [`DiskLog`] per shard under a common root directory.
 ///
@@ -42,6 +41,23 @@ impl DiskLogProvider {
         &self.config
     }
 
+    /// Open or return the cached log for `shard`.
+    pub fn open_shard(&self, shard: &ShardKey) -> Result<DiskLog> {
+        // Recovery runs under the lock: two callers racing to open the same new
+        // shard must not both scan and both create segment zero.
+        let mut open_logs = self.open_logs.lock();
+        if let Some(log) = open_logs.get(shard) {
+            return Ok(log.clone());
+        }
+        let log = DiskLog::open(
+            layout::shard_dir(&self.root, shard),
+            layout::shard_label(shard),
+            self.config.clone(),
+        )?;
+        open_logs.insert(shard.clone(), log.clone());
+        Ok(log)
+    }
+
     /// Open or return the cached log for `shard`, creating it to begin at
     /// `base_offset` if it does not exist yet.
     ///
@@ -58,23 +74,6 @@ impl DiskLogProvider {
             layout::shard_label(shard),
             self.config.clone(),
             base_offset,
-        )?;
-        open_logs.insert(shard.clone(), log.clone());
-        Ok(log)
-    }
-
-    /// Open or return the cached log for `shard`.
-    pub fn open_shard(&self, shard: &ShardKey) -> Result<DiskLog> {
-        // Recovery runs under the lock: two callers racing to open the same new
-        // shard must not both scan and both create segment zero.
-        let mut open_logs = self.open_logs.lock();
-        if let Some(log) = open_logs.get(shard) {
-            return Ok(log.clone());
-        }
-        let log = DiskLog::open(
-            layout::shard_dir(&self.root, shard),
-            layout::shard_label(shard),
-            self.config.clone(),
         )?;
         open_logs.insert(shard.clone(), log.clone());
         Ok(log)

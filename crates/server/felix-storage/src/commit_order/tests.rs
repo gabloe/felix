@@ -1,6 +1,7 @@
-use super::*;
 use std::sync::Arc;
 use std::time::Duration;
+
+use super::*;
 
 #[tokio::test]
 async fn the_first_offset_proceeds_immediately() {

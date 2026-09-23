@@ -13,10 +13,9 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 
-use crate::{Result, StorageError, metrics_names};
-
 use super::segments::RetentionOutcome;
 use super::{LogInner, now_micros};
+use crate::{Result, StorageError, metrics_names};
 
 /// Background task that enforces retention on a timer.
 ///

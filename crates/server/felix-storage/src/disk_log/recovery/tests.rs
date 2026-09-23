@@ -1,8 +1,9 @@
+use bytes::Bytes;
+use tempfile::{TempDir, tempdir};
+
 use super::*;
 use crate::log::{AppendRecord, FsyncMode};
 use crate::segment::format::SEGMENT_HEADER_LEN;
-use bytes::Bytes;
-use tempfile::{TempDir, tempdir};
 
 fn config() -> LogConfig {
     LogConfig {
@@ -413,7 +414,7 @@ fn a_missing_segment_in_the_middle_is_an_error() {
     };
     assert!(matches!(
         detail.kind,
-        crate::CorruptionKind::OffsetOutOfOrder { .. }
+        CorruptionKind::OffsetOutOfOrder { .. }
     ));
 }
 

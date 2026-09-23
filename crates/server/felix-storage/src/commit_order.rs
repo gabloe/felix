@@ -37,6 +37,98 @@ pub struct CommitSequencer {
     state: Mutex<SequenceState>,
 }
 
+impl CommitSequencer {
+    pub fn new(next: Offset) -> Self {
+        Self {
+            state: Mutex::new(SequenceState {
+                next,
+                resolved: BTreeMap::new(),
+                generation: 0,
+                waiters: BTreeMap::new(),
+            }),
+        }
+    }
+
+    /// The offset whose turn it is — everything below it has applied.
+    ///
+    /// Also how a caller that appends outside the reserve path (recovery,
+    /// compaction, replication shipping) tells whether writers are in flight:
+    /// with nothing reserved and unresolved, this equals the log's next offset.
+    pub fn next_offset(&self) -> Offset {
+        self.state.lock().next
+    }
+
+    /// Claim the offset range `[first_offset, next_offset)` in the commit order.
+    ///
+    /// Returns immediately and does **not** wait for a turn — call
+    /// [`CommitTurn::wait`] for that. The split matters: the guard must be
+    /// created the moment offsets are consumed, because from then on the range
+    /// exists on disk and every later offset is queued behind it. If the caller
+    /// then fails, or its future is cancelled part-way through the durability
+    /// wait, the guard's `Drop` still releases the range and the stream keeps
+    /// moving. Claiming the range only *after* a successful append is what
+    /// stranded the stream: an abandoned range never released, and every
+    /// subsequent publish waited on a turn that could not arrive.
+    pub fn reserve(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
+        CommitTurn {
+            sequencer: SequencerRef::Borrowed(self),
+            first_offset,
+            next_offset,
+            generation: self.state.lock().generation,
+        }
+    }
+
+    /// [`CommitSequencer::reserve`], but the turn owns its sequencer and so has
+    /// no lifetime tying it to this call.
+    ///
+    /// Same guarantees, including the one that matters: the range is claimed
+    /// the moment offsets are consumed, and `Drop` releases it however the
+    /// caller exits. The difference is only that the claim can be moved into
+    /// another task, which is what lets durability waits overlap.
+    pub fn reserve_owned(
+        self: &Arc<Self>,
+        first_offset: Offset,
+        next_offset: Offset,
+    ) -> CommitTurn<'static> {
+        CommitTurn {
+            sequencer: SequencerRef::Owned(Arc::clone(self)),
+            first_offset,
+            next_offset,
+            generation: self.state.lock().generation,
+        }
+    }
+
+    /// Restart the sequence at `next`, used when a stream adopts a recovered
+    /// log and its offsets resume from the durable tail.
+    pub fn reset(&self, next: Offset) {
+        let orphaned: Vec<oneshot::Sender<()>> = {
+            let mut state = self.state.lock();
+            state.next = next;
+            // Pending resolutions describe a sequence that no longer exists.
+            state.resolved.clear();
+            state.generation += 1;
+            // Wake everyone: a waiter parked on an offset the reset just
+            // discarded would otherwise never be released. Its `wait` sees the
+            // generation has moved and returns.
+            state.waiters.split_off(&0).into_values().collect()
+        };
+        for waiter in orphaned {
+            let _ = waiter.send(());
+        }
+    }
+}
+
+impl fmt::Debug for CommitSequencer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = self.state.lock();
+        f.debug_struct("CommitSequencer")
+            .field("next", &state.next)
+            .field("pending_resolutions", &state.resolved.len())
+            .field("generation", &state.generation)
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 struct SequenceState {
     /// Offset whose turn it is. Publishers wait until this reaches their first
@@ -103,121 +195,6 @@ impl SequenceState {
     }
 }
 
-impl fmt::Debug for CommitSequencer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state.lock();
-        f.debug_struct("CommitSequencer")
-            .field("next", &state.next)
-            .field("pending_resolutions", &state.resolved.len())
-            .field("generation", &state.generation)
-            .finish()
-    }
-}
-
-impl CommitSequencer {
-    pub fn new(next: Offset) -> Self {
-        Self {
-            state: Mutex::new(SequenceState {
-                next,
-                resolved: BTreeMap::new(),
-                generation: 0,
-                waiters: BTreeMap::new(),
-            }),
-        }
-    }
-
-    /// Restart the sequence at `next`, used when a stream adopts a recovered
-    /// log and its offsets resume from the durable tail.
-    pub fn reset(&self, next: Offset) {
-        let orphaned: Vec<oneshot::Sender<()>> = {
-            let mut state = self.state.lock();
-            state.next = next;
-            // Pending resolutions describe a sequence that no longer exists.
-            state.resolved.clear();
-            state.generation += 1;
-            // Wake everyone: a waiter parked on an offset the reset just
-            // discarded would otherwise never be released. Its `wait` sees the
-            // generation has moved and returns.
-            state.waiters.split_off(&0).into_values().collect()
-        };
-        for waiter in orphaned {
-            let _ = waiter.send(());
-        }
-    }
-
-    /// The offset whose turn it is — everything below it has applied.
-    ///
-    /// Also how a caller that appends outside the reserve path (recovery,
-    /// compaction, replication shipping) tells whether writers are in flight:
-    /// with nothing reserved and unresolved, this equals the log's next offset.
-    pub fn next_offset(&self) -> Offset {
-        self.state.lock().next
-    }
-
-    /// Claim the offset range `[first_offset, next_offset)` in the commit order.
-    ///
-    /// Returns immediately and does **not** wait for a turn — call
-    /// [`CommitTurn::wait`] for that. The split matters: the guard must be
-    /// created the moment offsets are consumed, because from then on the range
-    /// exists on disk and every later offset is queued behind it. If the caller
-    /// then fails, or its future is cancelled part-way through the durability
-    /// wait, the guard's `Drop` still releases the range and the stream keeps
-    /// moving. Claiming the range only *after* a successful append is what
-    /// stranded the stream: an abandoned range never released, and every
-    /// subsequent publish waited on a turn that could not arrive.
-    pub fn reserve(&self, first_offset: Offset, next_offset: Offset) -> CommitTurn<'_> {
-        CommitTurn {
-            sequencer: SequencerRef::Borrowed(self),
-            first_offset,
-            next_offset,
-            generation: self.state.lock().generation,
-        }
-    }
-
-    /// [`CommitSequencer::reserve`], but the turn owns its sequencer and so has
-    /// no lifetime tying it to this call.
-    ///
-    /// Same guarantees, including the one that matters: the range is claimed
-    /// the moment offsets are consumed, and `Drop` releases it however the
-    /// caller exits. The difference is only that the claim can be moved into
-    /// another task, which is what lets durability waits overlap.
-    pub fn reserve_owned(
-        self: &Arc<Self>,
-        first_offset: Offset,
-        next_offset: Offset,
-    ) -> CommitTurn<'static> {
-        CommitTurn {
-            sequencer: SequencerRef::Owned(Arc::clone(self)),
-            first_offset,
-            next_offset,
-            generation: self.state.lock().generation,
-        }
-    }
-}
-
-/// How a turn holds the sequencer it will release into.
-///
-/// A borrowed turn is the common case and costs nothing. An owned one exists so
-/// a claim can outlive the stack frame that made it -- which is what lets a
-/// caller claim its offsets in order and then await the device flush
-/// concurrently with other publishes, instead of holding the whole stream
-/// behind one flush at a time (#535).
-enum SequencerRef<'a> {
-    Borrowed(&'a CommitSequencer),
-    Owned(Arc<CommitSequencer>),
-}
-
-impl std::ops::Deref for SequencerRef<'_> {
-    type Target = CommitSequencer;
-
-    fn deref(&self) -> &CommitSequencer {
-        match self {
-            SequencerRef::Borrowed(sequencer) => sequencer,
-            SequencerRef::Owned(sequencer) => sequencer,
-        }
-    }
-}
-
 /// A claim on one offset range. Releasing it lets the next range proceed.
 pub struct CommitTurn<'a> {
     sequencer: SequencerRef<'a>,
@@ -277,6 +254,29 @@ impl Drop for CommitTurn<'_> {
         // Outside the lock: the woken task wants this mutex immediately.
         if let Some(waiter) = ready {
             let _ = waiter.send(());
+        }
+    }
+}
+
+/// How a turn holds the sequencer it will release into.
+///
+/// A borrowed turn is the common case and costs nothing. An owned one exists so
+/// a claim can outlive the stack frame that made it -- which is what lets a
+/// caller claim its offsets in order and then await the device flush
+/// concurrently with other publishes, instead of holding the whole stream
+/// behind one flush at a time (#535).
+enum SequencerRef<'a> {
+    Borrowed(&'a CommitSequencer),
+    Owned(Arc<CommitSequencer>),
+}
+
+impl std::ops::Deref for SequencerRef<'_> {
+    type Target = CommitSequencer;
+
+    fn deref(&self) -> &CommitSequencer {
+        match self {
+            SequencerRef::Borrowed(sequencer) => sequencer,
+            SequencerRef::Owned(sequencer) => sequencer,
         }
     }
 }

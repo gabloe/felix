@@ -82,50 +82,12 @@ impl Durability {
         *self.durable_tx.borrow()
     }
 
-    /// Publish flush progress. Monotonic: a late report cannot walk it back.
-    pub fn note_durable(&self, durable_upto: Offset) {
-        self.durable_tx.send_if_modified(|current| {
-            if durable_upto > *current {
-                *current = durable_upto;
-                true
-            } else {
-                false
-            }
-        });
-    }
-
-    /// Prevent flush progress from racing an operation that rewrites the log.
-    pub async fn lock_flushes(&self) -> MutexGuard<'_, ()> {
-        self.flush_lock.lock().await
-    }
-
     /// How many flushes have actually been issued.
     ///
     /// The direct measure of group commit: N appends that coalesce produce far
     /// fewer than N flushes, whatever the machine's timing looks like.
     pub fn flushes(&self) -> u64 {
         self.flushes.load(Ordering::Relaxed)
-    }
-
-    /// Lower the durable bound after truncation.
-    ///
-    /// The caller must hold [`Self::lock_flushes`] and the segment write lock,
-    /// so no flush can publish stale progress and no append can observe the
-    /// truncated tail before this reset.
-    pub fn reset_after_truncate(&self, durable_upto: Offset) {
-        self.durable_tx.send_replace(durable_upto);
-    }
-
-    /// Run an unconditional flush under the same lock used by group commit.
-    pub async fn force_flush<F, Fut>(&self, flush: F) -> Result<Offset>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Offset>>,
-    {
-        let _guard = self.flush_lock.lock().await;
-        let durable_upto = flush().await?;
-        self.note_durable(durable_upto);
-        Ok(durable_upto)
     }
 
     /// Whether an append must wait for a flush before it may be acknowledged.
@@ -152,6 +114,44 @@ impl Durability {
         let result = self.flush_until(target, flush, &mut receiver).await;
         self.waiting.fetch_sub(1, Ordering::Relaxed);
         result
+    }
+
+    /// Run an unconditional flush under the same lock used by group commit.
+    pub async fn force_flush<F, Fut>(&self, flush: F) -> Result<Offset>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Offset>>,
+    {
+        let _guard = self.flush_lock.lock().await;
+        let durable_upto = flush().await?;
+        self.note_durable(durable_upto);
+        Ok(durable_upto)
+    }
+
+    /// Publish flush progress. Monotonic: a late report cannot walk it back.
+    pub fn note_durable(&self, durable_upto: Offset) {
+        self.durable_tx.send_if_modified(|current| {
+            if durable_upto > *current {
+                *current = durable_upto;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    /// Prevent flush progress from racing an operation that rewrites the log.
+    pub async fn lock_flushes(&self) -> MutexGuard<'_, ()> {
+        self.flush_lock.lock().await
+    }
+
+    /// Lower the durable bound after truncation.
+    ///
+    /// The caller must hold [`Self::lock_flushes`] and the segment write lock,
+    /// so no flush can publish stale progress and no append can observe the
+    /// truncated tail before this reset.
+    pub fn reset_after_truncate(&self, durable_upto: Offset) {
+        self.durable_tx.send_replace(durable_upto);
     }
 
     async fn flush_until<F, Fut>(

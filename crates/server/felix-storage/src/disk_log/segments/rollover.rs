@@ -9,14 +9,13 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+use super::{SealedEntry, SegmentSet};
 use crate::Result;
 use crate::disk_log::now_micros;
 use crate::log::{AppendRecord, SegmentId};
 use crate::segment::writer::BlankSegment;
 use crate::segment::{SegmentReader, SegmentWriter, index_file_name};
 use crate::{StorageError, metrics_names};
-
-use super::{SealedEntry, SegmentSet};
 
 impl SegmentSet {
     /// Whether appending `records` requires an *inline* rollover — the blocking

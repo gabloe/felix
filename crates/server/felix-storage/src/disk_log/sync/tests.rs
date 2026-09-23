@@ -1,5 +1,6 @@
-use super::*;
 use std::sync::atomic::AtomicUsize;
+
+use super::*;
 
 fn counting_flush(
     counter: Arc<AtomicUsize>,

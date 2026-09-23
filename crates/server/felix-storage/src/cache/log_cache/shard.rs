@@ -12,12 +12,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use tokio::sync::Mutex;
 
+use super::CacheOp;
 use crate::commit_order::CommitSequencer;
 use crate::disk_log::DiskLog;
 use crate::log::{AppendOnlyLog, LogConfig, Offset, ReadRange};
 use crate::{Result, StorageError};
-
-use super::CacheOp;
 
 /// How much of the log one replay or compaction pass reads at a time.
 ///

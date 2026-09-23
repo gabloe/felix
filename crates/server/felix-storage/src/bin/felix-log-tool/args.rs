@@ -11,6 +11,46 @@ use std::time::Duration;
 
 use felix_storage::log::{FsyncMode, LogConfig};
 
+pub(crate) const USAGE: &str = "\
+felix-log-tool — exercise and measure the durable log
+
+USAGE:
+    felix-log-tool write  --dir <PATH> [OPTIONS]
+    felix-log-tool verify --dir <PATH> [OPTIONS]
+    felix-log-tool bench  --dir <PATH> [OPTIONS]
+
+COMMON OPTIONS:
+    --dir <PATH>                  Log directory (required)
+    --fsync <none|periodic|on_commit>   Durability policy [default: on_commit]
+    --fsync-interval-ms <N>       Interval for --fsync periodic [default: 250]
+    --segment-bytes <N>           Segment rollover size [default: 67108864]
+    --index-spacing-bytes <N>     Sparse index interval [default: 4096]
+    --no-preallocate              Do not reserve segment blocks up front
+    --rollover-threshold-percent <N>  Start the background roll at this % of
+                                  --segment-bytes; 100 disables it [default: 80]
+    --max-overshoot-percent <N>   How far past --segment-bytes a segment may
+                                  grow while its replacement is prepared
+
+write OPTIONS:
+    --records <N>                 Records to append; 0 means run until killed
+    --payload-bytes <N>           Payload size [default: 128]
+    --batch <N>                   Records per append [default: 1]
+    --report-acks                 Print one JSON line per acknowledged batch
+    --clean-shutdown              Flush and exit cleanly when done
+
+verify OPTIONS:
+    --expect-at-least <N>         Fail unless at least N records survived
+    --payload-bytes <N>           Also check payload contents
+
+bench OPTIONS:
+    --records <N>                 Records to measure [default: 20000]
+    --payload-bytes <N>           Payload size [default: 128]
+    --batch <N>                   Records per append [default: 1]
+    --concurrency <N>             Concurrent publishers [default: 1]
+    --warmup-records <N>          Records to discard before measuring [default: 2000]
+    --label <TEXT>                Name for this run in the JSON output
+";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Command {
     /// Append records until told to stop, for crash and benchmark runs.
@@ -57,46 +97,6 @@ pub(crate) struct BenchArgs {
     pub config: LogConfig,
     pub label: String,
 }
-
-pub(crate) const USAGE: &str = "\
-felix-log-tool — exercise and measure the durable log
-
-USAGE:
-    felix-log-tool write  --dir <PATH> [OPTIONS]
-    felix-log-tool verify --dir <PATH> [OPTIONS]
-    felix-log-tool bench  --dir <PATH> [OPTIONS]
-
-COMMON OPTIONS:
-    --dir <PATH>                  Log directory (required)
-    --fsync <none|periodic|on_commit>   Durability policy [default: on_commit]
-    --fsync-interval-ms <N>       Interval for --fsync periodic [default: 250]
-    --segment-bytes <N>           Segment rollover size [default: 67108864]
-    --index-spacing-bytes <N>     Sparse index interval [default: 4096]
-    --no-preallocate              Do not reserve segment blocks up front
-    --rollover-threshold-percent <N>  Start the background roll at this % of
-                                  --segment-bytes; 100 disables it [default: 80]
-    --max-overshoot-percent <N>   How far past --segment-bytes a segment may
-                                  grow while its replacement is prepared
-
-write OPTIONS:
-    --records <N>                 Records to append; 0 means run until killed
-    --payload-bytes <N>           Payload size [default: 128]
-    --batch <N>                   Records per append [default: 1]
-    --report-acks                 Print one JSON line per acknowledged batch
-    --clean-shutdown              Flush and exit cleanly when done
-
-verify OPTIONS:
-    --expect-at-least <N>         Fail unless at least N records survived
-    --payload-bytes <N>           Also check payload contents
-
-bench OPTIONS:
-    --records <N>                 Records to measure [default: 20000]
-    --payload-bytes <N>           Payload size [default: 128]
-    --batch <N>                   Records per append [default: 1]
-    --concurrency <N>             Concurrent publishers [default: 1]
-    --warmup-records <N>          Records to discard before measuring [default: 2000]
-    --label <TEXT>                Name for this run in the JSON output
-";
 
 /// Parse `args` (excluding the program name).
 pub(crate) fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String> {

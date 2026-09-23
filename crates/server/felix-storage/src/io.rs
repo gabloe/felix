@@ -33,7 +33,6 @@ pub(crate) mod uring_fsync;
 
 use std::fs::File;
 use std::io;
-
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 #[cfg(windows)]

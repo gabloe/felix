@@ -1,6 +1,7 @@
 //! Cutting a log back: dropping a suffix for replication, or discarding
 //! everything to start again at a new base.
 
+use super::{SealedEntry, SegmentSet};
 use crate::disk_log::now_micros;
 use crate::log::{Offset, SegmentId};
 use crate::segment::format::{RECORD_HEADER_LEN, SEGMENT_HEADER_LEN};
@@ -10,8 +11,6 @@ use crate::segment::{
     scan_segment, segment_file_name,
 };
 use crate::{Result, metrics_names};
-
-use super::{SealedEntry, SegmentSet};
 
 impl SegmentSet {
     /// Drop every record at or after `offset`.

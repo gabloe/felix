@@ -1,3 +1,6 @@
+//! Moving sealed segments to cold storage and back. Only the interface exists;
+//! nothing implements it yet.
+
 use std::time::Duration;
 
 use crate::Result;
