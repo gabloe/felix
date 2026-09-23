@@ -23,7 +23,7 @@
 //!
 //! NOTE: This file is a *client* of the control-plane. Persisting control-plane data
 //! (e.g., in Postgres) is implemented on the **control-plane service**, not here.
-use crate::credential::NodeCredential;
+use crate::cluster::credential::NodeCredential;
 use anyhow::{Context, Result, anyhow};
 use felix_broker::{Broker, BrokerError, CacheMetadata, ConsistencyLevel, StreamMetadata};
 use serde::{Deserialize, Serialize};

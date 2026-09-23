@@ -831,7 +831,7 @@ pub struct ReportTo {
     pub node_id: String,
     /// Held, not copied: this reports for the life of the process, across
     /// however many access tokens that spans.
-    pub token: Option<crate::credential::NodeCredential>,
+    pub token: Option<crate::cluster::credential::NodeCredential>,
     pub incarnation: u64,
 }
 

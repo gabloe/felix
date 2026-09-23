@@ -21,7 +21,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use super::{NodeCredential, now_secs, read_claims};
-use crate::membership::metrics as mm;
+use crate::cluster::membership::metrics as mm;
 
 /// How often the token file is re-read.
 ///

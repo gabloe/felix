@@ -201,7 +201,7 @@ impl Cluster {
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         self.watch_with(
-            felix_broker_service::credential::NodeCredential::new(self.bearer.clone()),
+            felix_broker_service::cluster::credential::NodeCredential::new(self.bearer.clone()),
             ownership,
             shutdown,
         )
@@ -209,7 +209,7 @@ impl Cluster {
 
     fn watch_with(
         &self,
-        credential: felix_broker_service::credential::NodeCredential,
+        credential: felix_broker_service::cluster::credential::NodeCredential,
         ownership: Arc<RwLock<ShardOwnership>>,
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
@@ -395,7 +395,8 @@ async fn the_watch_picks_up_a_refreshed_credential() {
     let cluster = Cluster::start().await;
     cluster.assign(0, "broker-a", ShardState::Assigning).await;
 
-    let credential = felix_broker_service::credential::NodeCredential::new("not-a-valid-token");
+    let credential =
+        felix_broker_service::cluster::credential::NodeCredential::new("not-a-valid-token");
     let ownership = Arc::new(RwLock::new(ShardOwnership::default()));
     let shutdown = CancellationToken::new();
     let watch = cluster.watch_with(credential.clone(), Arc::clone(&ownership), shutdown.clone());

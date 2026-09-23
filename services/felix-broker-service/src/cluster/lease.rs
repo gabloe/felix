@@ -174,9 +174,9 @@ impl LeaseState {
                         usable_ms = self.usable().as_millis() as u64,
                         "lease expired; this broker is no longer serving the shards it led",
                     );
-                    crate::lease::metrics::record_expiry();
+                    crate::cluster::lease::metrics::record_expiry();
                 }
-                crate::lease::metrics::set_held(self.is_valid_now());
+                crate::cluster::lease::metrics::set_held(self.is_valid_now());
             }
         })
     }

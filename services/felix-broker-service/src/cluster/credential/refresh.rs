@@ -13,7 +13,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use super::{NodeCredential, now_secs, read_claims, refresh_delay};
-use crate::membership::metrics as mm;
+use crate::cluster::membership::metrics as mm;
 
 /// What `/token/refresh` answers with.
 #[derive(Debug, Deserialize)]

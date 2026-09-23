@@ -40,7 +40,7 @@ use axum::http::StatusCode;
 use axum::{Json, Router};
 use base64::Engine as _;
 use felix_broker::Broker;
-use felix_broker_service::controlplane as broker_controlplane;
+use felix_broker_service::cluster::catalog_sync as broker_catalog_sync;
 use felix_broker_service::serving::{auth::BrokerAuth, quic};
 use felix_client::{Client, ClientConfig};
 use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
@@ -385,10 +385,10 @@ async fn spawn_broker(
         }
     });
 
-    let credential = felix_broker_service::credential::NodeCredential::new(credential);
+    let credential = felix_broker_service::cluster::credential::NodeCredential::new(credential);
     let sync_task = tokio::spawn(async move {
         let interval = Duration::from_millis(sync_interval_ms);
-        if let Err(err) = broker_controlplane::start_sync(
+        if let Err(err) = broker_catalog_sync::start_sync(
             broker_sync,
             controlplane_url,
             interval,

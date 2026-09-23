@@ -226,12 +226,12 @@ pub(crate) struct PublishContext {
     ///
     /// `None` on a single-node broker, which leads by construction and has
     /// nobody to lose a shard to.
-    pub(crate) lease: Option<Arc<crate::lease::LeaseState>>,
+    pub(crate) lease: Option<Arc<crate::cluster::lease::LeaseState>>,
     /// Where a client may connect, for answering `Topology` on the control
     /// stream. Nothing on the publish path reads it; it rides here because this
     /// is the per-connection bundle of what the cluster makes available, beside
     /// `ingress` and `peers`.
-    pub(crate) client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
+    pub(crate) client_endpoints: Option<Arc<crate::cluster::client_endpoints::ClientEndpoints>>,
     /// How far a majority of each shard's replica set has got, for a write
     /// that must not be acknowledged before it does. `None` off a cluster.
     pub(crate) marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
@@ -419,7 +419,7 @@ pub(crate) fn internal_ack(ack: Option<felix_wire::AckMode>) -> felix_wire::inte
 #[derive(Clone, Copy)]
 pub(crate) struct Authority<'a> {
     pub(crate) ingress: Option<&'a IngressRouter>,
-    pub(crate) lease: Option<&'a crate::lease::LeaseState>,
+    pub(crate) lease: Option<&'a crate::cluster::lease::LeaseState>,
 }
 
 impl PublishContext {
@@ -472,11 +472,13 @@ pub(crate) async fn resolve_route(
 
     // The admission fence. Cheap and possibly stale, so it only sheds early --
     // the authoritative check happens again before the record is committed. See
-    // `crate::lease`.
+    // `crate::cluster::lease`.
     if let Some(lease) = lease
         && !lease.looks_valid()
     {
-        crate::lease::metrics::record_refusal(crate::lease::metrics::BOUNDARY_ADMISSION);
+        crate::cluster::lease::metrics::record_refusal(
+            crate::cluster::lease::metrics::BOUNDARY_ADMISSION,
+        );
         tracing::debug!(
             tenant_id,
             namespace,

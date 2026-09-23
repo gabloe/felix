@@ -812,7 +812,7 @@ pub(crate) async fn handle_subscribe_message(
 #[allow(clippy::too_many_arguments)]
 pub fn redirect_for(
     ingress: Option<&crate::shard_routing::IngressRouter>,
-    client_endpoints: Option<&crate::client_endpoints::ClientEndpoints>,
+    client_endpoints: Option<&crate::cluster::client_endpoints::ClientEndpoints>,
     tenant_id: &str,
     namespace: &str,
     stream: &str,

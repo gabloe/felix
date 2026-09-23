@@ -118,7 +118,7 @@ async fn registration_sends_the_identity_and_returns_the_incarnation() {
         &client,
         &base_url,
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect("register");
@@ -157,7 +157,7 @@ async fn a_rejected_registration_is_an_error() {
         &client,
         &format!("http://{addr}"),
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect_err("should fail");
@@ -179,7 +179,7 @@ async fn heartbeats_carry_the_registered_incarnation() {
         &client,
         &base_url,
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect("register");
@@ -193,7 +193,7 @@ async fn heartbeats_carry_the_registered_incarnation() {
         registration,
         shutdown.clone(),
         Arc::clone(&failures),
-        Arc::new(crate::lease::LeaseState::new(
+        Arc::new(crate::cluster::lease::LeaseState::new(
             std::time::Duration::from_secs(30),
         )),
     ));
@@ -235,7 +235,7 @@ async fn heartbeat_failures_are_counted_and_then_recovered_from() {
         &client,
         &base_url,
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect("register");
@@ -247,7 +247,7 @@ async fn heartbeat_failures_are_counted_and_then_recovered_from() {
         registration,
         shutdown.clone(),
         Arc::clone(&failures),
-        Arc::new(crate::lease::LeaseState::new(
+        Arc::new(crate::cluster::lease::LeaseState::new(
             std::time::Duration::from_secs(30),
         )),
     ));
@@ -347,11 +347,14 @@ async fn a_refusal_and_an_outage_are_different_kinds() {
         &client,
         &format!("http://{addr}"),
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect_err("should be refused");
-    assert_eq!(refused.kind(), crate::membership::metrics::KIND_REJECTED);
+    assert_eq!(
+        refused.kind(),
+        crate::cluster::membership::metrics::KIND_REJECTED
+    );
 
     let _ = stop.send(());
     let _ = handle.await;
@@ -361,11 +364,14 @@ async fn a_refusal_and_an_outage_are_different_kinds() {
         &client,
         &format!("http://{addr}"),
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect_err("should be unavailable");
-    assert_eq!(outage.kind(), crate::membership::metrics::KIND_UNAVAILABLE);
+    assert_eq!(
+        outage.kind(),
+        crate::cluster::membership::metrics::KIND_UNAVAILABLE
+    );
 }
 
 /// A 5xx is the control plane failing, not refusing, so it is retryable like an
@@ -388,11 +394,14 @@ async fn a_server_error_counts_as_an_outage_not_a_refusal() {
         &client,
         &format!("http://{addr}"),
         &config(),
-        &crate::credential::NodeCredential::new("a-node-token"),
+        &crate::cluster::credential::NodeCredential::new("a-node-token"),
     )
     .await
     .expect_err("should fail");
-    assert_eq!(err.kind(), crate::membership::metrics::KIND_UNAVAILABLE);
+    assert_eq!(
+        err.kind(),
+        crate::cluster::membership::metrics::KIND_UNAVAILABLE
+    );
     assert!(
         matches!(err, MembershipError::Unavailable(_)),
         "a 5xx must stay retryable",

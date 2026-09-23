@@ -1182,8 +1182,8 @@ impl BrokerConfig {
         // Only a token that says when it expires. One this broker cannot read
         // the claims of is someone else's format, and guessing is worse than
         // letting it run.
-        let Some(expires_at) =
-            crate::credential::read_claims(&self.controlplane_token).map(|claims| claims.exp)
+        let Some(expires_at) = crate::cluster::credential::read_claims(&self.controlplane_token)
+            .map(|claims| claims.exp)
         else {
             return Ok(());
         };

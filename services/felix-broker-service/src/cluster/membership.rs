@@ -23,8 +23,8 @@ use felix_common::membership::NodeLifecycle;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use crate::cluster::membership::metrics as mm;
 use crate::config::MembershipConfig;
-use crate::membership::metrics as mm;
 
 /// Ceiling on heartbeat retry backoff.
 ///
@@ -100,7 +100,7 @@ pub struct Registration {
     ///
     /// The shared holder, not a copy: heartbeats run for the life of the
     /// process and outlast any one access token.
-    pub token: crate::credential::NodeCredential,
+    pub token: crate::cluster::credential::NodeCredential,
     /// This process's incarnation. Sent with every heartbeat so one delayed
     /// past a restart is rejected instead of counted for its successor.
     pub incarnation: u64,
@@ -158,7 +158,7 @@ pub async fn register(
     client: &reqwest::Client,
     base_url: &str,
     config: &MembershipConfig,
-    credential: &crate::credential::NodeCredential,
+    credential: &crate::cluster::credential::NodeCredential,
 ) -> std::result::Result<Registration, MembershipError> {
     let response = client
         .post(format!("{}/v1/nodes", base_url.trim_end_matches('/')))
@@ -226,7 +226,7 @@ pub async fn run_heartbeat(
     registration: Registration,
     shutdown: CancellationToken,
     consecutive_failures: Arc<AtomicU64>,
-    lease: Arc<crate::lease::LeaseState>,
+    lease: Arc<crate::cluster::lease::LeaseState>,
 ) {
     let base_url = base_url.trim_end_matches('/').to_string();
     let url = format!("{base_url}/v1/nodes/{}/heartbeat", registration.node_id);
@@ -425,7 +425,7 @@ pub struct MembershipTask {
     pub consecutive_failures: Arc<AtomicU64>,
     /// This broker's authority to serve the shards it leads. Renewed by the
     /// heartbeat below; read by the publish path.
-    pub lease: Arc<crate::lease::LeaseState>,
+    pub lease: Arc<crate::cluster::lease::LeaseState>,
 }
 
 /// Register once the broker can serve, then report health until shutdown.
@@ -437,10 +437,10 @@ pub fn spawn(
     client: reqwest::Client,
     base_url: String,
     config: MembershipConfig,
-    credential: crate::credential::NodeCredential,
+    credential: crate::cluster::credential::NodeCredential,
     serving: CancellationToken,
     shutdown: CancellationToken,
-    lease: Arc<crate::lease::LeaseState>,
+    lease: Arc<crate::cluster::lease::LeaseState>,
 ) -> MembershipTask {
     let fatal = CancellationToken::new();
     let consecutive_failures = Arc::new(AtomicU64::new(0));

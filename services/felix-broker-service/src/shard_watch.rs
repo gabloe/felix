@@ -195,7 +195,7 @@ pub async fn run(
     // Held rather than copied: this task outlives many token lifetimes, and a
     // copy taken at startup is the exact bug that drops a broker out of the
     // cluster when its first token expires.
-    bearer: Option<crate::credential::NodeCredential>,
+    bearer: Option<crate::cluster::credential::NodeCredential>,
     ownership: Arc<RwLock<ShardOwnership>>,
     interval: Duration,
     shutdown: CancellationToken,

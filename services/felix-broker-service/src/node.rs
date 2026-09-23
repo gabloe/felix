@@ -33,8 +33,8 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::credential;
-use crate::membership;
+use crate::cluster::credential;
+use crate::cluster::membership;
 use crate::peer;
 use crate::replication;
 use crate::serving::{auth::BrokerAuth, quic};
@@ -145,7 +145,7 @@ where
     // Empty until the first catalog refresh fills it, which is the honest
     // answer in the meantime: this broker has not yet been told where any
     // client may connect.
-    let client_endpoints = Arc::new(crate::client_endpoints::ClientEndpoints::new());
+    let client_endpoints = Arc::new(crate::cluster::client_endpoints::ClientEndpoints::new());
     let peer_shutdown = CancellationToken::new();
     // One identity for both ends of the peer transport, so a rotation
     // reaches the listener and the dialler together. Loaded before either
@@ -435,7 +435,7 @@ where
                 _ = sync_shutdown.cancelled() => {
                     tracing::info!("control plane sync stopped");
                 }
-                result = crate::controlplane::start_sync_with_signal(
+                result = crate::cluster::catalog_sync::start_sync_with_signal(
                     broker,
                     base_url,
                     Duration::from_millis(interval_ms),
@@ -906,8 +906,8 @@ where
 /// The real duration comes from the control plane's expiry window on the first
 /// accepted heartbeat, so this value only bounds how long a broker could serve
 /// if that window ever stopped being reported.
-fn peer_lease_state() -> crate::lease::LeaseState {
-    crate::lease::LeaseState::new(Duration::from_secs(10))
+fn peer_lease_state() -> crate::cluster::lease::LeaseState {
+    crate::cluster::lease::LeaseState::new(Duration::from_secs(10))
 }
 
 /// Build the QUIC server TLS configuration.

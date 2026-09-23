@@ -17,7 +17,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::routing::post;
 use base64::Engine;
-use felix_broker_service::credential::{NodeCredential, refresh};
+use felix_broker_service::cluster::credential::{NodeCredential, refresh};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 

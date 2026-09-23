@@ -267,7 +267,7 @@ pub struct FeedState {
     /// Refreshed on the same tick as the catalog it is derived from, so what a
     /// client is told and what this broker forwards to cannot come from
     /// different fetches.
-    pub client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
+    pub client_endpoints: Option<Arc<crate::cluster::client_endpoints::ClientEndpoints>>,
 }
 
 /// What the feed needs to read the node catalog.
@@ -277,7 +277,7 @@ pub struct CatalogSource {
     /// The same credential the assignment feed uses: `/v1/nodes` and
     /// `/v1/shard-assignments` both require `node.view:cluster:*`. Held, not
     /// copied, so a refresh reaches this feed too.
-    pub token: Option<crate::credential::NodeCredential>,
+    pub token: Option<crate::cluster::credential::NodeCredential>,
 }
 
 /// Keep local shard state and the routing table in step with the watch.
@@ -318,7 +318,7 @@ pub fn spawn_feed(
                 // Read on every tick rather than once, so a refreshed token is
                 // in use from the next poll.
                 let bearer = source.token.as_ref().map(|token| token.bearer());
-                match crate::node_catalog::fetch(
+                match crate::cluster::node_catalog::fetch(
                     &source.client,
                     &source.base_url,
                     bearer.as_deref().map(String::as_str),

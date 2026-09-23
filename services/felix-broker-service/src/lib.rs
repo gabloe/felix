@@ -20,17 +20,18 @@
 //! shard mine, should it be forwarded, or can nobody serve it right now?
 //! `serving::cache_routing` is the same question for a cache key,
 //! `serving::group_ops` and [`serving::core_shards`] are the queue and shard
-//! operations behind the handlers, and [`client_endpoints`] is what this broker
-//! tells a client about where to connect.
+//! operations behind the handlers, and [`cluster::client_endpoints`] is what
+//! this broker tells a client about where to connect.
 //!
 //! # 2. Belonging to a cluster
 //!
-//! [`membership`] registers this node and heartbeats; [`credential`] holds the
-//! token it presents and refreshes it before expiry. [`controlplane`] syncs
-//! the metadata catalog, [`node_catalog`] turns node ids into addresses, and
-//! [`lease`] is the authority to serve at all — renewed by the same heartbeat,
-//! checked cheaply on admission and against the clock again before any record
-//! is committed.
+//! [`cluster::membership`] registers this node and heartbeats;
+//! [`cluster::credential`] holds the token it presents and refreshes it before
+//! expiry. [`cluster::catalog_sync`] syncs the metadata catalog,
+//! [`cluster::node_catalog`] turns node ids into addresses, and
+//! [`cluster::lease`] is the authority to serve at all — renewed by the same
+//! heartbeat, checked cheaply on admission and against the clock again before
+//! any record is committed.
 //!
 //! # 3. Owning shards
 //!
@@ -54,16 +55,11 @@
 //! at `<module>/metrics.rs`.
 
 // --- 1. Serving clients -------------------------------------------------
-pub mod client_endpoints;
 pub mod serving;
 pub mod shard_routing;
 
 // --- 2. Belonging to a cluster ------------------------------------------
-pub mod controlplane;
-pub mod credential;
-pub mod lease;
-pub mod membership;
-pub mod node_catalog;
+pub mod cluster;
 
 // --- 3. Owning shards ---------------------------------------------------
 pub mod shard_lifecycle;

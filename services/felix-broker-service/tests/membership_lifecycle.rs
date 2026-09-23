@@ -5,8 +5,8 @@
 //! pass. Running the real router means the HTTP contract is under test too.
 //!
 //! Run with `cargo test -p felix-broker-service --test membership_lifecycle`.
+use felix_broker_service::cluster::membership::{self, MembershipError};
 use felix_broker_service::config::MembershipConfig;
-use felix_broker_service::membership::{self, MembershipError};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::config::NodeLivenessConfig;
@@ -161,7 +161,7 @@ async fn boot_produces_one_live_record_and_a_restart_reuses_it() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-a", 7001),
-        &felix_broker_service::credential::NodeCredential::new(cluster.token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
     .expect("register");
@@ -173,7 +173,7 @@ async fn boot_produces_one_live_record_and_a_restart_reuses_it() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-a", 7001),
-        &felix_broker_service::credential::NodeCredential::new(cluster.token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
     .expect("re-register");
@@ -201,7 +201,7 @@ async fn graceful_shutdown_leaves_rather_than_expiring() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-a", 7001),
-        &felix_broker_service::credential::NodeCredential::new(cluster.token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
     .expect("register");
@@ -226,7 +226,7 @@ async fn an_abrupt_stop_is_detected_by_expiry() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-a", 7001),
-        &felix_broker_service::credential::NodeCredential::new(cluster.token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
     .expect("register");
@@ -264,7 +264,7 @@ async fn a_duplicate_advertised_address_is_refused_terminally() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-a", 7001),
-        &felix_broker_service::credential::NodeCredential::new(cluster.token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(cluster.token.clone()),
     )
     .await
     .expect("register");
@@ -276,7 +276,7 @@ async fn a_duplicate_advertised_address_is_refused_terminally() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-b", 7001),
-        &felix_broker_service::credential::NodeCredential::new(fleet_token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(fleet_token.clone()),
     )
     .await
     .expect_err("should be refused");
@@ -301,10 +301,10 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
         cluster.client.clone(),
         cluster.base_url.clone(),
         config("broker-a", 7001),
-        felix_broker_service::credential::NodeCredential::new(cluster.token.clone()),
+        felix_broker_service::cluster::credential::NodeCredential::new(cluster.token.clone()),
         serving,
         shutdown.clone(),
-        std::sync::Arc::new(felix_broker_service::lease::LeaseState::new(
+        std::sync::Arc::new(felix_broker_service::cluster::lease::LeaseState::new(
             Duration::from_secs(30),
         )),
     );
@@ -352,7 +352,7 @@ async fn a_brokers_credential_cannot_deregister_another_broker() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-b", 7002),
-        &felix_broker_service::credential::NodeCredential::new(fleet_token.clone()),
+        &felix_broker_service::cluster::credential::NodeCredential::new(fleet_token.clone()),
     )
     .await
     .expect("register broker-b");
@@ -388,7 +388,7 @@ async fn an_unauthenticated_broker_cannot_register() {
         &cluster.client,
         &cluster.base_url,
         &config("broker-a", 7001),
-        &felix_broker_service::credential::NodeCredential::new(""),
+        &felix_broker_service::cluster::credential::NodeCredential::new(""),
     )
     .await
     .expect_err("should be refused");

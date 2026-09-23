@@ -126,14 +126,14 @@ pub struct ClusterContext {
     pub ingress: Option<Arc<IngressRouter>>,
     pub peers: Option<Arc<crate::peer::PeerPool>>,
     /// This broker's authority to serve the shards it leads.
-    pub lease: Option<Arc<crate::lease::LeaseState>>,
+    pub lease: Option<Arc<crate::cluster::lease::LeaseState>>,
     /// How far a majority of each shard's replica set has got. Read by a
     /// publish to a `Quorum` stream, which cannot acknowledge until the
     /// majority holds its records.
     pub marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
     /// Where a client may connect, for answering `Topology`. `None` on a broker
     /// with no cluster behind it, which then advertises no such feature.
-    pub client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
+    pub client_endpoints: Option<Arc<crate::cluster::client_endpoints::ClientEndpoints>>,
 }
 
 fn build_publish_context(
@@ -278,8 +278,8 @@ fn build_publish_context(
                         // broker writing a shard someone else may already lead.
                         match &lease_for_worker {
                             Some(lease) if !lease.is_valid_now() => {
-                                crate::lease::metrics::record_refusal(
-                                    crate::lease::metrics::BOUNDARY_COMMIT,
+                                crate::cluster::lease::metrics::record_refusal(
+                                    crate::cluster::lease::metrics::BOUNDARY_COMMIT,
                                 );
                                 Err(anyhow::anyhow!(
                                     "lease lapsed before the record could be committed"
@@ -314,8 +314,8 @@ fn build_publish_context(
                     } => match &lease_for_worker {
                         // The same commit fence as a plain publish: see above.
                         Some(lease) if !lease.is_valid_now() => {
-                            crate::lease::metrics::record_refusal(
-                                crate::lease::metrics::BOUNDARY_COMMIT,
+                            crate::cluster::lease::metrics::record_refusal(
+                                crate::cluster::lease::metrics::BOUNDARY_COMMIT,
                             );
                             Err(anyhow::anyhow!(
                                 "lease lapsed before the record could be committed"

@@ -132,9 +132,9 @@ pub(crate) fn now_secs() -> i64 {
 pub fn report_expiry(credential: &NodeCredential) {
     match read_claims(&credential.bearer()) {
         Some(claims) => {
-            crate::membership::metrics::record_credential_expiry(claims.exp - now_secs())
+            crate::cluster::membership::metrics::record_credential_expiry(claims.exp - now_secs())
         }
-        None => crate::membership::metrics::record_credential_expiry_unknown(),
+        None => crate::cluster::membership::metrics::record_credential_expiry_unknown(),
     }
 }
 
