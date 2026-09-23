@@ -154,7 +154,7 @@ impl IngressRouter {
     }
 
     /// The placed shard count, or `None` if the routing snapshot does not know
-    /// this stream. See [`felix_router::ShardTable::placed_shards_for`].
+    /// this stream. See [`felix_router::RoutingTable::placed_shards_for`].
     pub fn placed_shards_for(
         &self,
         kind: ShardKind,

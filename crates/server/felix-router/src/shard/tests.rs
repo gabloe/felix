@@ -1,5 +1,9 @@
 //! Route resolution: every outcome, and the concurrency the hot path needs.
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
 use super::*;
+use crate::RegionRouter;
 
 fn key(shard: u32) -> ShardKey {
     ShardKey {

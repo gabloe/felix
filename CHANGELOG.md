@@ -65,6 +65,9 @@ for what the current release actually guarantees.
   placement pass to brokers that hold none of their log. Its shards are moved
   instead, which takes a few passes; the harness's `move_shard` steps
   placement until the move completes.
+- `felix_router::shard` is no longer public. Everything in it was already
+  re-exported at the crate root, so `felix_router::ShardRouter` and friends
+  are the paths to use.
 
 ## [0.6.0-preview] - 2026-09-20
 
