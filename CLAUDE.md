@@ -125,6 +125,9 @@ broker does not accept traffic for streams it does not yet know about.
 
 ## Conventions
 
+- **Code organization rules are in CONTRIBUTING.md** ("How the code is organized"): grouped
+  crate layout, `lib.rs` as a table of contents, domain-named modules, item order inside a
+  file, and unit tests in `<module>/tests.rs`. Follow them for new code.
 - **Comment the *why*, briefly.** A non-obvious constraint — an ordering requirement, a
   failure mode, a limit that exists for a reason — is worth a sentence or two next to the
   code that depends on it. Aim for that, not for an essay.
