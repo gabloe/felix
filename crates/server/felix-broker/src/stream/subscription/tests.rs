@@ -3,9 +3,11 @@
 //! `None` is the end of the subscription. Every caller treats it that way — the
 //! broker's subscribe handler, the client, and the benchmarks all stop when
 //! they see it. So `None` must mean the channel closed and nothing else.
+
+use std::sync::Arc;
+
 use super::*;
 use crate::stream::DeliveryEnvelope;
-use std::sync::Arc;
 
 fn payload(value: &str) -> Bytes {
     Bytes::copy_from_slice(value.as_bytes())

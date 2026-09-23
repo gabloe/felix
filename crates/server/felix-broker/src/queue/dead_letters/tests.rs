@@ -1,7 +1,8 @@
 //! What a group gave up on, and whose it was.
-use super::*;
 
 use felix_storage::log::FsyncMode;
+
+use super::*;
 
 fn config() -> LogConfig {
     LogConfig {

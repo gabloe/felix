@@ -1,6 +1,7 @@
-use super::*;
 use felix_storage::log::FsyncMode;
 use tempfile::tempdir;
+
+use super::*;
 
 fn config() -> LogConfig {
     LogConfig {

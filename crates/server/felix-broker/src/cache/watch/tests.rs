@@ -1,7 +1,8 @@
 //! The watch hub's contract: exact filtering, loud loss, clean teardown.
 
-use super::*;
 use felix_storage::{CacheChange, CacheObserver};
+
+use super::*;
 
 fn change(key: &str, offset: u64) -> CacheChange {
     CacheChange {

@@ -1,5 +1,6 @@
-use super::*;
 use serial_test::serial;
+
+use super::*;
 
 fn reset_collector() {
     let Some(collector) = COLLECTOR.get() else {

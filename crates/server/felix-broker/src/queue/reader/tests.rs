@@ -1,9 +1,9 @@
 //! A group reading a real log, with a real cursor underneath it.
-use super::*;
 
 use bytes::Bytes;
 use felix_storage::log::{FsyncMode, LogConfig};
 
+use super::*;
 use crate::durable::{DurableStorage, StreamLog};
 use crate::queue::DeadLetters;
 
