@@ -894,11 +894,11 @@ broker's `StorageApi`.
 
 ### 14.1 Ephemeral cache implementation
 
-`crates/server/felix-storage/src/lib.rs::StorageApi` defines `put`, `get`, `delete`,
+`crates/server/felix-storage/src/cache.rs::StorageApi` defines `put`, `get`, `delete`,
 `len`, and `is_empty`.
 
 The running broker uses
-`crates/server/felix-storage/src/ephemeral_cache.rs::EphemeralCache`, which stores
+`crates/server/felix-storage/src/cache/ephemeral.rs::EphemeralCache`, which stores
 entries in an async `RwLock<HashMap<CacheKey, CacheEntry>>`.
 
 TTL behavior is lazy:

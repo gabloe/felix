@@ -213,7 +213,7 @@ prove the write was unfinished; when it is not, recovery refuses to choose
 between "unfinished" and "rotted" and fails loudly instead.
 
 The full rules live in `is_repairable_tail` in
-[`segment/reader.rs`](../crates/server/felix-storage/src/segment/reader.rs).
+[`segment/scan.rs`](../crates/server/felix-storage/src/segment/scan.rs).
 
 ## Golden vectors
 

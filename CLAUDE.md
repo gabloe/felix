@@ -77,11 +77,15 @@ e.g. reading history before registering a subscriber loses any publish landing i
 
 `crates/server/felix-storage/src/`:
 
-- `segment/` — the byte format (`format.rs`), platform I/O (`io.rs`: `pread`, preallocation,
-  `F_FULLFSYNC` on macOS), writer, reader, sparse index.
-- `disk_log/` — `segments.rs` (rollover, offset routing, truncation), `recovery.rs` (startup
-  validation and torn-tail repair), `sync.rs` (fsync policy and group commit), `mod.rs` (the
-  async `AppendOnlyLog` seam).
+- `io.rs` — platform I/O: `pread`, preallocation, `F_FULLFSYNC` on macOS, and the
+  optional io_uring flusher.
+- `segment/` — the byte format (`format.rs`), the startup scan that decides torn tail vs.
+  corruption (`scan.rs`), range reads (`reader.rs`), the writer, and the sparse index.
+- `disk_log.rs` — the async `AppendOnlyLog` seam; under `disk_log/`: `append.rs` (the append
+  path and background rollover), `flush.rs`, `segments.rs` (with `rollover.rs` and
+  `truncation.rs`), `recovery.rs` (startup validation and torn-tail repair), `sync.rs` (fsync
+  policy and group commit), `retention.rs`.
+- `cache/` and `counter_log.rs` — the cache and counters, each projected from its own logs.
 
 Load-bearing properties, all documented in `docs/durable-storage.md` and
 `docs/storage-format.md`:

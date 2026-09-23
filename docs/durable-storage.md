@@ -72,10 +72,12 @@ Each module owns one decision:
 | Module | Owns |
 | --- | --- |
 | `segment/format` | the byte layout and every corruption verdict |
-| `segment/io` | positioned reads, preallocation, device flush |
+| `io` | positioned reads, preallocation, device flush |
 | `segment/index` | the sparse index and how a seek position is chosen |
 | `segment/writer` | appending to one file; nothing about rollover |
-| `segment/reader` | validating scans and bounded range reads |
+| `segment/scan` | validating scans, and whether damage is a repairable tail |
+| `segment/reader` | bounded range reads |
+| `disk_log/append` | the append path, and when it rolls a segment |
 | `disk_log/segments` | rollover, which segment holds an offset, truncation |
 | `disk_log/recovery` | startup discovery, validation, torn-tail repair |
 | `disk_log/sync` | when a flush happens and who waits for it |

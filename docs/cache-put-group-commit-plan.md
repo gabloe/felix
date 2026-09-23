@@ -4,7 +4,7 @@ Status: **implemented.** The design below shipped as written: the sequencer
 was lifted into `felix-storage` (`commit_order.rs`, shared with the broker's
 publish path), `put_checked`/`delete_checked` follow the stage → commit →
 turn-wait → apply flow, compaction is gated on the apply step with nothing
-staged behind it, and the tests in `crates/server/felix-storage/src/log_cache/tests.rs`
+staged behind it, and the tests in `crates/server/felix-storage/src/cache/log_cache/tests/`
 cover the throughput regression (flush-count, revert-verified), ordering,
 durability-before-visibility, cancellation, and compaction under load. The
 crash-mid-window test is deferred to the `felix-log-tool` kill harness — the
@@ -25,7 +25,7 @@ correct, they just cannot batch.
 
 ## Root cause
 
-`crates/server/felix-storage/src/log_cache/mod.rs`:
+`crates/server/felix-storage/src/cache/log_cache.rs`:
 
 - Each `CacheShard` has a single `state: Mutex<ShardState>` (`{ log, index }`).
 - `put_checked` / `delete_checked` take that mutex and, **while holding it**, call
@@ -51,7 +51,7 @@ lets many run concurrently:
    *immediately*, before the durability wait.
 3. `durable.commit(&pending)` — waits for the fsync, which is **group-committed**
    across every concurrent `commit` in the window (`DiskLog::append_pending` +
-   `commit`, `disk_log/mod.rs`).
+   `commit`, `disk_log.rs`).
 4. `turn.wait()` — blocks until every lower offset has been applied.
 5. Apply to the in-memory replay ring + fanout, **in disk-offset order**.
 
