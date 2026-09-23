@@ -13,7 +13,7 @@ publish = false
 
 [[bin]]
 name = "felix-cluster"
-path = "src/bin/felix-cluster.rs"
+path = "src/bin/felix-cluster/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
