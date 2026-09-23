@@ -780,9 +780,10 @@ impl Client {
     /// [`CacheWatchItem::Lagged`] naming the offset to re-watch from.
     ///
     /// A watch reads one shard. A key names its shard by hashing, exactly as a
-    /// get does; a prefix watch reads shard 0 — use [`Client::watch_cache_shard`]
-    /// per shard for a multi-shard cache, since keys sharing a prefix hash
-    /// apart.
+    /// get does. A prefix watch reads shard 0 of a single-shard cache and is
+    /// refused on a multi-shard one, since keys sharing a prefix hash apart and
+    /// shard 0 alone would look complete while missing the rest: use
+    /// [`Client::watch_cache_shard`] once per shard.
     ///
     /// Fails without sending anything when the broker did not advertise
     /// [`felix_wire::FEATURE_CACHE_WATCH`]: an unrecognised message type is

@@ -425,7 +425,8 @@ pub enum Message {
         /// per shard. Ignored for a `key` watch — the key names its shard by
         /// hashing, the same resolution a `cache_get` uses.
         ///
-        /// Absent means shard 0, which is every key of a single-shard cache.
+        /// Absent means shard 0, which is every key of a single-shard cache;
+        /// on a multi-shard cache the broker refuses an absent shard.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shard: Option<u32>,
         /// Resume from this cache-log offset — the first change the client has
