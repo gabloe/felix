@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790126597111,
+  "lastUpdate": 1790192068847,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13780,6 +13780,58 @@ window.BENCHMARK_DATA = {
             "range": "44352.34",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 914731.72\nmean: 903317.35\nstdev: 44352.34\ncv: 4.91%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e68304587bdf96d991e3095e3e619025322bcbba",
+          "message": "ci(formal): a change to the modelled code must touch the spec or say why not (#642)\n\n* ci(formal): a change to the modelled code must touch the spec or say why not\n\nTier 1 of #598. Evidence citations catch a renamed test, not the drift that\nhappened in #268: a protocol change that touched neither the spec nor a cited\ntest. A PR touching the lease, replication, shard lifecycle, placement or\nreplica-position code now has to touch docs/formal/ too, or carry a\n`Spec-Unaffected: <why>` line in a commit message or the PR description.\n\nRuns in the TLA+ job on pull requests; `task tla:pairing` locally.\n\n* docs(formal): say trace validation is not planned, and when to revisit it\n\nCloses the last open item on #598: the decision on Tier 3 is recorded where\nsomeone reading the model's limits will find it.",
+          "timestamp": "2026-09-23T12:31:55-07:00",
+          "tree_id": "8d445fdf92af9243fbbcdfbd07affea5019818ba",
+          "url": "https://github.com/gabloe/felix/commit/e68304587bdf96d991e3095e3e619025322bcbba"
+        },
+        "date": 1790192068168,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 398363.03,
+            "range": "24629.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 398363.03\nmean: 382297.97\nstdev: 24629.03\ncv: 6.44%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 398363.03,
+            "range": "24629.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 398363.03\nmean: 382297.97\nstdev: 24629.03\ncv: 6.44%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94116.48,
+            "range": "4189.20",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94116.48\nmean: 92122.38\nstdev: 4189.20\ncv: 4.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 941164.76,
+            "range": "41891.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 941164.76\nmean: 921223.85\nstdev: 41891.98\ncv: 4.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
