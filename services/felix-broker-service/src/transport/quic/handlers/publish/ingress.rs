@@ -16,6 +16,7 @@ use crate::transport::quic::GLOBAL_INGRESS_DEPTH;
 use crate::transport::quic::handlers::publish::ack::EnqueuePolicy;
 use crate::transport::quic::handlers::publish::admission::AdmissionPermit;
 use crate::transport::quic::handlers::publish::{PublishContext, PublishJob};
+use crate::transport::quic::telemetry::{t_counter, t_gauge};
 
 pub(crate) enum PublishTarget {
     Resolved {

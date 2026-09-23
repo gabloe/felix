@@ -5,7 +5,6 @@ mod codec;
 mod conn;
 mod errors;
 mod streams;
-#[macro_use]
 mod telemetry;
 
 pub mod handlers {

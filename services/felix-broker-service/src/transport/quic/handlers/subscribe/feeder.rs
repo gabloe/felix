@@ -9,7 +9,7 @@ use crate::timings;
 use crate::transport::quic::handlers::publish::SubscriptionLimiter;
 use crate::transport::quic::handlers::subscribe::config::EventWriterConfig;
 use crate::transport::quic::handlers::subscribe::lane::{LaneCommand, WriterLaneManager};
-use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
+use crate::transport::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
 pub(super) async fn run_lane_feeder(
     mut event_rx: SubscriptionReceiver,

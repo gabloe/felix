@@ -9,6 +9,7 @@ use std::time::Instant;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 use crate::transport::quic::errors::AckEnqueueError;
+use crate::transport::quic::telemetry::{t_counter, t_gauge};
 use crate::transport::quic::{
     ACK_ENQUEUE_TIMEOUT, ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
 };

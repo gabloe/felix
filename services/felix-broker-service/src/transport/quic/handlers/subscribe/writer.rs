@@ -18,7 +18,7 @@ use crate::transport::quic::handlers::subscribe::lane::{
     ConnectionCommand, LaneCommand, LaneDelivery, LaneRuntimeConfig, LaneSubscriber,
     WriterLaneManager,
 };
-use crate::transport::quic::telemetry::{t_now_if, t_should_sample};
+use crate::transport::quic::telemetry::{t_counter, t_histogram, t_now_if, t_should_sample};
 
 #[cfg(test)]
 pub(super) async fn write_parts_to<W>(

@@ -13,6 +13,7 @@ use crate::transport::quic::handlers::subscribe::conn_counts::{
     connection_subscriber_unregister, hash64,
 };
 use crate::transport::quic::handlers::subscribe::writer::{run_connection_writer, run_writer_lane};
+use crate::transport::quic::telemetry::{t_counter, t_histogram};
 
 #[derive(Debug)]
 pub(super) struct LaneSubscriber {

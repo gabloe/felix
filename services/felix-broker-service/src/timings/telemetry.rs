@@ -1,9 +1,9 @@
-// Opt-in timing collection for broker hot paths — demos, benchmarks, and perf
-// investigations, not production metrics.
-//
-// Sampling is a global counter modulo `sample_every`: best-effort and lossy.
-// Samples land in `Mutex<Vec<u64>>`s, which is fine at sampled rates but is
-// exactly why the whole thing stays behind explicit enablement.
+//! Opt-in timing collection for broker hot paths — demos, benchmarks, and perf
+//! investigations, not production metrics.
+//!
+//! Sampling is a global counter modulo `sample_every`: best-effort and lossy.
+//! Samples land in `Mutex<Vec<u64>>`s, which is fine at sampled rates but is
+//! exactly why the whole thing stays behind explicit enablement.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};

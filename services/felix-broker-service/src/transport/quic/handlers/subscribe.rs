@@ -74,6 +74,7 @@ use tokio::sync::mpsc;
 use super::publish::{Outgoing, SubscriptionLimiter, send_outgoing_critical};
 use crate::transport::quic::SUBSCRIPTION_ID;
 use crate::transport::quic::codec::write_message;
+use crate::transport::quic::telemetry::t_counter;
 /// Report a failed subscribe on the control stream and keep the stream alive.
 ///
 /// Extracted because the tail-only and resume paths fail identically, and

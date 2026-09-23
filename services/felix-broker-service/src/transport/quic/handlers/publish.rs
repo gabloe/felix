@@ -108,6 +108,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::subscribe::WriterLaneManager;
 
 use crate::transport::quic::STREAM_CACHE_TTL;
+use crate::transport::quic::telemetry::t_counter;
 
 pub(crate) type StreamHandleCache = HashMap<String, (Option<StreamHandle>, Instant)>;
 

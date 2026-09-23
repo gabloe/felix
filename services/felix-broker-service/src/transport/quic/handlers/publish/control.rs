@@ -24,7 +24,9 @@ use crate::transport::quic::handlers::publish::{
     PublishContext, PublishJob, PublishRoute, StreamHandleCache, internal_ack, publish_target,
     resolve_route,
 };
-use crate::transport::quic::telemetry::{log_decode_error, t_consume_instant, t_now_if};
+use crate::transport::quic::telemetry::{
+    log_decode_error, t_consume_instant, t_counter, t_histogram, t_now_if,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_binary_publish_batch_control(

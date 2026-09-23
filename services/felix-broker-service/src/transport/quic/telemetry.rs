@@ -286,6 +286,7 @@ pub(crate) fn log_decode_error(context: &str, err: &anyhow::Error, frame: &Frame
 pub(crate) fn log_decode_error(_context: &str, _err: &anyhow::Error, _frame: &Frame) {}
 
 pub(crate) use t_counter;
+pub(crate) use t_gauge;
 pub(crate) use t_histogram;
 
 #[cfg(test)]
