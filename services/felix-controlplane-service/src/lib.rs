@@ -1,50 +1,53 @@
 //! The control plane: the cluster's metadata, and the decisions taken from it.
 //!
-//! **The entry point is `main.rs`**, next door. It builds an [`app::AppState`]
-//! — a store, an auth validator, config — hands it to [`app::build_router`],
-//! and starts the background loops that make decisions on a timer.
+//! It carries no payload data. It owns *who and where*: tenants, namespaces,
+//! streams, caches, the node catalog, and which broker leads each shard.
+//! Brokers read it and act; it never reaches into a broker.
 //!
-//! The control plane carries no payload data. It owns *who and where*:
-//! tenants, namespaces, streams, caches, the node catalog, and which broker
-//! leads each shard. Brokers read it and act; it never reaches into a broker.
+//! There are two entry points, both reached from the `felix-controlplane`
+//! binary: [`server::run`] serves the API and runs the background loops, and
+//! [`migrate::run`] moves metadata between backends.
 //!
-//! # The HTTP surface
+//! # Vocabulary
 //!
-//! [`api`] is the REST layer and [`app`] assembles it into a router. [`model`]
-//! is what those endpoints read and write — and the place to look first, since
-//! the rules about a shard assignment or a node lifecycle are stated on the
-//! type rather than scattered through handlers. [`auth`] verifies Felix
-//! tokens, mints them through token exchange, and publishes JWKS; [`tls`]
-//! terminates the listener.
+//! [`model`] is what every endpoint reads and writes, and the place to look
+//! first: the rules about a shard assignment or a node lifecycle are stated on
+//! the type rather than scattered through handlers.
 //!
-//! # Storage, behind one trait
+//! # Serving
+//!
+//! [`api`] is the REST layer: handlers, the router, the OpenAPI document, and
+//! `/ready`, which gates traffic on the store being usable rather than on the
+//! process being up. [`auth`] verifies Felix tokens, mints them through token
+//! exchange, and publishes JWKS.
+//!
+//! # Keeping
 //!
 //! [`store::ControlPlaneStore`] has three implementations: in memory, over
-//! Postgres, and over an embedded Raft group ([`raft`], with
-//! [`store::state_machine`] applying the log). All three are held to one
-//! shared contract test, because a rule that holds only in memory is a rule
-//! the deployed system does not have. [`migrate`] moves metadata between
-//! backends.
+//! Postgres, and over an embedded Raft group ([`store::raft`], built on the
+//! consensus seam in [`raft`]). All three are held to one shared contract
+//! test, because a rule that holds only in memory is a rule the deployed
+//! system does not have.
 //!
-//! # The decisions, each on a timer
+//! # Deciding
 //!
-//! - [`placement`] decides which broker leads each shard — by rendezvous
-//!   hashing for a new one, by promotion when a leader is lost, and by a
-//!   staged handoff when a live broker has to give one up. It is a pure
-//!   function of a metadata snapshot, which is what lets two instances agree
-//!   without coordinating.
-//! - [`membership`] expires nodes that stopped heartbeating, since silence is
-//!   the only signal that a broker is gone.
-//! - [`replica_positions`] reads what leaders reported about their replicas,
-//!   which is what gates a promotion and a cut-over.
-//! - [`readiness`] answers `/ready`, gating traffic on the store being usable
-//!   rather than on the process being up.
+//! [`cluster`] makes the timer-driven decisions about the fleet:
+//! [`cluster::membership`] expires nodes that stopped heartbeating, and
+//! [`cluster::placement`] decides which broker leads each shard, as a pure
+//! function of a metadata snapshot so that two instances agree without
+//! coordinating.
 //!
-//! Each module owns its own tests at `<module>/tests.rs`.
+//! # Running
+//!
+//! [`config`] reads the environment and YAML, [`server`] wires everything
+//! together and drains it in order, [`migrate`] is the backend migration tool,
+//! and [`clock`] is the wall clock the stored timestamps use.
+//!
+//! Each module keeps its unit tests at `<module>/tests.rs`.
 
-pub mod api;
 pub mod model;
 
+pub mod api;
 pub mod auth;
 
 pub mod raft;

@@ -12,7 +12,7 @@
 //! Nothing here consults a clock or generates a value: heartbeat and expiry
 //! commands carry their timestamps, bootstrap carries its candidate keys.
 //! If a command cannot be decoded — a newer envelope version, an unknown
-//! operation — the answer is an [`MetaError::Unsupported`] *response*,
+//! operation — the answer is a [`MetaError::Unsupported`](super::command::MetaError::Unsupported) *response*,
 //! identical on every replica; silently skipping a committed command would
 //! fork this replica's state from the group's.
 use std::collections::{BTreeMap, VecDeque};

@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::store::raft::command::{MetaCommand, MetaResult, decode_result, encode_command};
 
+/// Run one `migrate` subcommand; `args` starts after the word `migrate`.
 pub async fn run(args: Vec<String>) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("export-postgres") => {

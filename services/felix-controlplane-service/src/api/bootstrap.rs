@@ -222,7 +222,7 @@ pub async fn initialize(
 /// `previous_token`, both generations of instance accept both, and the old one
 /// is dropped once the deploy settles. Transport-level client authentication is
 /// enforced *before* this runs when bootstrap mTLS is configured — see
-/// [`crate::tls`] — which is the second factor the token alone does not give.
+/// [`crate::server::tls`] — which is the second factor the token alone does not give.
 fn ensure_bootstrap_authorized(
     state: &AppState,
     headers: &HeaderMap,

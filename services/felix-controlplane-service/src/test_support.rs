@@ -1,9 +1,5 @@
-//! Shared `AppState` construction for tests across this crate.
-//!
-//! Three near-identical builders existed before this, one per file that
-//! needed a fake `AppState`, differing only in the one or two fields each
-//! test actually varied. One builder means a future field addition updates
-//! once instead of three times.
+//! Shared `AppState` construction for tests across this crate, so a new
+//! field is added in one place.
 #![cfg(test)]
 
 use std::sync::Arc;
