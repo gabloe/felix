@@ -1019,6 +1019,21 @@ Leave it unset unless you are experimenting; the derived value is correct by
 construction.
 :::
 
+:::caution[One client process cannot measure a broker's ceiling on macOS]
+Every client endpoint in a process shares the pool's last runtime, which is
+one thread. That is deliberate: a client's publish and event endpoints carry
+two halves of one request/response flow, and splitting them costs two
+cross-thread wakes per message (measured ~123 K msg/s co-located against
+~21 K spread). The consequence is that a single process on macOS cannot send
+faster than one thread can drive, however many clients, sockets or publisher
+tasks it creates. A sweep of listener counts or broker settings from one
+generator process comes back flat whether or not the change works.
+
+To measure transport scaling, generate load from several processes — on
+Linux, from separate machines, as `scripts/perf/azure` does. Linux defaults
+this pool to `0`, so the cap does not apply there.
+:::
+
 ### `FELIX_ACK_ELICITING_THRESHOLD`
 
 **Description**: How many ack-eliciting packets a peer may receive before it must send an ACK (QUIC ACK-frequency extension; applies between quinn peers). The RFC default of every other packet costs a reverse-path datagram — plus its wakeup chain — per ~2 datagrams of data; the higher default trades a little loss-detection latency (bounded by the 2 ms `max_ack_delay` Felix also negotiates) for measurably less per-byte wakeup traffic (~+15% throughput on loopback).
