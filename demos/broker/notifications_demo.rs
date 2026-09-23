@@ -47,7 +47,12 @@ async fn run_demo(args: DemoArgs) -> Result<()> {
             .register_stream(tenant, "default", "alerts", StreamMetadata::default())
             .await?;
         broker
-            .register_cache(tenant, "default", LAST_ALERTS_CACHE, CacheMetadata)
+            .register_cache(
+                tenant,
+                "default",
+                LAST_ALERTS_CACHE,
+                CacheMetadata::default(),
+            )
             .await?;
     }
 

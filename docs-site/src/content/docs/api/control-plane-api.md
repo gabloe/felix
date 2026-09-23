@@ -135,13 +135,20 @@ signing keys to verify against.
 
 `POST /v1/nodes/{node_id}/drain` marks a broker as leaving: it keeps serving,
 and placement moves every shard it leads to brokers that are staying, one
-handoff at a time. `GET /v1/shard-assignments?leader={node_id}` is empty when
-it is done, and `DELETE /v1/nodes/{node_id}` is refused until then. A shard
-being moved shows its destination as `successor` and, once the leader has
-been told to stop, `"state": "draining"`. See
+handoff at a time. A shard being moved shows its destination as `successor`
+and, once the leader has been told to stop, `"state": "draining"`.
+
+`PATCH /v1/nodes/{node_id}` changes `region`, `labels` or `capacity`, and moves
+`lifecycle` between `live` and `draining` — `{"lifecycle": "live"}` cancels a
+drain. Nothing observed is patchable: a `down` or `left` broker is revived only
+by registering, so a patch cannot claim a silent broker is alive.
+
+`DELETE /v1/nodes/{node_id}` removes a broker's record. It needs `node.manage`
+on `cluster:*`, and is refused (409) while the broker is `live` or `draining`
+or while any shard names it as leader or replica. See
 [Adding, draining and removing brokers](/felix/deployment/scaling/).
 
-The registration, heartbeat, drain, and deregister endpoints require
+The registration, heartbeat, drain, deregister and patch endpoints require
 `node.manage` over the node being changed. A broker's credential is scoped to
 `node:{its own id}`, so it cannot act for another broker; an operator holding
 `cluster:*` can manage the whole fleet. Registration authorises the identity in
@@ -171,6 +178,18 @@ Content-Type: application/json
 { "stream": "orders", "kind": "Stream", "shards": 1, "replication_factor": 1,
   "retention": { "max_age_seconds": null, "max_size_bytes": null },
   "consistency": "Leader", "delivery": "AtLeastOnce", "durable": true }
+```
+
+A cache takes `consistency` the same way, `"Leader"` when omitted. Under
+`"Quorum"` a put or delete is acknowledged only once a majority of the shard's
+replicas hold it; counter updates are acknowledged by the leader either way.
+
+```http
+POST /v1/tenants/t1/namespaces/payments/caches
+Content-Type: application/json
+
+{ "cache": "sessions", "display_name": "Sessions", "shards": 4,
+  "replication_factor": 3, "consistency": "Quorum" }
 ```
 
 A tenant admin's token already carries the manage actions: exchange expands

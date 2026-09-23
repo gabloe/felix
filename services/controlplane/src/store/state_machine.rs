@@ -392,5 +392,4 @@ impl AppStateMachine for MetadataStateMachine {
 }
 
 #[cfg(test)]
-#[path = "state_machine_tests.rs"]
 mod tests;

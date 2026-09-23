@@ -250,7 +250,6 @@ pub enum ShardAssignmentChangeOp {
 }
 
 #[cfg(test)]
-#[path = "shard_tests.rs"]
 mod tests;
 
 /// What a shard's leader last reported about its replicas.

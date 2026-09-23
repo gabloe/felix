@@ -71,7 +71,7 @@ async fn run_protocol_suite() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", CacheMetadata)
+        .register_cache("t1", "default", "primary", CacheMetadata::default())
         .await?;
     broker
         .register_stream("t1", "default", "conformance", Default::default())

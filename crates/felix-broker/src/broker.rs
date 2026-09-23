@@ -273,8 +273,14 @@ impl StreamHandle {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CacheMetadata;
+/// What the broker knows about a registered cache.
+#[derive(Debug, Clone, Default)]
+pub struct CacheMetadata {
+    /// What acknowledging a write to this cache means. A cache's shards are
+    /// replicated like a stream's, so `Quorum` holds the acknowledgement until
+    /// a majority of the shard's replica set has the write.
+    pub consistency: ConsistencyLevel,
+}
 
 impl Default for StreamMetadata {
     fn default() -> Self {

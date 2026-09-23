@@ -86,6 +86,17 @@ impl NodeLifecycle {
             _ => true,
         }
     }
+
+    /// Whether an operator, rather than an observed signal, may move `self` to
+    /// `next`.
+    ///
+    /// Only into and out of `Draining`, and only from a serving node. Reviving
+    /// a `Down` or `Left` node is registration's to do: an operator setting one
+    /// `Live` would be claiming a broker is alive that nothing has heard from.
+    pub fn operator_can_move_to(self, next: NodeLifecycle) -> bool {
+        use NodeLifecycle::*;
+        self == next || matches!((self, next), (Live, Draining) | (Draining, Live))
+    }
 }
 
 /// Capacity hints an operator provides for placement.
@@ -217,8 +228,8 @@ pub struct NodePatchRequest {
     pub region: Option<String>,
     pub labels: Option<BTreeMap<String, String>>,
     pub capacity: Option<NodeCapacity>,
-    /// The only status field an operator may drive, and only into a lifecycle
-    /// [`NodeLifecycle::can_transition_to`] allows from the current one.
+    /// The only status field an operator may drive, and only between `live` and
+    /// `draining` ([`NodeLifecycle::operator_can_move_to`]).
     pub lifecycle: Option<NodeLifecycle>,
 }
 
@@ -236,7 +247,7 @@ impl NodePatchRequest {
             patched.spec.capacity = capacity.clone();
         }
         if let Some(lifecycle) = self.lifecycle {
-            if !node.status.lifecycle.can_transition_to(lifecycle) {
+            if !node.status.lifecycle.operator_can_move_to(lifecycle) {
                 return Err(NodeValidationError::UnsupportedTransition {
                     from: node.status.lifecycle,
                     to: lifecycle,
@@ -321,5 +332,4 @@ fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), NodeValidati
 }
 
 #[cfg(test)]
-#[path = "node_tests.rs"]
 mod tests;

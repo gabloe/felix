@@ -278,8 +278,8 @@ fn build_publish_context(
                         // broker writing a shard someone else may already lead.
                         match &lease_for_worker {
                             Some(lease) if !lease.is_valid_now() => {
-                                crate::lease_metrics::record_refusal(
-                                    crate::lease_metrics::BOUNDARY_COMMIT,
+                                crate::lease::metrics::record_refusal(
+                                    crate::lease::metrics::BOUNDARY_COMMIT,
                                 );
                                 Err(anyhow::anyhow!(
                                     "lease lapsed before the record could be committed"
@@ -314,8 +314,8 @@ fn build_publish_context(
                     } => match &lease_for_worker {
                         // The same commit fence as a plain publish: see above.
                         Some(lease) if !lease.is_valid_now() => {
-                            crate::lease_metrics::record_refusal(
-                                crate::lease_metrics::BOUNDARY_COMMIT,
+                            crate::lease::metrics::record_refusal(
+                                crate::lease::metrics::BOUNDARY_COMMIT,
                             );
                             Err(anyhow::anyhow!(
                                 "lease lapsed before the record could be committed"
@@ -423,6 +423,8 @@ fn build_publish_context(
         peers,
         lease,
         client_endpoints,
+        marks,
+        quorum_timeout,
         workers: Arc::new(worker_txs),
         worker_count,
         depth: queue_depth,

@@ -34,7 +34,7 @@ async fn run_demo(mut bench: BenchConfig) -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", CacheMetadata)
+        .register_cache("t1", "default", "primary", CacheMetadata::default())
         .await?;
     let config = broker::config::BrokerConfig::from_env()?;
     let (auth, auth_override) = resolve_demo_auth(&config)?;

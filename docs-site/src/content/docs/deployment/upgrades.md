@@ -132,8 +132,9 @@ If it changes `FORMAT_VERSION`, back up first and do not plan to roll back.
 
 ## What this does not cover
 
-Topology, install steps, and replacing a persistent volume, which wait on the
-packaging work. Adding, draining and removing a broker have their own page:
+Topology, install steps and replacing a persistent volume are on
+[Kubernetes Deployment](/felix/deployment/kubernetes/). Adding, draining and
+removing a broker have their own page:
 [Adding, draining and removing brokers](/felix/deployment/scaling/).
 
 The two observable checks available during any upgrade:

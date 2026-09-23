@@ -231,6 +231,12 @@ pub(crate) struct PublishContext {
     /// is the per-connection bundle of what the cluster makes available, beside
     /// `ingress` and `peers`.
     pub(crate) client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
+    /// How far a majority of each shard's replica set has got, for a write
+    /// that must not be acknowledged before it does. `None` off a cluster.
+    pub(crate) marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
+    /// How long such a write waits for its majority before saying it cannot
+    /// confirm one.
+    pub(crate) quorum_timeout: Duration,
     pub(crate) workers: Arc<Vec<mpsc::Sender<PublishJob>>>,
     pub(crate) worker_count: usize,
     pub(crate) depth: Arc<AtomicUsize>,
@@ -469,7 +475,7 @@ pub(crate) async fn resolve_route(
     if let Some(lease) = lease
         && !lease.looks_valid()
     {
-        crate::lease_metrics::record_refusal(crate::lease_metrics::BOUNDARY_ADMISSION);
+        crate::lease::metrics::record_refusal(crate::lease::metrics::BOUNDARY_ADMISSION);
         tracing::debug!(
             tenant_id,
             namespace,

@@ -320,7 +320,6 @@ fn budget_spent(node_id: &str, budget: Duration, attempts: u32, last: &str) -> S
 }
 
 #[cfg(test)]
-#[path = "forward_tests.rs"]
 mod tests;
 
 /// What a cache operation asks the owner to do.

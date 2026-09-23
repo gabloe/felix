@@ -281,6 +281,7 @@ async fn pg_delete_namespace_emits_cascades() {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await
         .expect("cache");
@@ -631,6 +632,7 @@ async fn pg_store_cache_conflict_and_not_found() {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await
         .expect_err("missing namespace");
@@ -643,6 +645,7 @@ async fn pg_store_cache_conflict_and_not_found() {
         display_name: "Primary".to_string(),
         shards: 1,
         replication_factor: 1,
+        consistency: controlplane::model::ConsistencyLevel::Leader,
     };
     store.create_cache(cache.clone()).await.expect("cache");
     let err = store.create_cache(cache).await.expect_err("conflict");
@@ -749,6 +752,9 @@ async fn pg_store_list_get_and_exists_roundtrip() {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            // Not the default, so reading it back proves the column round-trips
+            // rather than the default filling it in.
+            consistency: ConsistencyLevel::Quorum,
         })
         .await
         .expect("cache");
@@ -775,7 +781,11 @@ async fn pg_store_list_get_and_exists_roundtrip() {
         .list_caches("t1", "default")
         .await
         .expect("list caches");
-    assert!(caches.iter().any(|c| c.cache == "primary"));
+    assert!(
+        caches
+            .iter()
+            .any(|c| c.cache == "primary" && matches!(c.consistency, ConsistencyLevel::Quorum))
+    );
     let cache = store
         .get_cache(&controlplane::model::CacheKey {
             tenant_id: "t1".to_string(),
@@ -784,6 +794,7 @@ async fn pg_store_list_get_and_exists_roundtrip() {
         })
         .await
         .expect("get cache");
+    assert!(matches!(cache.consistency, ConsistencyLevel::Quorum));
     assert_eq!(cache.cache, "primary");
 
     assert!(store.tenant_exists("t1").await.expect("tenant exists"));

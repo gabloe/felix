@@ -603,5 +603,4 @@ impl AuthStore for RaftStore {
 }
 
 #[cfg(test)]
-#[path = "raft_backend_tests.rs"]
 mod tests;

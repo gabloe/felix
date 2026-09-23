@@ -10,6 +10,8 @@
 //! What must never happen is carrying on from a checkpoint the control plane can
 //! no longer honour, because that silently drops ownership changes and leaves
 //! this broker serving shards it no longer owns.
+pub mod metrics;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +21,7 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::shard_watch_metrics as mm;
+use crate::shard_watch::metrics as mm;
 
 /// Ceiling on poll backoff after a failure.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -338,5 +340,4 @@ fn backoff(interval: Duration, failures: u32) -> Duration {
 }
 
 #[cfg(test)]
-#[path = "shard_watch_tests.rs"]
 mod tests;

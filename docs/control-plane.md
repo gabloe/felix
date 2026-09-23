@@ -218,8 +218,9 @@ not a backdoor into tenant data.
 
 #### Authorizing membership writes
 
-Registration, heartbeat, drain, and deregistration all require `node.manage`
-over the node being changed:
+Registration, heartbeat, drain, deregistration and `PATCH /v1/nodes/{id}` all
+require `node.manage` over the node being changed (`DELETE /v1/nodes/{id}`
+requires it on `cluster:*`, so a broker cannot remove its own record):
 
 | Object | Who holds it | Can change |
 | --- | --- | --- |
@@ -524,8 +525,9 @@ not the same event as the shard becoming servable.
 
 #### Resolving a shard to a node
 
-`felix-router` answers *where* a shard lives; the region allowlist answers
-*whether* traffic may cross to it. Keeping those separate matters: folding them
+`felix-router` answers *where* a shard lives; the region allowlist is meant to
+answer *whether* traffic may cross to it, though nothing consults it yet
+(#616). Keeping those separate matters: folding them
 together makes a placement decision look like a policy decision, and they fail
 for different reasons and need different fixes.
 

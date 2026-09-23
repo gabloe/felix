@@ -88,7 +88,13 @@ pub(crate) fn resolve_cache_route(
 // it, and the publish handlers carry the same allow for the same reason.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_cache_op(
-    cache_store: &dyn felix_storage::StorageApi,
+    broker: &felix_broker::Broker,
+    // Read by a write to a `Quorum` cache, which is not acknowledged until a
+    // majority of the shard's replicas hold it.
+    quorum: (
+        Option<&crate::replication::quorum::QuorumMarks>,
+        std::time::Duration,
+    ),
     ingress: Option<&IngressRouter>,
     peers: Option<&crate::peer::PeerPool>,
     // The caller's token, carried on a forward for the owner to verify.
@@ -100,31 +106,61 @@ pub(crate) async fn apply_cache_op(
     request: CacheRequest,
 ) -> Result<Option<Bytes>, String> {
     match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
-        CacheRoute::Local { shard } => Ok(match request {
-            CacheRequest::Put { value, ttl_ms } => {
-                let ttl = (ttl_ms > 0).then(|| std::time::Duration::from_millis(ttl_ms));
-                cache_store
-                    .put(tenant_id, namespace, cache, shard, key, value, ttl)
-                    .await;
-                None
-            }
-            CacheRequest::Get => {
-                cache_store
-                    .get(tenant_id, namespace, cache, shard, key)
+        CacheRoute::Local { shard } => {
+            let cache_store = broker.cache();
+            let written = ShardKey {
+                tenant_id: tenant_id.to_string(),
+                namespace: namespace.to_string(),
+                stream: cache.to_string(),
+                shard,
+                kind: ShardKind::Cache,
+            };
+            let (marks, quorum_timeout) = quorum;
+            Ok(match request {
+                CacheRequest::Put { value, ttl_ms } => {
+                    let ttl = (ttl_ms > 0).then(|| std::time::Duration::from_millis(ttl_ms));
+                    cache_store
+                        .put(tenant_id, namespace, cache, shard, key, value, ttl)
+                        .await;
+                    crate::replication::quorum::await_cache_quorum(
+                        broker,
+                        &written,
+                        marks,
+                        ingress,
+                        quorum_timeout,
+                    )
                     .await
-            }
-            CacheRequest::Delete => {
-                cache_store
-                    .delete(tenant_id, namespace, cache, shard, key)
+                    .map_err(|err| err.to_string())?;
+                    None
+                }
+                CacheRequest::Get => {
+                    cache_store
+                        .get(tenant_id, namespace, cache, shard, key)
+                        .await
+                }
+                CacheRequest::Delete => {
+                    let removed = cache_store
+                        .delete(tenant_id, namespace, cache, shard, key)
+                        .await;
+                    crate::replication::quorum::await_cache_quorum(
+                        broker,
+                        &written,
+                        marks,
+                        ingress,
+                        quorum_timeout,
+                    )
                     .await
-            }
-            // Counter operations go through `apply_counter_op`, which owns the
-            // counter store; routing them here would answer from the wrong
-            // seam.
-            CacheRequest::CounterAdd { .. } | CacheRequest::CounterGet => {
-                return Err("not a cache operation: counters route separately".to_string());
-            }
-        }),
+                    .map_err(|err| err.to_string())?;
+                    removed
+                }
+                // Counter operations go through `apply_counter_op`, which owns the
+                // counter store; routing them here would answer from the wrong
+                // seam.
+                CacheRequest::CounterAdd { .. } | CacheRequest::CounterGet => {
+                    return Err("not a cache operation: counters route separately".to_string());
+                }
+            })
+        }
         CacheRoute::Forward {
             key: forward_key,
             target,
@@ -225,5 +261,4 @@ pub(crate) fn put_request(value: Bytes, ttl: Option<std::time::Duration>) -> Cac
 }
 
 #[cfg(test)]
-#[path = "cache_routing_tests.rs"]
 mod tests;

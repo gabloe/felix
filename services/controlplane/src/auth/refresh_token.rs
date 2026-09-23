@@ -97,5 +97,4 @@ pub fn join(token_id: &str, secret: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "refresh_token_tests.rs"]
 mod tests;

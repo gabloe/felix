@@ -663,5 +663,4 @@ pub fn quorum_offset(leader_tail: u64, followers: &[FollowerCursor]) -> u64 {
 }
 
 #[cfg(test)]
-#[path = "replication_tests.rs"]
 mod tests;

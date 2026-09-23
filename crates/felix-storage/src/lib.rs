@@ -1,4 +1,25 @@
-// Simple in-memory cache with optional TTL expiry.
+//! Where records are kept: a log-structured segment store, and the caches
+//! projected from it.
+//!
+//! **Start at [`disk_log::DiskLog`].** That is the durable log a stream shard
+//! is made of — append, read a range, recover a torn tail. [`segment`] is the
+//! byte format underneath it, [`EphemeralCache`] is the in-memory store a
+//! broker without durable storage uses instead, and [`LogCache`] is the
+//! key-to-latest-value projection that makes a cache out of a log.
+//!
+//! Three properties everything here rests on, each explained in
+//! `docs/durable-storage.md`:
+//!
+//! - **Records below the high-water mark are never rewritten**, which is what
+//!   lets recovery trust "valid bytes end at EOF".
+//! - **A torn tail is repaired; interior corruption is fatal.** Refusing to
+//!   start beats silently losing acknowledged records.
+//! - **Indexes are derived, never trusted** — a missing, short or stale index
+//!   is rebuilt from the segment it describes.
+//!
+//! [`CommitSequencer`] is the odd one out: it orders publishes rather than
+//! storing them, and lives here because the order is per durable log and is
+//! shared with the cache write path.
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::fmt;

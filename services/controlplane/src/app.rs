@@ -146,7 +146,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/v1/nodes/{node_id}",
-            axum::routing::get(api::nodes::get_node),
+            axum::routing::get(api::nodes::get_node)
+                .patch(api::nodes::patch_node)
+                .delete(api::nodes::delete_node),
         )
         .route(
             "/v1/shard-assignments",

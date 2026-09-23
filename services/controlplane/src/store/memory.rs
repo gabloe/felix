@@ -1015,7 +1015,7 @@ impl ControlPlaneStore for InMemoryStore {
         let mut expired = Vec::with_capacity(stale.len());
         for node_id in stale {
             let node = state.records.get_mut(&node_id).expect("just listed");
-            crate::membership_metrics::record_transition(
+            crate::membership::metrics::record_transition(
                 node.status.lifecycle,
                 NodeLifecycle::Down,
             );
@@ -1047,7 +1047,7 @@ impl ControlPlaneStore for InMemoryStore {
         let previous = node.status.lifecycle;
         node.status.lifecycle = lifecycle;
         let updated = node.clone();
-        crate::membership_metrics::record_transition(previous, lifecycle);
+        crate::membership::metrics::record_transition(previous, lifecycle);
         state.record(NodeChangeOp::Updated, node_id, Some(updated.clone()));
         metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
         Ok(Some(updated))
@@ -2148,6 +2148,7 @@ mod tests {
                 display_name: "Primary".to_string(),
                 shards: 1,
                 replication_factor: 1,
+                consistency: crate::model::ConsistencyLevel::Leader,
             })
             .await
             .expect("cache");

@@ -710,7 +710,7 @@ assert!(fast_count >= expected_count);
 | **Consumer groups** | At-least-once, bounded redelivery, dead letters | Shard assignment across a group's consumers |
 | **Message ordering** | Per shard | Configurable cross-shard |
 | **Subscriber isolation** | Yes | — |
-| **Cache** | Routed to one owner, replicated, read-your-writes through that owner | A declared consistency level; a cache write is acknowledged by its leader |
+| **Cache** | Routed to one owner, replicated, read-your-writes through that owner; `Leader` or `Quorum` acknowledgement per cache | `Quorum` for counter updates, which are acknowledged by the leader |
 | **TTL precision** | Lazy on access, against an absolute expiry | Sweeping expiry |
 | **Durability** | Per stream: ephemeral, or `Leader` or `Quorum` acknowledgement | — |
 | **Authorization** | Tenant-scoped tokens, RBAC per resource, OIDC exchange | — |

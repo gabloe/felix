@@ -18,7 +18,8 @@
 //!   `docker stop` send, so handling only SIGINT would abort in-flight work on every
 //!   rolling update.
 //! - Shutdown then runs a bounded drain, in order: readiness goes false so load
-//!   balancers stop routing here, the listener stops admitting new connections,
+//!   balancers stop routing here, the listener keeps admitting for
+//!   `FELIX_SHUTDOWN_PREDRAIN_MS` (off by default) while they notice, then stops,
 //!   in-flight connections finish, and finally the metrics server stops. Anything
 //!   still running when `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` expires is force-cancelled
 //!   and named in a warning. See `felix_common::lifecycle`.
@@ -785,6 +786,22 @@ where
     readiness.begin_draining();
     tracing::info!("readiness set to draining");
 
+    // Step 1b: keep accepting while a load balancer polling `/ready` notices.
+    // Without it the listener stops admitting in the same breath as the flip.
+    if config.shutdown_predrain_ms > 0 {
+        tracing::info!(
+            hold_off_ms = config.shutdown_predrain_ms,
+            "serving while unready so load balancers can drop this broker"
+        );
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(config.shutdown_predrain_ms)) => {}
+            // An operator who signals twice is asking to skip the wait.
+            _ = lifecycle::termination_signal() => {
+                tracing::info!("second termination signal; ending hold-off early");
+            }
+        }
+    }
+
     // Step 2: stop admitting new connections. In-flight ones are untouched.
     accept_shutdown.cancel();
 
@@ -1104,6 +1121,114 @@ mod tests {
             .await
             .expect("shutdown timeout")?;
         result?;
+        Ok(())
+    }
+
+    fn free_tcp() -> std::net::SocketAddr {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("free tcp port")
+    }
+
+    fn free_udp() -> std::net::SocketAddr {
+        std::net::UdpSocket::bind("127.0.0.1:0")
+            .and_then(|s| s.local_addr())
+            .expect("free udp port")
+    }
+
+    fn client_trusting(pem: &str) -> Result<felix_transport::QuicClient> {
+        use base64::Engine as _;
+        let body: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+        let der = base64::engine::general_purpose::STANDARD.decode(body)?;
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(rustls::pki_types::CertificateDer::from(der))?;
+        let config = quinn::ClientConfig::with_root_certificates(Arc::new(roots))?;
+        felix_transport::QuicClient::bind(
+            "127.0.0.1:0".parse()?,
+            config,
+            felix_transport::TransportConfig::default(),
+        )
+    }
+
+    /// The hold-off's whole point: once `/ready` says draining, a new
+    /// connection is still admitted, so one a load balancer routed here before
+    /// it noticed is served rather than refused.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_listener_admits_while_unready_during_the_hold_off() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let cert_path = dir.path().join("broker-cert.pem");
+        let metrics = free_tcp();
+        let quic = free_udp();
+        let _g1 = EnvGuard::set("FELIX_BROKER_METRICS_BIND", &metrics.to_string());
+        let _g2 = EnvGuard::set("FELIX_QUIC_BIND", &quic.to_string());
+        let _g3 = EnvGuard::unset("FELIX_CP_URL");
+        let _g4 = EnvGuard::set("FELIX_CONTROLPLANE_URL", "http://127.0.0.1:1");
+        let _g5 = EnvGuard::set("FELIX_TLS_CERT_EXPORT", cert_path.to_str().expect("utf-8"));
+        let _g6 = EnvGuard::set("FELIX_SHUTDOWN_PREDRAIN_MS", "3000");
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn(run_with_shutdown(async {
+            let _ = shutdown_rx.await;
+        }));
+
+        let http = reqwest::Client::new();
+        let ready_url = format!("http://{metrics}/ready");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let status = http
+                .get(&ready_url)
+                .send()
+                .await
+                .ok()
+                .map(|r| r.status().as_u16());
+            if status == Some(200) && cert_path.exists() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "broker never became ready"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let started = tokio::time::Instant::now();
+        let _ = shutdown_tx.send(());
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let status = http
+                .get(&ready_url)
+                .send()
+                .await
+                .ok()
+                .map(|r| r.status().as_u16());
+            if status == Some(503) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "never saw /ready report draining while the broker was up: \
+                 shutdown ran straight through without holding off",
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let client = client_trusting(&std::fs::read_to_string(&cert_path)?)?;
+        let connected =
+            tokio::time::timeout(Duration::from_secs(2), client.connect(quic, "localhost")).await;
+        assert!(
+            matches!(connected, Ok(Ok(_))),
+            "a connection arriving after readiness flipped was refused during the hold-off",
+        );
+        drop(connected);
+        drop(client);
+
+        tokio::time::timeout(Duration::from_secs(30), handle).await???;
+        assert!(
+            started.elapsed() >= Duration::from_millis(3000),
+            "shutdown finished in {:?}, before the hold-off elapsed",
+            started.elapsed(),
+        );
         Ok(())
     }
 }

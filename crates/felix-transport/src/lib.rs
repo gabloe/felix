@@ -1,4 +1,22 @@
-// QUIC transport configuration and primitives.
+//! The QUIC transport every Felix connection runs over.
+//!
+//! **Start at [`QuicServer`] and [`QuicClient`].** A server accepts
+//! connections and a client makes them; both hand back a [`QuicConnection`],
+//! which is what the broker and the client SDK open streams on.
+//! [`TransportConfig`] carries the tuning — congestion window, path MTU,
+//! socket buffers, stream limits.
+//!
+//! This crate deliberately knows nothing about Felix messages. Framing and
+//! message types live in `felix-wire`; this layer moves bytes and manages
+//! connection and stream lifetime, so the protocol can change without
+//! touching transport tuning and the reverse.
+//!
+//! One sizing rule is load-bearing enough to state here: a server endpoint
+//! multiplexes every connection and drives traffic both ways, so it gets a
+//! runtime to itself while client endpoints share the rest. Putting a client
+//! endpoint on the server's runtime measured 5-6x slower, because the two
+//! halves of a request/response ping-pong then serialize on one thread. See
+//! [`Role`] and [`plan_server_endpoints`].
 use anyhow::{Context, Result, anyhow};
 use quinn::{ClientConfig, Connection, Endpoint, RecvStream, SendStream, ServerConfig};
 use std::net::SocketAddr;
@@ -28,8 +46,8 @@ enum EndpointRole {
 /// per *byte* (measured ~7.5x below capacity). Each endpoint gets a
 /// single-threaded runtime so driver self-wakes re-poll immediately and never
 /// migrate cores; see [`EndpointRole`] for which endpoints share one.
-/// `FELIX_IO_RUNTIME_THREADS` sets the pool size (default: 2); `0` restores
-/// drivers to the app runtime.
+/// `FELIX_IO_RUNTIME_THREADS` sets the pool size (derived from the listener
+/// count on macOS, `0` elsewhere); `0` restores drivers to the app runtime.
 fn io_runtime_index(role: EndpointRole, sequence: usize, pool_len: usize) -> usize {
     if pool_len <= 1 {
         return 0;

@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::broker::{Broker, CacheMetadata, StreamHandle, StreamMetadata};
+use crate::broker::{Broker, CacheMetadata, ConsistencyLevel, StreamHandle, StreamMetadata};
 use crate::error::{BrokerError, Result};
 use crate::keys::{
     CacheKey, CacheKeyRef, NamespaceKey, NamespaceKeyRef, StreamKey, StreamKeyRef, TopicKey,
@@ -322,6 +322,21 @@ impl Broker {
             .read()
             .await
             .contains_key(&StreamKeyRef::new(tenant_id, namespace, stream))
+    }
+
+    /// The consistency a registered cache asked for, or `None` if the cache is
+    /// not registered here.
+    pub async fn cache_consistency(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+    ) -> Option<ConsistencyLevel> {
+        self.caches
+            .read()
+            .await
+            .get(&CacheKeyRef::new(tenant_id, namespace, cache))
+            .map(|metadata| metadata.consistency)
     }
 
     pub async fn cache_exists(&self, tenant_id: &str, namespace: &str, cache: &str) -> bool {

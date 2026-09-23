@@ -219,6 +219,67 @@ pub async fn await_quorum(
     }
 }
 
+/// Hold a write to a `Quorum` cache until a majority of its shard's replica set
+/// has it. The cache-side mirror of [`await_quorum`].
+///
+/// A cache put does not report the offset it took, so this waits for the
+/// shard's tail as read after the write. That is at or past the write, so a
+/// mark at the tail covers it; a concurrent later write can only make the wait
+/// longer, never make it end before this write is on a majority.
+pub async fn await_cache_quorum(
+    broker: &felix_broker::Broker,
+    shard: &crate::shard_watch::ShardKey,
+    marks: Option<&QuorumMarks>,
+    ingress: Option<&crate::shard_routing::IngressRouter>,
+    timeout: std::time::Duration,
+) -> Result<(), anyhow::Error> {
+    let consistency = broker
+        .cache_consistency(&shard.tenant_id, &shard.namespace, &shard.stream)
+        .await;
+    if consistency != Some(felix_broker::ConsistencyLevel::Quorum) {
+        return Ok(());
+    }
+    // As for a stream: a broker with no replica set is satisfied by itself.
+    let (Some(marks), Some(ingress)) = (marks, ingress) else {
+        return Ok(());
+    };
+    // A cache with no log keeps nothing to replicate.
+    let Some(log) = broker
+        .shard_log(
+            felix_broker::LogKind::Cache,
+            &shard.tenant_id,
+            &shard.namespace,
+            &shard.stream,
+            shard.shard,
+        )
+        .await
+    else {
+        return Ok(());
+    };
+    let tail = log.tail_offset().await?;
+    let Some(generation) = ingress.generation(shard) else {
+        anyhow::bail!("shard ownership changed before the write could reach a quorum");
+    };
+    match marks.wait_for(shard, generation, tail, timeout).await {
+        QuorumWait::Reached => Ok(()),
+        QuorumWait::TimedOut => {
+            crate::replication::metrics::record_quorum(
+                crate::replication::metrics::QUORUM_TIMED_OUT,
+            );
+            Err(anyhow::anyhow!(
+                "the write is durable here but did not reach a majority within {timeout:?}"
+            ))
+        }
+        QuorumWait::NotLeading => {
+            crate::replication::metrics::record_quorum(
+                crate::replication::metrics::QUORUM_NOT_LEADING,
+            );
+            Err(anyhow::anyhow!(
+                "shard leadership moved before the write could reach a quorum"
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
-#[path = "quorum_tests.rs"]
 mod tests;

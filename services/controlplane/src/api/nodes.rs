@@ -9,8 +9,9 @@
 //!
 //! Every write requires `node.manage` over the node being changed. A broker's
 //! credential is scoped to `node:{its own id}`, so it cannot register, drain,
-//! deregister, or report health for another broker; an operator holding
-//! `cluster:*` can manage the whole fleet. Reads require
+//! deregister, patch, or report health for another broker; an operator holding
+//! `cluster:*` can manage the whole fleet. Deleting a record takes `cluster:*`
+//! outright. Reads require
 //! `node.view:cluster:*`, since the listing exposes the cluster's network
 //! layout.
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
@@ -24,7 +25,7 @@ use crate::auth::bearer::{require_cluster_action, verified_claims};
 use crate::auth::rbac::authorize::{
     ACTION_NODE_MANAGE, ACTION_NODE_VIEW, ParsedObject, object_within_scope, parse_permission,
 };
-use crate::model::{Node, NodeLifecycle, NodeSpec, NodeStatus};
+use crate::model::{Node, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
 use crate::store::StoreError;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -336,6 +337,124 @@ pub(crate) async fn deregister_node(
 ) -> Result<Json<Node>, ApiError> {
     require_node_manage(&state, &headers, &node_id).await?;
     set_lifecycle(&state, &node_id, NodeLifecycle::Left).await
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/nodes/{node_id}",
+    tag = "nodes",
+    params(("node_id" = String, Path, description = "Broker node identifier")),
+    request_body = NodePatchRequest,
+    responses(
+        (status = 200, description = "Node updated", body = crate::model::Node),
+        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse),
+        (status = 409, description = "Invalid spec or lifecycle move", body = crate::api::types::ErrorResponse)
+    )
+)]
+/// Change a node's region, labels or capacity, or move it between `live` and
+/// `draining`.
+///
+/// Setting `lifecycle` to `live` on a draining node is how an operator cancels
+/// a drain. Nothing observed is patchable: a `down` or `left` node is revived
+/// only by the broker registering.
+///
+/// # Errors
+/// - 404 when the node is not registered.
+/// - 409 when the patched spec is invalid or the lifecycle move is not one an
+///   operator may make.
+pub(crate) async fn patch_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+    Json(patch): Json<NodePatchRequest>,
+) -> Result<Json<Node>, ApiError> {
+    require_node_manage(&state, &headers, &node_id).await?;
+    state
+        .store
+        .patch_node(&node_id, patch)
+        .await
+        .map(Json)
+        .map_err(|err| match err {
+            StoreError::NotFound(_) => api_not_found("node is not registered"),
+            StoreError::Conflict(ref message) => api_conflict("conflict", message),
+            ref other => api_internal("patch node", other),
+        })
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/nodes/{node_id}",
+    tag = "nodes",
+    params(("node_id" = String, Path, description = "Broker node identifier")),
+    responses(
+        (status = 204, description = "Node record removed"),
+        (status = 404, description = "Node is not registered", body = crate::api::types::ErrorResponse),
+        (status = 409, description = "Node is still running, or a shard still names it", body = crate::api::types::ErrorResponse)
+    )
+)]
+/// Remove a broker's record for good.
+///
+/// Refused while the broker is `live` or `draining`, and while any shard names
+/// it as leader or replica: the assignment is the only record of where that
+/// shard's data is, and a follower slot naming a node that no longer exists is
+/// never replaced. Requires `node.manage` on `cluster:*`; a broker cannot
+/// remove itself.
+///
+/// # Errors
+/// - 404 when the node is not registered.
+/// - 409 when the node is still serving or still named by an assignment.
+pub(crate) async fn delete_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(node_id): Path<String>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    require_cluster_action(&state, &headers, ACTION_NODE_MANAGE).await?;
+
+    let node = state
+        .store
+        .get_node(&node_id)
+        .await
+        .map_err(|err| match err {
+            StoreError::NotFound(_) => api_not_found("node is not registered"),
+            ref other => api_internal("get node", other),
+        })?;
+    if matches!(
+        node.status.lifecycle,
+        NodeLifecycle::Live | NodeLifecycle::Draining
+    ) {
+        return Err(api_conflict(
+            "conflict",
+            &format!("node {node_id} is still running; drain it and stop it first"),
+        ));
+    }
+    // The store refuses a leader atomically. A replica is checked here, which
+    // can race a placement pass, but placement only names live nodes, and this
+    // one is not.
+    let named = state
+        .store
+        .list_shard_assignments()
+        .await
+        .map_err(|ref err| api_internal("list shard assignments", err))?
+        .into_iter()
+        .filter(|a| a.leader == node_id || a.replicas.contains(&node_id))
+        .count();
+    if named > 0 {
+        return Err(api_conflict(
+            "conflict",
+            &format!("node {node_id} is still named by {named} shard assignment(s)"),
+        ));
+    }
+
+    state
+        .store
+        .delete_node(&node_id)
+        .await
+        .map_err(|err| match err {
+            StoreError::NotFound(_) => api_not_found("node is not registered"),
+            StoreError::Conflict(ref message) => api_conflict("conflict", message),
+            ref other => api_internal("delete node", other),
+        })?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// Drive a lifecycle move, treating "already there" as success.

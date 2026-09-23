@@ -219,6 +219,13 @@ tasks:
     # must violate, so a finding cannot quietly turn into a pass.
     cmds:
       - "scripts/check_tla.sh"
+  tla:pairing:
+    desc: "Assert a change to the code docs/formal models also touches the spec, or says why not"
+    # Diffs BASE...HEAD, so it needs history back to BASE.
+    vars:
+      BASE: '{{.BASE | default "origin/main"}}'
+    cmds:
+      - "python3 scripts/check_spec_pairing.py --base {{.BASE}}"
 
   chart:check:
     desc: "Lint and render the Helm chart every way ci/ describes, and check the result keeps its promises"
