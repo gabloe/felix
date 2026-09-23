@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790200572809,
+  "lastUpdate": 1790203882917,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18084,6 +18084,72 @@ window.BENCHMARK_DATA = {
             "range": "236.68",
             "unit": "us",
             "extra": "trials: 5\nmedian: 824.00\nmean: 832.40\nstdev: 236.68\ncv: 28.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "29feda772cf8085d73f83e7cc6c35d34cb4a8fc7",
+          "message": "feat(client): watch a cache prefix across every shard (#654)\n\n* feat(client): watch a cache prefix across every shard\n\nCloses #611. A prefix watch reads one shard and keys sharing a prefix hash\napart, so a prefix on a multi-shard cache needed one watch per shard, found\nand routed by hand, with no way to even learn the shard count.\n\nThe broker now answers `cache_shards` (FEATURE_CACHE_SHARDS), the cache\ncounterpart of `stream_shards`. `ClusterClient::watch_cache_sharded` asks it,\nopens one prefix watch per shard following each shard's redirect, and merges\nthem into a `ShardedCacheWatch`. Ordering is per key, since a key lives on one\nshard, and resumption is a vector of per-shard offsets.\n\nOn a retained watch the shards finish their state phases at different times,\ninterleaved with each other's live changes, so counting items can't say when\nthe state is complete. The merged watch emits `StateComplete` once every shard\nhas delivered its retained values, and never if one ended mid-state. A shard\nstill mid-state resumes from 0, since its retained values can carry any older\noffset.\n\n* docs: tighten the sharded cache watch docs",
+          "timestamp": "2026-09-23T15:48:52-07:00",
+          "tree_id": "bef2eb7dc4dbd5af6479ebddbe8ae2fad9c995ba",
+          "url": "https://github.com/gabloe/felix/commit/29feda772cf8085d73f83e7cc6c35d34cb4a8fc7"
+        },
+        "date": 1790203881335,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "3.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 162.60\nstdev: 3.71\ncv: 2.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "6.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 210.60\nstdev: 6.58\ncv: 3.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 243,
+            "range": "877.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 243.00\nmean: 660.20\nstdev: 877.58\ncv: 132.93%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 202,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 202.00\nmean: 202.20\nstdev: 0.45\ncv: 0.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 406,
+            "range": "6.54",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 406.00\nmean: 409.60\nstdev: 6.54\ncv: 1.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 918,
+            "range": "364.03",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 918.00\nmean: 910.60\nstdev: 364.03\ncv: 39.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
