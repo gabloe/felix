@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
+use crate::auth::TokenProvider;
 use crate::client::cache::{CacheRequest, CacheWorker, run_cache_worker_with_limit};
 use crate::client::event_router::{EventRouterCommand, spawn_event_router_with_config};
 use crate::client::publisher::{PublishWorker, run_publisher_writer_with_limit};
@@ -73,7 +74,7 @@ pub struct Client {
     cache_conn_counts: Arc<Vec<AtomicUsize>>,
     event_conn_counts: Arc<Vec<AtomicUsize>>,
     auth_tenant_id: String,
-    auth_token: String,
+    credentials: Credentials,
     runtime_config: ClientRuntimeConfig,
     /// Optional requests this broker said it implements.
     server_features: u32,
@@ -201,10 +202,10 @@ impl Client {
             .auth_tenant_id
             .clone()
             .context("FELIX_AUTH_TENANT must be set")?;
-        let auth_token = client_config
-            .auth_token
-            .clone()
-            .context("FELIX_AUTH_TOKEN must be set")?;
+        let credentials = Credentials {
+            tenant_id: auth_tenant_id.clone(),
+            tokens: client_config.tokens()?,
+        };
         let bind_addr: SocketAddr = "0.0.0.0:0".parse().expect("bind addr");
         let publish_client =
             QuicClient::bind(bind_addr, client_config.quinn.clone(), transport.clone())?;
@@ -236,8 +237,7 @@ impl Client {
         let negotiated = open_publish_streams(
             &first,
             publish_streams_per_conn,
-            &auth_tenant_id,
-            &auth_token,
+            &credentials,
             &runtime_config,
             publish_queue_depth,
             publish_chunk_bytes,
@@ -267,8 +267,7 @@ impl Client {
             open_publish_streams(
                 &connection,
                 publish_streams_per_conn,
-                &auth_tenant_id,
-                &auth_token,
+                &credentials,
                 &runtime_config,
                 publish_queue_depth,
                 publish_chunk_bytes,
@@ -309,16 +308,9 @@ impl Client {
         let cache_conn_counts = Arc::new(cache_conn_counts);
         for (conn_index, connection) in cache_connections.iter().enumerate() {
             for _ in 0..cache_streams_per_conn {
-                let (mut send, mut recv) = connection.open_bi().await?;
-                debug!(conn_index, "client opened cache stream");
-                let _ = authenticate_stream(
-                    &mut send,
-                    &mut recv,
-                    &auth_tenant_id,
-                    &auth_token,
-                    runtime_config.max_frame_bytes,
-                )
-                .await?;
+                let (send, recv, _) = credentials
+                    .open(connection, runtime_config.max_frame_bytes)
+                    .await?;
                 debug!(conn_index, "client cache stream authenticated");
                 let (tx, rx) = mpsc::channel(CACHE_WORKER_QUEUE_DEPTH);
                 tokio::spawn(run_cache_worker_with_limit(
@@ -374,7 +366,7 @@ impl Client {
             event_stream_routers,
             event_conn_counts: Arc::new(event_conn_counts),
             auth_tenant_id,
-            auth_token,
+            credentials,
             runtime_config,
         })
     }
@@ -498,16 +490,11 @@ impl Client {
         let rr = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
         let connection_index = rr as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
-        let (mut send, mut recv) = connection.open_bi().await?;
-        let server_flags = authenticate_stream(
-            &mut send,
-            &mut recv,
-            &self.auth_tenant_id,
-            &self.auth_token,
-            self.runtime_config.max_frame_bytes,
-        )
-        .await?
-        .server_flags;
+        let (mut send, mut recv, negotiated) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
+        let server_flags = negotiated.server_flags;
 
         // A broker that predates resume ignores the unknown `start` field and
         // subscribes at the tail, then answers `Subscribed` -- so the client
@@ -900,15 +887,10 @@ impl Client {
         let rr = self.subscription_counter.fetch_add(1, Ordering::Relaxed);
         let connection_index = rr as usize % self.event_pool_size;
         let connection = &self.event_connections[connection_index];
-        let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(
-            &mut send,
-            &mut recv,
-            &self.auth_tenant_id,
-            &self.auth_token,
-            self.runtime_config.max_frame_bytes,
-        )
-        .await?;
+        let (mut send, mut recv, _) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
 
         let (key, prefix) = crate::client::cache_watch::filter_fields(&filter);
         let mut frame_scratch = BytesMut::with_capacity(16 * 1024);
@@ -1347,15 +1329,10 @@ impl Client {
     /// `topology` opens its own.
     async fn group_round_trip(&self, message: Message, request_id: u64) -> Result<Message> {
         let connection = &self.event_connections[0];
-        let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(
-            &mut send,
-            &mut recv,
-            &self.auth_tenant_id,
-            &self.auth_token,
-            self.runtime_config.max_frame_bytes,
-        )
-        .await?;
+        let (mut send, mut recv, _) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
         write_message(&mut send, message)
             .await
             .context("send group request")?;
@@ -1476,15 +1453,10 @@ impl Client {
         // pipelined, and a request/response exchange in the middle of one would
         // have to be matched against acks it has nothing to do with.
         let connection = &self.event_connections[0];
-        let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(
-            &mut send,
-            &mut recv,
-            &self.auth_tenant_id,
-            &self.auth_token,
-            self.runtime_config.max_frame_bytes,
-        )
-        .await?;
+        let (mut send, mut recv, _) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
         write_message(&mut send, Message::Topology)
             .await
             .context("send topology request")?;
@@ -1536,15 +1508,10 @@ impl Client {
             ));
         }
         let connection = &self.event_connections[0];
-        let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(
-            &mut send,
-            &mut recv,
-            &self.auth_tenant_id,
-            &self.auth_token,
-            self.runtime_config.max_frame_bytes,
-        )
-        .await?;
+        let (mut send, mut recv, _) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
         let request_id = self
             .cache_request_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1598,15 +1565,10 @@ impl Client {
             ));
         }
         let connection = &self.event_connections[0];
-        let (mut send, mut recv) = connection.open_bi().await?;
-        authenticate_stream(
-            &mut send,
-            &mut recv,
-            &self.auth_tenant_id,
-            &self.auth_token,
-            self.runtime_config.max_frame_bytes,
-        )
-        .await?;
+        let (mut send, mut recv, _) = self
+            .credentials
+            .open(connection, self.runtime_config.max_frame_bytes)
+            .await?;
         let request_id = self
             .cache_request_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1662,8 +1624,7 @@ pub(crate) struct Negotiated {
 async fn open_publish_streams(
     connection: &QuicConnection,
     streams_per_conn: usize,
-    auth_tenant_id: &str,
-    auth_token: &str,
+    credentials: &Credentials,
     runtime_config: &crate::config::ClientRuntimeConfig,
     publish_queue_depth: usize,
     publish_chunk_bytes: usize,
@@ -1671,16 +1632,10 @@ async fn open_publish_streams(
 ) -> Result<Negotiated> {
     let mut last = None;
     for _ in 0..streams_per_conn {
-        let (mut send, mut recv) = connection.open_bi().await?;
+        let (send, recv, negotiated) = credentials
+            .open(connection, runtime_config.max_frame_bytes)
+            .await?;
         debug!("client opened publish stream");
-        let negotiated = authenticate_stream(
-            &mut send,
-            &mut recv,
-            auth_tenant_id,
-            auth_token,
-            runtime_config.max_frame_bytes,
-        )
-        .await?;
         let server_flags = negotiated.server_flags;
         debug!(server_flags, "client publish stream authenticated");
         let (tx, rx) = mpsc::channel(publish_queue_depth);
@@ -1748,6 +1703,59 @@ fn pool_target(
     target
 }
 
+/// The tenant and token source every stream authenticates with.
+struct Credentials {
+    tenant_id: String,
+    tokens: Arc<dyn TokenProvider>,
+}
+
+impl Credentials {
+    /// Open a stream and authenticate it with the current token.
+    ///
+    /// If the broker refuses the token and the provider has a different one,
+    /// retry once on a new stream (the broker closes a stream after a failed
+    /// auth). This catches a token that expired earlier than `exp` suggested,
+    /// e.g. from clock skew.
+    async fn open(
+        &self,
+        connection: &QuicConnection,
+        max_frame_bytes: usize,
+    ) -> Result<(SendStream, RecvStream, Negotiated)> {
+        let mut token = self.tokens.token().await?;
+        let mut retried = false;
+        loop {
+            let (mut send, mut recv) = connection.open_bi().await?;
+            match authenticate_stream(
+                &mut send,
+                &mut recv,
+                &self.tenant_id,
+                &token,
+                max_frame_bytes,
+            )
+            .await
+            {
+                Ok(negotiated) => return Ok((send, recv, negotiated)),
+                Err(err) if !retried && err.downcast_ref::<AuthRejected>().is_some() => {
+                    self.tokens.invalidate(&token);
+                    let fresh = self.tokens.token().await?;
+                    if fresh == token {
+                        return Err(err);
+                    }
+                    debug!("auth refused; retrying with a fresh token");
+                    token = fresh;
+                    retried = true;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+/// The broker refused a stream's credentials.
+#[derive(Debug, thiserror::Error)]
+#[error("auth rejected: {0}")]
+struct AuthRejected(String);
+
 async fn authenticate_stream(
     send: &mut SendStream,
     recv: &mut RecvStream,
@@ -1786,7 +1794,7 @@ async fn authenticate_stream(
             server_features: 0,
             listener_ports: Vec::new(),
         }),
-        Some(Message::Error { message }) => Err(anyhow::anyhow!("auth rejected: {message}")),
+        Some(Message::Error { message }) => Err(AuthRejected(message).into()),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),
     }

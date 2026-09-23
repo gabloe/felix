@@ -174,6 +174,8 @@ const MAX_REDIRECTS: usize = 3;
 /// let mut config = ClientConfig::from_env_or_yaml(quinn, None)?;
 /// config.auth_tenant_id = Some("acme".to_string());
 /// config.auth_token = Some(std::env::var("FELIX_TOKEN")?);
+/// // For a long-running client, set `config.token_provider` so reconnects
+/// // get a fresh token.
 ///
 /// // One address is enough; the rest are discovered. Configure more anyway,
 /// // because discovery needs *some* broker to answer first.

@@ -21,6 +21,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 metrics = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
 serde_yaml_ng = { workspace = true }
 # felix-broker/felix-storage are optional: they're only needed by the `in-process` feature
 # (an embedded-broker convenience mode for local dev/tests). Both are AGPL-3.0 licensed,

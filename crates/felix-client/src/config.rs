@@ -11,7 +11,9 @@ use anyhow::{Context, Result};
 use felix_transport::TransportConfig;
 use serde::Deserialize;
 use std::fs;
+use std::sync::Arc;
 
+use crate::auth::{StaticToken, TokenProvider};
 use crate::client::sharding::PublishSharding;
 
 pub(crate) const DEFAULT_PUBLISH_QUEUE_DEPTH: usize = 64;
@@ -97,7 +99,12 @@ pub struct ClientConfig {
     pub publish_inflight_bytes: usize,
     pub publish_sharding: PublishSharding,
     pub auth_tenant_id: Option<String>,
+    /// A fixed token for every stream. Clients that run longer than the
+    /// token lasts should use `token_provider`.
     pub auth_token: Option<String>,
+    /// Supplies the token each time a stream authenticates. Overrides
+    /// `auth_token`. See [`crate::RefreshingToken`].
+    pub token_provider: Option<Arc<dyn TokenProvider>>,
     pub cache_conn_pool: usize,
     pub cache_streams_per_conn: usize,
     pub event_conn_pool: usize,
@@ -190,6 +197,7 @@ impl ClientConfig {
             publish_sharding: PublishSharding::HashStream,
             auth_tenant_id: None,
             auth_token: None,
+            token_provider: None,
             cache_conn_pool: DEFAULT_CACHE_CONN_POOL,
             cache_streams_per_conn: DEFAULT_CACHE_STREAMS_PER_CONN,
             event_conn_pool: DEFAULT_EVENT_CONN_POOL,
@@ -284,6 +292,18 @@ impl ClientConfig {
             config.auth_token = Some(value);
         }
         config
+    }
+
+    /// The token source streams authenticate with.
+    pub(crate) fn tokens(&self) -> Result<Arc<dyn TokenProvider>> {
+        if let Some(provider) = &self.token_provider {
+            return Ok(Arc::clone(provider));
+        }
+        let token = self
+            .auth_token
+            .clone()
+            .context("FELIX_AUTH_TOKEN must be set, or a token provider configured")?;
+        Ok(Arc::new(StaticToken(token)))
     }
 
     pub(crate) fn runtime_config(&self) -> ClientRuntimeConfig {
