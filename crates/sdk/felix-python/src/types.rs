@@ -4,8 +4,42 @@
 //! back by `Client` and one handed back by `AsyncClient` must be the same
 //! Python type — an application that switches surfaces should not have to
 //! switch its `isinstance` checks too.
+
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+
+/// One record delivered to a subscriber.
+#[pyclass(module = "felix", frozen, get_all)]
+pub struct Event {
+    pub tenant_id: String,
+    pub namespace: String,
+    pub stream: String,
+    pub payload: Py<PyBytes>,
+    /// Log offset on a durable stream; `None` on an in-memory stream or from a
+    /// broker that did not negotiate offsets.
+    ///
+    /// Two uses. Checkpoint `offset + 1` to resume after a reconnect. And
+    /// because offsets are contiguous, a jump between consecutive events means
+    /// the subscriber queue dropped something — which is otherwise invisible.
+    pub offset: Option<u64>,
+}
+
+#[pymethods]
+impl Event {
+    fn __repr__(&self, py: Python<'_>) -> String {
+        let len = self.payload.bind(py).as_bytes().len();
+        match self.offset {
+            Some(offset) => format!(
+                "Event(stream='{}/{}/{}', {len} bytes, offset={offset})",
+                self.tenant_id, self.namespace, self.stream
+            ),
+            None => format!(
+                "Event(stream='{}/{}/{}', {len} bytes)",
+                self.tenant_id, self.namespace, self.stream
+            ),
+        }
+    }
+}
 
 /// One record handed to a consumer group member, with the offset to settle.
 #[pyclass(module = "felix", frozen, get_all)]
@@ -84,7 +118,7 @@ impl CacheWatchLagged {
 #[pyclass(module = "felix", frozen, get_all)]
 pub struct ShardRecord {
     pub shard: u32,
-    pub event: Py<crate::Event>,
+    pub event: Py<Event>,
 }
 
 #[pymethods]
@@ -174,6 +208,50 @@ impl CacheWatchFilter {
         } else {
             felix_client::CacheWatchFilter::Key(self.value.clone())
         }
+    }
+}
+
+/// An event carried back to the Python loop.
+///
+/// A separate owned type because the payload has to cross a thread boundary
+/// before there is a `Python<'_>` to build a `PyBytes` with; the conversion to
+/// [`Event`] happens once the result reaches the loop.
+pub(crate) struct OwnedEvent {
+    tenant_id: String,
+    namespace: String,
+    stream: String,
+    payload: Vec<u8>,
+    offset: Option<u64>,
+}
+
+impl From<felix_client::Event> for OwnedEvent {
+    fn from(event: felix_client::Event) -> Self {
+        Self {
+            tenant_id: event.tenant_id.to_string(),
+            namespace: event.namespace.to_string(),
+            stream: event.stream.to_string(),
+            payload: event.payload.to_vec(),
+            offset: event.offset,
+        }
+    }
+}
+
+impl<'py> IntoPyObject<'py> for OwnedEvent {
+    type Target = Event;
+    type Output = Bound<'py, Event>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Bound::new(
+            py,
+            Event {
+                tenant_id: self.tenant_id,
+                namespace: self.namespace,
+                stream: self.stream,
+                payload: PyBytes::new(py, &self.payload).unbind(),
+                offset: self.offset,
+            },
+        )
     }
 }
 
@@ -319,7 +397,7 @@ impl<'py> IntoPyObject<'py> for OwnedShardEvent {
             } => {
                 let event = Bound::new(
                     py,
-                    crate::Event {
+                    Event {
                         tenant_id,
                         namespace,
                         stream,
