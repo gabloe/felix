@@ -31,7 +31,7 @@
 //! Set `LogConfig::verify_all_on_open` to trade startup time for eager detection
 //! of bit rot in cold data.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::now_micros;
 use super::segments::SealedEntry;
@@ -40,14 +40,14 @@ use crate::log::{LogConfig, Offset, SegmentDescriptor, SegmentId};
 use crate::segment::format::SEGMENT_HEADER_LEN;
 use crate::segment::writer::ResumeState;
 use crate::segment::{
-    ScanOutcome, ScanStart, SegmentReader, SegmentWriter, SparseIndex, index_file_name,
-    parse_segment_file_name, read_segment_header, scan_segment, segment_file_name,
+    ScanStart, SegmentReader, SegmentWriter, SparseIndex, index_file_name, parse_segment_file_name,
+    read_segment_header, scan_segment, segment_file_name,
 };
 use crate::{Corruption, CorruptionKind, Result, StorageError, metrics_names};
 
 /// The outcome of recovering one shard directory.
 #[derive(Debug)]
-pub struct Recovered {
+pub(super) struct Recovered {
     pub sealed: Vec<SealedEntry>,
     pub active: SegmentWriter,
     /// Bytes discarded from a torn tail, for logging and metrics.
@@ -61,11 +61,8 @@ struct OpenedSealed {
     rebuilt_index: bool,
 }
 
-/// Report of what a scan found, re-exported so callers can log it.
-pub type SegmentScan = ScanOutcome;
-
 /// Open, validate and repair every segment for one shard.
-pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Recovered> {
+pub(super) fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Recovered> {
     let started = std::time::Instant::now();
     std::fs::create_dir_all(dir)?;
     // The directory entry itself must be durable, or a crash could lose a shard
@@ -124,7 +121,11 @@ pub fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Result<Reco
 ///
 /// The segment carries `base_offset` in its header, so recovery reads it back
 /// without needing to be told again.
-pub fn place_empty_shard(dir: &Path, config: &LogConfig, base_offset: Offset) -> Result<bool> {
+pub(super) fn place_empty_shard(
+    dir: &Path,
+    config: &LogConfig,
+    base_offset: Offset,
+) -> Result<bool> {
     std::fs::create_dir_all(dir)?;
     if let Some(parent) = dir.parent() {
         sync_dir(parent)?;
@@ -152,7 +153,7 @@ pub fn place_empty_shard(dir: &Path, config: &LogConfig, base_offset: Offset) ->
 /// Directory iteration order is filesystem-defined and must never be relied on:
 /// on some filesystems it is hash order, which would interleave segments and
 /// make the log look shuffled.
-pub fn discover_segment_ids(dir: &Path) -> Result<Vec<SegmentId>> {
+pub(super) fn discover_segment_ids(dir: &Path) -> Result<Vec<SegmentId>> {
     let mut ids = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -172,11 +173,6 @@ pub fn discover_segment_ids(dir: &Path) -> Result<Vec<SegmentId>> {
     // duplicate that later code treats as two segments.
     ids.dedup();
     Ok(ids)
-}
-
-/// Path to a shard directory's data file for `id`. Exposed for tests and tools.
-pub fn segment_path(dir: &Path, id: SegmentId) -> PathBuf {
-    dir.join(segment_file_name(id))
 }
 
 /// Remove trailing segments that a rollover created but never installed.

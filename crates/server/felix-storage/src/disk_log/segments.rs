@@ -11,7 +11,7 @@ mod truncation;
 #[cfg(test)]
 mod test_support;
 
-pub use rollover::{PreparedSegment, RollOutcome, RollPlan};
+pub(super) use rollover::RollOutcome;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +25,7 @@ use crate::{Result, StorageError, metrics_names};
 
 /// Everything on disk for one shard.
 #[derive(Debug)]
-pub struct SegmentSet {
+pub(super) struct SegmentSet {
     dir: PathBuf,
     label: String,
     config: LogConfig,
@@ -45,7 +45,7 @@ pub struct SegmentSet {
 
 impl SegmentSet {
     /// Take ownership of an already recovered set of segments.
-    pub fn new(
+    pub(super) fn new(
         dir: PathBuf,
         label: String,
         config: LogConfig,
@@ -66,33 +66,29 @@ impl SegmentSet {
         })
     }
 
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
     /// Offset the next appended record will take.
-    pub fn tail_offset(&self) -> Offset {
+    pub(super) fn tail_offset(&self) -> Offset {
         self.active.next_offset()
     }
 
     /// Oldest offset still readable. Rises only when segments are deleted.
-    pub fn base_offset(&self) -> Offset {
+    pub(super) fn base_offset(&self) -> Offset {
         self.sealed
             .first()
             .map(|entry| entry.descriptor.base_offset)
             .unwrap_or_else(|| self.active.base_offset())
     }
 
-    pub fn active(&self) -> &SegmentWriter {
+    pub(super) fn active(&self) -> &SegmentWriter {
         &self.active
     }
 
-    pub fn active_mut(&mut self) -> &mut SegmentWriter {
+    pub(super) fn active_mut(&mut self) -> &mut SegmentWriter {
         &mut self.active
     }
 
     /// Every segment, oldest first.
-    pub fn descriptors(&self) -> Vec<SegmentDescriptor> {
+    pub(super) fn descriptors(&self) -> Vec<SegmentDescriptor> {
         self.sealed
             .iter()
             .map(|entry| entry.descriptor.clone())
@@ -105,7 +101,7 @@ impl SegmentSet {
     /// A batch is never split across segments: offsets stay contiguous either
     /// way, but keeping a batch whole means one `write` call and one index
     /// update per append regardless of where the boundary falls.
-    pub fn append(&mut self, records: &[AppendRecord]) -> Result<(Offset, Offset)> {
+    pub(super) fn append(&mut self, records: &[AppendRecord]) -> Result<(Offset, Offset)> {
         // An empty active segment must accept the batch even when it is
         // oversized — otherwise a record larger than `segment_size_bytes` could
         // never be written at all. Such a record gets a segment to itself and
@@ -125,7 +121,7 @@ impl SegmentSet {
     ///
     /// Walks segments in offset order, so results are strictly ascending with no
     /// duplicates and no gaps inside the data that is present.
-    pub fn read(&self, start: Offset, mut budget: ReadBudget) -> Result<Vec<LogRecord>> {
+    pub(super) fn read(&self, start: Offset, mut budget: ReadBudget) -> Result<Vec<LogRecord>> {
         let mut out = Vec::new();
         if start >= self.tail_offset() {
             return Ok(out);
@@ -163,7 +159,7 @@ impl SegmentSet {
     }
 
     /// Seal the active segment and report a verifiable summary of it.
-    pub fn seal_active(&mut self) -> Result<(SegmentDescriptor, u64)> {
+    pub(super) fn seal_active(&mut self) -> Result<(SegmentDescriptor, u64)> {
         let descriptor = self.active.seal()?;
         let checksum = checksum_file(self.active.path())?;
         Ok((descriptor, checksum))
@@ -181,7 +177,7 @@ impl SegmentSet {
     /// both happen under the caller's write lock — so a reader either sees a
     /// segment and can read it, or sees a raised base offset and gets
     /// `Trimmed`. It never sees a descriptor whose file is gone.
-    pub fn enforce_retention(&mut self, now_micros: u64) -> Result<RetentionOutcome> {
+    pub(super) fn enforce_retention(&mut self, now_micros: u64) -> Result<RetentionOutcome> {
         let max_bytes = self.config.retention_bytes;
         let max_age_micros = self
             .config
@@ -279,7 +275,7 @@ impl SegmentSet {
 
 /// A finished segment: immutable bytes plus the index needed to seek into them.
 #[derive(Debug)]
-pub struct SealedEntry {
+pub(super) struct SealedEntry {
     pub descriptor: SegmentDescriptor,
     pub index: SparseIndex,
     pub reader: SegmentReader,
@@ -304,7 +300,7 @@ pub struct RetentionOutcome {
 }
 
 /// CRC-32 of an entire file, streamed in fixed chunks.
-pub fn checksum_file(path: &Path) -> Result<u64> {
+pub(super) fn checksum_file(path: &Path) -> Result<u64> {
     let file = std::fs::File::open(path)?;
     let mut hasher = crc32fast::Hasher::new();
     let mut buf = vec![0u8; 64 * 1024];

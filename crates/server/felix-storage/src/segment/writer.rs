@@ -410,7 +410,7 @@ impl SegmentWriter {
 /// treats one as an uninstalled rollover and deletes it; it can hold no
 /// records, so nothing acknowledged is at stake.
 #[derive(Debug)]
-pub struct BlankSegment {
+pub(crate) struct BlankSegment {
     id: SegmentId,
     path: PathBuf,
     file: File,
@@ -420,7 +420,7 @@ pub struct BlankSegment {
 
 impl BlankSegment {
     /// Create the file and its index, and make the directory entry durable.
-    pub fn create(
+    pub(crate) fn create(
         dir: &Path,
         id: SegmentId,
         preallocate_bytes: u64,
@@ -442,16 +442,9 @@ impl BlankSegment {
         })
     }
 
-    pub fn id(&self) -> SegmentId {
-        self.id
-    }
-
-    pub fn path(&self) -> &Path {
+    #[cfg(test)]
+    pub(crate) fn path(&self) -> &Path {
         &self.path
-    }
-
-    pub fn index_path(&self) -> &Path {
-        &self.index_path
     }
 
     /// Write the header and become a writable segment based at `base_offset`.
@@ -460,7 +453,7 @@ impl BlankSegment {
     /// lock that appends contend on. The header reaches disk with the first
     /// sync of this segment, which under every fsync policy happens no later
     /// than the acknowledgement of the first record written to it.
-    pub fn activate(
+    pub(crate) fn activate(
         mut self,
         base_offset: Offset,
         created_at_micros: u64,
@@ -493,7 +486,7 @@ impl BlankSegment {
     }
 
     /// Delete a blank segment that will never be activated.
-    pub fn discard(self) -> Result<()> {
+    pub(crate) fn discard(self) -> Result<()> {
         let Self {
             path,
             file,

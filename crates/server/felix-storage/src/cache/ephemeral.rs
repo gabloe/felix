@@ -161,7 +161,7 @@ const _: () = {
 
 /// Identifies one entry: the tenant, namespace and cache it belongs to, and its key.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct CacheKey {
+struct CacheKey {
     tenant_id: String,
     namespace: String,
     cache: String,
@@ -169,7 +169,7 @@ pub struct CacheKey {
 }
 
 impl CacheKey {
-    pub fn new(
+    fn new(
         tenant_id: impl Into<String>,
         namespace: impl Into<String>,
         cache: impl Into<String>,
@@ -186,7 +186,7 @@ impl CacheKey {
 
 /// A stored value and when it expires.
 #[derive(Debug, Clone)]
-pub struct CacheEntry {
+struct CacheEntry {
     // Stored value plus optional expiration.
     value: Bytes,
     expires_at: Option<Instant>,

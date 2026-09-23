@@ -18,7 +18,7 @@
 
 mod record;
 
-pub use record::CounterOp;
+use record::CounterOp;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

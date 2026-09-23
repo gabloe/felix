@@ -4,8 +4,6 @@
 use std::fs::File;
 use std::path::Path;
 
-use bytes::Bytes;
-
 use crate::log::{LogRecord, Offset, SegmentId};
 use crate::segment::cursor::SegmentCursor;
 use crate::segment::format::{RECORD_HEADER_LEN, RecordHeader, decode_record};
@@ -152,10 +150,6 @@ impl ReadBudget {
         self.produced += 1;
     }
 }
-
-/// Re-exported so callers can name the payload type without depending on
-/// `bytes` directly in signatures they only forward.
-pub type ReadPayload = Bytes;
 
 #[cfg(test)]
 mod tests;

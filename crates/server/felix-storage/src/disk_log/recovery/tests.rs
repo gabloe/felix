@@ -1,9 +1,15 @@
+use std::path::PathBuf;
+
 use bytes::Bytes;
 use tempfile::{TempDir, tempdir};
 
 use super::*;
 use crate::log::{AppendRecord, FsyncMode};
 use crate::segment::format::SEGMENT_HEADER_LEN;
+
+fn segment_path(dir: &Path, id: SegmentId) -> PathBuf {
+    dir.join(segment_file_name(id))
+}
 
 fn config() -> LogConfig {
     LogConfig {

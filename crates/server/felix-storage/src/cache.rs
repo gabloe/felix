@@ -8,7 +8,7 @@
 mod ephemeral;
 mod log_cache;
 
-pub use ephemeral::{CacheEntry, CacheKey, EphemeralCache};
+pub use ephemeral::EphemeralCache;
 pub use log_cache::{CacheOp, LogCache};
 
 use std::fmt::Debug;

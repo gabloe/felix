@@ -41,7 +41,7 @@ const MAX_FLUSH_ATTEMPTS: usize = 8;
 
 /// Tracks how much of the log is durable and coordinates who flushes.
 #[derive(Debug)]
-pub struct Durability {
+pub(super) struct Durability {
     mode: FsyncMode,
     /// Exclusive upper bound: every offset below this is on stable storage.
     /// A watch channel so waiters are woken by the flusher rather than polling.
@@ -63,7 +63,7 @@ pub struct Durability {
 impl Durability {
     /// `durable_upto` is the exclusive offset bound recovered from disk — every
     /// record already on disk at open time is by definition durable.
-    pub fn new(mode: FsyncMode, durable_upto: Offset) -> Self {
+    pub(super) fn new(mode: FsyncMode, durable_upto: Offset) -> Self {
         Self {
             mode,
             durable_tx: watch::channel(durable_upto).0,
@@ -73,12 +73,8 @@ impl Durability {
         }
     }
 
-    pub fn mode(&self) -> FsyncMode {
-        self.mode
-    }
-
     /// Exclusive bound on durable offsets: everything below it survives a crash.
-    pub fn durable_upto(&self) -> Offset {
+    pub(super) fn durable_upto(&self) -> Offset {
         *self.durable_tx.borrow()
     }
 
@@ -86,12 +82,12 @@ impl Durability {
     ///
     /// The direct measure of group commit: N appends that coalesce produce far
     /// fewer than N flushes, whatever the machine's timing looks like.
-    pub fn flushes(&self) -> u64 {
+    pub(super) fn flushes(&self) -> u64 {
         self.flushes.load(Ordering::Relaxed)
     }
 
     /// Whether an append must wait for a flush before it may be acknowledged.
-    pub fn acknowledges_before_sync(&self) -> bool {
+    pub(super) fn acknowledges_before_sync(&self) -> bool {
         !matches!(self.mode, FsyncMode::OnCommit)
     }
 
@@ -100,7 +96,7 @@ impl Durability {
     /// `flush` performs one device flush and returns the exclusive offset bound
     /// it made durable. It is called by at most one task at a time; concurrent
     /// callers wait on that single flush.
-    pub async fn ensure_durable<F, Fut>(&self, target: Offset, flush: F) -> Result<()>
+    pub(super) async fn ensure_durable<F, Fut>(&self, target: Offset, flush: F) -> Result<()>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = Result<Offset>>,
@@ -117,7 +113,7 @@ impl Durability {
     }
 
     /// Run an unconditional flush under the same lock used by group commit.
-    pub async fn force_flush<F, Fut>(&self, flush: F) -> Result<Offset>
+    pub(super) async fn force_flush<F, Fut>(&self, flush: F) -> Result<Offset>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Offset>>,
@@ -129,7 +125,7 @@ impl Durability {
     }
 
     /// Publish flush progress. Monotonic: a late report cannot walk it back.
-    pub fn note_durable(&self, durable_upto: Offset) {
+    pub(super) fn note_durable(&self, durable_upto: Offset) {
         self.durable_tx.send_if_modified(|current| {
             if durable_upto > *current {
                 *current = durable_upto;
@@ -141,7 +137,7 @@ impl Durability {
     }
 
     /// Prevent flush progress from racing an operation that rewrites the log.
-    pub async fn lock_flushes(&self) -> MutexGuard<'_, ()> {
+    pub(super) async fn lock_flushes(&self) -> MutexGuard<'_, ()> {
         self.flush_lock.lock().await
     }
 
@@ -150,7 +146,7 @@ impl Durability {
     /// The caller must hold [`Self::lock_flushes`] and the segment write lock,
     /// so no flush can publish stale progress and no append can observe the
     /// truncated tail before this reset.
-    pub fn reset_after_truncate(&self, durable_upto: Offset) {
+    pub(super) fn reset_after_truncate(&self, durable_upto: Offset) {
         self.durable_tx.send_replace(durable_upto);
     }
 
@@ -210,7 +206,7 @@ impl Durability {
 /// against a closed file, and so graceful shutdown can flush one last time
 /// before the process exits.
 #[derive(Debug)]
-pub struct PeriodicSyncer {
+pub(super) struct PeriodicSyncer {
     shutdown: Arc<Notify>,
     handle: tokio::task::JoinHandle<()>,
 }
@@ -225,7 +221,7 @@ impl PeriodicSyncer {
     /// Flush failures are logged and retried on the next tick rather than
     /// killing the task: a transient I/O error must not silently disable
     /// durability for the rest of the process's life.
-    pub fn spawn<F, Fut>(interval: Duration, flush: F) -> Result<Self>
+    pub(super) fn spawn<F, Fut>(interval: Duration, flush: F) -> Result<Self>
     where
         F: Fn() -> Fut + Send + 'static,
         Fut: Future<Output = Result<Offset>> + Send,
@@ -268,7 +264,7 @@ impl PeriodicSyncer {
     }
 
     /// Stop the task, waiting for its final flush to complete.
-    pub async fn shutdown(self) {
+    pub(super) async fn shutdown(self) {
         self.shutdown.notify_waiters();
         // The task may not be parked on `notified()` yet; `notify_waiters` does
         // not latch, so nudge it until it observes the signal.

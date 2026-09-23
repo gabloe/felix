@@ -22,7 +22,7 @@ use crate::{Result, StorageError, metrics_names};
 /// Holds only a weak reference to the log, so a dropped log stops the work
 /// instead of being kept alive by its own housekeeping.
 #[derive(Debug)]
-pub struct RetentionTask {
+pub(super) struct RetentionTask {
     shutdown: Arc<Notify>,
     handle: tokio::task::JoinHandle<()>,
 }
@@ -34,7 +34,7 @@ impl RetentionTask {
     /// killing the task: a transient I/O error must not silently turn retention
     /// off for the rest of the process's life, because the symptom of that is a
     /// full disk hours later.
-    pub fn spawn<F, Fut>(interval: Duration, sweep: F) -> Result<Self>
+    pub(super) fn spawn<F, Fut>(interval: Duration, sweep: F) -> Result<Self>
     where
         F: Fn() -> Fut + Send + 'static,
         Fut: Future<Output = Result<RetentionOutcome>> + Send,
@@ -88,7 +88,7 @@ impl RetentionTask {
     }
 
     /// Stop the task and wait for it to observe the signal.
-    pub async fn shutdown(self) {
+    pub(super) async fn shutdown(self) {
         self.shutdown.notify_waiters();
         // `notify_waiters` does not latch, so a task not yet parked on
         // `notified()` would miss it; nudge until it lands.

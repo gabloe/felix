@@ -18,7 +18,7 @@ impl SegmentSet {
     /// Used by replication to discard a divergent suffix. Truncating to at or
     /// beyond the tail is a no-op; truncating below the base offset empties the
     /// log.
-    pub fn truncate(&mut self, offset: Offset) -> Result<()> {
+    pub(crate) fn truncate(&mut self, offset: Offset) -> Result<()> {
         if offset >= self.tail_offset() {
             return Ok(());
         }
@@ -60,7 +60,7 @@ impl SegmentSet {
     /// merely short: nothing here is worth keeping, and the leader's oldest
     /// record is where the new copy begins. Unlike `truncate`, the base may
     /// move in either direction.
-    pub fn reset_to(&mut self, base_offset: Offset) -> Result<()> {
+    pub(crate) fn reset_to(&mut self, base_offset: Offset) -> Result<()> {
         while let Some(entry) = self.sealed.pop() {
             self.remove_segment_files(entry.descriptor.id)?;
         }

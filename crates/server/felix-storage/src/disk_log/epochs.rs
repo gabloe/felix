@@ -40,21 +40,22 @@ const MAX_ENTRIES: usize = 512;
 /// began simply cannot offer a truncation point — which is a refusal, not a
 /// corruption.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EpochMap {
+pub(super) struct EpochMap {
     entries: Vec<Epoch>,
 }
 
 impl EpochMap {
-    pub fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub fn entries(&self) -> &[Epoch] {
+    pub(super) fn entries(&self) -> &[Epoch] {
         &self.entries
     }
 
     /// The newest generation recorded, if any.
-    pub fn newest(&self) -> Option<Epoch> {
+    pub(super) fn newest(&self) -> Option<Epoch> {
         self.entries.last().copied()
     }
 
@@ -63,7 +64,7 @@ impl EpochMap {
     /// Ignores a generation at or below the newest already held: a leader
     /// re-reporting its own generation is ordinary, and one *older* than the
     /// newest is a stale message that must not rewrite history.
-    pub fn record(&mut self, generation: u64, start_offset: Offset) -> bool {
+    pub(super) fn record(&mut self, generation: u64, start_offset: Offset) -> bool {
         if let Some(newest) = self.newest()
             && generation <= newest.generation
         {
@@ -86,7 +87,7 @@ impl EpochMap {
     /// newest. `None` when the generation is not in the history at all — which
     /// is the case that must refuse rather than guess, since a guess here is a
     /// truncation point.
-    pub fn end_of(&self, generation: u64, tail: Offset) -> Option<Offset> {
+    pub(super) fn end_of(&self, generation: u64, tail: Offset) -> Option<Offset> {
         let index = self
             .entries
             .iter()
@@ -101,7 +102,8 @@ impl EpochMap {
     ///
     /// The point of comparing at all: this is the last generation within which
     /// the two cannot disagree, so it is where a repair starts from.
-    pub fn newest_shared(&self, other: &[Epoch]) -> Option<Epoch> {
+    #[cfg(test)]
+    pub(super) fn newest_shared(&self, other: &[Epoch]) -> Option<Epoch> {
         self.entries
             .iter()
             .rev()
@@ -117,7 +119,7 @@ impl EpochMap {
     ///
     /// Called with a truncation, so the history does not outlive the records it
     /// describes and point at offsets the log no longer has.
-    pub fn truncate_from(&mut self, offset: Offset) {
+    pub(super) fn truncate_from(&mut self, offset: Offset) {
         self.entries.retain(|epoch| epoch.start_offset < offset);
     }
 
@@ -169,7 +171,7 @@ impl EpochMap {
 /// costs the ability to repair a divergence automatically — it never costs a
 /// record, and refusing to start a broker over it would trade an outage for a
 /// convenience.
-pub fn load(dir: &Path) -> EpochMap {
+pub(super) fn load(dir: &Path) -> EpochMap {
     match std::fs::read(path_in(dir)) {
         Ok(bytes) => EpochMap::decode(&bytes).unwrap_or_else(|| {
             tracing::warn!(
@@ -197,7 +199,7 @@ pub fn load(dir: &Path) -> EpochMap {
 /// Through a temporary and a rename, for the same reason compaction's directory
 /// swap is: a half-written history is worse than none, because it would be read
 /// back as a confident answer about where a generation began.
-pub fn store(dir: &Path, map: &EpochMap) -> Result<()> {
+pub(super) fn store(dir: &Path, map: &EpochMap) -> Result<()> {
     use std::io::Write;
 
     let path = path_in(dir);
@@ -212,7 +214,7 @@ pub fn store(dir: &Path, map: &EpochMap) -> Result<()> {
     Ok(())
 }
 
-pub fn epochs_file_name() -> &'static str {
+pub(super) fn epochs_file_name() -> &'static str {
     "epochs"
 }
 

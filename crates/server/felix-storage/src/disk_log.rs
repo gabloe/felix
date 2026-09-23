@@ -33,18 +33,19 @@
 //! * `read_range` may touch cold blocks, so it runs entirely on `spawn_blocking`.
 //!   It is a replay and catch-up path, not the publish hot path.
 
-pub mod epochs;
 pub mod layout;
-pub mod recovery;
-pub mod retention;
-pub mod segments;
-pub mod sync;
 
 mod append;
+mod epochs;
 mod flush;
 mod provider;
+mod recovery;
+mod retention;
+mod segments;
+mod sync;
 
 pub use provider::DiskLogProvider;
+pub use segments::RetentionOutcome;
 
 use std::path::PathBuf;
 use std::sync::Arc;

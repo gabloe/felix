@@ -28,12 +28,13 @@
 //!   (positioned reads, preallocation, flushes).
 //! - Projections of a log: [`cache`] ([`StorageApi`] and its two stores) and
 //!   [`counter_log`].
-//! - Ordering and reporting: [`commit_order`], [`metrics_names`], and the
-//!   errors every call returns ([`StorageError`], [`Corruption`]).
+//! - Ordering and reporting: `commit_order` ([`CommitSequencer`]),
+//!   [`metrics_names`], and the errors every call returns ([`StorageError`],
+//!   [`Corruption`]).
 //! - [`tiered`] is an interface with no implementation yet.
 
 pub mod cache;
-pub mod commit_order;
+mod commit_order;
 pub mod counter_log;
 pub mod disk_log;
 mod error;
@@ -44,8 +45,7 @@ pub mod segment;
 pub mod tiered;
 
 pub use cache::{
-    CacheChange, CacheEntry, CacheKey, CacheObserver, CacheSnapshotEntry, EphemeralCache, LogCache,
-    StorageApi,
+    CacheChange, CacheObserver, CacheSnapshotEntry, EphemeralCache, LogCache, StorageApi,
 };
 pub use commit_order::{CommitSequencer, CommitTurn};
 pub use counter_log::CounterStore;

@@ -39,7 +39,7 @@ impl SegmentSet {
     /// segment is the one scanned in full at startup. Past the bound, appends
     /// roll inline and take the latency hit, which is the correct trade when the
     /// alternative is an unboundedly large segment to re-scan after a crash.
-    pub fn would_roll_within(&self, records: &[AppendRecord], roll_pending: bool) -> bool {
+    pub(crate) fn would_roll_within(&self, records: &[AppendRecord], roll_pending: bool) -> bool {
         self.active.projected_size(records) > self.size_ceiling(roll_pending)
             && self.active.record_count() > 0
     }
@@ -49,7 +49,7 @@ impl SegmentSet {
     /// Exposed so the async layer can perform the roll — which seals a segment,
     /// creates another, and fsyncs both plus the directory — on a blocking
     /// thread instead of inline on a reactor worker.
-    pub fn would_roll(&self, records: &[AppendRecord]) -> bool {
+    pub(crate) fn would_roll(&self, records: &[AppendRecord]) -> bool {
         self.would_roll_within(records, false)
     }
 
@@ -61,7 +61,7 @@ impl SegmentSet {
     /// instead of waiting for one to be built. That makes the configured size a
     /// target rather than a hard ceiling — a segment can overshoot slightly
     /// while its replacement is being created.
-    pub fn should_prepare_roll(&self) -> bool {
+    pub(crate) fn should_prepare_roll(&self) -> bool {
         // 100 means "never roll early", and it is the default. Without this the
         // comparison below still fires whenever the segment has *reached* its
         // configured size -- which an exactly fitting batch or a single
@@ -95,7 +95,7 @@ impl SegmentSet {
     /// directory, and holding even a read lock across that blocks every append
     /// waiting for the write lock, which is the stall this whole design exists
     /// to remove.
-    pub fn roll_plan(&self) -> RollPlan {
+    pub(crate) fn roll_plan(&self) -> RollPlan {
         RollPlan {
             dir: self.dir.clone(),
             id: self.next_segment_id.fetch_add(1, Ordering::AcqRel),
@@ -122,7 +122,7 @@ impl SegmentSet {
     ///
     /// Returns [`RollOutcome::Stale`] only when another roll already replaced
     /// the segment this one was built to retire.
-    pub fn commit_roll(&mut self, prepared: PreparedSegment) -> Result<RollOutcome> {
+    pub(crate) fn commit_roll(&mut self, prepared: PreparedSegment) -> Result<RollOutcome> {
         // Rolling an empty segment would push a `SealedEntry` with no
         // `last_offset` to describe, and gains nothing.
         if prepared.previous_active_id != self.active.id() || self.active.record_count() == 0 {
@@ -159,7 +159,7 @@ impl SegmentSet {
     /// that drive `SegmentSet` directly. It holds the caller's lock across
     /// several fsyncs; the split `roll_plan`/`commit_roll` pair is what the
     /// async log uses to keep that off the append path.
-    pub fn roll(&mut self) -> Result<()> {
+    pub(crate) fn roll(&mut self) -> Result<()> {
         let descriptor = self.active.seal()?;
         let base_offset = self.active.next_offset();
         let id = self.next_segment_id.fetch_add(1, Ordering::AcqRel);
@@ -222,7 +222,7 @@ impl SegmentSet {
 /// Everything needed to build a replacement segment, captured under the lock so
 /// that the building itself can happen without one.
 #[derive(Debug, Clone)]
-pub struct RollPlan {
+pub(crate) struct RollPlan {
     dir: PathBuf,
     id: SegmentId,
     previous_active_id: SegmentId,
@@ -235,7 +235,7 @@ impl RollPlan {
     ///
     /// The segment is left *headerless*: it claims no base offset yet, because
     /// the correct one is not known until the swap. See [`BlankSegment`].
-    pub fn build(self) -> Result<PreparedSegment> {
+    pub(crate) fn build(self) -> Result<PreparedSegment> {
         let blank = BlankSegment::create(
             &self.dir,
             self.id,
@@ -251,7 +251,7 @@ impl RollPlan {
 
 /// A replacement segment built ahead of the swap that installs it.
 #[derive(Debug)]
-pub struct PreparedSegment {
+pub(crate) struct PreparedSegment {
     blank: BlankSegment,
     /// The segment this replacement was built to retire.
     ///
@@ -264,14 +264,14 @@ pub struct PreparedSegment {
 
 impl PreparedSegment {
     /// Remove the files backing a replacement that was never installed.
-    pub fn discard(self) -> Result<()> {
+    pub(crate) fn discard(self) -> Result<()> {
         self.blank.discard()
     }
 }
 
 /// What happened to a prepared segment offered to [`SegmentSet::commit_roll`].
 #[derive(Debug)]
-pub enum RollOutcome {
+pub(crate) enum RollOutcome {
     /// Installed as the active segment. Carries the retired writer to be sealed.
     Installed(SegmentWriter),
     /// Rejected: the tail moved past the offset it was built for. Handed back

@@ -6,10 +6,11 @@
 //! segments into a log is `crate::disk_log`'s job.
 
 pub mod format;
-pub mod index;
-pub mod reader;
-pub mod scan;
-pub mod writer;
+
+pub(crate) mod index;
+pub(crate) mod reader;
+pub(crate) mod scan;
+pub(crate) mod writer;
 
 mod cursor;
 #[cfg(test)]
