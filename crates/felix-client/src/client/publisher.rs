@@ -415,6 +415,14 @@ impl Publisher {
         )
     }
 
+    /// Whether the broker takes an idempotent batch as a binary frame.
+    fn supports_binary_idempotent(&self) -> bool {
+        felix_wire::supports(
+            self.inner.server_flags,
+            felix_wire::FLAG_BINARY_PUBLISH_ACKED | felix_wire::FLAG_BINARY_PUBLISH_IDEMPOTENT,
+        )
+    }
+
     /// Publish one payload using the JSON compatibility encoding.
     #[deprecated(
         since = "0.5.0",
@@ -750,6 +758,41 @@ impl Publisher {
         let worker = self.select_worker(tenant_id, namespace, stream)?;
         let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
         let request_id = worker.request_counter.fetch_add(1, Ordering::Relaxed);
+        if self.supports_binary_idempotent() {
+            let bytes = felix_wire::binary::encode_idempotent_publish_batch_bytes(
+                request_id,
+                felix_wire::binary::ProducerSequence {
+                    producer_id,
+                    sequence,
+                },
+                None,
+                tenant_id,
+                namespace,
+                stream,
+                &payloads,
+            )?;
+            let permit = self.inner.admission.acquire(bytes.len()).await?;
+            let (response_tx, response_rx) = oneshot::channel();
+            worker
+                .tx
+                .send(PublishRequest::BinaryBytes {
+                    bytes,
+                    item_count: payloads.len(),
+                    sample: false,
+                    ack: AckMode::PerBatch,
+                    request_id: Some(request_id),
+                    _permit: permit,
+                    response: response_tx,
+                })
+                .await
+                .context("enqueue idempotent binary batch")?;
+            let cancelled = CancelledAfterEnqueue::armed();
+            let answer = response_rx
+                .await
+                .context("idempotent binary batch response dropped")?;
+            cancelled.answered();
+            return answer.map(|_| ());
+        }
         let message = Message::PublishIdempotent {
             tenant_id: tenant_id.to_string(),
             namespace: namespace.to_string(),
@@ -1721,6 +1764,77 @@ mod tests {
             _ => panic!("a broker without the acked binary frame must get JSON"),
         }
         publish.await.expect("task").expect("publish");
+    }
+
+    /// An idempotent batch goes out as a binary frame when the broker
+    /// advertised the bit, and as `publish_idempotent` when it did not.
+    #[tokio::test]
+    async fn an_idempotent_batch_is_binary_only_when_advertised() {
+        for (server_flags, binary) in [
+            (felix_wire::KNOWN_FLAGS, true),
+            (
+                felix_wire::KNOWN_FLAGS & !felix_wire::FLAG_BINARY_PUBLISH_IDEMPOTENT,
+                false,
+            ),
+        ] {
+            let (tx, mut rx) = mpsc::channel::<PublishRequest>(2);
+            let publisher = Publisher {
+                inner: Arc::new(PublisherInner::new(
+                    Arc::new(vec![PublishWorker {
+                        tx,
+                        handle: tokio::sync::Mutex::new(None),
+                        request_counter: AtomicU64::new(1),
+                        server_flags,
+                    }]),
+                    PublishSharding::RoundRobin,
+                )),
+            };
+            let publish = tokio::spawn({
+                let publisher = publisher.clone();
+                async move {
+                    publisher
+                        .publish_idempotent_batch("t", "ns", "s", vec![b"one".to_vec()], 42, 7)
+                        .await
+                }
+            });
+            match rx.recv().await.expect("request") {
+                PublishRequest::BinaryBytes {
+                    bytes, response, ..
+                } => {
+                    assert!(binary, "sent a binary frame the broker never advertised");
+                    let frame = felix_wire::Frame::decode(bytes).expect("frame");
+                    let decoded =
+                        felix_wire::binary::decode_acked_publish_batch(&frame).expect("decode");
+                    assert_eq!(
+                        decoded.producer,
+                        Some(felix_wire::binary::ProducerSequence {
+                            producer_id: 42,
+                            sequence: 7,
+                        })
+                    );
+                    let _ = response.send(Ok(None));
+                }
+                PublishRequest::Message {
+                    message, response, ..
+                } => {
+                    assert!(
+                        !binary,
+                        "fell back to JSON against a broker that has the bit"
+                    );
+                    assert!(matches!(
+                        message,
+                        Message::PublishIdempotent {
+                            producer_id: 42,
+                            sequence: 7,
+                            ..
+                        }
+                    ));
+                    let _ = response.send(Ok(None));
+                }
+                PublishRequest::Finish { .. } => panic!("unexpected finish"),
+            }
+            publish.await.expect("task").expect("publish");
+        }
     }
 
     #[tokio::test]

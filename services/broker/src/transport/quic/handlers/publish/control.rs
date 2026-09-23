@@ -250,6 +250,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
     }
 
+    let producer = batch.producer;
     let batch = batch.batch;
     let Some(auth_ctx) = auth_ctx else {
         reply_error("auth required".to_string()).await?;
@@ -279,7 +280,13 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         stream_cache_key,
         throttled,
         ack_on_commit,
-        AckEncoding::Binary,
+        // Answered like `publish_idempotent`, so a refusal stays typed. The
+        // client reads JSON and binary acks off the same stream.
+        if producer.is_some() {
+            AckEncoding::Idempotent
+        } else {
+            AckEncoding::Binary
+        },
         out_ack_tx,
         out_ack_depth,
         ack_throttle_tx,
@@ -293,10 +300,15 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         batch.payloads,
         batch.key,
         Some(request_id),
-        Some(ack),
+        // Always per batch for a producer: the sequence names the batch.
+        Some(if producer.is_some() {
+            felix_wire::AckMode::PerBatch
+        } else {
+            ack
+        }),
         sample,
         auth_ctx.token.clone(),
-        None,
+        producer.map(|producer| (producer.producer_id, producer.sequence)),
     )
     .await
 }

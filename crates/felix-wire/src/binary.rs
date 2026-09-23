@@ -7,7 +7,8 @@ use crate::error::{Error, Result};
 use crate::frame::{
     FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
     FLAG_BINARY_PUBLISH_ACK_OWNER, FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH,
-    FLAG_BINARY_PUBLISH_KEYED, FLAG_EVENT_BATCH_OFFSETS, Frame, FrameHeader,
+    FLAG_BINARY_PUBLISH_IDEMPOTENT, FLAG_BINARY_PUBLISH_KEYED, FLAG_EVENT_BATCH_OFFSETS, Frame,
+    FrameHeader,
 };
 use crate::message::AckMode;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -306,6 +307,13 @@ pub fn encode_publish_batch_bytes_with_stats_keyed_from_bytes(
 
 // Decode a binary publish batch frame into its structured form.
 pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
+    // The producer prefix only exists after an acked prefix, which this does
+    // not parse. Reading on would take the producer id for the tenant length.
+    if frame.header.flags & FLAG_BINARY_PUBLISH_IDEMPOTENT != 0 {
+        return Err(Error::Deserialize(SerdeError::custom(
+            "an idempotent publish must be acked",
+        )));
+    }
     let mut buf = frame.payload.clone();
     // The key prefix comes first, so everything after it is the ordinary body
     // at a shifted offset rather than a second layout to parse.
@@ -413,8 +421,20 @@ fn ack_mode_from_wire(byte: u8) -> Result<AckMode> {
 pub struct AckedPublishBatch {
     pub request_id: u64,
     pub ack: AckMode,
+    /// Present when the frame carried `FLAG_BINARY_PUBLISH_IDEMPOTENT`.
+    pub producer: Option<ProducerSequence>,
     pub batch: PublishBatch,
 }
+
+/// The producer id and sequence an idempotent batch is appended under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerSequence {
+    pub producer_id: u64,
+    pub sequence: u64,
+}
+
+// u64 producer_id + u64 sequence, after the acked prefix.
+const PRODUCER_PREFIX_LEN: usize = 16;
 
 /// Encode an acked publish batch into a full framed buffer (header included).
 pub fn encode_acked_publish_batch_bytes(
@@ -444,24 +464,69 @@ pub fn encode_acked_publish_batch_bytes_keyed(
     stream: &str,
     payloads: &[Vec<u8>],
 ) -> Result<Bytes> {
+    encode_acked_inner(
+        request_id, ack, None, key, tenant_id, namespace, stream, payloads,
+    )
+}
+
+/// Encode a batch under an idempotent producer's sequence. Always acked per
+/// batch; the producer prefix follows the acked prefix and precedes any key.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_idempotent_publish_batch_bytes(
+    request_id: u64,
+    producer: ProducerSequence,
+    key: Option<&[u8]>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<Bytes> {
+    encode_acked_inner(
+        request_id,
+        AckMode::PerBatch,
+        Some(producer),
+        key,
+        tenant_id,
+        namespace,
+        stream,
+        payloads,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_acked_inner(
+    request_id: u64,
+    ack: AckMode,
+    producer: Option<ProducerSequence>,
+    key: Option<&[u8]>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<Bytes> {
     let ack_byte = ack_mode_to_wire(ack)?;
     // Reuse the unacked body encoder rather than duplicating its bounds checks,
-    // then splice the prefix in front and restate the header with both flags.
+    // then splice the prefixes in front and restate the header.
     let body = encode_publish_batch_keyed(key, tenant_id, namespace, stream, payloads)?.payload;
-    let payload_len = ACKED_PREFIX_LEN
+    let prefix_len = ACKED_PREFIX_LEN + producer.map_or(0, |_| PRODUCER_PREFIX_LEN);
+    let payload_len = prefix_len
         .checked_add(body.len())
         .ok_or(Error::FrameTooLarge)?;
     if payload_len > u32::MAX as usize {
         return Err(Error::FrameTooLarge);
     }
+    let mut flags = publish_flags(key) | FLAG_BINARY_PUBLISH_ACKED;
+    if producer.is_some() {
+        flags |= FLAG_BINARY_PUBLISH_IDEMPOTENT;
+    }
     let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
-    FrameHeader::new(
-        publish_flags(key) | FLAG_BINARY_PUBLISH_ACKED,
-        payload_len as u32,
-    )
-    .encode(&mut buf);
+    FrameHeader::new(flags, payload_len as u32).encode(&mut buf);
     buf.put_u64(request_id);
     buf.put_u8(ack_byte);
+    if let Some(producer) = producer {
+        buf.put_u64(producer.producer_id);
+        buf.put_u64(producer.sequence);
+    }
     buf.extend_from_slice(&body);
     Ok(buf.freeze())
 }
@@ -484,6 +549,20 @@ pub fn peek_acked_publish_prefix(frame: &Frame) -> Result<(u64, AckMode)> {
 /// Decode an acked binary publish batch frame.
 pub fn decode_acked_publish_batch(frame: &Frame) -> Result<AckedPublishBatch> {
     let (request_id, ack) = peek_acked_publish_prefix(frame)?;
+    let mut prefix_len = ACKED_PREFIX_LEN;
+    let producer = if frame.header.flags & FLAG_BINARY_PUBLISH_IDEMPOTENT != 0 {
+        let mut buf = frame.payload.slice(ACKED_PREFIX_LEN..);
+        if buf.remaining() < PRODUCER_PREFIX_LEN {
+            return Err(Error::Incomplete);
+        }
+        prefix_len += PRODUCER_PREFIX_LEN;
+        Some(ProducerSequence {
+            producer_id: buf.get_u64(),
+            sequence: buf.get_u64(),
+        })
+    } else {
+        None
+    };
     // Re-frame the remainder as a plain publish batch so both encodings share one
     // body parser, and with it one set of bounds checks.
     let body = Frame {
@@ -491,13 +570,14 @@ pub fn decode_acked_publish_batch(frame: &Frame) -> Result<AckedPublishBatch> {
             // Carry the keyed bit across: it is what tells the body parser a key
             // prefix comes before the tenant id.
             FLAG_BINARY_PUBLISH_BATCH | (frame.header.flags & FLAG_BINARY_PUBLISH_KEYED),
-            (frame.payload.len() - ACKED_PREFIX_LEN) as u32,
+            (frame.payload.len() - prefix_len) as u32,
         ),
-        payload: frame.payload.slice(ACKED_PREFIX_LEN..),
+        payload: frame.payload.slice(prefix_len..),
     };
     Ok(AckedPublishBatch {
         request_id,
         ack,
+        producer,
         batch: decode_publish_batch(&body)?,
     })
 }
