@@ -15,7 +15,7 @@
 //! Developer-facing demo; it favours clarity over performance. Run it with:
 //!
 //! ```text
-//! cargo run --release -p broker --bin durable-restart-demo
+//! cargo run --release -p felix-broker-service --bin durable-restart-demo
 //! ```
 
 use anyhow::{Context, Result, bail};

@@ -17,13 +17,13 @@ rcgen = "0.14"
 rustls = "0.23"
 quinn = "0.11"
 
-controlplane = { path = "../../services/controlplane" }
-broker = { path = "../../services/broker" }
-felix-broker = { path = "../../crates/felix-broker" }
-felix-client = { path = "../../crates/felix-client" }
-felix-storage = { path = "../../crates/felix-storage" }
-felix-transport = { path = "../../crates/felix-transport" }
-felix-wire = { path = "../../crates/felix-wire" }
+felix-controlplane-service = { path = "../../services/felix-controlplane-service" }
+felix-broker-service = { path = "../../services/felix-broker-service" }
+felix-broker = { path = "../../crates/server/felix-broker" }
+felix-client = { path = "../../crates/sdk/felix-client" }
+felix-storage = { path = "../../crates/server/felix-storage" }
+felix-transport = { path = "../../crates/protocol/felix-transport" }
+felix-wire = { path = "../../crates/protocol/felix-wire" }
 
 [workspace]
 

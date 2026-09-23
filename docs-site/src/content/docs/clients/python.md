@@ -24,7 +24,7 @@ sdist and does need one.
 Building from the repository needs a Rust toolchain either way:
 
 ```bash
-pip install ./crates/felix-python
+pip install ./crates/sdk/felix-python
 ```
 
 ## Two surfaces

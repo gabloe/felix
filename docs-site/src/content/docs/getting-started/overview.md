@@ -67,8 +67,8 @@ flowchart TB
     WIRE["felix-wire<br/><small>frame header, JSON control messages,<br/>binary data-plane frames</small>"]
     TRANS["felix-transport<br/><small>QUIC endpoints, streams, flow control,<br/>dedicated I/O runtimes</small>"]
     BRK["felix-broker<br/><small>stream registry, log, subscriber<br/>registry, fanout</small>"]
-    SVC["services/broker<br/><small>network service: handlers, auth,<br/>metrics, control-plane sync</small>"]
-    CP["services/controlplane<br/><small>tenants, namespaces, streams,<br/>tokens, RBAC</small>"]
+    SVC["services/felix-broker-service<br/><small>network service: handlers, auth,<br/>metrics, control-plane sync</small>"]
+    CP["services/felix-controlplane-service<br/><small>tenants, namespaces, streams,<br/>tokens, RBAC</small>"]
 
     A1 e1@--> SDK
     A2 e2@--> SDK
@@ -106,10 +106,10 @@ flowchart TB
   subscriber registry, fanout, cache index, consumer groups.
 - **`felix-client`** is the Rust SDK: publisher, subscription, and cache APIs
   over pooled connections, with reconnection and redirect-following in the
-  cluster client. Python (`crates/felix-python`) and TypeScript
-  (`crates/felix-typescript`) ship too, both as bindings over this client
+  cluster client. Python (`crates/sdk/felix-python`) and TypeScript
+  (`crates/sdk/felix-typescript`) ship too, both as bindings over this client
   rather than reimplementations; Go and C# are not started.
-- **The control plane** (`services/controlplane`) holds metadata — tenants,
+- **The control plane** (`services/felix-controlplane-service`) holds metadata — tenants,
   namespaces, streams, caches, nodes — behind a REST API, and assigns every
   shard to a broker. Brokers watch its assignment feed. It is not on the data
   path: a publish never waits on it.

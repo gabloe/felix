@@ -5,7 +5,7 @@ self-contained and optimized for clarity over production hardening.
 
 ## Broker demos
 
-Located in `demos/broker/` and built from the `broker` crate:
+Located in `demos/broker/` and built from the `felix-broker-service` package:
 
 - `pubsub-demo-simple`: End-to-end QUIC publish/subscribe flow.
 - `cache-demo`: Cache put/get workflow over QUIC.
@@ -17,12 +17,12 @@ Located in `demos/broker/` and built from the `broker` crate:
 ### Run
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-simple
-cargo run --release -p broker --bin cache-demo
-cargo run --release -p broker --bin latency-demo
-cargo run --release -p broker --bin pubsub-demo-notifications
-cargo run --release -p broker --bin pubsub-demo-orders
-cargo run --release -p broker --bin durable-restart-demo
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin cache-demo
+cargo run --release -p felix-broker-service --bin latency-demo
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin durable-restart-demo
 ```
 
 ### Notes

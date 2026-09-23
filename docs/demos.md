@@ -10,7 +10,7 @@ hardening and are intended for learning, diagnostics, and performance tuning.
 From the repository root:
 
 ```bash
-cargo run --release -p broker --bin <demo-binary>
+cargo run --release -p felix-broker-service --bin <demo-binary>
 ```
 
 Or, if you have [Task](https://taskfile.dev/) installed:
@@ -67,7 +67,7 @@ consumer, waits to be told it was handled, and takes it back if nobody does.
 
 ```bash
 task demo:queues
-# or: cargo run --release -p broker --bin queue-semantics-demo
+# or: cargo run --release -p felix-broker-service --bin queue-semantics-demo
 ```
 
 **What it shows**
@@ -232,7 +232,7 @@ STEP 19 t2 token publish denied: PASS
 
 **Run**:
 ```bash
-cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
 ```
 
 **What to expect**:
@@ -250,7 +250,7 @@ cargo run --release -p broker --bin pubsub-demo-simple
 
 **Run**:
 ```bash
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 ```
 
 **Common tuning env vars**:
@@ -278,10 +278,10 @@ FELIX_CACHE_BENCH_OPS=put,get_hit,get_miss
 **Run**:
 ```bash
 # Single run
-cargo run --release -p broker --bin latency-demo
+cargo run --release -p felix-broker-service --bin latency-demo
 
 # Customized run
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -290,12 +290,12 @@ cargo run --release -p broker --bin latency-demo -- \
     --warmup 500
 
 # Fairness A/B knobs for throughput-mode cliffs
-cargo run --release -p broker --bin latency-demo --all-features -- \
+cargo run --release -p felix-broker-service --bin latency-demo --all-features -- \
     --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 \
     --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1 \
     --pub-yield-every-batches 1
 
-cargo run --release -p broker --bin latency-demo --all-features -- \
+cargo run --release -p felix-broker-service --bin latency-demo --all-features -- \
     --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 \
     --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1 \
     --sub-dedicated-thread
@@ -321,7 +321,7 @@ cargo run --release -p broker --bin latency-demo --all-features -- \
 ```bash
 task demo:notifications
 # or
-cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
 ```
 
 **Optional flags**:
@@ -347,7 +347,7 @@ cargo run --release -p broker --bin pubsub-demo-notifications
 ```bash
 task demo:orders
 # or
-cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
 ```
 
 **Optional flags**:

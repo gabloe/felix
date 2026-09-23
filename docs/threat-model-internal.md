@@ -11,7 +11,7 @@ that is stated plainly rather than described as future work.
 ## The surface
 
 One listener, separate from the client-facing one
-(`services/broker/src/peer/server.rs`), speaking `felix-internal/1` over QUIC.
+(`services/felix-broker-service/src/peer/server.rs`), speaking `felix-internal/1` over QUIC.
 It accepts four families of request:
 
 | Family | Messages | Effect on the receiver |

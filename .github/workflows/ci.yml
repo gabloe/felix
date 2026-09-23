@@ -234,9 +234,9 @@ jobs:
   #
   # Unconditional, despite driving real QUIC and costing a broker build: the
   # lesson of #534 is that a job which does not run is a job that breaks
-  # silently, and a filter on `crates/felix-python/**` would have missed it
+  # silently, and a filter on `crates/sdk/felix-python/**` would have missed it
   # anyway -- the binding wraps the Rust client, so a change anywhere under
-  # `crates/felix-client` can break it just as surely.
+  # `crates/sdk/felix-client` can break it just as surely.
   python:
     name: Python client conformance
     runs-on: ubuntu-latest
@@ -259,7 +259,7 @@ jobs:
       # The suite starts these.
       - name: Build the broker and cluster harness
         run: |
-          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-broker-service --bin felix-broker
           cargo build --locked -p felix-cluster --bin felix-cluster
 
       # Same installation the release job uses, so the two cannot drift.
@@ -267,13 +267,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install ./crates/felix-python
+          python -m pip install ./crates/sdk/felix-python
           python -c "import felix; print('felix binding imported OK')"
 
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/python-conformance.json
-        run: cd crates/felix-python && pytest -q
+        run: cd crates/sdk/felix-python && pytest -q
 
       # The verdict, not the exit code: a suite that passed while skipping a
       # required scenario is not conformance.
@@ -281,7 +281,7 @@ jobs:
         run: cargo run --locked -q -p felix-conformance -- verify python-conformance.json
 
   # Same reasoning as the Python job above, and the same shape: the binding
-  # wraps the Rust client, so a change anywhere under `crates/felix-client` can
+  # wraps the Rust client, so a change anywhere under `crates/sdk/felix-client` can
   # break it. Unconditional for the same reason too -- a job behind a path
   # filter is a job that breaks silently.
   typescript:
@@ -306,7 +306,7 @@ jobs:
       # The suite starts these.
       - name: Build the broker and cluster harness
         run: |
-          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-broker-service --bin felix-broker
           cargo build --locked -p felix-cluster --bin felix-cluster
 
       # No napi CLI: `napi build` is mostly a rename of this cdylib, and the
@@ -321,13 +321,13 @@ jobs:
         run: python3 scripts/check_npm_packages.py
 
       - name: Build the addon
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: cargo build --locked
 
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/ts-conformance.json
-        run: cd crates/felix-typescript && node --test test/conformance.test.mjs
+        run: cd crates/sdk/felix-typescript && node --test test/conformance.test.mjs
 
       # The verdict, not the exit code: a suite that passed while skipping a
       # required scenario is not conformance.
@@ -402,8 +402,8 @@ jobs:
           # flags, so they would otherwise miss the cache the other jobs share.
           workspaces: |
             .
-            crates/felix-wire/fuzz
-            crates/felix-storage/fuzz
+            crates/protocol/felix-wire/fuzz
+            crates/server/felix-storage/fuzz
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
@@ -425,6 +425,6 @@ jobs:
         with:
           name: fuzz-artifacts
           path: |
-            crates/felix-wire/fuzz/artifacts/
-            crates/felix-storage/fuzz/artifacts/
+            crates/protocol/felix-wire/fuzz/artifacts/
+            crates/server/felix-storage/fuzz/artifacts/
           if-no-files-found: ignore

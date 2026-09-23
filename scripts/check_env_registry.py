@@ -18,10 +18,10 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-REGISTRY = REPO / "crates/felix-common/src/env_registry.rs"
+REGISTRY = REPO / "crates/server/felix-common/src/env_registry.rs"
 
 # Not variables at all. The detector matches any quoted FELIX_* literal in Rust,
-# and these are the TypeScript binding's error codes (`crates/felix-typescript`),
+# and these are the TypeScript binding's error codes (`crates/sdk/felix-typescript`),
 # which ride on an error message and reach JavaScript as `err.code`. They are
 # public API, documented in that package's `index.d.ts` and README, so they are
 # named here rather than renamed to dodge a heuristic. Kept in step with the

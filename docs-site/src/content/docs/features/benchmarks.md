@@ -22,10 +22,10 @@ figures below as its baseline.
 
 ```bash
 # Full matrix: latency-focused (batch=1) then throughput-focused (batch=64)
-cargo run --release -p broker --bin latency-demo --all-features
+cargo run --release -p felix-broker-service --bin latency-demo --all-features
 
 # Single case
-cargo run --release -p broker --bin latency-demo --all-features -- \
+cargo run --release -p felix-broker-service --bin latency-demo --all-features -- \
   --warmup 500 --total 20000 --payload 1024 --fanout 10 --batch 64
 ```
 
@@ -304,7 +304,7 @@ nats-server &
 nats bench benchsubject --pub 1 --sub 10 --size 1024 --msgs 100000
 
 # Felix side, matching shape
-cargo run --release -p broker --bin latency-demo --all-features -- \
+cargo run --release -p felix-broker-service --bin latency-demo --all-features -- \
   --warmup 500 --total 100000 --payload 1024 --fanout 10 --batch 64
 ```
 
@@ -382,7 +382,7 @@ meaningful readings from each.
 
 ```bash
 # Single case, quick sanity check
-cargo run --release -p broker --bin latency-demo --all-features -- \
+cargo run --release -p felix-broker-service --bin latency-demo --all-features -- \
   --warmup 500 --total 20000 --payload 1024 --fanout 10 --batch 64
 
 # Full matrix (scripts/perf/presets.yml) + aggregation + charts + markdown.

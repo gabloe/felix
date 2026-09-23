@@ -167,11 +167,11 @@ The sum survives what the cursors survive, proven the same way: restart
 log rides its cache shard's replica set the way group state rides a stream
 shard's, shipped by the same driver pass and gating nothing.
 
-> `crates/felix-storage/src/counter_log/tests.rs`, including
+> `crates/server/felix-storage/src/counter_log/tests.rs`, including
 > `compaction_moves_neither_the_sum_nor_the_offsets` and
 > `the_sum_survives_a_restart`;
-> `services/broker/tests/counters.rs::an_add_answers_with_the_sum_including_it`;
-> `crates/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
+> `services/felix-broker-service/tests/counters.rs::an_add_answers_with_the_sum_including_it`;
+> `crates/testing/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
 
 ## Where this stops being true
 

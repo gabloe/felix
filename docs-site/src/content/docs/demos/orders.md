@@ -34,13 +34,13 @@ flowchart LR
 ```bash
 task demo:orders
 # or
-cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
 ```
 
 Optional failure injection:
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-orders -- --kill-worker=payments
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders -- --kill-worker=payments
 ```
 
 ## Configuration flags

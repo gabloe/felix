@@ -227,7 +227,7 @@ byte-identical replicas, settled by nothing but the order the log assigned.
 
 ### The consensus core underneath
 
-`services/controlplane/src/raft/` is the whole openraft surface — no
+`services/felix-controlplane-service/src/raft/` is the whole openraft surface — no
 consensus type escapes it. Outside the seam there are exactly two things: a
 `RaftHandle` (start, initialize, write, add-learner, promote, snapshot,
 status, shutdown) and an `AppStateMachine` trait whose contract is the

@@ -16,7 +16,7 @@ framing is allowed to change shape for latency reasons, while bytes already on
 disk must stay readable by every later build.
 
 Implementation:
-[`crates/felix-storage/src/segment/format.rs`](https://github.com/gabloe/felix/blob/main/crates/felix-storage/src/segment/format.rs).
+[`crates/server/felix-storage/src/segment/format.rs`](https://github.com/gabloe/felix/blob/main/crates/server/felix-storage/src/segment/format.rs).
 The two must move together — a change to one without the other is a bug.
 
 This page is the byte layout. For how those bytes are produced and consumed over
@@ -200,7 +200,7 @@ because only there can a record have been mid-write when the process died:
 - Segment-header damage is never repairable.
 
 The full rules live in `is_repairable_tail` in
-[`segment/reader.rs`](https://github.com/gabloe/felix/blob/main/crates/felix-storage/src/segment/reader.rs).
+[`segment/reader.rs`](https://github.com/gabloe/felix/blob/main/crates/server/felix-storage/src/segment/reader.rs).
 
 ## Golden vectors
 

@@ -6,8 +6,8 @@ static audit half is recorded separately in [panic-audit.md](panic-audit.md).
 
 ## Scope and environment
 
-- Harness: `services/broker/src/bin/soak/`, run via
-  `cargo run --release -p broker --bin soak`.
+- Harness: `services/felix-broker-service/src/bin/soak/`, run via
+  `cargo run --release -p felix-broker-service --bin soak`.
 - Build: `--release` (fat LTO, `codegen-units = 1`), default features.
   `FELIX_DISABLE_TIMINGS=1`.
 - Environment: macOS 15 (Darwin 25.6), Apple Silicon, 2026-08-09.

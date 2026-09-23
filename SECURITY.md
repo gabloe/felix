@@ -23,8 +23,8 @@ Don't include vulnerability details in that first message.
 - Affected component and version — a released tag (`v0.3.1`), a commit SHA, or
   a container image digest.
 - Which piece: `felix-wire`, `felix-transport`, `felix-client`, `felix-broker`,
-  `felix-storage`, `felix-authz`, `felix-router`, `services/broker`, or
-  `services/controlplane`.
+  `felix-storage`, `felix-authz`, `felix-router`, `services/felix-broker-service`, or
+  `services/felix-controlplane-service`.
 - Impact: what an attacker gains, and what position they need to start from
   (unauthenticated network peer, holder of a valid token for another tenant,
   tenant admin, node operator, local disk access).
@@ -111,7 +111,7 @@ Anything that breaks a property Felix claims to enforce:
   mode or a feature; they are outside the workspace, deliberately
   under-hardened, and not for production.
 - **Test fixtures, benchmark harnesses, the cluster harness
-  (`crates/felix-cluster`), and the load generator (`crates/felix-loadgen`)** —
+  (`crates/testing/felix-cluster`), and the load generator (`crates/testing/felix-loadgen`)** —
   local development tooling that assumes a trusted operator.
 - **Defaults that are documented as development-only** — self-signed
   certificates, permissive local configs, the compose/Kubernetes examples'

@@ -43,16 +43,15 @@ COPYLEFT = {
     "felix-router",
     "felix-cluster",
     "felix-loadgen",
-    "broker",
-    "controlplane",
+    "felix-broker-service",
+    "felix-controlplane-service",
 }
 
 # Service binaries and dev/CI tools with hard AGPL-3.0 dependencies. Nobody
-# consumes these from a registry, and `broker`/`controlplane` are generic
-# names that would collide besides.
+# consumes these from a registry.
 NOT_PUBLISHABLE = {
-    "broker",
-    "controlplane",
+    "felix-broker-service",
+    "felix-controlplane-service",
     "felix-conformance",
     "felix-cluster",
     "felix-loadgen",

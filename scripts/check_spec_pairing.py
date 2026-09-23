@@ -35,11 +35,11 @@ import sys
 # The implementation of what docs/formal/FelixShard.tla models: the lease, the
 # replication and quorum mark, the reports, promotion, and the planned handoff.
 MODELLED = (
-    "services/broker/src/lease",
-    "services/broker/src/replication",
-    "services/broker/src/shard_lifecycle",
-    "services/controlplane/src/placement",
-    "services/controlplane/src/replica_positions",
+    "services/felix-broker-service/src/lease",
+    "services/felix-broker-service/src/replication",
+    "services/felix-broker-service/src/shard_lifecycle",
+    "services/felix-controlplane-service/src/placement",
+    "services/felix-controlplane-service/src/replica_positions",
 )
 SPEC = "docs/formal/"
 MARKER = re.compile(r"^\s*Spec-Unaffected:\s*\S", re.MULTILINE)

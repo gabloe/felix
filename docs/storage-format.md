@@ -6,7 +6,7 @@ segment files, and it is intentionally independent of `felix-wire`: network
 framing is allowed to change shape for latency reasons, while bytes already on
 disk must stay readable by every later build.
 
-Implementation: [`crates/felix-storage/src/segment/format.rs`](../crates/felix-storage/src/segment/format.rs).
+Implementation: [`crates/server/felix-storage/src/segment/format.rs`](../crates/server/felix-storage/src/segment/format.rs).
 The two must move together — a change to one without the other is a bug.
 
 ## Goals
@@ -213,7 +213,7 @@ prove the write was unfinished; when it is not, recovery refuses to choose
 between "unfinished" and "rotted" and fails loudly instead.
 
 The full rules live in `is_repairable_tail` in
-[`segment/reader.rs`](../crates/felix-storage/src/segment/reader.rs).
+[`segment/reader.rs`](../crates/server/felix-storage/src/segment/reader.rs).
 
 ## Golden vectors
 

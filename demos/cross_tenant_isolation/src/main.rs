@@ -22,20 +22,24 @@ use anyhow::{bail, Context, Result};
 use axum::http::StatusCode;
 use axum::{Json, Router};
 use base64::Engine as _;
-use broker::{auth::BrokerAuth, controlplane as broker_controlplane, quic};
-use controlplane::api::bootstrap::BootstrapInitializeRequest;
-use controlplane::api::types::{CacheCreateRequest, NamespaceCreateRequest, StreamCreateRequest};
-use controlplane::app::{build_bootstrap_router, build_router, AppState};
-use controlplane::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
-use controlplane::auth::principal::principal_id;
-use controlplane::auth::rbac::policy_store::{GroupingRule, PolicyRule};
-use controlplane::config::{
+use felix_broker::Broker;
+use felix_broker_service::{auth::BrokerAuth, controlplane as broker_controlplane, quic};
+use felix_client::{Client, ClientConfig};
+use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
+use felix_controlplane_service::api::types::{
+    CacheCreateRequest, NamespaceCreateRequest, StreamCreateRequest,
+};
+use felix_controlplane_service::app::{build_bootstrap_router, build_router, AppState};
+use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
+use felix_controlplane_service::auth::principal::principal_id;
+use felix_controlplane_service::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+use felix_controlplane_service::config::{
     PostgresConfig, DEFAULT_CHANGES_LIMIT, DEFAULT_CHANGE_RETENTION_MAX_ROWS,
 };
-use controlplane::model::{ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, StreamKind};
-use controlplane::store::{postgres::PostgresStore, ControlPlaneStore, StoreConfig};
-use felix_broker::Broker;
-use felix_client::{Client, ClientConfig};
+use felix_controlplane_service::model::{
+    ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, StreamKind,
+};
+use felix_controlplane_service::store::{postgres::PostgresStore, ControlPlaneStore, StoreConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
 use felix_wire::AckMode;
@@ -435,24 +439,24 @@ fn resolve_db_urls() -> Vec<String> {
 /// Starts the control plane HTTP server on a random local port.
 async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, JoinHandle<()>)> {
     let state = AppState {
-        region: controlplane::api::types::Region {
+        region: felix_controlplane_service::api::types::Region {
             region_id: "local".to_string(),
             display_name: "Local".to_string(),
         },
         api_version: "v1".to_string(),
-        features: controlplane::api::types::FeatureFlags {
+        features: felix_controlplane_service::api::types::FeatureFlags {
             durable_storage: store.is_durable(),
             tiered_storage: false,
             bridges: false,
         },
         store,
-        oidc_validator: controlplane::auth::oidc::UpstreamOidcValidator::default(),
+        oidc_validator: felix_controlplane_service::auth::oidc::UpstreamOidcValidator::default(),
         bootstrap_enabled: true,
         bootstrap_tokens: vec![BOOTSTRAP_TOKEN.to_string()],
         node_liveness: Default::default(),
         // The demo's store is in-memory, which has nothing to be unready about.
-        readiness: std::sync::Arc::new(controlplane::readiness::Readiness::new(
-            std::sync::Arc::new(controlplane::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
@@ -479,7 +483,7 @@ async fn spawn_broker(
     Vec<JoinHandle<()>>,
 )> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
-    let mut config = broker::config::BrokerConfig::from_env()?;
+    let mut config = felix_broker_service::config::BrokerConfig::from_env()?;
     config.controlplane_url = Some(controlplane_url.to_string());
     config.controlplane_sync_interval_ms = 200;
     config.disable_timings = true;
@@ -506,7 +510,7 @@ async fn spawn_broker(
         }
     });
 
-    let credential = broker::credential::NodeCredential::new(credential);
+    let credential = felix_broker_service::credential::NodeCredential::new(credential);
     let sync_task = tokio::spawn(async move {
         let interval = Duration::from_millis(sync_interval_ms);
         if let Err(err) = broker_controlplane::start_sync(

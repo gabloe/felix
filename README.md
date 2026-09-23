@@ -45,8 +45,8 @@ Core components
 - `felix-broker`: pub/sub logic, cache and queue projections, stream registry, fanout.
 - `felix-client`: publisher/subscriber/cache APIs over QUIC with connection/stream pooling.
 - `felix-storage`: storage layer for broker.
-- `services/broker`: runnable broker node.
-- `services/controlplane`: runnable control plane node.
+- `services/felix-broker-service`: runnable broker node.
+- `services/felix-controlplane-service`: runnable control plane node.
 
 Pub/sub data flow (happy path)
 - Client opens a bidirectional control stream to publish/subscribe and receive acks.
@@ -174,22 +174,28 @@ is kept current per capability and is the page to trust when another disagrees.
 ## Repository Layout (High-Level)
 
 ```
-crates/
-  felix-common      # shared IDs, config, errors
-  felix-wire        # wire framing and protocol
-  felix-transport   # QUIC-based transport
-  felix-storage     # ephemeral + durable storage
-  felix-broker      # broker core (fanout, isolation, cache)
-  felix-router      # region-aware routing
-  felix-authz       # authentication and authorization
-  felix-client      # Rust client SDK
-  felix-python      # Python bindings over the Rust client
-  felix-typescript  # Node.js/TypeScript bindings over the Rust client
-  felix-conformance # shared wire protocol conformance runner
+crates/                  # libraries and tools, grouped by role (see crates/README.md)
+  protocol/
+    felix-wire           # frame codec and message types
+    felix-transport      # QUIC transport
+  server/
+    felix-broker         # broker core: streams, caches, consumer groups over one log
+    felix-storage        # segment store, durable log, cache stores
+    felix-router         # which node serves a shard
+    felix-authz          # tokens and permissions
+    felix-common         # shapes the broker and control plane share
+  sdk/
+    felix-client         # Rust client SDK
+    felix-python         # Python bindings over the Rust client
+    felix-typescript     # Node.js/TypeScript bindings over the Rust client
+  testing/
+    felix-cluster        # local multi-node cluster harness and CLI
+    felix-conformance    # client conformance kit
+    felix-loadgen        # load generator for the real-network perf suite
 
 services/
-  broker             # broker service binary
-  controlplane       # control plane service
+  felix-broker-service       # the felix-broker binary
+  felix-controlplane-service # the felix-controlplane binary
 
 demos/
   broker             # broker demo binaries
@@ -228,7 +234,7 @@ cargo build --workspace
 Run the broker service:
 
 ```bash
-cargo run -p broker
+cargo run -p felix-broker-service
 ```
 
 Run the wire protocol conformance runner:

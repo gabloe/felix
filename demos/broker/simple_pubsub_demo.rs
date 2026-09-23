@@ -5,8 +5,8 @@
 //!
 //! This is a developer-facing demo; it favors clarity over performance.
 use anyhow::{Context, Result};
-use broker::{auth::BrokerAuth, auth_demo, quic};
 use felix_broker::{Broker, StreamMetadata};
+use felix_broker_service::{auth::BrokerAuth, auth_demo, quic};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -47,7 +47,7 @@ async fn run_demo() -> Result<()> {
     let addr = server.local_addr()?;
 
     // Start the broker with QUIC transport in a background task to accept client connections.
-    let config = broker::config::BrokerConfig::from_env()?;
+    let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let (auth, auth_override) = resolve_demo_auth(&config)?;
     let server_task = tokio::spawn(quic::serve(Arc::clone(&server), broker, config, auth));
 
@@ -132,7 +132,7 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     ClientConfig::from_env_or_yaml(quinn, None)
 }
 
-fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
+fn resolve_demo_auth(config: &felix_broker_service::config::BrokerConfig) -> DemoAuthResult {
     if let Some(controlplane_url) = config.controlplane_url.clone() {
         return Ok((Arc::new(BrokerAuth::new(controlplane_url)), None));
     }
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn pubsub_demo_resolve_auth_uses_controlplane_url() -> Result<()> {
-        let mut config = broker::config::BrokerConfig::from_env()?;
+        let mut config = felix_broker_service::config::BrokerConfig::from_env()?;
         config.controlplane_url = Some("http://localhost:9999".to_string());
         let result = resolve_demo_auth(&config)?;
         assert!(result.1.is_none());
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn pubsub_demo_resolve_auth_demo_path_sets_override() -> Result<()> {
-        let mut config = broker::config::BrokerConfig::from_env()?;
+        let mut config = felix_broker_service::config::BrokerConfig::from_env()?;
         config.controlplane_url = None;
         let (_auth, override_creds) = resolve_demo_auth(&config)?;
         let (tenant, token) = override_creds.expect("demo auth override");

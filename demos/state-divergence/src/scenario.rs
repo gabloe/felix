@@ -314,7 +314,7 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
 
 fn client_config(
     cert: &CertificateDer<'static>,
-    auth: &broker::auth_demo::DemoAuth,
+    auth: &felix_broker_service::auth_demo::DemoAuth,
     mode: Mode,
 ) -> Result<ClientConfig> {
     let mut roots = RootCertStore::empty();
@@ -340,7 +340,7 @@ struct Harness {
 }
 
 async fn start_broker(
-    auth: &broker::auth_demo::DemoAuth,
+    auth: &felix_broker_service::auth_demo::DemoAuth,
     mode: Mode,
     queue_capacity: usize,
 ) -> Result<Harness> {
@@ -367,7 +367,7 @@ async fn start_broker(
     )?);
     let addr = server.local_addr()?;
 
-    let mut config = broker::config::BrokerConfig::from_env()?;
+    let mut config = felix_broker_service::config::BrokerConfig::from_env()?;
     config.subscriber_queue_capacity = queue_capacity;
     // All four checkpoints must agree. Any one of them left on a shedding default
     // becomes the place loss happens, and the ones downstream never come into play.
@@ -379,7 +379,7 @@ async fn start_broker(
         let server = Arc::clone(&server);
         let auth = Arc::clone(&auth.auth);
         tokio::spawn(async move {
-            if let Err(err) = broker::quic::serve(server, core, config, auth).await {
+            if let Err(err) = felix_broker_service::quic::serve(server, core, config, auth).await {
                 eprintln!("accept loop exited: {err}");
             }
         })
@@ -408,7 +408,7 @@ pub async fn run_once<F>(config: RunConfig, mut on_tick: F) -> Result<Outcome>
 where
     F: FnMut(&LiveState) -> Result<bool>,
 {
-    let auth = broker::auth_demo::demo_auth_for_tenant(TENANT)?;
+    let auth = felix_broker_service::auth_demo::demo_auth_for_tenant(TENANT)?;
     let harness = start_broker(&auth, config.mode, config.queue_capacity).await?;
 
     let consumers: Vec<Arc<ConsumerState>> = (1..=config.consumers)

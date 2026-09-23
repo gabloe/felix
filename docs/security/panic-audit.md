@@ -8,8 +8,8 @@ into [#154](https://github.com/gabloe/felix/issues/154).
 ## Scope and environment
 
 - Commit: branch `users/gabloe/remainingm0`.
-- Crates in scope: `crates/felix-wire`, `crates/felix-broker`, `crates/felix-transport`,
-  `crates/felix-storage`, `services/broker`, `services/controlplane`.
+- Crates in scope: `crates/protocol/felix-wire`, `crates/server/felix-broker`, `crates/protocol/felix-transport`,
+  `crates/server/felix-storage`, `services/felix-broker-service`, `services/felix-controlplane-service`.
 - Method: static inventory of `unwrap`/`expect`/`panic!`/`unreachable!`/`todo!`/
   `unimplemented!` in non-test code, plus manual review of the binary frame decoders
   for panics that carry no `unwrap` at all (slicing, `Buf` scalar reads, and

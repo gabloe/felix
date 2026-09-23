@@ -8,10 +8,10 @@
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use broker::{auth::BrokerAuth, quic};
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_authz::{FelixTokenIssuer, Jwks, TenantId, TenantKeyCache, TenantKeyMaterial};
 use felix_broker::{Broker, CacheMetadata, StreamMetadata};
+use felix_broker_service::{auth::BrokerAuth, quic};
 use felix_client::{Client, ClientConfig, Publisher};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -53,7 +53,7 @@ async fn run_demo(args: DemoArgs) -> Result<()> {
         .register_cache("t1", "default", ORDER_CACHE, CacheMetadata::default())
         .await?;
 
-    let config = broker::config::BrokerConfig::from_env()?;
+    let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let demo_auth = demo_auth_for_tenants(&["t1"], Duration::from_secs(900))?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let transport = TransportConfig::default();
@@ -335,7 +335,7 @@ fn demo_auth_for_tenants(tenants: &[&str], ttl: Duration) -> Result<DemoAuthBund
         tokens.insert((*tenant).to_string(), token);
     }
 
-    let key_store = Arc::new(broker::auth::ControlPlaneKeyStore::new(
+    let key_store = Arc::new(felix_broker_service::auth::ControlPlaneKeyStore::new(
         "http://127.0.0.1".to_string(),
         Arc::new(TenantKeyCache::default()),
     ));

@@ -35,7 +35,7 @@ Always use release builds (`--release`) for performance testing. Debug builds ha
 Run the broker with default settings:
 
 ```bash
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 **Expected output:**
@@ -87,7 +87,7 @@ export FELIX_ACK_ON_COMMIT="true"
 export FELIX_EVENT_BATCH_MAX_DELAY_US="100"
 
 # Run broker with custom config
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 ### Using a Config File
@@ -141,7 +141,7 @@ disable_timings: false
 **Run with custom config:**
 
 ```bash
-FELIX_BROKER_CONFIG=/tmp/felix-dev.yml cargo run --release -p broker
+FELIX_BROKER_CONFIG=/tmp/felix-dev.yml cargo run --release -p felix-broker-service
 ```
 
 :::caution[Config File Priority]
@@ -159,7 +159,7 @@ export FELIX_EVENT_BATCH_MAX_EVENTS="1"
 export FELIX_FANOUT_BATCH="1"
 export FELIX_DISABLE_TIMINGS="1"
 
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 ### Scenario 2: High-Throughput Testing
@@ -172,7 +172,7 @@ export FELIX_EVENT_BATCH_MAX_EVENTS="256"
 export FELIX_EVENT_BATCH_MAX_BYTES="1048576"  # 1 MiB
 export FELIX_FANOUT_BATCH="128"
 
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 ### Scenario 3: Multi-Client Development
@@ -181,13 +181,13 @@ Run multiple clients connecting to the same broker:
 
 ```bash
 # Terminal 1: Start broker
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 
 # Terminal 2: Run subscriber demo
-cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
 
 # Terminal 3: Run another client
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 ```
 
 ### Scenario 4: Testing Control Plane Integration
@@ -202,7 +202,7 @@ export FELIX_CONTROLPLANE_SYNC_INTERVAL_MS="1000"
 # bootstrap and token exchange produce one.
 export FELIX_NODE_TOKEN="<felix token>"
 
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 ## Performance Profiles
@@ -222,7 +222,7 @@ export FELIX_EVENT_BATCH_MAX_DELAY_US="250"
 export FELIX_CACHE_CONN_POOL="8"
 export FELIX_CACHE_STREAMS_PER_CONN="4"
 
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 ### High-Memory Profile
@@ -239,7 +239,7 @@ export FELIX_CACHE_CONN_POOL="8"
 export FELIX_CACHE_STREAMS_PER_CONN="4"
 export FELIX_DISABLE_TIMINGS="1"
 
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 :::note[Memory vs Performance]
@@ -256,7 +256,7 @@ You do not need to run the broker separately for these demos.
 ### Pub/Sub Demo
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
 ```
 
 Demonstrates:
@@ -267,7 +267,7 @@ Demonstrates:
 ### Cache Demo
 
 ```bash
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 ```
 
 Benchmarks cache operations:
@@ -279,10 +279,10 @@ Benchmarks cache operations:
 
 ```bash
 # Basic run
-cargo run --release -p broker --bin latency-demo
+cargo run --release -p felix-broker-service --bin latency-demo
 
 # Custom configuration
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -305,7 +305,7 @@ cargo run --release -p broker --bin latency-demo -- \
 #### Notifications (Multi-tenant alerts)
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
 ```
 
 Optional flags: `--alerts=10`, `--last-n=5`, `--drop-subscriber`.
@@ -313,7 +313,7 @@ Optional flags: `--alerts=10`, `--last-n=5`, `--drop-subscriber`.
 #### Orders/Payments Pipeline
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
 ```
 
 Optional flags: `--orders=12`, `--duplicate-every=5`, `--kill-worker=payments`.
@@ -409,7 +409,7 @@ export RUST_LOG="info"
 # Specific module
 export RUST_LOG="felix_broker=debug,felix_wire=trace"
 
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 ## Troubleshooting
@@ -452,7 +452,7 @@ ps aux | grep broker
 lsof -i UDP:5000
 
 # Check logs
-RUST_LOG=debug cargo run --release -p broker
+RUST_LOG=debug cargo run --release -p felix-broker-service
 ```
 
 ### High Memory Usage
@@ -480,7 +480,7 @@ export FELIX_CACHE_CONN_RECV_WINDOW="134217728"
 
 ```bash
 cargo build --release
-FELIX_DISABLE_TIMINGS=1 cargo run --release -p broker
+FELIX_DISABLE_TIMINGS=1 cargo run --release -p felix-broker-service
 ```
 
 ## Next Steps

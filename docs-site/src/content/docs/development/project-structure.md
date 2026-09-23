@@ -258,7 +258,7 @@ demos/
 
 ### Broker Service
 
-**Location**: `services/broker/`
+**Location**: `services/felix-broker-service/`
 
 **Entrypoint**: `src/main.rs`
 

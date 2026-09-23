@@ -26,7 +26,7 @@ ARG BIN=felix-broker
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/felix/target \
-    cargo build --release --locked -p broker --bin "${BIN}" \
+    cargo build --release --locked -p felix-broker-service --bin "${BIN}" \
     && strip "target/release/${BIN}" \
     # Copied out of the cache mount, which does not survive the layer.
     && cp "target/release/${BIN}" /usr/local/bin/felix-broker

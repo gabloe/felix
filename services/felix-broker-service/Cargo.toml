@@ -1,0 +1,124 @@
+[package]
+name = "felix-broker-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Felix broker service binary"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+# Not a library anyone consumes from a registry: service binaries and a
+# dev/CI tool with hard AGPL-3.0 dependencies.
+publish = false
+# Eight of the nine binaries here are demos, so `cargo run -p felix-broker-service` asked
+# which one rather than running the broker.
+default-run = "felix-broker"
+
+[[bin]]
+name = "felix-broker"
+path = "src/main.rs"
+
+[[bin]]
+name = "pubsub-demo-simple"
+path = "../../demos/broker/simple_pubsub_demo.rs"
+
+[[bin]]
+name = "cache-demo"
+path = "../../demos/broker/cache_demo.rs"
+
+[[bin]]
+name = "latency-demo"
+path = "../../demos/broker/latency_demo.rs"
+
+[[bin]]
+name = "pubsub-demo-notifications"
+path = "../../demos/broker/notifications_demo.rs"
+
+[[bin]]
+name = "pubsub-demo-orders"
+path = "../../demos/broker/orders_demo.rs"
+
+[[bin]]
+name = "durable-restart-demo"
+path = "../../demos/broker/durable_restart_demo.rs"
+
+[[bin]]
+name = "queue-semantics-demo"
+path = "../../demos/broker/queue_semantics_demo.rs"
+
+# Soak and resource-leak harness (#154). Not a demo: it exits non-zero on a
+# finding so CI can gate on it.
+[[bin]]
+name = "soak"
+path = "src/bin/soak/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+# The shard lifecycle drives local state through a trait object, so its two
+# async methods need boxing.
+async-trait = { workspace = true }
+felix-router = { path = "../../crates/server/felix-router", version = "0.6.0-preview" }
+arc-swap = { workspace = true }
+base64 = { workspace = true }
+felix-broker = { path = "../../crates/server/felix-broker", version = "0.6.0-preview" }
+felix-common = { path = "../../crates/server/felix-common", version = "0.6.0-preview", features = ["lifecycle"] }
+felix-client = { path = "../../crates/sdk/felix-client", version = "0.6.0-preview" }
+felix-authz = { path = "../../crates/server/felix-authz", version = "0.6.0-preview" }
+felix-transport = { path = "../../crates/protocol/felix-transport", version = "0.6.0-preview" }
+felix-wire = { path = "../../crates/protocol/felix-wire", version = "0.6.0-preview" }
+felix-storage = { path = "../../crates/server/felix-storage", version = "0.6.0-preview" }
+bytes = { workspace = true }
+dashmap = { workspace = true }
+ed25519-dalek = { workspace = true }
+futures = "0.3"
+axum = { workspace = true }
+metrics = { workspace = true }
+parking_lot = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+jsonwebtoken = { workspace = true }
+quinn = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+rustls-webpki = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tokio = { workspace = true }
+# `TaskTracker` and `CancellationToken` back the graceful drain in `shutdown.rs`.
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+
+# Linux-only core pinning (`core_shards`) and Unix-wide SIGTERM delivery in the
+# soak harness both need libc; the pinning call site stays `target_os = "linux"`
+# gated in code.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+# Used by the durable-restart and queue-semantics demo binaries to stage a
+# throwaway storage root.
+tempfile = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+# The membership integration test drives the real control-plane router rather
+# than a stub, so a mismatch in the HTTP contract between the two services fails
+# here instead of in a cluster.
+felix-controlplane-service = { path = "../felix-controlplane-service", version = "0.6.0-preview" }
+
+[features]
+default = []
+telemetry = ["felix-client/telemetry", "felix-broker/telemetry"]
+perf_debug = ["felix-broker/perf_debug"]
+
+[lints]
+workspace = true

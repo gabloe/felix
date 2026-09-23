@@ -4,7 +4,7 @@ Status: **implemented.** The design below shipped as written: the sequencer
 was lifted into `felix-storage` (`commit_order.rs`, shared with the broker's
 publish path), `put_checked`/`delete_checked` follow the stage → commit →
 turn-wait → apply flow, compaction is gated on the apply step with nothing
-staged behind it, and the tests in `crates/felix-storage/src/log_cache/tests.rs`
+staged behind it, and the tests in `crates/server/felix-storage/src/log_cache/tests.rs`
 cover the throughput regression (flush-count, revert-verified), ordering,
 durability-before-visibility, cancellation, and compaction under load. The
 crash-mid-window test is deferred to the `felix-log-tool` kill harness — the
@@ -25,7 +25,7 @@ correct, they just cannot batch.
 
 ## Root cause
 
-`crates/felix-storage/src/log_cache/mod.rs`:
+`crates/server/felix-storage/src/log_cache/mod.rs`:
 
 - Each `CacheShard` has a single `state: Mutex<ShardState>` (`{ log, index }`).
 - `put_checked` / `delete_checked` take that mutex and, **while holding it**, call
@@ -42,7 +42,7 @@ one append in flight to batch.
 
 ### Why the stream path does not have this
 
-`crates/felix-broker/src/broker.rs` (publish path) splits the write in two and
+`crates/server/felix-broker/src/broker.rs` (publish path) splits the write in two and
 lets many run concurrently:
 
 1. `durable.begin_append(payloads)` → `PendingAppend` — claims disk offsets under
@@ -55,7 +55,7 @@ lets many run concurrently:
 4. `turn.wait()` — blocks until every lower offset has been applied.
 5. Apply to the in-memory replay ring + fanout, **in disk-offset order**.
 
-The `CommitSequencer` (`crates/felix-broker/src/commit_order.rs`) is the crux:
+The `CommitSequencer` (`crates/server/felix-broker/src/commit_order.rs`) is the crux:
 commits complete out of order, but step 4/5 re-serialise the *observable* effects
 into disk order, so "what the log says" and "what readers/subscribers see" never
 disagree — even though the expensive fsyncs ran in parallel.

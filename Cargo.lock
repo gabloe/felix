@@ -394,54 +394,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "broker"
-version = "0.6.0-preview"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-trait",
- "axum",
- "base64 0.23.1",
- "bytes",
- "controlplane",
- "dashmap",
- "ed25519-dalek",
- "felix-authz",
- "felix-broker",
- "felix-client",
- "felix-common",
- "felix-router",
- "felix-storage",
- "felix-transport",
- "felix-wire",
- "futures",
- "jsonwebtoken",
- "libc",
- "metrics",
- "metrics-exporter-prometheus",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "parking_lot",
- "quinn",
- "rcgen",
- "reqwest 0.12.28",
- "rustls",
- "rustls-webpki",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "serial_test",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -677,56 +629,6 @@ dependencies = [
  "getrandom 0.2.17",
  "once_cell",
  "tiny-keccak",
-]
-
-[[package]]
-name = "controlplane"
-version = "0.6.0-preview"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.23.1",
- "casbin",
- "chrono",
- "dashmap",
- "ed25519-dalek",
- "felix-common",
- "hex",
- "hyper-util",
- "jsonwebtoken",
- "metrics",
- "metrics-exporter-prometheus",
- "openraft",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "rand 0.10.2",
- "rcgen",
- "redb",
- "reqwest 0.12.28",
- "rustls",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "serial_test",
- "sha2 0.11.0",
- "sqlx",
- "tempfile",
- "testcontainers",
- "testcontainers-modules",
- "thiserror 2.0.20",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tower",
- "tower-http 0.7.1",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "utoipa",
- "utoipa-swagger-ui",
- "uuid",
 ]
 
 [[package]]
@@ -1193,6 +1095,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "felix-broker-service"
+version = "0.6.0-preview"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "dashmap",
+ "ed25519-dalek",
+ "felix-authz",
+ "felix-broker",
+ "felix-client",
+ "felix-common",
+ "felix-controlplane-service",
+ "felix-router",
+ "felix-storage",
+ "felix-transport",
+ "felix-wire",
+ "futures",
+ "jsonwebtoken",
+ "libc",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "quinn",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "serial_test",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "felix-client"
 version = "0.6.0-preview"
 dependencies = [
@@ -1227,9 +1177,9 @@ dependencies = [
  "anyhow",
  "axum",
  "bytes",
- "controlplane",
  "felix-client",
  "felix-conformance",
+ "felix-controlplane-service",
  "felix-wire",
  "libc",
  "quinn",
@@ -1267,11 +1217,11 @@ version = "0.6.0-preview"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
- "broker",
  "bytes",
  "ed25519-dalek",
  "felix-authz",
  "felix-broker",
+ "felix-broker-service",
  "felix-client",
  "felix-storage",
  "felix-transport",
@@ -1284,6 +1234,56 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "felix-controlplane-service"
+version = "0.6.0-preview"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "casbin",
+ "chrono",
+ "dashmap",
+ "ed25519-dalek",
+ "felix-common",
+ "hex",
+ "hyper-util",
+ "jsonwebtoken",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "openraft",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rand 0.10.2",
+ "rcgen",
+ "redb",
+ "reqwest 0.12.28",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "serial_test",
+ "sha2 0.11.0",
+ "sqlx",
+ "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tower",
+ "tower-http 0.7.1",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "utoipa",
+ "utoipa-swagger-ui",
+ "uuid",
 ]
 
 [[package]]

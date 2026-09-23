@@ -27,7 +27,7 @@ tasks:
       # executable when that bin's own package has integration tests, and
       # felix-loadgen's only consumer is a test in *another* crate — so the
       # workspace test run never produces it, and those cases fail "not found".
-      # Build it up front (the felix-broker bin needs no such help: services/broker
+      # Build it up front (the felix-broker bin needs no such help: services/felix-broker-service
       # has its own integration tests, so cargo builds it).
       - "cargo build -p felix-loadgen"
       # One managed Postgres, torn down afterwards. Without it the Postgres
@@ -262,18 +262,18 @@ tasks:
           fi
         done
   demo:cache:
-    cmds: ["cargo run --release -p broker --bin cache-demo -- {{.CLI_ARGS}}"]
+    cmds: ["cargo run --release -p felix-broker-service --bin cache-demo -- {{.CLI_ARGS}}"]
   demo:latency:
-    cmds: ["cargo run --release -p broker --bin latency-demo --all-features -- {{.CLI_ARGS}}"]
+    cmds: ["cargo run --release -p felix-broker-service --bin latency-demo --all-features -- {{.CLI_ARGS}}"]
   demo:notifications:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-notifications -- {{.CLI_ARGS}}"]
+    cmds: ["cargo run --release -p felix-broker-service --bin pubsub-demo-notifications -- {{.CLI_ARGS}}"]
   demo:orders:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-orders -- {{.CLI_ARGS}}"]
+    cmds: ["cargo run --release -p felix-broker-service --bin pubsub-demo-orders -- {{.CLI_ARGS}}"]
   demo:pubsub:
-    cmds: ["cargo run --release -p broker --bin pubsub-demo-simple -- {{.CLI_ARGS}}"]
+    cmds: ["cargo run --release -p felix-broker-service --bin pubsub-demo-simple -- {{.CLI_ARGS}}"]
   demo:queues:
     desc: "Queue semantics: distribution, redelivery, dead letters, and their cost"
-    cmds: ["cargo run --release -p broker --bin queue-semantics-demo -- {{.CLI_ARGS}}"]
+    cmds: ["cargo run --release -p felix-broker-service --bin queue-semantics-demo -- {{.CLI_ARGS}}"]
   demo:check:
     desc: "Build the standalone demo crates and run their behavioural tests"
     cmds:
@@ -290,7 +290,7 @@ tasks:
       # The queue demo asserts every guarantee it narrates and bails on any
       # violation, so running it is the behavioural test. It is deterministic:
       # it drives the visibility timeout itself rather than sleeping.
-      - "cargo run -q -p broker --bin queue-semantics-demo"
+      - "cargo run -q -p felix-broker-service --bin queue-semantics-demo"
   demo:state-divergence:
     desc: "Counterpart demo: what at-most-once costs a consumer holding local state"
     cmds:
@@ -351,17 +351,17 @@ tasks:
   cluster:up:
     desc: Start a local three-node cluster and hold it until Ctrl-C.
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo run -p felix-cluster -- up {{.CLI_ARGS}}
   cluster:status:
     desc: Start a cluster, print membership and shard ownership, then tear it down.
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo run -p felix-cluster -- status {{.CLI_ARGS}}
   cluster:smoke:
     desc: Publish through a non-owner and receive from the owner.
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo run -p felix-cluster -- smoke {{.CLI_ARGS}}
   cluster:subscribe:
     desc: Stream events from a running cluster (start one with cluster:up).
@@ -372,7 +372,7 @@ tasks:
   cluster:demo:
     desc: "Cross-broker demo in ONE pane, start to finish (see cluster:demo:tmux for three)."
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo run -q -p felix-cluster -- demo {{.CLI_ARGS}}
   cluster:failover:
     desc: "Replication, quorum acks and failover: kill the leader, keep publishing."
@@ -382,13 +382,13 @@ tasks:
   cluster:consistency:
     desc: "What Quorum buys and what Leader costs, under one fault"
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo run -q -p felix-cluster --bin felix-cluster -- consistency {{.CLI_ARGS}}
 
   cluster:demo:tmux:
     desc: The same demo across THREE tmux panes - cluster, subscriber, publisher.
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo build -p felix-cluster
       - scripts/cluster-demo-tmux.sh
   cluster:burst:
@@ -418,31 +418,31 @@ tasks:
       # the one that grows, so a run never writes into the committed seeds.
       - for: ["frame", "internal_message", "binary_payload", "client_message"]
         cmd: >
-          cd crates/felix-wire/fuzz &&
+          cd crates/protocol/felix-wire/fuzz &&
           mkdir -p corpus/{{.ITEM}} &&
           cargo +nightly fuzz run {{.ITEM}} corpus/{{.ITEM}} seeds/{{.ITEM}}
           -- -max_total_time={{.SECONDS}}
       - for: ["segment_record", "segment_recovery", "sparse_index"]
         cmd: >
-          cd crates/felix-storage/fuzz &&
+          cd crates/server/felix-storage/fuzz &&
           cargo +nightly fuzz run {{.ITEM}}
           -- -max_total_time={{.SECONDS}}
 
   python:check:
     desc: Build and lint the Python binding (its own workspace, like the demos).
-    dir: crates/felix-python
+    dir: crates/sdk/felix-python
     cmds:
       - cargo fmt -- --check
       - cargo clippy --all-targets -- -D warnings
       - cargo build
   python:build:
     desc: Build the Python wheel with maturin (needs `pip install maturin`).
-    dir: crates/felix-python
+    dir: crates/sdk/felix-python
     cmds:
       - maturin build --release {{.CLI_ARGS}}
   python:develop:
     desc: Install the Python binding into the active virtualenv, in place.
-    dir: crates/felix-python
+    dir: crates/sdk/felix-python
     cmds:
       - maturin develop {{.CLI_ARGS}}
   lock:refresh:
@@ -458,40 +458,40 @@ tasks:
           - demos/rbac-live
           - demos/slow-consumer
           - demos/state-divergence
-          - crates/felix-python
-          - crates/felix-typescript
+          - crates/sdk/felix-python
+          - crates/sdk/felix-typescript
         cmd: test -d {{.ITEM}} && cd {{.ITEM}} && cargo update -q --workspace || true
 
   python:test:
     desc: Run the Python suite against a conformance fixture (needs python:develop first).
-    dir: crates/felix-python
+    dir: crates/sdk/felix-python
     cmds:
       - pytest -q {{.CLI_ARGS}}
   ts:check:
     desc: Build and lint the Node/TypeScript binding (its own workspace, like felix-python).
-    dir: crates/felix-typescript
+    dir: crates/sdk/felix-typescript
     cmds:
       - cargo fmt -- --check
       - cargo clippy --all-targets -- -D warnings
       - cargo build
   ts:build:
     desc: Build the Node addon with napi (needs `npm i -g @napi-rs/cli@2`).
-    dir: crates/felix-typescript
+    dir: crates/sdk/felix-typescript
     cmds:
       - napi build --platform --release {{.CLI_ARGS}}
   ts:test:
     desc: Run the Node conformance suite against a fixture cluster it starts itself.
-    dir: crates/felix-typescript
+    dir: crates/sdk/felix-typescript
     cmds:
       - node --test test/conformance.test.mjs {{.CLI_ARGS}}
   ts:conformance:
     desc: Build what the Node suite needs, run it, and check the verdict against the catalogue.
     cmds:
       # The suite spawns these; `cargo build` does not do it on its behalf.
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo build -p felix-cluster --bin felix-cluster
-      - cd crates/felix-typescript && cargo build
-      - cd crates/felix-typescript && FELIX_CONFORMANCE_RESULTS={{.RESULTS}} node --test test/conformance.test.mjs
+      - cd crates/sdk/felix-typescript && cargo build
+      - cd crates/sdk/felix-typescript && FELIX_CONFORMANCE_RESULTS={{.RESULTS}} node --test test/conformance.test.mjs
       # The verdict, not the exit code: a suite that passed while skipping a
       # required scenario is not conformance.
       - cargo run -q -p felix-conformance -- verify {{.RESULTS}}
@@ -517,5 +517,5 @@ tasks:
   conformance:fixture:
     desc: Hold a cluster for a client conformance suite to run against.
     cmds:
-      - cargo build -p broker --bin felix-broker
+      - cargo build -p felix-broker-service --bin felix-broker
       - cargo run -q -p felix-cluster -- client-fixture {{.CLI_ARGS}}

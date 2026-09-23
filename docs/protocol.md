@@ -1011,7 +1011,7 @@ Two uses:
 
 ## Test Vectors
 Client implementations MUST validate against shared vectors in:
-`crates/felix-wire/tests/vectors/`
+`crates/protocol/felix-wire/tests/vectors/`
 
 ## Conformance
 All clients SHOULD pass the shared conformance suite (felix-conformance).

@@ -73,7 +73,7 @@ tokio runtime — worth remembering when reading CPU numbers.
 ## The measurement flaw (finding 1)
 
 `felix-transport` defaults `send_window` to 64 MiB
-(`crates/felix-transport/src/lib.rs:52`). Any run whose total payload volume is
+(`crates/protocol/felix-transport/src/lib.rs:52`). Any run whose total payload volume is
 below that is absorbed by buffers before backpressure appears, and
 `latency-demo` stops its clock when the last event arrives.
 
@@ -220,7 +220,7 @@ target is "user-space scheduling and synchronization."
 Recorded deliberately, because several are plausible enough to be re-proposed.
 
 1. **The redundant payload copy is not the bottleneck.** `decode_publish_batch`
-   does `bytes.to_vec()` per payload (`crates/felix-wire/src/binary.rs:250`) and
+   does `bytes.to_vec()` per payload (`crates/protocol/felix-wire/src/binary.rs:250`) and
    every caller immediately converts back with `Bytes::from(vec)`
    (`handlers/publish/uni.rs:82`, `control.rs:108`) — a genuine
    `Bytes`→`Vec`→`Bytes` round trip caused only by `PublishBatch.payloads` being
@@ -234,7 +234,7 @@ Recorded deliberately, because several are plausible enough to be re-proposed.
    It reuses correctly.
 3. **Replay-ring retention is not the cause.** `latency_demo.rs:679` sizes the
    ring to the whole run (`warmup + total + 1`) instead of the production
-   default of 1024 (`crates/felix-broker/src/config.rs:4`), and RSS climbs
+   default of 1024 (`crates/server/felix-broker/src/config.rs:4`), and RSS climbs
    13 → 410 MB during a run without plateauing. A/B against a 1024-entry ring:
    **0.92× / 1.01× / 1.02×** at totals 8,000 / 20,000 / 40,000. Not causal.
 4. **`net.inet.udp.maxdgram` does not cap this path.** It is 9216, below Felix's
@@ -471,7 +471,7 @@ not necessarily the ideal width for a standalone broker.
 ### The 64 KiB egress granularity is real but is not the cost
 
 Static analysis (correctly) identified that `event_batch_max_bytes` defaults to
-64 KiB (`crates/felix-broker/src/config.rs:115`), that
+64 KiB (`crates/server/felix-broker/src/config.rs:115`), that
 `handlers/subscribe/feeder.rs` splits a 256 KiB envelope into four separately
 encoded 64 KiB lane frames, and that `_lane_flush_hints` in `feeder.rs:24-29` is
 a dead binding — `flush_max_items`, `flush_max_delay` and `max_bytes_per_write`
@@ -558,7 +558,7 @@ removing 2 hops cannot recover anything either.
 - **Removing the client publisher round trip.** Same argument: it is per-batch,
   and batch rate varies 4× across payload sizes with no change in byte rate.
 - **Flow control.** Checked: the client's event stream window is already 64 MiB
-  and its connection window 256 MiB (`crates/felix-client/src/config.rs:27-29`).
+  and its connection window 256 MiB (`crates/sdk/felix-client/src/config.rs:27-29`).
   At 73 MB/s that is 0.86 s of buffering — not window-limited.
 
 ## Where this leaves it
@@ -775,7 +775,7 @@ Reading quinn 0.11 internals gave the missing piece:
   pays a fixed scheduler round trip. Per-message and per-frame costs never
   mattered because the datagram chain dominates.
 
-**Fix 1 — dedicated I/O runtimes** (`crates/felix-transport`): quinn endpoints
+**Fix 1 — dedicated I/O runtimes** (`crates/protocol/felix-transport`): quinn endpoints
 get a `quinn::Runtime` implementation that spawns all driver tasks onto a pool
 of *single-threaded* tokio runtimes (round-robin per endpoint,
 `FELIX_IO_RUNTIME_THREADS`, default = available parallelism; the demo pins 2 —
@@ -854,14 +854,14 @@ per-stage measurement was fast because no stage was the problem.**
 
 Shipped changes (official quinn/quinn-proto only):
 
-1. `crates/felix-transport`: dedicated single-threaded I/O runtime pool for
+1. `crates/protocol/felix-transport`: dedicated single-threaded I/O runtime pool for
    quinn drivers (`FELIX_IO_RUNTIME_THREADS`, default = available parallelism,
    `0` = old behaviour), macOS QoS pinning, `QuicConnection::spawn_pump`,
    ACK-frequency defaults (2 ms / threshold 20), `close_reason()` passthrough.
-2. `crates/felix-client`: subscription read task colocated via `spawn_pump`;
+2. `crates/sdk/felix-client`: subscription read task colocated via `spawn_pump`;
    publisher writer deliberately not; client-side `FELIX_CONN_STATS_MS`
    diagnostics.
-3. `services/broker`: per-connection delivery writer colocated via
+3. `services/felix-broker-service`: per-connection delivery writer colocated via
    `spawn_pump`; `FELIX_CONN_STATS_MS` now logs `cwnd`/`rtt`.
 4. `demos/broker/latency_demo.rs`: pins `FELIX_IO_RUNTIME_THREADS=2` for its
    13-endpoint single-process topology; honours
@@ -913,7 +913,7 @@ the knob that is genuinely unsafe on an unknown path.
 
 ```sh
 # Sustained (not buffer-absorbed) 4 KiB throughput
-cargo run --release -p broker --bin latency-demo --all-features -- \
+cargo run --release -p felix-broker-service --bin latency-demo --all-features -- \
   --binary --warmup 1000 --total 60000 --payload 4096 --fanout 1 --batch 64
 
 # Replay-ring A/B (flag added by this investigation)
@@ -935,8 +935,8 @@ artifacts that remain deliberately:
 - `demos/broker/latency_demo.rs`: `--log-capacity` / `FELIX_DEMO_LOG_CAPACITY`
   (defaults to the previous whole-run behaviour), and tracing init when
   `RUST_LOG` is set so broker/client diagnostics are reachable.
-- `services/broker/src/transport/quic/conn.rs` and
-  `crates/felix-client/src/client/client.rs`: `FELIX_CONN_STATS_MS` logs live
+- `services/felix-broker-service/src/transport/quic/conn.rs` and
+  `crates/sdk/felix-client/src/client/client.rs`: `FELIX_CONN_STATS_MS` logs live
   `quinn::ConnectionStats` (MTU, cwnd, rtt, loss, blocked-frame counters) on
   both ends. Off unless the variable is set.
 
@@ -1093,7 +1093,7 @@ sharing it with anything starves it; and a client's publish and event endpoints
 carry the two halves of one request/response flow, so splitting *them* makes
 every message pay two cross-thread wakes.
 
-**Fix** (`crates/felix-transport/src/lib.rs`): assignment is by role, with
+**Fix** (`crates/protocol/felix-transport/src/lib.rs`): assignment is by role, with
 disjoint runtime slots that do not depend on creation order.
 
 ```rust
@@ -1653,7 +1653,7 @@ because no fix has been written yet.
 
 All uncommitted. Grouped by what would make sensible commits.
 
-**Transport (`crates/felix-transport/src/lib.rs`)**
+**Transport (`crates/protocol/felix-transport/src/lib.rs`)**
 - `EndpointRole`: server endpoints get a runtime each, client endpoints share
   one. Replaces round-robin assignment (round 12).
 - Default I/O pool size available-parallelism → **2**.
@@ -1665,7 +1665,7 @@ All uncommitted. Grouped by what would make sensible commits.
   `black_hole_cooldown` 60 s → 2 s with `FELIX_MTU_BLACK_HOLE_COOLDOWN_MS`
   override.
 
-**Client (`crates/felix-client/`)**
+**Client (`crates/sdk/felix-client/`)**
 - `client.rs`: `FELIX_CONN_STATS_MS` path-stats logger (client is the sender on
   the publish path, so its cwnd/rtt is invisible from broker stats).
 - `subscription.rs`: subscription read task colocated via `spawn_pump`.
@@ -1683,7 +1683,7 @@ All uncommitted. Grouped by what would make sensible commits.
   against the inline-wait implementation and passes in milliseconds with
   pipelining.
 
-**Broker (`services/broker/`)**
+**Broker (`services/felix-broker-service/`)**
 - `conn.rs`: `FELIX_CONN_STATS_MS` now logs `cwnd` and `rtt`.
 - `subscribe/lane.rs`: per-connection delivery writer colocated via
   `spawn_pump`.

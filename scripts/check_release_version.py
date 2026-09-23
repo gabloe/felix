@@ -26,9 +26,9 @@ REPO = Path(__file__).resolve().parent.parent
 #: chart, not the app, and moves on its own schedule.
 SOURCES: list[tuple[str, str]] = [
     ("Cargo.toml", "cargo"),
-    ("crates/felix-python/Cargo.toml", "cargo"),
-    ("crates/felix-typescript/Cargo.toml", "cargo"),
-    ("crates/felix-typescript/package.json", "npm"),
+    ("crates/sdk/felix-python/Cargo.toml", "cargo"),
+    ("crates/sdk/felix-typescript/Cargo.toml", "cargo"),
+    ("crates/sdk/felix-typescript/package.json", "npm"),
     ("deploy/helm/felix/Chart.yaml", "chart"),
 ]
 

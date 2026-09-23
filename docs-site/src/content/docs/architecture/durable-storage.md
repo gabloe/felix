@@ -297,7 +297,7 @@ Invalid combinations fail at startup, not at the first publish.
 ```sh
 FELIX_DURABLE_STORAGE_DIR=/var/lib/felix/streams \
 FELIX_DURABLE_FSYNC_MODE=on_commit \
-  cargo run --release -p broker --bin felix-broker
+  cargo run --release -p felix-broker-service --bin felix-broker
 ```
 
 ## Observability
@@ -317,7 +317,7 @@ the bottleneck?* If sync dominates append, the fsync policy is the cost.
 ## See it work
 
 ```sh
-cargo run --release -p broker --bin durable-restart-demo
+cargo run --release -p felix-broker-service --bin durable-restart-demo
 ```
 
 Publishes to one durable and one non-durable stream, drops the broker with no

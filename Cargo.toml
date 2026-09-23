@@ -1,19 +1,27 @@
 [workspace]
 resolver = "2"
+# Grouped by role; see the README in each directory under crates/. The binding
+# crates (crates/sdk/felix-python, crates/sdk/felix-typescript) and the demos
+# with their own [workspace] are deliberately not members.
 members = [
-  "crates/felix-common",
-  "crates/felix-wire",
-  "crates/felix-transport",
-  "crates/felix-storage",
-  "crates/felix-broker",
-  "crates/felix-router",
-  "crates/felix-authz",
-  "crates/felix-client",
-  "crates/felix-conformance",
-  "crates/felix-cluster",
-  "crates/felix-loadgen",
-  "services/controlplane",
-  "services/broker",
+  # How peers talk: the frame codec and the QUIC layer under it.
+  "crates/protocol/felix-wire",
+  "crates/protocol/felix-transport",
+  # The libraries the services are built from.
+  "crates/server/felix-common",
+  "crates/server/felix-authz",
+  "crates/server/felix-router",
+  "crates/server/felix-storage",
+  "crates/server/felix-broker",
+  # What applications link.
+  "crates/sdk/felix-client",
+  # Harnesses, kits and load tools.
+  "crates/testing/felix-cluster",
+  "crates/testing/felix-conformance",
+  "crates/testing/felix-loadgen",
+  # The deployables.
+  "services/felix-broker-service",
+  "services/felix-controlplane-service",
 ]
 
 [profile.dev]

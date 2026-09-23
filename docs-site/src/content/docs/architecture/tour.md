@@ -35,15 +35,15 @@ reading stores and rebuilds, with the test behind every claim.
 
 ![Clients connect to any broker over QUIC. Brokers are peers that forward requests for shards they do not own and replicate the ones they lead. A control plane places shards by rendezvous hashing, and brokers watch its assignment feed. Inside a shard, one append-only log is read as a stream by offset and as a cache through a key index.](/felix/diagrams/architecture.svg)
 
-**The client** (`crates/felix-client`) is a library. It holds pools of QUIC
+**The client** (`crates/sdk/felix-client`) is a library. It holds pools of QUIC
 connections, encodes frames, and knows how to follow a redirect. It never
 decides where data lives.
 
-**The broker** (`services/broker` + `crates/felix-broker`) serves clients over
+**The broker** (`services/felix-broker-service` + `crates/server/felix-broker`) serves clients over
 QUIC and peers over a second QUIC endpoint with its own protocol. It leads some
 shards, forwards what it does not lead, and replicates what it leads.
 
-**The control plane** (`services/controlplane`) is a stateless REST service over
+**The control plane** (`services/felix-controlplane-service`) is a stateless REST service over
 Postgres. It owns tenants, namespaces, streams, caches, the node catalog, and
 **shard assignments**, and it runs placement on a timer.
 
@@ -70,11 +70,11 @@ send a featured request to a peer that did not advertise the bit: an
 unrecognised message type is fatal to a broker's control loop, so probing costs
 the connection rather than returning an error.
 
-> `crates/felix-wire/src/frame.rs`, `message.rs`.
+> `crates/protocol/felix-wire/src/frame.rs`, `message.rs`.
 
 ### 2. The broker decodes and routes it to a handler
 
-`services/broker/src/transport/quic/` accepts the connection.
+`services/felix-broker-service/src/transport/quic/` accepts the connection.
 `streams/control.rs` is the control-stream loop: it owns auth state and
 dispatches every `Message` variant. `handlers/publish.rs` and
 `handlers/subscribe.rs` do the per-message work.
@@ -103,13 +103,13 @@ Three outcomes, and no fourth:
   nobody. There is deliberately no "not sure, handle it locally": a broker that
   treats an unknown route as its own is a broker writing a shard it does not own.
 
-> `crates/felix-router/src/shard.rs`, `services/broker/src/shard_routing.rs`.
+> `crates/server/felix-router/src/shard.rs`, `services/felix-broker-service/src/shard_routing.rs`.
 
 ### 4. Offsets are taken before durability is waited on
 
 This is the ordering most likely to be "fixed" into a bug.
 
-`crates/felix-broker/src/broker.rs` calls `begin_append` and *then* `commit`.
+`crates/server/felix-broker/src/broker.rs` calls `begin_append` and *then* `commit`.
 The batch claims its place in the stream's order the instant its offsets are
 consumed, before anyone waits on the disk. `commit_order.rs` then makes later
 publishes wait behind earlier ones — **whether those succeed, fail, or are
@@ -118,7 +118,7 @@ a later record land at an earlier offset.
 
 ### 5. Storage appends it
 
-`crates/felix-storage/src/disk_log/` — a log-structured segment store, not a
+`crates/server/felix-storage/src/disk_log/` — a log-structured segment store, not a
 write-ahead log. Four properties carry it, and all four are load-bearing:
 
 - **Records are never rewritten.** Recovery can therefore trust "valid bytes end
@@ -156,7 +156,7 @@ downstream would report it as one.
 
 ### 7. Fanout happens after durability
 
-`crates/felix-broker/src/delivery.rs`. One `DeliveryEnvelope` is shared by every
+`crates/server/felix-broker/src/delivery.rs`. One `DeliveryEnvelope` is shared by every
 subscriber and caches its encoded frame, so a publish is encoded once regardless
 of fanout.
 
@@ -210,8 +210,8 @@ If you find yourself reordering one of these, it is almost certainly a bug.
 | `felix-broker` | Streams, delivery, commit ordering, consumer groups |
 | `felix-client` | The client library and its connection pools |
 | `felix-authz` | Tokens, RBAC, and the actions they gate |
-| `services/broker` | The broker binary: QUIC handlers, routing, replication, peers |
-| `services/controlplane` | Metadata, placement, and the REST API |
+| `services/felix-broker-service` | The broker binary: QUIC handlers, routing, replication, peers |
+| `services/felix-controlplane-service` | Metadata, placement, and the REST API |
 | `felix-cluster` | A local multi-broker cluster, for integration and failure tests |
 
 ## Before you change something

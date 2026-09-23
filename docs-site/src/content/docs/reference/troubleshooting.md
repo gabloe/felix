@@ -107,7 +107,7 @@ Error: Address already in use (os error 48)
 ```bash
 export FELIX_QUIC_BIND="0.0.0.0:5001"
 export FELIX_BROKER_METRICS_BIND="0.0.0.0:8081"
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 **Option 2 - Find and kill process**:
@@ -219,7 +219,7 @@ ulimit -n 65536
 ```bash
 # Debug builds are 10-100x slower
 cargo build --release
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 2. **Disable timing collection**:
@@ -241,7 +241,7 @@ htop
 
 5. **Profile with perf** (Linux):
 ```bash
-sudo perf record -g cargo run --release -p broker
+sudo perf record -g cargo run --release -p felix-broker-service
 sudo perf report
 ```
 
@@ -272,7 +272,7 @@ iperf3 -c <broker-ip> -u -b 1G
 4. **Verify CPU affinity**:
 ```bash
 # Pin broker to specific cores
-taskset -c 0-7 cargo run --release -p broker
+taskset -c 0-7 cargo run --release -p felix-broker-service
 ```
 
 ### High Memory Usage
@@ -338,7 +338,7 @@ cargo build --release --no-default-features
 
 4. **Profile hot paths**:
 ```bash
-cargo flamegraph -p broker
+cargo flamegraph -p felix-broker-service
 ```
 
 ## Runtime Errors
@@ -356,7 +356,7 @@ thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value'
 1. **Enable backtraces**:
 ```bash
 export RUST_BACKTRACE=1
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 ```
 
 2. **Check logs** for context before panic.
@@ -659,30 +659,30 @@ wireshark felix.pcap
 
 **Linux perf**:
 ```bash
-sudo perf record -g --call-graph dwarf cargo run --release -p broker
+sudo perf record -g --call-graph dwarf cargo run --release -p felix-broker-service
 sudo perf report
 ```
 
 **flamegraph**:
 ```bash
 cargo install flamegraph
-cargo flamegraph -p broker -- --custom-args
+cargo flamegraph -p felix-broker-service -- --custom-args
 ```
 
 **Memory profiling**:
 ```bash
 cargo install --locked cargo-profdata
-cargo profdata run -p broker
+cargo profdata run -p felix-broker-service
 ```
 
 ### Test Latency Locally
 
 ```bash
 # Run broker
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 
 # In another terminal, run latency demo
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
   --binary \
   --fanout 1 \
   --batch 1 \
@@ -753,7 +753,7 @@ If you're still stuck:
 3. **Collect diagnostic info**:
 ```bash
 # Broker version
-cargo run --release -p broker -- --version
+cargo run --release -p felix-broker-service -- --version
 
 # System info
 uname -a

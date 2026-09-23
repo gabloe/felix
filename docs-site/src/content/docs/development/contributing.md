@@ -516,11 +516,11 @@ npm run build
 
 ```bash
 # Run latency benchmarks
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
     --binary --fanout 10 --batch 64 --payload 4096
 
 # Run cache benchmarks
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 ```
 
 ### Profiling
@@ -529,12 +529,12 @@ cargo run --release -p broker --bin cache-demo
 
 ```bash
 # Linux perf
-sudo perf record -g cargo run --release -p broker
+sudo perf record -g cargo run --release -p felix-broker-service
 sudo perf report
 
 # Flamegraph
 cargo install flamegraph
-cargo flamegraph -p broker
+cargo flamegraph -p felix-broker-service
 ```
 
 **Memory profiling**:
@@ -544,7 +544,7 @@ cargo flamegraph -p broker
 valgrind --leak-check=full ./target/debug/broker
 
 # Heaptrack (Linux)
-heaptrack cargo run --release -p broker
+heaptrack cargo run --release -p felix-broker-service
 ```
 
 ## Release Process

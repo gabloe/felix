@@ -24,7 +24,7 @@ arm64, glibc), macOS (Intel and Apple silicon) and Windows x86-64 are covered.
 To build it from the repository instead:
 
 ```bash
-cd crates/felix-typescript
+cd crates/sdk/felix-typescript
 napi build --platform --release      # needs: npm i -g @napi-rs/cli@2
 ```
 

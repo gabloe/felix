@@ -821,7 +821,7 @@ window.
 
 Every claim in this section is exercised against a real Postgres reached through
 a proxy the test can cut, black-hole, and restore, in
-`tests/readiness_pg.rs` (`cargo test -p controlplane --features pg-tests --test
+`tests/readiness_pg.rs` (`cargo test -p felix-controlplane-service --features pg-tests --test
 readiness_pg`):
 
 | Claim | What the test does |
@@ -887,7 +887,7 @@ What a drain looks like on the metrics endpoint, which outlives it:
 
 The rolling-restart guarantee — two instances over one Postgres, every broker
 heartbeat and watch served across a restart of each — is exercised end to end
-by `tests/rolling_restart.rs` (`cargo test -p controlplane --features pg-tests
+by `tests/rolling_restart.rs` (`cargo test -p felix-controlplane-service --features pg-tests
 --test rolling_restart`).
 
 ## Open Questions

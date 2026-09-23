@@ -48,8 +48,8 @@ jobs:
       - name: Build release binaries
         run: |
           cargo build --release --locked \
-            -p broker --bin felix-broker \
-            -p controlplane --bin felix-controlplane
+            -p felix-broker-service --bin felix-broker \
+            -p felix-controlplane-service --bin felix-controlplane
 
       - name: Package release archive
         run: |
@@ -251,7 +251,7 @@ jobs:
       # The suite drives real brokers over real QUIC; these are what it starts.
       - name: Build the broker and cluster harness
         run: |
-          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-broker-service --bin felix-broker
           cargo build --locked -p felix-cluster --bin felix-cluster
 
       # `maturin develop` installs into an *active* virtualenv and refuses to
@@ -263,13 +263,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install ./crates/felix-python
+          python -m pip install ./crates/sdk/felix-python
           python -c "import felix; print('felix binding imported OK')"
 
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/python-conformance.json
-        run: cd crates/felix-python && pytest -q
+        run: cd crates/sdk/felix-python && pytest -q
 
       # The verdict, not the test exit code: a suite that passed while skipping
       # a required scenario is not conformance, and this is what says so.
@@ -321,7 +321,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.maturin }}
-          args: --release --out dist --manifest-path crates/felix-python/Cargo.toml
+          args: --release --out dist --manifest-path crates/sdk/felix-python/Cargo.toml
           manylinux: auto
 
       - name: Upload wheel
@@ -345,7 +345,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist --manifest-path crates/felix-python/Cargo.toml
+          args: --out dist --manifest-path crates/sdk/felix-python/Cargo.toml
 
       - uses: actions/upload-artifact@v7
         with:
@@ -421,20 +421,20 @@ jobs:
       # The suite drives real brokers over real QUIC; these are what it starts.
       - name: Build the broker and cluster harness
         run: |
-          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-broker-service --bin felix-broker
           cargo build --locked -p felix-cluster --bin felix-cluster
 
       # No napi CLI here: `napi build` is mostly a rename of this cdylib, and
       # the package loads it from the target directory either way. Keeping the
       # gate off the CLI keeps it off a registry too.
       - name: Build the addon
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: cargo build --locked
 
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/ts-conformance.json
-        run: cd crates/felix-typescript && node --test test/conformance.test.mjs
+        run: cd crates/sdk/felix-typescript && node --test test/conformance.test.mjs
 
       # The verdict, not the test exit code: a suite that passed while skipping
       # a required scenario is not conformance, and this is what says so.
@@ -495,7 +495,7 @@ jobs:
         run: npm install -g @napi-rs/cli@2
 
       - name: Build the addon
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: napi build --platform --release --target ${{ matrix.target }}
 
       # The addon is named by platform (felix.darwin-arm64.node and so on), so
@@ -504,7 +504,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: napi-${{ matrix.target }}
-          path: crates/felix-typescript/*.node
+          path: crates/sdk/felix-typescript/*.node
           if-no-files-found: error
 
   typescript-release-assets:
@@ -600,17 +600,17 @@ jobs:
         with:
           pattern: napi-*
           merge-multiple: true
-          path: crates/felix-typescript/artifacts
+          path: crates/sdk/felix-typescript/artifacts
 
       - name: Install the napi CLI
         run: npm install -g @napi-rs/cli@2
 
       - name: Move each binary into its platform package
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: napi artifacts
 
       - name: What is about to be published
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: ls -la npm/*/
 
       # `npm publish` per package rather than `napi prepublish`. What that
@@ -624,7 +624,7 @@ jobs:
       # dependencies, so publishing it first leaves a window where an install
       # resolves to nothing.
       - name: ${{ inputs.npm_stage && 'Stage, platform packages first' || 'Publish, platform packages first' }}
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         env:
           # Only in staging mode, and only then: trusted publishing is the
           # normal path and a token present alongside it is a second way in
@@ -651,7 +651,7 @@ jobs:
       # question only when something was actually published.
       - name: The registry must actually have them
         if: ${{ !inputs.npm_stage }}
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
@@ -668,7 +668,7 @@ jobs:
 
       - name: What a maintainer needs to promote
         if: ${{ inputs.npm_stage }}
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")

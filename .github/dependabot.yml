@@ -31,8 +31,8 @@ updates:
   # `task lint` / `task test` do not build these — `task demo:check` does.
   - package-ecosystem: "cargo"
     directories:
-      - "/crates/felix-python"
-      - "/crates/felix-storage/fuzz"
+      - "/crates/sdk/felix-python"
+      - "/crates/server/felix-storage/fuzz"
       - "/demos/cross_tenant_isolation"
       - "/demos/rbac-live"
       - "/demos/slow-consumer"
@@ -113,11 +113,11 @@ updates:
 
   # --- Python -------------------------------------------------------------
   # scripts/perf/requirements.txt (matplotlib/pandas/pyarrow) and the maturin
-  # build-system pin in crates/felix-python/pyproject.toml.
+  # build-system pin in crates/sdk/felix-python/pyproject.toml.
   - package-ecosystem: "pip"
     directories:
       - "/scripts/perf"
-      - "/crates/felix-python"
+      - "/crates/sdk/felix-python"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3
@@ -155,7 +155,7 @@ updates:
   # --- Control-plane compose stack ----------------------------------------
   # Postgres major is pinned deliberately (coverage/test containers run 15).
   - package-ecosystem: "docker-compose"
-    directory: "/services/controlplane"
+    directory: "/services/felix-controlplane-service"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 2

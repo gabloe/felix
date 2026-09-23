@@ -22,7 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # A real Felix broker, behind the shim. AGPL-3.0, like anything that embeds the
 # broker — which is one of the things a shim would have to decide, since it
 # would ship as part of Felix rather than beside it.
-felix-broker = { path = "../../crates/felix-broker" }
-felix-storage = { path = "../../crates/felix-storage" }
+felix-broker = { path = "../../crates/server/felix-broker" }
+felix-storage = { path = "../../crates/server/felix-storage" }
 
 [workspace]

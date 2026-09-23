@@ -60,7 +60,7 @@ Debug builds are 10-100x slower. Use `--release` for performance testing.
 
 ```bash
 # Build only the broker
-cargo build -p broker --release
+cargo build -p felix-broker-service --release
 
 # Build only the wire protocol crate
 cargo build -p felix-wire
@@ -115,13 +115,13 @@ task clean-all
 
 ```bash
 # Run broker (debug)
-cargo run -p broker
+cargo run -p felix-broker-service
 
 # Run broker (release)
-cargo run --release -p broker
+cargo run --release -p felix-broker-service
 
 # Run with environment variables
-FELIX_QUIC_BIND=0.0.0.0:5001 cargo run --release -p broker
+FELIX_QUIC_BIND=0.0.0.0:5001 cargo run --release -p felix-broker-service
 ```
 
 ### Demo Applications
@@ -130,19 +130,19 @@ FELIX_QUIC_BIND=0.0.0.0:5001 cargo run --release -p broker
 # Demos are self-contained (in-process broker)
 
 # Pub/sub demo
-cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
 
 # Cache demo
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 
 # Latency benchmark
-cargo run --release -p broker --bin latency-demo
+cargo run --release -p felix-broker-service --bin latency-demo
 
 # Notifications demo
-cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
 
 # Orders/payments pipeline demo
-cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
 
 # Live RBAC policy change demo (control plane + broker + token exchange)
 cargo run --manifest-path demos/rbac-live/Cargo.toml
@@ -164,7 +164,7 @@ task demo:cross-tenant-isolation
 
 ```bash
 # Latency demo with custom settings
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -214,7 +214,7 @@ mod tests {
 
 **Integration tests** (separate files):
 ```
-crates/felix-broker/
+crates/server/felix-broker/
   tests/
     integration_test.rs
 ```
@@ -466,13 +466,13 @@ audit. A PR that passes those locally passes CI.
 **Basic run**:
 
 ```bash
-cargo run --release -p broker --bin latency-demo
+cargo run --release -p felix-broker-service --bin latency-demo
 ```
 
 **Custom configuration**:
 
 ```bash
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -498,7 +498,7 @@ python3 scripts/perf/render_markdown_snippets.py
 
 ```bash
 # Run cache benchmarks
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 
 # Or with Task
 task demo:cache
@@ -512,7 +512,7 @@ export FELIX_CACHE_STREAMS_PER_CONN=4
 export FELIX_CACHE_BENCH_CONCURRENCY=32
 export FELIX_CACHE_BENCH_KEYS=1024
 
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 ```
 
 ## Profiling
@@ -523,21 +523,21 @@ cargo run --release -p broker --bin cache-demo
 
 ```bash
 # Record profile
-sudo perf record -g --call-graph dwarf cargo run --release -p broker
+sudo perf record -g --call-graph dwarf cargo run --release -p felix-broker-service
 
 # View report
 sudo perf report
 
 # Generate flamegraph
 cargo install flamegraph
-cargo flamegraph -p broker
+cargo flamegraph -p felix-broker-service
 ```
 
 **macOS (Instruments)**:
 
 ```bash
 # Build with debug symbols
-cargo build --profile release-with-debug -p broker
+cargo build --profile release-with-debug -p felix-broker-service
 
 # Profile with Instruments
 instruments -t "Time Profiler" ./target/release-with-debug/broker
@@ -549,7 +549,7 @@ instruments -t "Time Profiler" ./target/release-with-debug/broker
 
 ```bash
 # Build debug
-cargo build -p broker
+cargo build -p felix-broker-service
 
 # Run with valgrind
 valgrind --leak-check=full --show-leak-kinds=all ./target/debug/broker
@@ -562,7 +562,7 @@ valgrind --leak-check=full --show-leak-kinds=all ./target/debug/broker
 sudo apt install heaptrack heaptrack-gui
 
 # Profile
-heaptrack cargo run --release -p broker
+heaptrack cargo run --release -p felix-broker-service
 
 # Analyze
 heaptrack_gui heaptrack.broker.*.gz

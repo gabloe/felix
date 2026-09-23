@@ -87,25 +87,25 @@ halves in full detail.
 
 The important architectural boundary is:
 
-- `crates/felix-broker/src/` contains the transport-independent broker core.
-- `services/broker/src/` turns that core into a network service.
-- `crates/felix-client/src/` implements the client-side connection pools and
+- `crates/server/felix-broker/src/` contains the transport-independent broker core.
+- `services/felix-broker-service/src/` turns that core into a network service.
+- `crates/sdk/felix-client/src/` implements the client-side connection pools and
   APIs.
-- `crates/felix-wire/src/` defines what the two sides exchange.
-- `crates/felix-transport/src/lib.rs` wraps the QUIC implementation.
+- `crates/protocol/felix-wire/src/` defines what the two sides exchange.
+- `crates/protocol/felix-transport/src/lib.rs` wraps the QUIC implementation.
 
 ## 2. Repository map
 
 | Area | Responsibility | Start reading |
 |---|---|---|
-| `crates/felix-wire` | Frame header, protocol messages, binary fast paths | `crates/felix-wire/src/lib.rs` |
-| `crates/felix-transport` | QUIC endpoint, connection, stream, flow-control, and UDP configuration | `crates/felix-transport/src/lib.rs` |
-| `crates/felix-client` | Publisher, subscription, and cache client APIs | `crates/felix-client/src/client/client.rs` |
-| `crates/felix-broker` | Stream registry, in-memory log, subscriber registry, fanout | `crates/felix-broker/src/lib.rs` |
-| `crates/felix-storage` | Cache storage abstraction and ephemeral implementation | `crates/felix-storage/src/lib.rs` |
-| `crates/felix-authz` | Token verification types and permission matching | `crates/felix-authz/src/lib.rs` |
-| `services/broker` | Runnable broker, network handlers, auth, metrics, control-plane sync | `services/broker/src/main.rs` |
-| `services/controlplane` | Metadata APIs, token exchange, JWKS, and RBAC | `services/controlplane/src/main.rs` |
+| `crates/protocol/felix-wire` | Frame header, protocol messages, binary fast paths | `crates/protocol/felix-wire/src/lib.rs` |
+| `crates/protocol/felix-transport` | QUIC endpoint, connection, stream, flow-control, and UDP configuration | `crates/protocol/felix-transport/src/lib.rs` |
+| `crates/sdk/felix-client` | Publisher, subscription, and cache client APIs | `crates/sdk/felix-client/src/client/client.rs` |
+| `crates/server/felix-broker` | Stream registry, in-memory log, subscriber registry, fanout | `crates/server/felix-broker/src/lib.rs` |
+| `crates/server/felix-storage` | Cache storage abstraction and ephemeral implementation | `crates/server/felix-storage/src/lib.rs` |
+| `crates/server/felix-authz` | Token verification types and permission matching | `crates/server/felix-authz/src/lib.rs` |
+| `services/felix-broker-service` | Runnable broker, network handlers, auth, metrics, control-plane sync | `services/felix-broker-service/src/main.rs` |
+| `services/felix-controlplane-service` | Metadata APIs, token exchange, JWKS, and RBAC | `services/felix-controlplane-service/src/main.rs` |
 
 `felix-router` supports the multi-node path (shard-owner resolution on the
 broker's ingress). Do not start with it when learning the current message
@@ -153,9 +153,9 @@ real application parallelism.
 Felix uses the [`quinn`](https://github.com/quinn-rs/quinn) Rust implementation.
 The wrapper types are:
 
-- `crates/felix-transport/src/lib.rs::QuicServer`
-- `crates/felix-transport/src/lib.rs::QuicClient`
-- `crates/felix-transport/src/lib.rs::QuicConnection`
+- `crates/protocol/felix-transport/src/lib.rs::QuicServer`
+- `crates/protocol/felix-transport/src/lib.rs::QuicClient`
+- `crates/protocol/felix-transport/src/lib.rs::QuicConnection`
 
 `QuicServer::bind` and `QuicClient::bind` create UDP sockets, install Quinn's
 transport configuration, and create endpoints using `quinn::TokioRuntime`.
@@ -181,14 +181,14 @@ Felix maps its operations onto these primitives:
 
 The current Rust client opens authenticated bidirectional workers for its normal
 publish API. The broker also supports unidirectional publish ingress in
-`services/broker/src/transport/quic/streams/uni.rs::run_uni_loop`.
+`services/felix-broker-service/src/transport/quic/streams/uni.rs::run_uni_loop`.
 Fire-and-forget means that the broker does not return a publish response; it
 does not mean that the stream is unauthenticated. A unidirectional publish
 stream must begin with `Message::Auth` before it sends publish frames.
 
 ### 3.4 Transport tuning
 
-`crates/felix-transport/src/lib.rs::TransportConfig` controls:
+`crates/protocol/felix-transport/src/lib.rs::TransportConfig` controls:
 
 - maximum concurrent streams;
 - connection and per-stream flow-control windows;
@@ -210,7 +210,7 @@ They improve capacity; they do not change Felix's delivery semantics.
 
 QUIC provides reliable byte streams, but it does not define where one Felix
 message ends and another begins. Felix adds its own framing protocol in
-`crates/felix-wire/src/lib.rs`.
+`crates/protocol/felix-wire/src/lib.rs`.
 
 ### 4.1 Frame envelope
 
@@ -230,7 +230,7 @@ enforce configured frame-size limits.
 
 ### 4.2 JSON control messages
 
-`crates/felix-wire/src/message.rs::Message` is the version-one protocol enum. With
+`crates/protocol/felix-wire/src/message.rs::Message` is the version-one protocol enum. With
 zero flags, `Message::encode` serializes a message as JSON and places it in a
 frame. JSON is used where flexibility and request metadata matter more than
 minimum encoding overhead:
@@ -286,11 +286,11 @@ tenant -> namespace -> cache -> key
 ```
 
 The broker keeps local registries for these objects in
-`crates/felix-broker/src/broker.rs::Broker`. A stream does not become valid merely
+`crates/server/felix-broker/src/broker.rs::Broker`. A stream does not become valid merely
 because a client names it; it must exist in the broker's synchronized metadata.
 
 The running service obtains metadata from the control plane through
-`services/broker/src/controlplane.rs::start_sync`. On cold start,
+`services/felix-broker-service/src/controlplane.rs::start_sync`. On cold start,
 `sync_once` fetches full snapshots in dependency order:
 
 1. tenants;
@@ -305,7 +305,7 @@ all resource types.
 
 ## 6. Broker startup and process lifecycle
 
-The executable starts at `services/broker/src/main.rs::main`, which calls
+The executable starts at `services/felix-broker-service/src/main.rs::main`, which calls
 `run_with_shutdown`.
 
 Startup proceeds in this order:
@@ -323,7 +323,7 @@ Startup proceeds in this order:
 9. `controlplane::start_sync` starts metadata synchronization.
 
 :::caution[Current TLS certificate behavior]
-`services/broker/src/main.rs::build_server_config` currently generates a
+`services/felix-broker-service/src/main.rs::build_server_config` currently generates a
 fresh self-signed certificate for `localhost`. The code explicitly marks
 this as development behavior, not production certificate management.
 :::
@@ -365,7 +365,7 @@ harness measured before this was fixed (see §16.1).
 
 ## 7. Client connection architecture
 
-`crates/felix-client/src/client/client.rs::Client::connect_with_transport`
+`crates/sdk/felix-client/src/client/client.rs::Client::connect_with_transport`
 constructs three separate pools.
 
 ### 7.1 Publish pool
@@ -401,14 +401,14 @@ another.
 ## 8. Authentication and authorization
 
 Every client-created control stream begins with authentication. The broker's
-read loop is `services/broker/src/transport/quic/streams/control.rs::run_control_loop`.
+read loop is `services/felix-broker-service/src/transport/quic/streams/control.rs::run_control_loop`.
 
 Before authentication:
 
 - JSON traffic must be `Message::Auth`.
 - Binary publish frames are rejected with `auth required`.
 
-`services/broker/src/auth.rs::BrokerAuth::authenticate`:
+`services/felix-broker-service/src/auth.rs::BrokerAuth::authenticate`:
 
 1. ensures the tenant's JWKS is cached;
 2. verifies the token signature and critical claims;
@@ -440,7 +440,7 @@ The application obtains a handle using
 - `Publisher::publish`; or
 - `Publisher::publish_batch`.
 
-In `crates/felix-client/src/client/publisher.rs`:
+In `crates/sdk/felix-client/src/client/publisher.rs`:
 
 - `AckMode::None` selects binary encoding.
 - `AckMode::PerMessage` and `AckMode::PerBatch` currently select JSON because
@@ -493,7 +493,7 @@ confirmation.
 
 ### 9.5 Broker connection and stream handling
 
-`services/broker/src/transport/quic/conn.rs::serve_with_shutdown` accepts QUIC
+`services/felix-broker-service/src/transport/quic/conn.rs::serve_with_shutdown` accepts QUIC
 connections and tracks each connection task.
 
 `handle_connection` concurrently accepts:
@@ -542,7 +542,7 @@ old resolutions. Removed stream states are also marked inactive, and
 ### 9.8 Broker byte and item admission
 
 The network handler constructs a `PublishJob` and calls
-`services/broker/src/transport/quic/handlers/publish/ingress.rs::enqueue_publish`.
+`services/felix-broker-service/src/transport/quic/handlers/publish/ingress.rs::enqueue_publish`.
 
 Two byte budgets are acquired:
 
@@ -562,7 +562,7 @@ finishes it.
 
 ### 9.9 Global stream-sharded workers
 
-`services/broker/src/transport/quic/conn.rs::build_publish_context` creates a
+`services/felix-broker-service/src/transport/quic/conn.rs::build_publish_context` creates a
 process-wide worker pool. It is deliberately not one pool per connection:
 per-connection pools previously multiplied concurrent access to shared stream
 state and increased contention.
@@ -577,7 +577,7 @@ worker `i` runs on shard runtime `i`.
 ### 9.10 Broker core append and fanout
 
 The worker calls
-`crates/felix-broker/src/broker.rs::Broker::publish_batch_to_handle`.
+`crates/server/felix-broker/src/broker.rs::Broker::publish_batch_to_handle`.
 
 That function:
 
@@ -656,7 +656,7 @@ acknowledgement error as proof that the event was not published.
 
 ### 11.1 Client subscribe request
 
-`crates/felix-client/src/client/client.rs::Client::subscribe`:
+`crates/sdk/felix-client/src/client/client.rs::Client::subscribe`:
 
 1. checks that the requested tenant matches the client's authenticated tenant;
 2. selects an event connection round-robin;
@@ -672,7 +672,7 @@ instances otherwise start local counters at the same values and can collide.
 ### 11.2 Broker subscription registration
 
 The control loop authorizes the request and calls
-`services/broker/src/transport/quic/handlers/subscribe.rs::handle_subscribe_message`.
+`services/felix-broker-service/src/transport/quic/handlers/subscribe.rs::handle_subscribe_message`.
 
 That function:
 
@@ -705,7 +705,7 @@ rebuilds the snapshot.
 
 The broker may open the unidirectional event stream before or after the client
 has processed `Subscribed`. Therefore
-`crates/felix-client/src/client/event_router.rs::run_event_router` maintains two
+`crates/sdk/felix-client/src/client/event_router.rs::run_event_router` maintains two
 bounded maps:
 
 - registrations waiting for streams;
@@ -877,7 +877,7 @@ Each call:
 3. enqueues a `CacheRequest`; and
 4. waits on a one-shot response channel.
 
-`crates/felix-client/src/client/cache.rs::run_cache_worker` owns one
+`crates/sdk/felix-client/src/client/cache.rs::run_cache_worker` owns one
 bidirectional QUIC stream and performs sequential round trips:
 
 ```text
@@ -892,11 +892,11 @@ broker's `StorageApi`.
 
 ### 14.1 Ephemeral cache implementation
 
-`crates/felix-storage/src/lib.rs::StorageApi` defines `put`, `get`, `delete`,
+`crates/server/felix-storage/src/lib.rs::StorageApi` defines `put`, `get`, `delete`,
 `len`, and `is_empty`.
 
 The running broker uses
-`crates/felix-storage/src/ephemeral_cache.rs::EphemeralCache`, which stores
+`crates/server/felix-storage/src/ephemeral_cache.rs::EphemeralCache`, which stores
 entries in an async `RwLock<HashMap<CacheKey, CacheEntry>>`.
 
 TTL behavior is lazy:
@@ -921,7 +921,7 @@ threads over time. That is flexible, but a hot stream can pay for:
 - channel wakeups between cores; and
 - scheduler migration.
 
-`services/broker/src/core_shards.rs::CoreShards` creates dedicated
+`services/felix-broker-service/src/core_shards.rs::CoreShards` creates dedicated
 single-threaded Tokio runtimes. On Linux, `pin_to_core` uses
 `sched_setaffinity` to pin each runtime thread to a CPU.
 
@@ -945,7 +945,7 @@ one logical stream still has one owning shard by design.
 
 ## 16. Observability
 
-`services/broker/src/observability.rs::init_observability` installs tracing,
+`services/felix-broker-service/src/observability.rs::init_observability` installs tracing,
 OpenTelemetry propagation, and a Prometheus recorder.
 
 The broker exposes:
@@ -959,11 +959,11 @@ The broker exposes:
 
 Hot-path timing code is feature-gated. The relevant modules are:
 
-- `services/broker/src/timings.rs`
-- `services/broker/src/timings_telemetry.rs`
-- `crates/felix-broker/src/timings.rs`
-- `crates/felix-client/src/timings.rs`
-- `services/broker/src/transport/quic/telemetry.rs`
+- `services/felix-broker-service/src/timings.rs`
+- `services/felix-broker-service/src/timings_telemetry.rs`
+- `crates/server/felix-broker/src/timings.rs`
+- `crates/sdk/felix-client/src/timings.rs`
+- `services/felix-broker-service/src/transport/quic/telemetry.rs`
 
 When investigating missing messages, begin with:
 
@@ -978,11 +978,11 @@ indicates a routing bug.
 
 ### 16.1 The soak harness
 
-`services/broker/src/bin/soak/` is the resource-leak and lifecycle harness. Run
+`services/felix-broker-service/src/bin/soak/` is the resource-leak and lifecycle harness. Run
 it with:
 
 ```bash
-cargo run --release -p broker --bin soak -- --duration-secs 60
+cargo run --release -p felix-broker-service --bin soak -- --duration-secs 60
 ```
 
 It stands up a real broker with real QUIC connections and the real auth path,
@@ -1098,47 +1098,47 @@ once per subscriber.
 
 Read in this order and follow each symbol with editor "go to definition":
 
-1. `crates/felix-wire/src/lib.rs`
+1. `crates/protocol/felix-wire/src/lib.rs`
    - `FrameHeader`
    - `Frame`
    - `Message`
    - binary publish/event encoders
-2. `crates/felix-transport/src/lib.rs`
+2. `crates/protocol/felix-transport/src/lib.rs`
    - `TransportConfig`
    - `QuicServer`
    - `QuicClient`
    - `QuicConnection`
-3. `crates/felix-client/src/client/client.rs`
+3. `crates/sdk/felix-client/src/client/client.rs`
    - `Client::connect_with_transport`
    - `Client::subscribe`
-4. `crates/felix-client/src/client/publisher.rs`
+4. `crates/sdk/felix-client/src/client/publisher.rs`
    - `Publisher::select_worker`
    - `Publisher::publish_batch_binary`
    - `run_publisher_writer`
-5. `services/broker/src/transport/quic/conn.rs`
+5. `services/felix-broker-service/src/transport/quic/conn.rs`
    - `serve_with_shutdown`
    - `build_publish_context`
    - `handle_connection_with_shutdown`
-6. `services/broker/src/transport/quic/streams/handlers.rs`
+6. `services/felix-broker-service/src/transport/quic/streams/handlers.rs`
    - `handle_stream`
-7. `services/broker/src/transport/quic/streams/control.rs`
+7. `services/felix-broker-service/src/transport/quic/streams/control.rs`
    - `run_control_loop`
-8. `services/broker/src/transport/quic/handlers/publish/`
+8. `services/felix-broker-service/src/transport/quic/handlers/publish/`
    - `resolve_stream_cached` (`publish.rs`)
    - `enqueue_publish` (`ingress.rs`)
-9. `crates/felix-broker/src/`
+9. `crates/server/felix-broker/src/`
    - `StreamState` (`stream_state.rs`)
    - `DeliveryEnvelope` (`delivery.rs`)
    - `Broker::publish_batch_to_handle` (`broker.rs`)
    - `Broker::subscribe` (`broker.rs`)
-10. `services/broker/src/transport/quic/handlers/subscribe/`
+10. `services/felix-broker-service/src/transport/quic/handlers/subscribe/`
     - `handle_subscribe_message` (`subscribe.rs`)
     - `run_lane_feeder` (`feeder.rs`)
     - `run_writer_lane` (`writer.rs`)
     - `run_connection_writer` (`writer.rs`)
-11. `crates/felix-client/src/client/event_router.rs`
+11. `crates/sdk/felix-client/src/client/event_router.rs`
     - `run_event_router`
-12. `crates/felix-client/src/client/subscription.rs`
+12. `crates/sdk/felix-client/src/client/subscription.rs`
     - `Subscription::spawn_pipeline`
     - `run_subscription_io_task`
     - `run_subscription_dispatch_task`

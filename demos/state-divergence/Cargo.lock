@@ -274,52 +274,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "broker"
-version = "0.6.0-preview"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-trait",
- "axum",
- "base64 0.23.1",
- "bytes",
- "dashmap",
- "ed25519-dalek",
- "felix-authz",
- "felix-broker",
- "felix-client",
- "felix-common",
- "felix-router",
- "felix-storage",
- "felix-transport",
- "felix-wire",
- "futures",
- "jsonwebtoken",
- "libc",
- "metrics",
- "metrics-exporter-prometheus",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "parking_lot",
- "quinn",
- "rcgen",
- "reqwest 0.12.28",
- "rustls",
- "rustls-webpki",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -647,10 +601,10 @@ name = "demo-state-divergence"
 version = "0.1.1"
 dependencies = [
  "anyhow",
- "broker",
  "bytes",
  "crossterm",
  "felix-broker",
+ "felix-broker-service",
  "felix-client",
  "felix-storage",
  "felix-transport",
@@ -883,6 +837,52 @@ dependencies = [
  "parking_lot",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "felix-broker-service"
+version = "0.6.0-preview"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "dashmap",
+ "ed25519-dalek",
+ "felix-authz",
+ "felix-broker",
+ "felix-client",
+ "felix-common",
+ "felix-router",
+ "felix-storage",
+ "felix-transport",
+ "felix-wire",
+ "futures",
+ "jsonwebtoken",
+ "libc",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "parking_lot",
+ "quinn",
+ "rcgen",
+ "reqwest 0.12.28",
+ "rustls",
+ "rustls-webpki",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
 ]
 
 [[package]]

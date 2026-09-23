@@ -71,7 +71,7 @@ Release builds are **significantly faster** than debug builds. Always use `--rel
 Build only the broker service:
 
 ```bash
-cargo build -p broker --release
+cargo build -p felix-broker-service --release
 ```
 
 Build only the client library:
@@ -150,16 +150,16 @@ publish and subscribe against it; running brokers yourself is covered there too.
 Verify end-to-end functionality with a self-contained demo (no separate broker required):
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
 ```
 
 Other demos you can try (including a control-plane RBAC mutation demo):
 
 ```bash
-cargo run --release -p broker --bin cache-demo
-cargo run --release -p broker --bin latency-demo
-cargo run --release -p broker --bin pubsub-demo-notifications
-cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin cache-demo
+cargo run --release -p felix-broker-service --bin latency-demo
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
 cargo run --manifest-path demos/rbac-live/Cargo.toml
 cargo run --manifest-path demos/cross_tenant_isolation/Cargo.toml
 ```
@@ -235,7 +235,7 @@ Build only what you need:
 
 ```bash
 # Just the broker
-cargo build --release -p broker
+cargo build --release -p felix-broker-service
 
 # Just the client library
 cargo build --release -p felix-client

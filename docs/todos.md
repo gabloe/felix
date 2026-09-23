@@ -34,10 +34,10 @@ cache, and consumer groups all landed afterwards.
 - [X] Message types: `Publish`, `Subscribe`, `Event`, `CachePut`, `CacheGet`, `CacheValue`, `Ok`, `Error`
 - [X] Encode/decode message payloads with frames
 - [X] Define v1 wire spec in `docs/protocol.md`
-- [X] Add test vectors in `crates/felix-wire/tests/vectors/`
+- [X] Add test vectors in `crates/protocol/felix-wire/tests/vectors/`
 - [X] Add conformance runner tool (felix-conformance)
 - [ ] Add fuzz tests for frame + message decoding (storage decoding is covered:
-      see `crates/felix-storage/fuzz/`)
+      see `crates/server/felix-storage/fuzz/`)
 - [ ] Add compatibility notes (reserved fields for future encryption/compression)
 
 ## QUIC transport (`felix-transport`)
@@ -63,7 +63,7 @@ cache, and consumer groups all landed afterwards.
 - [X] Cache: `Put/Get` with TTL expiry
 - [X] Cache eviction policy placeholder (size cap + LRU later)
 
-## Broker service (`services/broker`)
+## Broker service (`services/felix-broker-service`)
 - [X] Wire QUIC transport to broker protocol handler
 - [X] Env var for QUIC bind address (`FELIX_QUIC_BIND`)
 - [X] Health endpoints: `/live`, `/ready`
@@ -120,7 +120,7 @@ cache, and consumer groups all landed afterwards.
 - [ ] Define requirements for tiered storage (hot/cold path, LCU?) — tracked as
       [#172](https://github.com/gabloe/felix/issues/172)
 - [ ] Implement tiered storage primitives. `TieredStore` and friends are declared
-      in `crates/felix-storage/src/tiered.rs` and nothing implements them; see
+      in `crates/server/felix-storage/src/tiered.rs` and nothing implements them; see
       [#172](https://github.com/gabloe/felix/issues/172) for what M1's sealed
       segments already set up for it.
 

@@ -471,7 +471,7 @@ two distributions.
 ```sh
 FELIX_DURABLE_STORAGE_DIR=/var/lib/felix/streams \
 FELIX_DURABLE_FSYNC_MODE=on_commit \
-  cargo run --release -p broker --bin felix-broker
+  cargo run --release -p felix-broker-service --bin felix-broker
 ```
 
 ## Observability
@@ -504,7 +504,7 @@ felix-log-tool bench  --dir /tmp/bench --records 20000 --concurrency 8 --fsync o
 The end-to-end demo — publish, crash, restart, recover — is:
 
 ```sh
-cargo run --release -p broker --bin durable-restart-demo
+cargo run --release -p felix-broker-service --bin durable-restart-demo
 ```
 
 It verifies its own claims rather than narrating them, so a regression makes it
@@ -530,7 +530,7 @@ fail rather than print the wrong numbers.
   are deleted from the head, `base_offset` rises, and offsets below it report
   `Trimmed` (storage) or `CursorTooOld` (broker) rather than a short read. See
   [Retention](#retention) below.
-- **No tiered storage.** [`tiered.rs`](../crates/felix-storage/src/tiered.rs) is
+- **No tiered storage.** [`tiered.rs`](../crates/server/felix-storage/src/tiered.rs) is
   still trait scaffolding — `TieredStore`, `OffloadedSegment`, `ColdCacheConfig`
   and `RetentionPolicy` are declared, and nothing implements them. There is no
   hot/cold split, no offload, and no cold-tier read path; every read comes from

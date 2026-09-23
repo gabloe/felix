@@ -1,0 +1,39 @@
+[package]
+name = "felix-conformance"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+description = "Conformance runner validating third-party Felix protocol implementations"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords = ["felix", "conformance", "protocol"]
+categories = ["network-programming", "development-tools"]
+# Not a library anyone consumes from a registry: service binaries and a
+# dev/CI tool with hard AGPL-3.0 dependencies.
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+felix-broker-service = { path = "../../../services/felix-broker-service", version = "0.6.0-preview" }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+felix-authz = { path = "../../server/felix-authz", version = "0.6.0-preview" }
+felix-broker = { path = "../../server/felix-broker", version = "0.6.0-preview" }
+felix-client = { path = "../../sdk/felix-client", version = "0.6.0-preview" }
+felix-storage = { path = "../../server/felix-storage", version = "0.6.0-preview" }
+felix-transport = { path = "../../protocol/felix-transport", version = "0.6.0-preview" }
+felix-wire = { path = "../../protocol/felix-wire", version = "0.6.0-preview" }
+jsonwebtoken = { workspace = true }
+quinn = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+tokio = { workspace = true }
+toml = "1.1.6"
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

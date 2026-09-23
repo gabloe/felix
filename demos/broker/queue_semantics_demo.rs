@@ -28,7 +28,7 @@
 //! Run it with:
 //!
 //! ```text
-//! cargo run --release -p broker --bin queue-semantics-demo
+//! cargo run --release -p felix-broker-service --bin queue-semantics-demo
 //! ```
 
 use anyhow::{Context, Result, bail};
