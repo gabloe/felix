@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790203885198,
+  "lastUpdate": 1790204490167,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14300,6 +14300,58 @@ window.BENCHMARK_DATA = {
             "range": "6528.99",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 941626.15\nmean: 938756.53\nstdev: 6528.99\ncv: 0.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cdf36e56230fed9e149d8ca9bfc3fc45acdba58f",
+          "message": "feat: report where a resumed subscription joins its stream (#655)\n\n* feat: report where a resumed subscription joins its stream\n\nCloses #615. A subscribe with a start position was already gap-free from\nthat position, but the client had no way to tell which records were\nalready in the stream at join and which came after.\n\n`subscribed` now carries `start_offset` (the first record delivered) and\n`live_offset` (the tail when the subscriber was registered). Both are\noptional and only sent for a subscribe with a start, on a durable stream,\nto a client that negotiated offsets, so every other subscribe gets the\nframe it always did. The client exposes them on `Subscription`.\n\n`Latest` now reuses the single tail read instead of reading it twice, so\nits start and live offsets are the same number even while publishes land.\n\n* test(wire): subscribed without join offsets is byte-identical",
+          "timestamp": "2026-09-23T15:59:10-07:00",
+          "tree_id": "4a5053f88b4e1647bf406a8400d0ec3fb8412eb5",
+          "url": "https://github.com/gabloe/felix/commit/cdf36e56230fed9e149d8ca9bfc3fc45acdba58f"
+        },
+        "date": 1790204489376,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 494502.45,
+            "range": "11750.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 494502.45\nmean: 496343.90\nstdev: 11750.27\ncv: 2.37%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 494502.45,
+            "range": "11750.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 494502.45\nmean: 496343.90\nstdev: 11750.27\ncv: 2.37%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 119352.37,
+            "range": "513.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 119352.37\nmean: 119103.82\nstdev: 513.96\ncv: 0.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1193523.71,
+            "range": "5139.60",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1193523.71\nmean: 1191038.24\nstdev: 5139.60\ncv: 0.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
