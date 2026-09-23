@@ -39,8 +39,8 @@ pub(crate) enum PublishTarget {
     /// relayed, from the same worker a local write would have used, so the ack
     /// path is identical either way.
     Forward {
-        target: crate::peer::ForwardTarget,
-        key: crate::peer::ForwardKey,
+        target: crate::serving::forward::ForwardTarget,
+        key: crate::serving::forward::ForwardKey,
         ack: felix_wire::internal::AckMode,
         /// The publisher's token, for the owner to verify again.
         credential: String,

@@ -9,9 +9,9 @@
 use async_trait::async_trait;
 use felix_wire::internal::{ErrorCode, ForwardPublishError, InternalMessage};
 
-use super::handler::ForwardingHandler;
-use super::replica::ReplicaHandler;
-use super::server::PeerRequestHandler;
+use crate::peer::server::PeerRequestHandler;
+use crate::replication::replica::ReplicaHandler;
+use crate::serving::forward::owner::ForwardingHandler;
 
 /// Answers every request a peer may send this broker.
 pub struct BrokerPeerHandler {

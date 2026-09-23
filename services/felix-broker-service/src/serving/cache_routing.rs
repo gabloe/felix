@@ -6,7 +6,7 @@
 //! divergence the log-backed cache had no defence against.
 use bytes::Bytes;
 
-use crate::peer::{CacheRequest, ForwardKey, ForwardTarget};
+use crate::serving::forward::{CacheRequest, ForwardKey, ForwardTarget};
 use crate::shards::routing::{Dispatch, IngressRouter, dispatch, shard_for};
 use crate::shards::{ShardKey, ShardKind};
 
@@ -174,9 +174,16 @@ pub(crate) async fn apply_cache_op(
                     target.node_id
                 ));
             };
-            crate::peer::forward_cache_op(pool, &target, &forward_key, key, credential, &request)
-                .await
-                .map_err(|err| err.to_string())
+            crate::serving::forward::forward_cache_op(
+                pool,
+                &target,
+                &forward_key,
+                key,
+                credential,
+                &request,
+            )
+            .await
+            .map_err(|err| err.to_string())
         }
         CacheRoute::Refused(reason) => Err(reason),
     }
@@ -231,7 +238,7 @@ pub(crate) async fn apply_counter_op(
                     target.node_id
                 ));
             };
-            let answer = crate::peer::forward_cache_op(
+            let answer = crate::serving::forward::forward_cache_op(
                 pool,
                 &target,
                 &forward_key,

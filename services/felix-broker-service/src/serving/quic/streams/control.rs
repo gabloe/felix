@@ -1033,7 +1033,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &namespace,
                     &cache,
                     &key,
-                    crate::peer::CacheRequest::Get,
+                    crate::serving::forward::CacheRequest::Get,
                 )
                 .await;
                 if let Some(start) = lookup_start {
@@ -1198,7 +1198,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &namespace,
                     &cache,
                     &key,
-                    crate::peer::CacheRequest::CounterAdd { delta },
+                    crate::serving::forward::CacheRequest::CounterAdd { delta },
                 )
                 .await;
                 let value = match applied {
@@ -1287,7 +1287,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &namespace,
                     &cache,
                     &key,
-                    crate::peer::CacheRequest::CounterGet,
+                    crate::serving::forward::CacheRequest::CounterGet,
                 )
                 .await;
                 let value = match read {
@@ -1923,7 +1923,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &namespace,
                     &cache,
                     &key,
-                    crate::peer::CacheRequest::Delete,
+                    crate::serving::forward::CacheRequest::Delete,
                 )
                 .await;
 

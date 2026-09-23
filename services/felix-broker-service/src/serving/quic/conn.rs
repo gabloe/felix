@@ -370,7 +370,7 @@ fn build_publish_context(
                         // a slow disk would and the existing backpressure and
                         // ack plumbing apply unchanged.
                         match &peers_for_worker {
-                            Some(pool) => crate::peer::forward_publish(
+                            Some(pool) => crate::serving::forward::forward_publish(
                                 pool,
                                 target,
                                 key,

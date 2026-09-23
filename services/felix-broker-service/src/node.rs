@@ -19,6 +19,8 @@
 //! Production deployments should use a real certificate chain and should not re-generate keys
 //! on each start.
 
+pub mod peer_dispatch;
+
 use anyhow::{Context, Result};
 use felix_broker::{Broker, DurableStorage};
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
@@ -581,8 +583,8 @@ where
             let server = peer::PeerServer::bind_with_tls(
                 membership_config.node_id.clone(),
                 peer_config,
-                Arc::new(peer::BrokerPeerHandler::new(
-                    peer::ForwardingHandler::new(
+                Arc::new(peer_dispatch::BrokerPeerHandler::new(
+                    crate::serving::forward::ForwardingHandler::new(
                         Arc::clone(&broker),
                         Arc::clone(ingress),
                         Arc::clone(router),
@@ -591,7 +593,7 @@ where
                         Duration::from_millis(config.publish_quorum_timeout_ms.max(1)),
                         Arc::clone(&auth),
                     ),
-                    peer::ReplicaHandler::new(Arc::clone(&broker), Arc::clone(router)),
+                    replication::ReplicaHandler::new(Arc::clone(&broker), Arc::clone(router)),
                 )),
                 peer_tls.clone(),
             )

@@ -933,5 +933,43 @@ fn close_reason_label(reason: &quinn::ConnectionError) -> &'static str {
     }
 }
 
+/// The one thing forwarding asks of the connection pool.
+///
+/// A trait rather than the pool itself so the retry rules above — which decide
+/// whether a batch may be sent a second time — can be tested against an owner
+/// that answers on command, including with the answers a healthy cluster
+/// almost never produces.
+pub trait PeerRequester {
+    fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> + Send;
+}
+
+impl<T: PeerRequester> PeerRequester for std::sync::Arc<T> {
+    fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> + Send
+    {
+        T::request(self, node_id, addr, message)
+    }
+}
+
+impl PeerRequester for PeerPool {
+    async fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        PeerPool::request(self, node_id, addr, message).await
+    }
+}
+
 #[cfg(test)]
 mod tests;

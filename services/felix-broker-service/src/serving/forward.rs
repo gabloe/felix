@@ -22,6 +22,13 @@
 //!
 //! Retries are bounded by `MAX_ATTEMPTS` so a shard being reassigned converges
 //! or fails explicitly, rather than chasing `NotLeader` around a cluster.
+//!
+//! This is the requesting side; [`owner`] is the side that answers.
+
+pub mod owner;
+
+pub use owner::ForwardingHandler;
+
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -30,8 +37,9 @@ use felix_wire::internal::{
     AckMode, CacheOpKind, ErrorCode, ForwardCacheOp, ForwardPublish, InternalMessage, ShardRef,
 };
 
-use super::metrics;
-use super::pool::{PeerError, PeerPool};
+use crate::peer::PeerRequester;
+use crate::peer::metrics;
+use crate::peer::pool::PeerError;
 
 /// Total attempts for one publish, across every owner it is redirected to.
 ///
@@ -69,44 +77,6 @@ pub enum ForwardError {
     /// been applied, and this broker cannot tell.
     #[error("forwarded publish to {node_id} was not acknowledged: {detail}")]
     Indeterminate { node_id: String, detail: String },
-}
-
-/// The one thing forwarding asks of the connection pool.
-///
-/// A trait rather than the pool itself so the retry rules above — which decide
-/// whether a batch may be sent a second time — can be tested against an owner
-/// that answers on command, including with the answers a healthy cluster
-/// almost never produces.
-pub trait PeerRequester {
-    fn request(
-        &self,
-        node_id: &str,
-        addr: SocketAddr,
-        message: InternalMessage,
-    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> + Send;
-}
-
-impl<T: PeerRequester> PeerRequester for std::sync::Arc<T> {
-    fn request(
-        &self,
-        node_id: &str,
-        addr: SocketAddr,
-        message: InternalMessage,
-    ) -> impl std::future::Future<Output = std::result::Result<InternalMessage, PeerError>> + Send
-    {
-        T::request(self, node_id, addr, message)
-    }
-}
-
-impl PeerRequester for PeerPool {
-    async fn request(
-        &self,
-        node_id: &str,
-        addr: SocketAddr,
-        message: InternalMessage,
-    ) -> std::result::Result<InternalMessage, PeerError> {
-        PeerPool::request(self, node_id, addr, message).await
-    }
 }
 
 /// Forward one batch and wait for the owner's answer.
@@ -319,9 +289,6 @@ fn budget_spent(node_id: &str, budget: Duration, attempts: u32, last: &str) -> S
     )
 }
 
-#[cfg(test)]
-mod tests;
-
 /// What a cache operation asks the owner to do.
 ///
 /// A separate type from the wire's `CacheOpKind` so callers do not have to
@@ -510,3 +477,6 @@ pub async fn forward_cache_op(
         detail: last,
     })
 }
+
+#[cfg(test)]
+mod tests;

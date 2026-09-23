@@ -32,8 +32,8 @@ use felix_wire::internal::{
     ForwardPublishError, ForwardPublishOk, InternalMessage, NotLeader,
 };
 
-use super::metrics;
-use super::server::PeerRequestHandler;
+use crate::peer::metrics;
+use crate::peer::server::PeerRequestHandler;
 use crate::serving::auth::BrokerAuth;
 use crate::shards::routing::{Dispatch, IngressRouter};
 use crate::shards::{ShardKey, ShardKind};
@@ -202,7 +202,7 @@ impl ForwardingHandler {
         None
     }
 
-    pub(super) async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
+    pub(crate) async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
         let correlation_id = publish.correlation_id;
         let key = ShardKey {
             tenant_id: publish.shard.tenant_id.clone(),
@@ -335,7 +335,7 @@ impl ForwardingHandler {
     /// The same ownership gates as a forwarded publish, for the same reason: a
     /// broker that served a cache key it no longer owns is the divergence this
     /// whole path exists to prevent.
-    pub(super) async fn apply_cache_op(&self, op: ForwardCacheOp) -> InternalMessage {
+    pub(crate) async fn apply_cache_op(&self, op: ForwardCacheOp) -> InternalMessage {
         let correlation_id = op.correlation_id;
         let key = ShardKey {
             tenant_id: op.shard.tenant_id.clone(),

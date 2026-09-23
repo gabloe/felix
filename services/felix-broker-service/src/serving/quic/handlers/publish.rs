@@ -78,9 +78,9 @@ pub(crate) fn record_json_publish(frame: &'static str) {
 
 // Re-exported so the test module (and its `use super::*`) reaches the internals it
 // exercises directly, without widening them for the rest of the crate.
-use crate::peer::ForwardTarget;
 #[cfg(test)]
 use crate::serving::auth::AuthContext;
+use crate::serving::forward::ForwardTarget;
 #[cfg(test)]
 use crate::serving::quic::errors::AckEnqueueError;
 #[cfg(test)]
@@ -380,7 +380,7 @@ pub(crate) fn publish_target(
             t_counter!("felix_publish_requests_total", "result" => "forwarded").increment(1);
             Some(PublishTarget::Forward {
                 target,
-                key: crate::peer::ForwardKey {
+                key: crate::serving::forward::ForwardKey {
                     tenant_id: tenant_id.to_string(),
                     namespace: namespace.to_string(),
                     stream: stream.to_string(),

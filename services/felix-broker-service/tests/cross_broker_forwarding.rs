@@ -18,11 +18,11 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
 };
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::peer::{
-    ForwardError, ForwardKey, ForwardTarget, ForwardingHandler, PeerPool, PeerServer,
-    PeerTransportConfig, forward_publish,
-};
+use felix_broker_service::peer::{PeerPool, PeerServer, PeerTransportConfig};
 use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::forward::{
+    ForwardError, ForwardKey, ForwardTarget, ForwardingHandler, forward_publish,
+};
 use felix_broker_service::shards::routing::{IngressRouter, routing_table_from};
 use felix_broker_service::shards::{ShardKey, watch::ShardAssignment};
 use felix_router::{NodeRef, RegionRouter, ShardRouter};

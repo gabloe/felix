@@ -25,7 +25,7 @@ use felix_wire::internal::{
     ReplicateRebuild, ReplicateRecords,
 };
 
-use super::metrics;
+use crate::peer::metrics;
 
 /// Stores replicated records against this broker's local logs.
 pub struct ReplicaHandler {
