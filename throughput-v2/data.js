@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790195081335,
+  "lastUpdate": 1790195300720,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13936,6 +13936,58 @@ window.BENCHMARK_DATA = {
             "range": "13133.99",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 940859.57\nmean: 940696.84\nstdev: 13133.99\ncv: 1.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "35f9e62721f1df3b3169ef251280e703c2a33b79",
+          "message": "ci(deps): bump docker/setup-buildx-action from 3 to 4 (#639)\n\nBumps [docker/setup-buildx-action](https://github.com/docker/setup-buildx-action) from 3 to 4.\n- [Release notes](https://github.com/docker/setup-buildx-action/releases)\n- [Commits](https://github.com/docker/setup-buildx-action/compare/v3...v4)\n\n---\nupdated-dependencies:\n- dependency-name: docker/setup-buildx-action\n  dependency-version: '4'\n  dependency-type: direct:production\n  update-type: version-update:semver-major\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-09-23T13:24:09-07:00",
+          "tree_id": "7c9aa77d7aa90ed78f2a5b6959491ffd6beef1d7",
+          "url": "https://github.com/gabloe/felix/commit/35f9e62721f1df3b3169ef251280e703c2a33b79"
+        },
+        "date": 1790195299601,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 417326.05,
+            "range": "21911.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 417326.05\nmean: 412005.23\nstdev: 21911.34\ncv: 5.32%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 417326.05,
+            "range": "21911.34",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 417326.05\nmean: 412005.23\nstdev: 21911.34\ncv: 5.32%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 95034.46,
+            "range": "4411.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 95034.46\nmean: 93781.84\nstdev: 4411.45\ncv: 4.70%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 950344.57,
+            "range": "44114.52",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 950344.57\nmean: 937818.40\nstdev: 44114.52\ncv: 4.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
