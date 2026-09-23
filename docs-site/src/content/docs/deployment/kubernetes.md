@@ -52,6 +52,40 @@ cosign verify ghcr.io/gabloe/felix-broker:0.5.0 \
 | The internal port | On the headless Service only, and a NetworkPolicy admitting it from broker pods | Without peer mTLS, anything that reaches the port is a broker. With it, this is the second fence. |
 | Peer mTLS | A cert-manager CSI volume per pod, off by default | Each broker needs a certificate issued to its own name. See [Peer mTLS](#peer-mtls). |
 
+## Topology
+
+| Component | Runs as | Listens on | Reached by |
+| --- | --- | --- | --- |
+| Control plane | Deployment over Postgres, or a StatefulSet of 3+ under Raft | `8443` TCP (REST API), `8080` TCP (metrics, `/ready`), `9095` TCP (bootstrap, only while enabled) | Brokers and operators on `8443`; Raft members reach each other on `8443` too |
+| Postgres | Outside the chart | Whatever you run it on | The control plane only |
+| Broker | StatefulSet, one volume per pod | `5000` UDP (client QUIC, `ports.listeners` consecutive ports from there), `5001` UDP (internal QUIC), `8080` TCP (metrics, `/ready`, `/replication/halted`) | Clients on `5000`; other brokers on `5001`; Prometheus on `8080` |
+
+What depends on what, in the order it matters during an incident:
+
+- **Brokers depend on the control plane to start**, not to keep serving. A
+  broker seeds its catalog before it reports ready; once running, it serves
+  from the catalog it has and retries heartbeats while the control plane is
+  away. A lease that cannot be renewed does lapse, so a long control-plane
+  outage does end in shards stopping.
+- **The control plane depends on its store.** Postgres unreachable, or under
+  Raft fewer than a majority of members, means no writes: no placement, no
+  moves, no failover.
+- **Brokers depend on each other** for forwarding and replication. Nothing
+  but brokers should reach `5001`; the NetworkPolicy and peer mTLS are what
+  enforce that.
+- **Storage is per broker.** A broker's volume holds the logs of every shard
+  it leads or follows. Losing it is recoverable from replicas when the
+  replication factor is above one, and is data loss when it is not.
+
+Certificates: clients verify each broker's self-generated certificate
+(see [Clients](#clients)); brokers verify each other only with peer mTLS on
+(see [Peer mTLS](#peer-mtls)); the control plane's API is plain HTTP in the
+chart, so put TLS in front of it if it leaves the cluster. Load balancing:
+the client Service must balance **UDP**, and only for the first connection —
+clients then connect to the broker that owns a shard by that broker's own
+address, so every broker must be individually reachable by whoever the
+clients are.
+
 ## Prerequisites
 
 - Kubernetes 1.25 or later and Helm 3.8 or later.
@@ -244,12 +278,22 @@ helm upgrade felix deploy/helm/felix -n felix --reuse-values --set broker.replic
 ```
 
 New brokers register, and placement moves shards onto them from whichever
-brokers lead more than their share, one move at a time by default. Scaling
-**in** removes the highest ordinals: drain each first (`POST
-/v1/nodes/{id}/drain` with an operator token), wait until
-`GET /v1/shard-assignments?leader=<id>` is empty, then lower `replicas`. The
-budget refuses a value it cannot keep a quorum under. What a move does, how
-long it takes and what to watch is on
+brokers lead more than their share, one move at a time by default. It is done
+when `felix_shard_moves_waiting` is `0` and no assignment has a `successor`:
+
+```bash
+curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  http://felix-controlplane.felix.svc:8443/v1/shard-assignments |
+  jq '[.items[] | select(.successor)] | length'
+```
+
+Scaling **in** removes the highest ordinals. Drain each first (`POST
+/v1/nodes/{id}/drain` with an operator token), wait until no assignment names
+it as leader or replica, then lower `replicas`. Lowering `replicas` without
+draining is a failover per shard it leads, and a follower slot that stays
+pointed at a broker that no longer exists. The budget refuses a value it
+cannot keep a quorum under. What a move does, how long it takes, the exact
+wait check and what to watch are on
 [Adding, draining and removing brokers](/felix/deployment/scaling/).
 
 ### Replacing a broker's volume
@@ -264,8 +308,19 @@ kubectl -n felix delete pvc data-felix-broker-2 --wait=false
 kubectl -n felix delete pod felix-broker-2
 ```
 
-Watch `felix_broker_replication_lag_records` fall and `/replication/halted`
-stay empty.
+It is done when the replacement is ready, `felix_broker_replication_lag_records`
+on each leader it follows has fallen to where it was before, and
+`/replication/halted` is empty on every broker:
+
+```bash
+for i in 0 1 2; do
+  kubectl -n felix exec felix-broker-$i -- wget -qO- http://127.0.0.1:8080/replication/halted
+done
+```
+
+Replace one volume at a time. A shard whose only copies were on volumes lost
+together is lost, and with a replication factor of one that is every shard
+the broker held — take a volume snapshot first in that case.
 
 ### Control-plane instance loss and database failover
 

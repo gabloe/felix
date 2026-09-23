@@ -54,14 +54,14 @@ With an operator token carrying `node.manage` on `cluster:*`:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $OPERATOR_TOKEN" \
-  http://controlplane:9090/v1/nodes/broker-2/drain
+  http://controlplane:8443/v1/nodes/broker-2/drain
 ```
 
 Then wait until it leads nothing:
 
 ```bash
 curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" \
-  "http://controlplane:9090/v1/shard-assignments?leader=broker-2"
+  "http://controlplane:8443/v1/shard-assignments?leader=broker-2"
 # {"items":[]} when it is done
 ```
 
@@ -74,25 +74,45 @@ Cancel a drain by putting the broker back into placement:
 ```bash
 curl -X PATCH -H "Authorization: Bearer $OPERATOR_TOKEN" \
   -H "Content-Type: application/json" -d '{"lifecycle":"live"}' \
-  http://controlplane:9090/v1/nodes/broker-2
+  http://controlplane:8443/v1/nodes/broker-2
 ```
 
 Moves already staged run to completion; nothing further starts, and the
 broker may then take shards back if it is under its share.
 
+A broker registers every time it starts, and registering makes it `live`, so
+**any restart of a draining broker also cancels its drain**. A rolling restart
+in the middle of a drain has to be followed by draining it again.
+
 ## Removing a broker
 
-Drain it, wait for it to lead nothing, stop the process, and remove the
-node record:
+Drain it, then wait until no assignment names it at all — not as leader, and
+not as a follower either. Leading nothing is not enough: the drain also
+replaces the broker wherever it holds a copy for another leader, and that
+only happens while it is `draining`. Once it has left, a follower slot still
+naming it stays as it is, and that shard runs one replica short.
+
+```bash
+curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" \
+  http://controlplane:8443/v1/shard-assignments |
+  jq '[.items[] | select(.leader == "broker-2" or (.replicas | index("broker-2")))] | length'
+# 0 when it is done
+```
+
+Then stop the process. Its shutdown marks it `left` with
+`POST /v1/nodes/{id}/deregister`, which is what tells the control plane this
+was intentional rather than a crash. The record is kept, so the identity and
+its incarnation survive if a broker with that `FELIX_NODE_ID` is started again.
+To remove it for good once the broker has stopped:
 
 ```bash
 curl -X DELETE -H "Authorization: Bearer $OPERATOR_TOKEN" \
-  http://controlplane:9090/v1/nodes/broker-2
+  http://controlplane:8443/v1/nodes/broker-2
 ```
 
-The delete is refused while the broker still leads a shard. That is
-deliberate: the record is the only thing that says where that shard's data
-is, and removing it would orphan the data rather than tidy the catalog.
+The delete is refused while the broker is `live` or `draining`, and while any
+shard names it: the assignment is the only record of where that shard's data
+is, and a follower slot naming a node that no longer exists is never replaced.
 
 ## Watching a move
 
@@ -148,5 +168,7 @@ intervals per shard plus the time to copy each log.
 | --- | --- |
 | A drain never finishes; `felix_shard_moves_waiting` is `1` | The successor is not catching up. Look at the leader's `/replication/halted` and replication lag. |
 | A drain never finishes; no successor is ever staged | No live broker under its share has capacity (`max_shards`), or `FELIX_SHARD_MOVES_MAX_CONCURRENT` is `0`. |
-| Shards moved, then moved back | The drained broker was put back to `live` while under its share. Expected; drain it again or leave it. |
-| `DELETE /v1/nodes/{id}` returns 409 | It still leads a shard. Drain first. |
+| Shards moved, then moved back | The drained broker was put back to `live`, or restarted (which registers it `live`), while under its share. Drain it again. |
+| A removed broker is still listed in a shard's `replicas` | It was stopped before the drain reseated that follower. Start it again, drain it, and wait for the check above to reach 0. |
+| `POST /v1/nodes/{id}/drain` returns 409 | The broker is `down` or `left`, so there is nothing to drain. |
+| `DELETE /v1/nodes/{id}` returns 409 | The broker is still running, or a shard still names it. The message says which. |
