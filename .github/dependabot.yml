@@ -44,6 +44,14 @@ updates:
       prefix: "build"
       include: "scope"
     labels: ["dependencies", "rust"]
+    # The demos depend on workspace crates by path, and those take
+    # opentelemetry from [workspace.dependencies], so bumping it here edits
+    # the root Cargo.toml without its Cargo.lock or tracing-opentelemetry.
+    # #640 did exactly that and the workspace stopped compiling. It moves with
+    # the workspace group instead.
+    ignore:
+      - dependency-name: "opentelemetry*"
+      - dependency-name: "tracing-opentelemetry"
     groups:
       out-of-workspace-crates:
         patterns: ["*"]
