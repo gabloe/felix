@@ -1,20 +1,20 @@
-// Metric names for the durable log, in one place.
-//
-// Storage performance is not something you tune by reading code — you tune it by
-// watching where time goes. The set below is chosen so that the three questions
-// that actually come up have an answer on the dashboard:
-//
-// * *Is durability the bottleneck?* Compare `append_duration_seconds` against
-//   `sync_duration_seconds`. If sync dominates, the fsync policy is the cost.
-// * *Is group commit working?* `sync_batch_appends` is the fan-in per device
-//   flush. A value near 1 under concurrent load means appends are serialising
-//   on the device instead of sharing a flush.
-// * *Is the periodic policy honouring its window?* `unsynced_bytes` is the data
-//   at risk right now; `sync_lag_seconds` is how long the oldest unsynced byte
-//   has been waiting.
-//
-// Names follow the `felix_` prefix already used by the broker so they land in
-// the same Prometheus namespace.
+//! Metric names for the durable log, in one place.
+//!
+//! Storage performance is not something you tune by reading code — you tune it by
+//! watching where time goes. The set below is chosen so that the three questions
+//! that actually come up have an answer on the dashboard:
+//!
+//! * *Is durability the bottleneck?* Compare `append_duration_seconds` against
+//!   `sync_duration_seconds`. If sync dominates, the fsync policy is the cost.
+//! * *Is group commit working?* `sync_batch_appends` is the fan-in per device
+//!   flush. A value near 1 under concurrent load means appends are serialising
+//!   on the device instead of sharing a flush.
+//! * *Is the periodic policy honouring its window?* `unsynced_bytes` is the data
+//!   at risk right now; `sync_lag_seconds` is how long the oldest unsynced byte
+//!   has been waiting.
+//!
+//! Names follow the `felix_` prefix already used by the broker so they land in
+//! the same Prometheus namespace.
 
 /// Records accepted into the log.
 pub const APPEND_RECORDS_TOTAL: &str = "felix_storage_append_records_total";

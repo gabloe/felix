@@ -19,12 +19,8 @@
 //! felix-log-tool bench  --dir /tmp/log --records 20000 --concurrency 8 --label on_commit-c8
 //! ```
 
-// The module tree lives in `log_tool/`; this file is only the entry point.
-#[path = "log_tool/args.rs"]
 mod args;
-#[path = "log_tool/commands.rs"]
 mod commands;
-#[path = "log_tool/payload.rs"]
 mod payload;
 
 use args::Command;
