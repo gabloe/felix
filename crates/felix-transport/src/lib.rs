@@ -46,8 +46,8 @@ enum EndpointRole {
 /// per *byte* (measured ~7.5x below capacity). Each endpoint gets a
 /// single-threaded runtime so driver self-wakes re-poll immediately and never
 /// migrate cores; see [`EndpointRole`] for which endpoints share one.
-/// `FELIX_IO_RUNTIME_THREADS` sets the pool size (default: 2); `0` restores
-/// drivers to the app runtime.
+/// `FELIX_IO_RUNTIME_THREADS` sets the pool size (derived from the listener
+/// count on macOS, `0` elsewhere); `0` restores drivers to the app runtime.
 fn io_runtime_index(role: EndpointRole, sequence: usize, pool_len: usize) -> usize {
     if pool_len <= 1 {
         return 0;
