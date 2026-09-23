@@ -650,6 +650,8 @@ fn message_all_variants_encode_decode() {
     // Test Subscribed message
     let message = Message::Subscribed {
         subscription_id: 42,
+        start_offset: None,
+        live_offset: None,
     };
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");

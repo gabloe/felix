@@ -494,6 +494,23 @@ loop {
 `tokio::select!` consumes nothing when another branch wins. You can put a
 timeout around it without losing a record.
 
+### Where a subscription joined
+
+On a durable stream, a subscribe with a start position tells you where it
+joined:
+
+```rust
+let sub = client
+    .subscribe_from("acme", "prod", "orders", Some(StartPosition::Offset(1_000)))
+    .await?;
+let first = sub.start_offset(); // Some(1000)
+let live = sub.live_offset();   // the tail when you subscribed
+```
+
+Events below `live_offset()` are catch-up; events from it on are new, and none
+are skipped between the two. From `Latest` the two offsets are equal. Both are
+`None` for a plain tail subscribe, an in-memory stream, or an older broker.
+
 ### Multiple Subscriptions
 
 Handle multiple streams concurrently:

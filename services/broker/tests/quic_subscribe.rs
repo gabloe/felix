@@ -486,6 +486,9 @@ async fn quic_subscribe_resumes_from_a_checkpointed_offset() -> Result<()> {
 
     // Phase 1: subscribe live, take the first few, then "crash".
     let mut sub = client.subscribe("t1", "default", "orders").await?;
+    // A plain tail subscribe names no start, so nothing is reported and the
+    // `subscribed` frame is the one it always was.
+    assert_eq!((sub.start_offset(), sub.live_offset()), (None, None));
     for i in 0..5usize {
         publisher
             .publish(
@@ -538,6 +541,10 @@ async fn quic_subscribe_resumes_from_a_checkpointed_offset() -> Result<()> {
             Some(felix_client::StartPosition::Offset(checkpoint + 1)),
         )
         .await?;
+    // Catch-up is exactly what was published while away; everything from the
+    // tail at join is live.
+    assert_eq!(resumed.start_offset(), Some(checkpoint + 1));
+    assert_eq!(resumed.live_offset(), Some(TOTAL as u64));
 
     while seen.len() < TOTAL {
         let Some(event) = timeout(Duration::from_secs(10), resumed.next_event()).await?? else {
@@ -558,6 +565,19 @@ async fn quic_subscribe_resumes_from_a_checkpointed_offset() -> Result<()> {
         "resume must lose nothing and duplicate nothing"
     );
 
+    // `Latest` joins at the current position: nothing to catch up on.
+    let latest = client2
+        .subscribe_from(
+            "t1",
+            "default",
+            "orders",
+            Some(felix_client::StartPosition::Latest),
+        )
+        .await?;
+    assert_eq!(latest.start_offset(), Some(TOTAL as u64));
+    assert_eq!(latest.live_offset(), Some(TOTAL as u64));
+
+    drop(latest);
     drop(resumed);
     server_task.abort();
     Ok(())

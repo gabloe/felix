@@ -602,7 +602,9 @@ fn handle_event_frame(
 
 fn parse_subscribe_response(response: Option<Message>) -> Result<u64> {
     match response {
-        Some(Message::Subscribed { subscription_id }) => Ok(subscription_id),
+        Some(Message::Subscribed {
+            subscription_id, ..
+        }) => Ok(subscription_id),
         other => Err(anyhow!("subscribe failed: {other:?}")),
     }
 }
@@ -740,7 +742,12 @@ mod tests {
     #[test]
     fn parse_subscribe_response_variants() {
         assert_eq!(
-            parse_subscribe_response(Some(Message::Subscribed { subscription_id: 7 })).expect("ok"),
+            parse_subscribe_response(Some(Message::Subscribed {
+                subscription_id: 7,
+                start_offset: None,
+                live_offset: None,
+            }))
+            .expect("ok"),
             7
         );
         assert!(

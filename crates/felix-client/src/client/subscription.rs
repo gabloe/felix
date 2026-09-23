@@ -37,6 +37,8 @@ pub struct Subscription {
     pub(crate) event_conn_counts: Arc<Vec<AtomicUsize>>,
     #[cfg(feature = "telemetry")]
     bench_embed_ts: bool,
+    start_offset: Option<u64>,
+    live_offset: Option<u64>,
 }
 
 pub struct Event {
@@ -107,7 +109,32 @@ impl Subscription {
             event_conn_counts: config.event_conn_counts,
             #[cfg(feature = "telemetry")]
             bench_embed_ts: config.bench_embed_ts,
+            start_offset: None,
+            live_offset: None,
         }
+    }
+
+    pub(crate) fn with_join(mut self, start_offset: Option<u64>, live_offset: Option<u64>) -> Self {
+        self.start_offset = start_offset;
+        self.live_offset = live_offset;
+        self
+    }
+
+    /// The first offset this subscription delivers.
+    ///
+    /// `None` for a plain tail subscribe, an in-memory stream, or an older
+    /// broker.
+    pub fn start_offset(&self) -> Option<u64> {
+        self.start_offset
+    }
+
+    /// The stream's tail when this subscription was registered.
+    ///
+    /// An event below it was already in the stream; one at or past it was
+    /// written after, and none are skipped in between. From `Latest` this
+    /// equals [`Self::start_offset`].
+    pub fn live_offset(&self) -> Option<u64> {
+        self.live_offset
     }
 
     pub async fn next_event(&mut self) -> Result<Option<Event>> {

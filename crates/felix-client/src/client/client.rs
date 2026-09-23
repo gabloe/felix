@@ -535,8 +535,12 @@ impl Client {
             self.runtime_config.max_frame_bytes,
         )
         .await?;
-        let subscription_id = match response {
-            Some(Message::Subscribed { subscription_id }) => subscription_id,
+        let (subscription_id, start_offset, live_offset) = match response {
+            Some(Message::Subscribed {
+                subscription_id,
+                start_offset,
+                live_offset,
+            }) => (subscription_id, start_offset, live_offset),
             Some(Message::Ok) => {
                 return Err(anyhow::anyhow!(
                     "subscribe response missing subscription id"
@@ -611,7 +615,8 @@ impl Client {
             max_frame_bytes: self.runtime_config.max_frame_bytes,
             #[cfg(feature = "telemetry")]
             bench_embed_ts: self.runtime_config.bench_embed_ts,
-        }))
+        })
+        .with_join(start_offset, live_offset))
     }
 
     pub async fn cache_put(

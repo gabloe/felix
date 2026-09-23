@@ -87,8 +87,8 @@ mod subscription;
 pub mod timings;
 
 pub use broker::{
-    Broker, CacheMetadata, ConsistencyLevel, HistoryRange, IdempotentOutcome, PublishOutcome,
-    ResumedSubscription, StartPosition, StreamHandle, StreamMetadata,
+    Broker, CacheMetadata, ConsistencyLevel, HistoryRange, IdempotentOutcome, JoinOffsets,
+    PublishOutcome, ResumedSubscription, StartPosition, StreamHandle, StreamMetadata,
 };
 pub use cache_watch::{CacheChangeEvent, CacheWatchFilter, CacheWatchHub, CacheWatchSubscription};
 pub use config::SubQueuePolicy;
