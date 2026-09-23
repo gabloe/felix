@@ -98,7 +98,7 @@ async fn start(root: &std::path::Path) -> Result<Running> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", CACHE, CacheMetadata)
+        .register_cache("t1", "default", CACHE, CacheMetadata::default())
         .await?;
     // A durable stream for the consumer-group tests. Durable because a group
     // reads a log, and an ephemeral stream has none.

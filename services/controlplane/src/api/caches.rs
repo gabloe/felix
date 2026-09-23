@@ -92,6 +92,7 @@ pub(crate) async fn create_cache(
         display_name: body.display_name,
         shards: body.shards.max(1),
         replication_factor: body.replication_factor.max(1),
+        consistency: body.consistency,
     };
     match state.store.create_cache(cache.clone()).await {
         Ok(created) => Ok((StatusCode::CREATED, Json(created))),

@@ -30,7 +30,7 @@ async fn notifications_demo_smoke() -> Result<()> {
             .register_stream(tenant, "default", "alerts", StreamMetadata::default())
             .await?;
         broker
-            .register_cache(tenant, "default", "last_alerts", CacheMetadata)
+            .register_cache(tenant, "default", "last_alerts", CacheMetadata::default())
             .await?;
     }
 

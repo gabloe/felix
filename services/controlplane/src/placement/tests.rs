@@ -1043,6 +1043,7 @@ fn replicated_cache(name: &str, shards: u32, replication_factor: u32) -> Cache {
         display_name: name.to_string(),
         shards,
         replication_factor,
+        consistency: crate::model::ConsistencyLevel::Leader,
     }
 }
 

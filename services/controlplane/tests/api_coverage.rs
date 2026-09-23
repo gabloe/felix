@@ -338,3 +338,44 @@ async fn streams_error_paths_and_changes() {
     let payload = read_json(response).await;
     assert!(payload["items"].as_array().is_some());
 }
+
+/// A cache records the consistency it was created with, and one created without
+/// saying reads back as `Leader`, which is what every cache was before.
+#[tokio::test]
+async fn a_cache_keeps_the_consistency_it_was_created_with() {
+    let h = harness().await;
+    let admin = h.admin("t1");
+    create_tenant(&h).await;
+    create_namespace(&h).await;
+
+    for (cache, requested, expected) in [
+        ("plain", None, "Leader"),
+        ("strict", Some("Quorum"), "Quorum"),
+    ] {
+        let mut body = serde_json::json!({ "cache": cache, "display_name": cache });
+        if let Some(level) = requested {
+            body["consistency"] = serde_json::json!(level);
+        }
+        let create = json_request_as(
+            "POST",
+            "/v1/tenants/t1/namespaces/default/caches",
+            &admin,
+            body,
+        );
+        let response = h.app.clone().oneshot(create).await.expect("create");
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let get = Request::builder()
+            .uri(format!("/v1/tenants/t1/namespaces/default/caches/{cache}"))
+            .header("authorization", format!("Bearer {admin}"))
+            .body(Body::empty())
+            .expect("get");
+        let response = h.app.clone().oneshot(get).await.expect("get");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            read_json(response).await["consistency"],
+            expected,
+            "{cache}"
+        );
+    }
+}

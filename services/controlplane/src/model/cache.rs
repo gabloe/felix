@@ -27,6 +27,10 @@ pub struct Cache {
     /// How many brokers hold a copy of each shard, leader included.
     #[serde(default = "default_cache_replication_factor")]
     pub replication_factor: u32,
+    /// What acknowledging a write to this cache means. `Leader` unless asked,
+    /// which is what every cache created before this existed reads back as.
+    #[serde(default = "default_cache_consistency")]
+    pub consistency: crate::model::ConsistencyLevel,
 }
 
 /// One shard: the whole keyspace has a single owner unless asked otherwise.
@@ -37,6 +41,10 @@ pub(crate) fn default_cache_shards() -> u32 {
 /// Leader-only, matching streams.
 pub(crate) fn default_cache_replication_factor() -> u32 {
     1
+}
+
+pub(crate) fn default_cache_consistency() -> crate::model::ConsistencyLevel {
+    crate::model::ConsistencyLevel::Leader
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

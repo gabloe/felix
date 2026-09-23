@@ -153,9 +153,11 @@ here has to be read as covering them:
 - **Retention outranks a group.** A record trimmed before a group reached it is
   skipped, and the group moves past. A retention window shorter than a group is
   allowed to fall behind loses work.
-- **A cache declares no consistency level.** A stream chooses `Leader` or
-  `Quorum`; a cache write is acknowledged by its leader, so losing that leader
-  between the acknowledgement and the ship loses the write.
+- **A counter update is acknowledged by its leader.** A cache chooses `Leader`
+  or `Quorum` for its puts and deletes, as a stream does for publishes, but the
+  counter log beside it feeds no quorum mark: on a `Quorum` cache a counter
+  update is still acknowledged once durable on the leader, so losing that
+  leader between the acknowledgement and the ship loses the update.
 - **Dead letters recorded under the old layout do not travel.** Shipping them
   became possible when the list moved to one log per stream shard, which is the
   unit the replication driver already walks; the earlier layout kept one log per

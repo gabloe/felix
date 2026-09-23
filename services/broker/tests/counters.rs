@@ -65,7 +65,7 @@ async fn start_broker(broker: Arc<Broker>) -> Result<Running> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", CACHE, CacheMetadata)
+        .register_cache("t1", "default", CACHE, CacheMetadata::default())
         .await?;
 
     let config = broker::config::BrokerConfig::from_env()?;

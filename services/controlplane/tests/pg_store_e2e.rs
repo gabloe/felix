@@ -591,6 +591,7 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await?;
     let conflict_cache = store
@@ -601,6 +602,7 @@ async fn pg_store_core_crud_and_auth() -> Result<()> {
             display_name: "Primary Again".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await;
     assert!(matches!(
@@ -869,6 +871,7 @@ async fn pg_store_additional_paths() -> Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await?;
     assert_eq!(store.list_streams("t1", "default").await?.len(), 1);
@@ -1068,6 +1071,7 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await?;
     store
@@ -1078,6 +1082,7 @@ async fn pg_store_list_and_change_roundtrip() -> Result<()> {
             display_name: "Secondary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await?;
     let caches = store.list_caches("t1", "ns1").await?;
@@ -1205,6 +1210,7 @@ async fn pg_store_not_found_and_noop_paths() -> Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await;
     assert!(matches!(missing_cache, Err(store::StoreError::NotFound(_))));
@@ -1318,6 +1324,7 @@ async fn pg_store_delete_tenant_with_dependents() -> Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await?;
 
@@ -1470,6 +1477,7 @@ async fn pg_store_full_surface_area() -> Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: controlplane::model::ConsistencyLevel::Leader,
         })
         .await?;
     assert_eq!(store.list_caches("t1", "default").await?.len(), 1);

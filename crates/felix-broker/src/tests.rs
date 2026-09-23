@@ -595,7 +595,7 @@ async fn existence_checks_reflect_registrations() {
         .await
         .expect("namespace");
     broker
-        .register_cache("t1", "default", "primary", CacheMetadata)
+        .register_cache("t1", "default", "primary", CacheMetadata::default())
         .await
         .expect("cache");
     broker

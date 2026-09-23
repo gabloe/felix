@@ -285,6 +285,8 @@ taken, so a torn tail is repaired before the shard is declared servable. A cache
 shard's log is opened lazily on the first request that touches it, so the same
 repair happens later and inline.
 
-**`Leader` and `Quorum` for a cache read.** A stream declares its consistency
-and a cache does not. What either should mean for a read, and what a client
-should expect of read-your-writes after a failover, is undecided.
+**`Leader` and `Quorum` for a cache read.** A cache declares a consistency
+level for its writes, as a stream does: under `Quorum` a put or delete is
+acknowledged only once a majority of the shard's replicas hold it. What either
+level should mean for a *read*, and what a client should expect of
+read-your-writes after a failover, is undecided.

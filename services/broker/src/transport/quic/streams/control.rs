@@ -842,7 +842,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // key's shard, and a write served here instead would be the
                 // second copy nothing reconciles.
                 let applied = crate::cache_routing::apply_cache_op(
-                    broker.cache(),
+                    &broker,
+                    (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
                     auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
@@ -966,7 +967,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 let lookup_start = t_now_if(sample);
                 let read = crate::cache_routing::apply_cache_op(
-                    broker.cache(),
+                    &broker,
+                    (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
                     auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
@@ -1741,7 +1743,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
 
                 let removed = crate::cache_routing::apply_cache_op(
-                    broker.cache(),
+                    &broker,
+                    (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
                     auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),

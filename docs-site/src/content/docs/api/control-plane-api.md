@@ -173,6 +173,18 @@ Content-Type: application/json
   "consistency": "Leader", "delivery": "AtLeastOnce", "durable": true }
 ```
 
+A cache takes `consistency` the same way, `"Leader"` when omitted. Under
+`"Quorum"` a put or delete is acknowledged only once a majority of the shard's
+replicas hold it; counter updates are acknowledged by the leader either way.
+
+```http
+POST /v1/tenants/t1/namespaces/payments/caches
+Content-Type: application/json
+
+{ "cache": "sessions", "display_name": "Sessions", "shards": 4,
+  "replication_factor": 3, "consistency": "Quorum" }
+```
+
 A tenant admin's token already carries the manage actions: exchange expands
 `tenant.manage:tenant:t1` to `ns.manage:namespace:t1/*`,
 `stream.manage:stream:t1/*/*` and `cache.manage:cache:t1/*/*`. Listings return

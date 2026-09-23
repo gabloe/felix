@@ -50,7 +50,7 @@ async fn run_demo(args: DemoArgs) -> Result<()> {
         .register_stream("t1", "default", "shipments", StreamMetadata::default())
         .await?;
     broker
-        .register_cache("t1", "default", ORDER_CACHE, CacheMetadata)
+        .register_cache("t1", "default", ORDER_CACHE, CacheMetadata::default())
         .await?;
 
     let config = broker::config::BrokerConfig::from_env()?;

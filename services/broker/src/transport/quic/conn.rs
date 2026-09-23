@@ -423,6 +423,8 @@ fn build_publish_context(
         peers,
         lease,
         client_endpoints,
+        marks,
+        quorum_timeout,
         workers: Arc::new(worker_txs),
         worker_count,
         depth: queue_depth,
