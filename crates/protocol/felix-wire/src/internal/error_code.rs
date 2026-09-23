@@ -44,6 +44,7 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
+    /// Parse a wire code; an unknown one is an error rather than a guess.
     pub fn from_u16(value: u16) -> Result<Self> {
         match value {
             1 => Ok(ErrorCode::StaleRoute),

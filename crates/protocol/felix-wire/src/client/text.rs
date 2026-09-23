@@ -8,11 +8,6 @@ use bytes::{BufMut, BytesMut};
 use crate::client::message::AckMode;
 use crate::error::{Error, Result};
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct EncodeStats {
-    pub reallocs: u64,
-}
-
 const PUBLISH_BATCH_PREFIX: &str = "{\"type\":\"publish_batch\",\"tenant_id\":\"";
 const PUBLISH_BATCH_NAMESPACE: &str = "\",\"namespace\":\"";
 const PUBLISH_BATCH_STREAM: &str = "\",\"stream\":\"";
@@ -25,6 +20,14 @@ const REQUEST_ID_PREFIX: &str = ",\"request_id\":";
 const KEY_PREFIX: &str = ",\"key\":\"";
 const ACK_PREFIX: &str = ",\"ack\":\"";
 
+/// How often the output buffer had to grow while encoding. Zero when the
+/// caller reserved [`publish_batch_json_len`] up front.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncodeStats {
+    pub reallocs: u64,
+}
+
+/// The exact length [`write_publish_batch_json`] writes for these arguments.
 #[allow(clippy::too_many_arguments)]
 pub fn publish_batch_json_len(
     tenant_id: &str,

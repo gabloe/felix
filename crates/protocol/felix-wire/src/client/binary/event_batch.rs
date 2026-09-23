@@ -10,7 +10,7 @@ use crate::client::flags::{
 use crate::client::frame::{Frame, FrameHeader};
 use crate::error::{Error, Result};
 
-// Parsed representation of a binary event batch frame.
+/// Parsed representation of a binary event batch frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventBatch {
     pub subscription_id: u64,
@@ -20,6 +20,8 @@ pub struct EventBatch {
     pub base_offset: Option<u64>,
 }
 
+/// Parsed representation of a shared event batch frame. It names no
+/// subscription: one encoding serves every subscriber of the stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedEventBatch {
     pub payloads: Vec<Bytes>,
@@ -27,6 +29,8 @@ pub struct SharedEventBatch {
     pub base_offset: Option<u64>,
 }
 
+/// An event batch as segments, so a writer can send each payload's existing
+/// [`Bytes`] without first copying them into one buffer.
 #[derive(Debug, Clone)]
 pub struct EncodedEventBatchParts {
     frame_len: usize,
@@ -34,20 +38,23 @@ pub struct EncodedEventBatchParts {
 }
 
 impl EncodedEventBatchParts {
+    /// Total length of every segment, header included.
     pub fn frame_len(&self) -> usize {
         self.frame_len
     }
 
+    /// The segments, in write order.
     pub fn segments(&self) -> &[Bytes] {
         &self.segments
     }
 
+    /// The segments, in write order.
     pub fn into_segments(self) -> Vec<Bytes> {
         self.segments
     }
 }
 
-// Encode binary event batch into a full framed payload.
+/// Encode binary event batch into a full framed payload.
 pub fn encode_event_batch_bytes(subscription_id: u64, payloads: &[Bytes]) -> Result<Bytes> {
     let parts = encode_event_batch_parts(subscription_id, payloads)?;
     let mut buf = BytesMut::with_capacity(parts.frame_len());
@@ -97,42 +104,7 @@ pub fn encode_event_batch_bytes_with_offset(
     Ok(buf.freeze())
 }
 
-/// Encode a shared (encode-once, fan-out-to-many) batch carrying its base offset.
-///
-/// Offsets belong to the stream rather than the subscriber, so one encoding
-/// still serves every subscriber that negotiated the bit -- which is what keeps
-/// this off the per-subscriber cost model.
-pub fn encode_shared_event_batch_bytes_with_offset(
-    payloads: &[Bytes],
-    base_offset: u64,
-) -> Result<Bytes> {
-    let mut payload_len = 8usize + 4;
-    for payload in payloads {
-        let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
-        payload_len = payload_len
-            .checked_add(4 + len as usize)
-            .ok_or(Error::FrameTooLarge)?;
-    }
-    if payload_len > u32::MAX as usize {
-        return Err(Error::FrameTooLarge);
-    }
-
-    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
-    FrameHeader::new(
-        FLAG_BINARY_EVENT_BATCH_SHARED | FLAG_EVENT_BATCH_OFFSETS,
-        payload_len as u32,
-    )
-    .encode(&mut buf);
-    buf.extend_from_slice(&base_offset.to_be_bytes());
-    buf.extend_from_slice(&(payloads.len() as u32).to_be_bytes());
-    for payload in payloads {
-        let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
-        buf.extend_from_slice(&len.to_be_bytes());
-        buf.extend_from_slice(payload);
-    }
-    Ok(buf.freeze())
-}
-
+/// [`encode_event_batch_bytes`] as segments; see [`EncodedEventBatchParts`].
 pub fn encode_event_batch_parts(
     subscription_id: u64,
     payloads: &[Bytes],
@@ -175,6 +147,7 @@ pub fn encode_event_batch_parts(
     })
 }
 
+/// Encode a shared (encode-once, fan-out-to-many) batch.
 pub fn encode_shared_event_batch_bytes(payloads: &[Bytes]) -> Result<Bytes> {
     let mut payload_len = 4usize;
     for payload in payloads {
@@ -198,7 +171,43 @@ pub fn encode_shared_event_batch_bytes(payloads: &[Bytes]) -> Result<Bytes> {
     Ok(buf.freeze())
 }
 
-// Decode binary event batch frame into its structured form.
+/// Encode a shared (encode-once, fan-out-to-many) batch carrying its base offset.
+///
+/// Offsets belong to the stream rather than the subscriber, so one encoding
+/// still serves every subscriber that negotiated the bit -- which is what keeps
+/// this off the per-subscriber cost model.
+pub fn encode_shared_event_batch_bytes_with_offset(
+    payloads: &[Bytes],
+    base_offset: u64,
+) -> Result<Bytes> {
+    let mut payload_len = 8usize + 4;
+    for payload in payloads {
+        let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+        payload_len = payload_len
+            .checked_add(4 + len as usize)
+            .ok_or(Error::FrameTooLarge)?;
+    }
+    if payload_len > u32::MAX as usize {
+        return Err(Error::FrameTooLarge);
+    }
+
+    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+    FrameHeader::new(
+        FLAG_BINARY_EVENT_BATCH_SHARED | FLAG_EVENT_BATCH_OFFSETS,
+        payload_len as u32,
+    )
+    .encode(&mut buf);
+    buf.extend_from_slice(&base_offset.to_be_bytes());
+    buf.extend_from_slice(&(payloads.len() as u32).to_be_bytes());
+    for payload in payloads {
+        let len = u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?;
+        buf.extend_from_slice(&len.to_be_bytes());
+        buf.extend_from_slice(payload);
+    }
+    Ok(buf.freeze())
+}
+
+/// Decode binary event batch frame into its structured form.
 pub fn decode_event_batch(frame: &Frame) -> Result<EventBatch> {
     let mut buf = frame.payload.clone();
     let has_offsets = frame.header.flags & FLAG_EVENT_BATCH_OFFSETS != 0;
@@ -228,6 +237,7 @@ pub fn decode_event_batch(frame: &Frame) -> Result<EventBatch> {
     })
 }
 
+/// Decode a shared event batch frame.
 pub fn decode_shared_event_batch(frame: &Frame) -> Result<SharedEventBatch> {
     let mut buf = frame.payload.clone();
     let has_offsets = frame.header.flags & FLAG_EVENT_BATCH_OFFSETS != 0;

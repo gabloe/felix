@@ -41,6 +41,19 @@ pub struct ReplicateOk {
     pub durable_offset: u64,
 }
 
+/// The follower refused, and where it stands.
+///
+/// `expected_offset` is what the follower wants next. For `LogGap` it is how
+/// the leader repairs without a separate negotiation; for the rest it is
+/// diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplicateError {
+    pub correlation_id: u64,
+    pub code: ErrorCode,
+    pub expected_offset: u64,
+    pub detail: String,
+}
+
 /// The leader has nothing older than `base_offset` left.
 ///
 /// Sent when a follower's position is below everything the leader still holds,
@@ -63,35 +76,6 @@ pub struct ReplicateBootstrap {
     pub base_offset: u64,
 }
 
-/// Which of a shard's logs a rebuild is about.
-///
-/// A field rather than five kinds, unlike the records and bootstrap messages:
-/// those share a body with something else and the kind is what tells them
-/// apart, whereas nothing shares this body. The values are this protocol's,
-/// not the broker's own enum, so a renumbering there cannot change the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ReplicaLog {
-    Stream = 1,
-    Cache = 2,
-    GroupCursors = 3,
-    GroupDeadLetters = 4,
-    Counters = 5,
-}
-
-impl ReplicaLog {
-    pub fn from_u8(value: u8) -> Result<Self> {
-        match value {
-            1 => Ok(ReplicaLog::Stream),
-            2 => Ok(ReplicaLog::Cache),
-            3 => Ok(ReplicaLog::GroupCursors),
-            4 => Ok(ReplicaLog::GroupDeadLetters),
-            5 => Ok(ReplicaLog::Counters),
-            other => Err(Error::UnknownInternalReplicaLog(other)),
-        }
-    }
-}
-
 /// Discard a follower's copy of one log and start again at `base_offset`.
 ///
 /// Sent by the leader to a follower whose replication has halted -- a
@@ -111,17 +95,34 @@ pub struct ReplicateRebuild {
     pub base_offset: u64,
 }
 
-/// The follower refused, and where it stands.
+/// Which of a shard's logs a rebuild is about.
 ///
-/// `expected_offset` is what the follower wants next. For `LogGap` it is how
-/// the leader repairs without a separate negotiation; for the rest it is
-/// diagnostic.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplicateError {
-    pub correlation_id: u64,
-    pub code: ErrorCode,
-    pub expected_offset: u64,
-    pub detail: String,
+/// A field rather than five kinds, unlike the records and bootstrap messages:
+/// those share a body with something else and the kind is what tells them
+/// apart, whereas nothing shares this body. The values are this protocol's,
+/// not the broker's own enum, so a renumbering there cannot change the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ReplicaLog {
+    Stream = 1,
+    Cache = 2,
+    GroupCursors = 3,
+    GroupDeadLetters = 4,
+    Counters = 5,
+}
+
+impl ReplicaLog {
+    /// Parse the wire value; an unknown one is an error.
+    pub fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(ReplicaLog::Stream),
+            2 => Ok(ReplicaLog::Cache),
+            3 => Ok(ReplicaLog::GroupCursors),
+            4 => Ok(ReplicaLog::GroupDeadLetters),
+            5 => Ok(ReplicaLog::Counters),
+            other => Err(Error::UnknownInternalReplicaLog(other)),
+        }
+    }
 }
 
 /// The checksum a [`ReplicateRecords`] batch carries.

@@ -647,12 +647,13 @@ pub enum Message {
 }
 
 impl Message {
+    /// JSON-encode into an unflagged frame.
     pub fn encode(&self) -> Result<Frame> {
-        // JSON-encode into a framed payload.
         let payload = serde_json::to_vec(self).map_err(Error::Serialize)?;
         Frame::new(0, Bytes::from(payload))
     }
 
+    /// Decode a frame's JSON payload.
     pub fn decode(frame: Frame) -> Result<Self> {
         serde_json::from_slice(&frame.payload).map_err(Error::Deserialize)
     }

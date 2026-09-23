@@ -1,16 +1,16 @@
 //! Feature bits: optional requests a broker may serve, advertised in `AuthOk`.
+//!
+//! A *feature* bit is not a frame flag. Frame flags say how a payload is laid
+//! out and travel on every frame; these say only that a request exists, and
+//! never appear on a frame at all. They are numbered separately for that
+//! reason -- sharing the space would have a client offering to receive a frame
+//! shape it has no encoder for.
+//!
+//! A client must not send a featured request to a broker that did not advertise
+//! the bit: an unrecognised message type is a fatal protocol error to the
+//! broker's control loop, so probing costs the connection.
 
-/// Optional requests a broker may implement, advertised in `AuthOk`.
-///
-/// A *feature* bit is not a frame flag. Frame flags say how a payload is laid
-/// out and travel on every frame; these say only that a request exists, and
-/// never appear on a frame at all. They are numbered separately for that
-/// reason -- sharing the space would have a client offering to receive a frame
-/// shape it has no encoder for.
-///
-/// A client must not send a featured request to a broker that did not advertise
-/// the bit: an unrecognised message type is a fatal protocol error to the
-/// broker's control loop, so probing costs the connection.
+/// The broker answers `topology`: which brokers a client may connect to.
 pub const FEATURE_TOPOLOGY: u32 = 0x0000_0001;
 
 /// The peer understands `NotLeader`.

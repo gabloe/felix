@@ -37,24 +37,8 @@ const ACK_MODE_PER_BATCH: u8 = 2;
 // u64 request_id + u8 ack_mode.
 const ACKED_PREFIX_LEN: usize = 9;
 
-fn ack_mode_to_wire(ack: AckMode) -> Result<u8> {
-    match ack {
-        AckMode::PerMessage => Ok(ACK_MODE_PER_MESSAGE),
-        AckMode::PerBatch => Ok(ACK_MODE_PER_BATCH),
-        // Callers must route AckMode::None to `encode_publish_batch`.
-        AckMode::None => Err(Error::Deserialize(SerdeError::custom(
-            "AckMode::None has no acked binary encoding",
-        ))),
-    }
-}
-
-fn ack_mode_from_wire(byte: u8) -> Result<AckMode> {
-    match byte {
-        ACK_MODE_PER_MESSAGE => Ok(AckMode::PerMessage),
-        ACK_MODE_PER_BATCH => Ok(AckMode::PerBatch),
-        _ => Err(Error::Deserialize(SerdeError::custom("invalid ack mode"))),
-    }
-}
+// u64 producer_id + u64 sequence, after the acked prefix.
+const PRODUCER_PREFIX_LEN: usize = 16;
 
 /// A binary publish batch that asked to be acknowledged.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,9 +56,6 @@ pub struct ProducerSequence {
     pub producer_id: u64,
     pub sequence: u64,
 }
-
-// u64 producer_id + u64 sequence, after the acked prefix.
-const PRODUCER_PREFIX_LEN: usize = 16;
 
 /// Encode an acked publish batch into a full framed buffer (header included).
 pub fn encode_acked_publish_batch_bytes(
@@ -133,44 +114,6 @@ pub fn encode_idempotent_publish_batch_bytes(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn encode_acked_inner(
-    request_id: u64,
-    ack: AckMode,
-    producer: Option<ProducerSequence>,
-    key: Option<&[u8]>,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    payloads: &[Vec<u8>],
-) -> Result<Bytes> {
-    let ack_byte = ack_mode_to_wire(ack)?;
-    // Reuse the unacked body encoder rather than duplicating its bounds checks,
-    // then splice the prefixes in front and restate the header.
-    let body = encode_publish_batch_keyed(key, tenant_id, namespace, stream, payloads)?.payload;
-    let prefix_len = ACKED_PREFIX_LEN + producer.map_or(0, |_| PRODUCER_PREFIX_LEN);
-    let payload_len = prefix_len
-        .checked_add(body.len())
-        .ok_or(Error::FrameTooLarge)?;
-    if payload_len > u32::MAX as usize {
-        return Err(Error::FrameTooLarge);
-    }
-    let mut flags = publish_flags(key) | FLAG_BINARY_PUBLISH_ACKED;
-    if producer.is_some() {
-        flags |= FLAG_BINARY_PUBLISH_IDEMPOTENT;
-    }
-    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
-    FrameHeader::new(flags, payload_len as u32).encode(&mut buf);
-    buf.put_u64(request_id);
-    buf.put_u8(ack_byte);
-    if let Some(producer) = producer {
-        buf.put_u64(producer.producer_id);
-        buf.put_u64(producer.sequence);
-    }
-    buf.extend_from_slice(&body);
-    Ok(buf.freeze())
-}
-
 /// Read only the correlation prefix, without decoding the batch body.
 ///
 /// The broker needs this to answer a malformed acked publish with a
@@ -220,6 +163,63 @@ pub fn decode_acked_publish_batch(frame: &Frame) -> Result<AckedPublishBatch> {
         producer,
         batch: decode_publish_batch(&body)?,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_acked_inner(
+    request_id: u64,
+    ack: AckMode,
+    producer: Option<ProducerSequence>,
+    key: Option<&[u8]>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    payloads: &[Vec<u8>],
+) -> Result<Bytes> {
+    let ack_byte = ack_mode_to_wire(ack)?;
+    // Reuse the unacked body encoder rather than duplicating its bounds checks,
+    // then splice the prefixes in front and restate the header.
+    let body = encode_publish_batch_keyed(key, tenant_id, namespace, stream, payloads)?.payload;
+    let prefix_len = ACKED_PREFIX_LEN + producer.map_or(0, |_| PRODUCER_PREFIX_LEN);
+    let payload_len = prefix_len
+        .checked_add(body.len())
+        .ok_or(Error::FrameTooLarge)?;
+    if payload_len > u32::MAX as usize {
+        return Err(Error::FrameTooLarge);
+    }
+    let mut flags = publish_flags(key) | FLAG_BINARY_PUBLISH_ACKED;
+    if producer.is_some() {
+        flags |= FLAG_BINARY_PUBLISH_IDEMPOTENT;
+    }
+    let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
+    FrameHeader::new(flags, payload_len as u32).encode(&mut buf);
+    buf.put_u64(request_id);
+    buf.put_u8(ack_byte);
+    if let Some(producer) = producer {
+        buf.put_u64(producer.producer_id);
+        buf.put_u64(producer.sequence);
+    }
+    buf.extend_from_slice(&body);
+    Ok(buf.freeze())
+}
+
+fn ack_mode_to_wire(ack: AckMode) -> Result<u8> {
+    match ack {
+        AckMode::PerMessage => Ok(ACK_MODE_PER_MESSAGE),
+        AckMode::PerBatch => Ok(ACK_MODE_PER_BATCH),
+        // Callers must route AckMode::None to `encode_publish_batch`.
+        AckMode::None => Err(Error::Deserialize(SerdeError::custom(
+            "AckMode::None has no acked binary encoding",
+        ))),
+    }
+}
+
+fn ack_mode_from_wire(byte: u8) -> Result<AckMode> {
+    match byte {
+        ACK_MODE_PER_MESSAGE => Ok(AckMode::PerMessage),
+        ACK_MODE_PER_BATCH => Ok(AckMode::PerBatch),
+        _ => Err(Error::Deserialize(SerdeError::custom("invalid ack mode"))),
+    }
 }
 
 #[cfg(test)]

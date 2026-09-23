@@ -28,6 +28,20 @@ use crate::error::{Error, Result};
 const ACK_STATUS_OK: u8 = 0;
 const ACK_STATUS_ERROR: u8 = 1;
 
+/// Broker → client acknowledgement for an acked binary publish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishAck {
+    pub request_id: u64,
+    /// `None` on success, `Some(message)` when the publish failed.
+    pub error: Option<String>,
+    /// Set when this batch was forwarded, naming the shard's owner.
+    ///
+    /// `None` means the broker handled it itself -- or predates the hint, or
+    /// was talking to a client that did not advertise it. All three are the
+    /// same thing to a caller: no better place to send the next batch is known.
+    pub forwarded_to: Option<PublishOwner>,
+}
+
 /// The broker that owns the shard a forwarded batch went to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishOwner {
@@ -42,20 +56,6 @@ pub struct PublishOwner {
     /// cached owner can tell a newer answer from an older one rather than
     /// letting two brokers mid-rebalance overwrite each other.
     pub generation: u64,
-}
-
-/// Broker → client acknowledgement for an acked binary publish.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishAck {
-    pub request_id: u64,
-    /// `None` on success, `Some(message)` when the publish failed.
-    pub error: Option<String>,
-    /// Set when this batch was forwarded, naming the shard's owner.
-    ///
-    /// `None` means the broker handled it itself -- or predates the hint, or
-    /// was talking to a client that did not advertise it. All three are the
-    /// same thing to a caller: no better place to send the next batch is known.
-    pub forwarded_to: Option<PublishOwner>,
 }
 
 /// Encode a publish ack into a full framed buffer (header included).

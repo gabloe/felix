@@ -10,7 +10,10 @@ use crate::client::flags::{
 use crate::client::frame::{Frame, FrameHeader};
 use crate::error::{Error, Result};
 
-// Parsed representation of a binary publish batch frame.
+// A keyed frame prefixes the body with a u16 length and the key bytes.
+const KEY_LEN_PREFIX: usize = 2;
+
+/// Parsed representation of a binary publish batch frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishBatch {
     pub tenant_id: String,
@@ -23,39 +26,13 @@ pub struct PublishBatch {
     pub payloads: Vec<Vec<u8>>,
 }
 
-// A keyed frame prefixes the body with a u16 length and the key bytes.
-const KEY_LEN_PREFIX: usize = 2;
-
-// Flags for a publish batch with or without a key.
-pub(super) fn publish_flags(key: Option<&[u8]>) -> u16 {
-    if key.is_some() {
-        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_KEYED
-    } else {
-        FLAG_BINARY_PUBLISH_BATCH
-    }
+/// How often the output buffer had to grow while encoding.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EncodeStats {
+    pub reallocs: u64,
 }
 
-// Bytes the key prefix adds to a payload, and a `FrameTooLarge` for a key that
-// cannot state its own length.
-fn key_prefix_len(key: Option<&[u8]>) -> Result<usize> {
-    match key {
-        None => Ok(0),
-        Some(key) => {
-            u16::try_from(key.len()).map_err(|_| Error::FrameTooLarge)?;
-            Ok(KEY_LEN_PREFIX + key.len())
-        }
-    }
-}
-
-fn put_key_prefix(buf: &mut BytesMut, key: Option<&[u8]>) {
-    if let Some(key) = key {
-        // Length already validated by `key_prefix_len`.
-        buf.put_u16(key.len() as u16);
-        buf.extend_from_slice(key);
-    }
-}
-
-// Encode a publish batch into a binary frame (payload only).
+/// Encode a publish batch into a binary frame.
 pub fn encode_publish_batch(
     tenant_id: &str,
     namespace: &str,
@@ -65,7 +42,7 @@ pub fn encode_publish_batch(
     encode_publish_batch_keyed(None, tenant_id, namespace, stream, payloads)
 }
 
-// Encode a publish batch into a binary frame (payload only), optionally keyed.
+/// Encode a publish batch into a binary frame, optionally keyed.
 pub fn encode_publish_batch_keyed(
     key: Option<&[u8]>,
     tenant_id: &str,
@@ -113,12 +90,7 @@ pub fn encode_publish_batch_keyed(
     Frame::new(publish_flags(key), buf.freeze())
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct EncodeStats {
-    pub reallocs: u64,
-}
-
-// Encode a full binary publish frame, including header and payload.
+/// Encode a full binary publish frame, including header and payload.
 pub fn encode_publish_batch_bytes(
     tenant_id: &str,
     namespace: &str,
@@ -130,6 +102,7 @@ pub fn encode_publish_batch_bytes(
     Ok(bytes)
 }
 
+/// [`encode_publish_batch_bytes`] for payloads already held as [`Bytes`].
 pub fn encode_publish_batch_bytes_from_bytes(
     tenant_id: &str,
     namespace: &str,
@@ -141,7 +114,7 @@ pub fn encode_publish_batch_bytes_from_bytes(
     Ok(bytes)
 }
 
-// Encode a full binary publish frame, including header and payload, and return stats.
+/// Encode a full binary publish frame, including header and payload, and return stats.
 pub fn encode_publish_batch_bytes_with_stats(
     tenant_id: &str,
     namespace: &str,
@@ -211,6 +184,8 @@ pub fn encode_publish_batch_bytes_with_stats_keyed(
     Ok((buf.freeze(), EncodeStats { reallocs }))
 }
 
+/// [`encode_publish_batch_bytes_with_stats`] for payloads already held as
+/// [`Bytes`].
 pub fn encode_publish_batch_bytes_with_stats_from_bytes(
     tenant_id: &str,
     namespace: &str,
@@ -280,7 +255,7 @@ pub fn encode_publish_batch_bytes_with_stats_keyed_from_bytes(
     Ok((buf.freeze(), EncodeStats { reallocs }))
 }
 
-// Decode a binary publish batch frame into its structured form.
+/// Decode a binary publish batch frame into its structured form.
 pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
     // The producer prefix only exists after an acked prefix, which this does
     // not parse. Reading on would take the producer id for the tenant length.
@@ -348,6 +323,35 @@ pub fn decode_publish_batch(frame: &Frame) -> Result<PublishBatch> {
         key,
         payloads,
     })
+}
+
+// Flags for a publish batch with or without a key.
+pub(super) fn publish_flags(key: Option<&[u8]>) -> u16 {
+    if key.is_some() {
+        FLAG_BINARY_PUBLISH_BATCH | FLAG_BINARY_PUBLISH_KEYED
+    } else {
+        FLAG_BINARY_PUBLISH_BATCH
+    }
+}
+
+// Bytes the key prefix adds to a payload, and a `FrameTooLarge` for a key that
+// cannot state its own length.
+fn key_prefix_len(key: Option<&[u8]>) -> Result<usize> {
+    match key {
+        None => Ok(0),
+        Some(key) => {
+            u16::try_from(key.len()).map_err(|_| Error::FrameTooLarge)?;
+            Ok(KEY_LEN_PREFIX + key.len())
+        }
+    }
+}
+
+fn put_key_prefix(buf: &mut BytesMut, key: Option<&[u8]>) {
+    if let Some(key) = key {
+        // Length already validated by `key_prefix_len`.
+        buf.put_u16(key.len() as u16);
+        buf.extend_from_slice(key);
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,9 @@
-// Wire-level error type shared by the framing and codec modules.
+//! Wire-level error type shared by the framing and codec modules.
 
+/// Result of a wire encode or decode.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Why a frame or message could not be encoded or decoded.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("invalid magic number")]

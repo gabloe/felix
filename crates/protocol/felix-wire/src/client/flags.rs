@@ -4,8 +4,12 @@
 //! know rather than masking it off, and a sender only sets a bit the peer
 //! advertised during `Auth`.
 
+/// The payload is a binary publish batch rather than JSON.
 pub const FLAG_BINARY_PUBLISH_BATCH: u16 = 0x0001;
+/// The payload is a binary event batch for one subscription.
 pub const FLAG_BINARY_EVENT_BATCH: u16 = 0x0002;
+/// The payload is a binary event batch encoded once for every subscriber of
+/// a stream, so it names no subscription.
 pub const FLAG_BINARY_EVENT_BATCH_SHARED: u16 = 0x0004;
 /// Modifier on `FLAG_BINARY_PUBLISH_BATCH`: the payload is prefixed with a
 /// `request_id` and an ack mode, and the broker owes the client an ack frame.

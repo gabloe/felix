@@ -6,29 +6,6 @@ use bytes::Bytes;
 use super::{ErrorCode, ShardRef};
 use crate::error::{Error, Result};
 
-/// How the origin publisher asked for its write to be acknowledged.
-///
-/// Carried across the forward so the owner applies the guarantee the client
-/// asked for, not the one the forwarding broker would have chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum AckMode {
-    None = 0,
-    OnAccept = 1,
-    OnCommit = 2,
-}
-
-impl AckMode {
-    pub fn from_u8(value: u8) -> Result<Self> {
-        match value {
-            0 => Ok(AckMode::None),
-            1 => Ok(AckMode::OnAccept),
-            2 => Ok(AckMode::OnCommit),
-            other => Err(Error::UnknownInternalAckMode(other)),
-        }
-    }
-}
-
 /// A publish handed to the broker that owns the shard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardPublish {
@@ -50,6 +27,30 @@ pub struct ForwardPublish {
     ///
     /// [`Kind::AuthorizedForwardPublish`]: super::Kind::AuthorizedForwardPublish
     pub credential: String,
+}
+
+/// How the origin publisher asked for its write to be acknowledged.
+///
+/// Carried across the forward so the owner applies the guarantee the client
+/// asked for, not the one the forwarding broker would have chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum AckMode {
+    None = 0,
+    OnAccept = 1,
+    OnCommit = 2,
+}
+
+impl AckMode {
+    /// Parse the wire value; an unknown one is an error.
+    pub fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(AckMode::None),
+            1 => Ok(AckMode::OnAccept),
+            2 => Ok(AckMode::OnCommit),
+            other => Err(Error::UnknownInternalAckMode(other)),
+        }
+    }
 }
 
 /// The owner accepted and wrote the batch.
@@ -87,35 +88,6 @@ pub struct NotLeader {
     pub generation: u64,
 }
 
-/// Which cache operation a forwarded request carries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum CacheOpKind {
-    Put = 1,
-    Get = 2,
-    Delete = 3,
-    /// Apply a signed delta to a counter in the shard's counter store. The
-    /// delta rides the `value` bytes as eight big-endian bytes; the answer's
-    /// value bytes carry the resulting sum the same way.
-    CounterAdd = 4,
-    /// Read a counter's sum. Answered like a `Get`: absent value for a
-    /// counter never written.
-    CounterGet = 5,
-}
-
-impl CacheOpKind {
-    pub fn from_u8(value: u8) -> Result<Self> {
-        match value {
-            1 => Ok(CacheOpKind::Put),
-            2 => Ok(CacheOpKind::Get),
-            3 => Ok(CacheOpKind::Delete),
-            4 => Ok(CacheOpKind::CounterAdd),
-            5 => Ok(CacheOpKind::CounterGet),
-            other => Err(Error::UnknownInternalCacheOp(other)),
-        }
-    }
-}
-
 /// A cache operation handed to the broker that owns the key's shard.
 ///
 /// One message for all three operations rather than three kinds: they share a
@@ -137,6 +109,36 @@ pub struct ForwardCacheOp {
     ///
     /// [`Kind::AuthorizedForwardCacheOp`]: super::Kind::AuthorizedForwardCacheOp
     pub credential: String,
+}
+
+/// Which cache operation a forwarded request carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CacheOpKind {
+    Put = 1,
+    Get = 2,
+    Delete = 3,
+    /// Apply a signed delta to a counter in the shard's counter store. The
+    /// delta rides the `value` bytes as eight big-endian bytes; the answer's
+    /// value bytes carry the resulting sum the same way.
+    CounterAdd = 4,
+    /// Read a counter's sum. Answered like a `Get`: absent value for a
+    /// counter never written.
+    CounterGet = 5,
+}
+
+impl CacheOpKind {
+    /// Parse the wire value; an unknown one is an error.
+    pub fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            1 => Ok(CacheOpKind::Put),
+            2 => Ok(CacheOpKind::Get),
+            3 => Ok(CacheOpKind::Delete),
+            4 => Ok(CacheOpKind::CounterAdd),
+            5 => Ok(CacheOpKind::CounterGet),
+            other => Err(Error::UnknownInternalCacheOp(other)),
+        }
+    }
 }
 
 /// The owner applied the operation.

@@ -27,26 +27,32 @@ pub const INTERNAL_VERSION: u16 = 1;
 /// a peer-provided number.
 pub const MAX_BODY_BYTES: u32 = 64 * 1024 * 1024;
 
-/// The frame envelope, decoded without resolving the kind.
-///
-/// [`InternalHeader::decode`] refuses a kind it does not know, which is right
-/// for deciding how to read a body and wrong for deciding whether to keep the
-/// stream. This says only what the frozen header says: the framing is ours, the
-/// version is one we speak, and the body is this many bytes — enough to step
-/// over a frame this build cannot interpret and answer for it.
+/// Fixed-size header preceding every internal body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FrameEnvelope {
-    /// The raw discriminant, whether or not [`Kind`] knows it.
-    pub kind: u16,
+pub struct InternalHeader {
+    pub kind: Kind,
     pub length: u32,
 }
 
-impl FrameEnvelope {
+impl InternalHeader {
+    /// Encoded length in bytes.
+    pub const LEN: usize = 12;
+
+    /// Append the header to `buf`.
+    pub fn encode(&self, buf: &mut BytesMut) {
+        buf.put_u32(INTERNAL_MAGIC);
+        buf.put_u16(INTERNAL_VERSION);
+        buf.put_u16(self.kind as u16);
+        buf.put_u32(self.length);
+    }
+
+    /// Parse a header, refusing an unknown kind or a body over
+    /// [`MAX_BODY_BYTES`].
     pub fn decode(buf: &Bytes) -> Result<Self> {
-        if buf.len() < InternalHeader::LEN {
+        if buf.len() < Self::LEN {
             return Err(Error::Incomplete);
         }
-        let mut head = buf.slice(0..InternalHeader::LEN);
+        let mut head = buf.slice(0..Self::LEN);
         if head.get_u32() != INTERNAL_MAGIC {
             return Err(Error::InvalidMagic);
         }
@@ -54,23 +60,13 @@ impl FrameEnvelope {
         if version != INTERNAL_VERSION {
             return Err(Error::UnsupportedVersion(version));
         }
-        Ok(Self {
-            kind: head.get_u16(),
-            length: head.get_u32(),
-        })
+        let kind = Kind::from_u16(head.get_u16())?;
+        let length = head.get_u32();
+        if length > MAX_BODY_BYTES {
+            return Err(Error::FrameTooLarge);
+        }
+        Ok(Self { kind, length })
     }
-}
-
-/// Every body begins with its correlation id, and nothing may be added before
-/// it.
-///
-/// That is what lets a responder answer a frame whose *kind* it does not know:
-/// without the correlation id the refusal could not be matched to the request,
-/// and the only remaining option would be to drop the connection.
-/// `every_body_begins_with_its_correlation_id` holds every kind to it.
-pub fn correlation_id_in(body: &[u8]) -> Option<u64> {
-    body.get(..8)
-        .map(|head| u64::from_be_bytes(head.try_into().expect("eight bytes")))
 }
 
 /// Message discriminant.
@@ -148,28 +144,27 @@ impl Kind {
     }
 }
 
-/// Fixed-size header preceding every internal body.
+/// The frame envelope, decoded without resolving the kind.
+///
+/// [`InternalHeader::decode`] refuses a kind it does not know, which is right
+/// for deciding how to read a body and wrong for deciding whether to keep the
+/// stream. This says only what the frozen header says: the framing is ours, the
+/// version is one we speak, and the body is this many bytes — enough to step
+/// over a frame this build cannot interpret and answer for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InternalHeader {
-    pub kind: Kind,
+pub struct FrameEnvelope {
+    /// The raw discriminant, whether or not [`Kind`] knows it.
+    pub kind: u16,
     pub length: u32,
 }
 
-impl InternalHeader {
-    pub const LEN: usize = 12;
-
-    pub fn encode(&self, buf: &mut BytesMut) {
-        buf.put_u32(INTERNAL_MAGIC);
-        buf.put_u16(INTERNAL_VERSION);
-        buf.put_u16(self.kind as u16);
-        buf.put_u32(self.length);
-    }
-
+impl FrameEnvelope {
+    /// Read the envelope, checking only the magic and version.
     pub fn decode(buf: &Bytes) -> Result<Self> {
-        if buf.len() < Self::LEN {
+        if buf.len() < InternalHeader::LEN {
             return Err(Error::Incomplete);
         }
-        let mut head = buf.slice(0..Self::LEN);
+        let mut head = buf.slice(0..InternalHeader::LEN);
         if head.get_u32() != INTERNAL_MAGIC {
             return Err(Error::InvalidMagic);
         }
@@ -177,11 +172,21 @@ impl InternalHeader {
         if version != INTERNAL_VERSION {
             return Err(Error::UnsupportedVersion(version));
         }
-        let kind = Kind::from_u16(head.get_u16())?;
-        let length = head.get_u32();
-        if length > MAX_BODY_BYTES {
-            return Err(Error::FrameTooLarge);
-        }
-        Ok(Self { kind, length })
+        Ok(Self {
+            kind: head.get_u16(),
+            length: head.get_u32(),
+        })
     }
+}
+
+/// Every body begins with its correlation id, and nothing may be added before
+/// it.
+///
+/// That is what lets a responder answer a frame whose *kind* it does not know:
+/// without the correlation id the refusal could not be matched to the request,
+/// and the only remaining option would be to drop the connection.
+/// `every_body_begins_with_its_correlation_id` holds every kind to it.
+pub fn correlation_id_in(body: &[u8]) -> Option<u64> {
+    body.get(..8)
+        .map(|head| u64::from_be_bytes(head.try_into().expect("eight bytes")))
 }

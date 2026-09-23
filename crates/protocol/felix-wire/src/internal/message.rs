@@ -6,20 +6,6 @@ use super::{
     ReplicateOk, ReplicateRebuild, ReplicateRecords,
 };
 
-/// Which shard a forwarded request is for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShardRef {
-    pub tenant_id: String,
-    pub namespace: String,
-    pub stream: String,
-    pub shard: u32,
-    /// The assignment generation the requester resolved against.
-    ///
-    /// The owner compares this with its own. Equal proceeds; either mismatch is
-    /// an explicit typed answer, and never a successful ownership claim.
-    pub generation: u64,
-}
-
 /// A decoded internal message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InternalMessage {
@@ -70,6 +56,7 @@ pub enum InternalMessage {
 }
 
 impl InternalMessage {
+    /// The kind this message is sent as.
     pub fn kind(&self) -> Kind {
         match self {
             // The credential decides the kind, so a forwarder that has one
@@ -132,4 +119,18 @@ impl InternalMessage {
             Self::ReplicateRebuild(m) => m.correlation_id,
         }
     }
+}
+
+/// Which shard a forwarded request is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardRef {
+    pub tenant_id: String,
+    pub namespace: String,
+    pub stream: String,
+    pub shard: u32,
+    /// The assignment generation the requester resolved against.
+    ///
+    /// The owner compares this with its own. Equal proceeds; either mismatch is
+    /// an explicit typed answer, and never a successful ownership claim.
+    pub generation: u64,
 }

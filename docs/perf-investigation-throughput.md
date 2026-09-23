@@ -220,7 +220,7 @@ target is "user-space scheduling and synchronization."
 Recorded deliberately, because several are plausible enough to be re-proposed.
 
 1. **The redundant payload copy is not the bottleneck.** `decode_publish_batch`
-   does `bytes.to_vec()` per payload (`crates/protocol/felix-wire/src/client/binary/publish.rs:342`) and
+   does `bytes.to_vec()` per payload (`crates/protocol/felix-wire/src/client/binary/publish.rs:317`) and
    every caller immediately converts back with `Bytes::from(vec)`
    (`handlers/publish/uni.rs:82`, `control.rs:108`) — a genuine
    `Bytes`→`Vec`→`Bytes` round trip caused only by `PublishBatch.payloads` being
