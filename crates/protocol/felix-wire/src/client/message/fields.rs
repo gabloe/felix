@@ -3,23 +3,6 @@
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-/// One record handed to a consumer, with the offset it must acknowledge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupRecord {
-    pub offset: u64,
-    #[serde(with = "crate::client::message::base64_serde::base64_bytes_bytes")]
-    pub payload: Bytes,
-    /// How many times this record has been handed out, this delivery included.
-    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
-    /// can treat a retry differently.
-    ///
-    /// `0` means the broker did not report it — absent rather than first, since
-    /// claiming a first attempt for an unknown one would have a consumer skip
-    /// exactly the retry handling it wanted.
-    #[serde(default)]
-    pub attempts: u32,
-}
-
 /// Somewhere a client may connect, as one broker understands the cluster.
 ///
 /// Carries only what a client needs in order to connect: an identity to
@@ -33,15 +16,13 @@ pub struct BrokerEndpoint {
     pub addr: String,
 }
 
-/// Why a subscribe could not start at the requested position.
+/// How a publish asks to be acknowledged. `None` asks for no answer at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CursorErrorReason {
-    /// The offset has been discarded by retention, or has fallen out of an
-    /// in-memory stream's replay ring.
-    TooOld,
-    /// The offset is past the end of the stream.
-    InFuture,
+pub enum AckMode {
+    None,
+    PerMessage,
+    PerBatch,
 }
 
 /// Why a `publish_idempotent` was not appended.
@@ -82,8 +63,9 @@ pub enum PublishRefusalReason {
 
 /// Where a subscription should begin.
 ///
-/// Untagged on the wire so `"latest"` and `{"offset": 42}` are both accepted,
-/// and so the common cases stay short in a JSON control message.
+/// Serde's default tagging spells these `"latest"`, `"earliest"` and
+/// `{"offset": 42}`, which keeps the common cases short in a JSON control
+/// message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartPosition {
@@ -102,10 +84,30 @@ pub enum StartPosition {
     Offset(u64),
 }
 
+/// Why a subscribe could not start at the requested position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum AckMode {
-    None,
-    PerMessage,
-    PerBatch,
+pub enum CursorErrorReason {
+    /// The offset has been discarded by retention, or has fallen out of an
+    /// in-memory stream's replay ring.
+    TooOld,
+    /// The offset is past the end of the stream.
+    InFuture,
+}
+
+/// One record handed to a consumer, with the offset it must acknowledge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupRecord {
+    pub offset: u64,
+    #[serde(with = "crate::client::message::base64_serde::base64_bytes_bytes")]
+    pub payload: Bytes,
+    /// How many times this record has been handed out, this delivery included.
+    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
+    /// can treat a retry differently.
+    ///
+    /// `0` means the broker did not report it — absent rather than first, since
+    /// claiming a first attempt for an unknown one would have a consumer skip
+    /// exactly the retry handling it wanted.
+    #[serde(default)]
+    pub attempts: u32,
 }

@@ -1,4 +1,8 @@
 //! V1 protocol message enum and its JSON codec.
+//!
+//! A field added to a variant must be optional and default to the behaviour
+//! that existed before it, so an old peer and a new one still exchange
+//! byte-identical frames.
 
 mod base64_serde;
 mod fields;
@@ -14,6 +18,9 @@ use crate::client::frame::Frame;
 use crate::error::{Error, Result};
 
 /// V1 wire messages encoded in framed payloads.
+///
+/// Internally tagged by `type`, so the order of the variants is not part of the
+/// wire format; they are grouped by what they are for.
 ///
 /// ```
 /// use felix_wire::Message;
@@ -35,7 +42,8 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
-    // Authenticate a control stream for a specific tenant.
+    // Session: authenticate a stream, and the generic answers.
+    /// Authenticate a control stream for a specific tenant.
     Auth {
         tenant_id: String,
         token: String,
@@ -60,10 +68,10 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_features: Option<u32>,
     },
-    // Successful auth, carrying the broker's supported frame-flag bits.
-    //
-    // Only ever sent in response to an `Auth` that offered `client_flags`, so a
-    // client old enough not to understand this variant can never receive it.
+    /// Successful auth, carrying the broker's supported frame-flag bits.
+    ///
+    /// Only ever sent in response to an `Auth` that offered `client_flags`, so a
+    /// client old enough not to understand this variant can never receive it.
     AuthOk {
         server_flags: u16,
         /// Optional protocol features this broker implements, as a bitset of
@@ -100,6 +108,12 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         listener_ports: Option<Vec<u16>>,
     },
+    /// Generic success response.
+    Ok,
+    /// Protocol-level error for invalid requests or unexpected message types.
+    Error { message: String },
+
+    // Topology and routing: who owns what, and how a stream or cache is sharded.
     /// This broker does not own the shard; the owner is named here.
     ///
     /// Only ever sent to a client that offered `FEATURE_REDIRECT`.
@@ -121,9 +135,7 @@ pub enum Message {
     /// Only ever sent to a broker that advertised `FEATURE_TOPOLOGY`.
     Topology,
     /// The brokers this one knows of that a client may connect to.
-    TopologyView {
-        brokers: Vec<BrokerEndpoint>,
-    },
+    TopologyView { brokers: Vec<BrokerEndpoint> },
     /// Ask how many shards a stream was placed with.
     ///
     /// A subscription reads one shard, so consuming a whole stream means one
@@ -142,10 +154,7 @@ pub enum Message {
     /// The answer can be stale in exactly the way any routing answer can: a
     /// stream whose shard count changed is described by whichever snapshot this
     /// broker last received. `0` means the broker knows nothing of the stream.
-    StreamShardsView {
-        shards: u32,
-        request_id: u64,
-    },
+    StreamShardsView { shards: u32, request_id: u64 },
     /// Ask how many shards a cache was placed with.
     ///
     /// A prefix watch reads one shard, so covering a prefix of a multi-shard
@@ -159,11 +168,10 @@ pub enum Message {
     },
     /// How many shards that cache has, as this broker's routing snapshot sees
     /// it. `0` means the broker knows nothing of the cache.
-    CacheShardsView {
-        shards: u32,
-        request_id: u64,
-    },
-    // Publish a single payload to a stream.
+    CacheShardsView { shards: u32, request_id: u64 },
+
+    // Publishing, including idempotent producers.
+    /// Publish a single payload to a stream.
     Publish {
         tenant_id: String,
         namespace: String,
@@ -192,7 +200,7 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
-    // Publish a batch of payloads in a single request.
+    /// Publish a batch of payloads in a single request.
     PublishBatch {
         tenant_id: String,
         namespace: String,
@@ -215,7 +223,58 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         ack: Option<AckMode>,
     },
-    // Subscribe to a stream; server responds with Subscribed.
+    /// Publish ack with request id.
+    PublishOk { request_id: u64 },
+    /// Publish error with request id.
+    PublishError { request_id: u64, message: String },
+    /// Ask the broker for a producer id.
+    ///
+    /// Only ever sent to a broker that advertised `FEATURE_IDEMPOTENT_PRODUCER`.
+    /// The id is the broker's to assign, so two producers can never pick the
+    /// same one and have their sequences confused for each other's.
+    ProducerInit { request_id: u64 },
+    /// The producer id the broker assigned.
+    ProducerInitOk { request_id: u64, producer_id: u64 },
+    /// A batch the broker appends once, however many times it arrives.
+    ///
+    /// `sequence` counts this producer's batches on this shard from zero, one
+    /// per batch whatever its size. The broker appends a batch whose sequence
+    /// is the next it expects, answers a re-send of one it already holds with
+    /// `publish_ok` and no second append, and refuses anything else with
+    /// `publish_refused`. Only ever sent to a broker that advertised
+    /// `FEATURE_IDEMPOTENT_PRODUCER`, and always acknowledged: a producer that
+    /// never learns the answer cannot know what to send next.
+    PublishIdempotent {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        #[serde(with = "crate::client::message::base64_serde::base64_vec")]
+        payloads: Vec<Vec<u8>>,
+        /// Routes the batch like `PublishBatch.key`. The sequence is per
+        /// shard, so a producer keeps one counter per key's shard.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::client::message::base64_serde::base64_option_bytes"
+        )]
+        key: Option<Bytes>,
+        request_id: u64,
+        producer_id: u64,
+        sequence: u64,
+    },
+    /// A `publish_idempotent` the broker would not append, with a reason the
+    /// producer can act on rather than prose it would have to parse.
+    ///
+    /// Only ever sent to a client that offered `FEATURE_IDEMPOTENT_PRODUCER`,
+    /// which it did by sending `publish_idempotent` at all.
+    PublishRefused {
+        request_id: u64,
+        reason: PublishRefusalReason,
+        message: String,
+    },
+
+    // Subscribing, and the events a subscription delivers.
+    /// Subscribe to a stream; server responds with Subscribed.
     Subscribe {
         tenant_id: String,
         namespace: String,
@@ -243,7 +302,7 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shard: Option<u32>,
     },
-    // Subscription confirmation with server-assigned ID.
+    /// Subscription confirmation with server-assigned ID.
     Subscribed {
         subscription_id: u64,
         /// The first offset this subscription delivers. Sent only for a
@@ -257,11 +316,25 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         live_offset: Option<u64>,
     },
-    // First message on the event stream for a subscription.
-    EventStreamHello {
-        subscription_id: u64,
+    /// A subscribe could not start where it was asked to.
+    ///
+    /// Distinct from `Error` because the client must be able to *act* on it:
+    /// `too_old` means pick a newer offset (or `earliest`), `in_future` means
+    /// the log has not reached that offset yet. A generic string forces every
+    /// client to parse prose to tell those apart, and a client that guesses
+    /// wrong silently restarts at the tail -- the failure resume exists to
+    /// remove.
+    SubscribeCursorError {
+        reason: CursorErrorReason,
+        /// The offset that was asked for.
+        requested: u64,
+        /// For `too_old`, the oldest offset still retained. For `in_future`,
+        /// the current tail. Either way: the nearest offset that would work.
+        available: u64,
     },
-    // Single event delivered to a subscriber.
+    /// First message on the event stream for a subscription.
+    EventStreamHello { subscription_id: u64 },
+    /// Single event delivered to a subscriber.
     Event {
         tenant_id: String,
         namespace: String,
@@ -276,7 +349,7 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         offset: Option<u64>,
     },
-    // JSON event batch (binary batch uses FLAG_BINARY_EVENT_BATCH).
+    /// JSON event batch (binary batch uses FLAG_BINARY_EVENT_BATCH).
     EventBatch {
         tenant_id: String,
         namespace: String,
@@ -288,7 +361,9 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         base_offset: Option<u64>,
     },
-    // Cache set operation; may include TTL and request id.
+
+    // Cache reads, writes, and watches.
+    /// Cache set operation; may include TTL and request id.
     CachePut {
         tenant_id: String,
         namespace: String,
@@ -300,7 +375,7 @@ pub enum Message {
         request_id: Option<u64>,
         ttl_ms: Option<u64>,
     },
-    // Cache get operation; request id is echoed in responses.
+    /// Cache get operation; request id is echoed in responses.
     CacheGet {
         tenant_id: String,
         namespace: String,
@@ -309,108 +384,11 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
     },
-    // Take records for a consumer group, claimed until the visibility timeout.
-    //
-    // A poll rather than a subscription: a queue consumer takes work when it
-    // has capacity for it, and the broker cannot know that. Sent only to a
-    // broker that advertised `FEATURE_CONSUMER_GROUP`.
-    GroupPoll {
-        tenant_id: String,
-        namespace: String,
-        stream: String,
-        shard: u32,
-        group: String,
-        // Most records to take. The broker may return fewer, including none.
-        max_records: u32,
-        // How long the broker may hold the request open waiting for work,
-        // in milliseconds.
-        //
-        // Omitted or `0` answers immediately with whatever is available, which
-        // is what a broker that predates this does — so an older peer degrades
-        // to a plain poll rather than misreading the request. The broker caps
-        // it; a client cannot hold a stream open indefinitely.
-        #[serde(default)]
-        wait_ms: u64,
-        request_id: u64,
-    },
-    // Records claimed by a `GroupPoll`, in offset order.
-    //
-    // Empty means nothing was available, which is an answer rather than an
-    // error: the log has no unclaimed records for this group right now.
-    GroupRecords {
-        records: Vec<GroupRecord>,
-        request_id: u64,
-    },
-    // Finish one record. Everything below the group's cursor stays finished.
-    GroupAck {
-        tenant_id: String,
-        namespace: String,
-        stream: String,
-        shard: u32,
-        group: String,
-        offset: u64,
-        request_id: u64,
-    },
-    // Hand one record back without finishing it, to be redelivered at once
-    // rather than after the visibility timeout.
-    GroupNack {
-        tenant_id: String,
-        namespace: String,
-        stream: String,
-        shard: u32,
-        group: String,
-        offset: u64,
-        request_id: u64,
-    },
-    // Offsets this group gave up on. Answered with `GroupDeadLetterList`.
-    //
-    // Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`.
-    GroupDeadLetters {
-        tenant_id: String,
-        namespace: String,
-        stream: String,
-        shard: u32,
-        group: String,
-        request_id: u64,
-    },
-    // Offsets the group gave up on, lowest first.
-    //
-    // The records are still in the stream's log at these offsets: this is a
-    // list of what to look at, not a copy of it.
-    GroupDeadLetterList {
-        offsets: Vec<u64>,
-        request_id: u64,
-    },
-    // Drop one dead letter from the list, having decided the record is not
-    // worth reprocessing. Does not touch the record itself.
-    GroupDiscard {
-        tenant_id: String,
-        namespace: String,
-        stream: String,
-        shard: u32,
-        group: String,
-        offset: u64,
-        request_id: u64,
-    },
-    // Put one dead letter back in the queue, its attempt count reset.
-    //
-    // For when the reason it failed has been fixed. The group's cursor is not
-    // moved backwards — the record is owed again, which is a different thing:
-    // everything the group finished stays finished.
-    GroupRedrive {
-        tenant_id: String,
-        namespace: String,
-        stream: String,
-        shard: u32,
-        group: String,
-        offset: u64,
-        request_id: u64,
-    },
-    // Cache delete; answered with `CacheValue` carrying whatever was removed.
-    //
-    // Sent only to a broker that advertised `FEATURE_CACHE_DELETE`: an older one
-    // has no arm for this variant, and an unrecognised message type ends its
-    // control loop.
+    /// Cache delete; answered with `CacheValue` carrying whatever was removed.
+    ///
+    /// Sent only to a broker that advertised `FEATURE_CACHE_DELETE`: an older one
+    /// has no arm for this variant, and an unrecognised message type ends its
+    /// control loop.
     CacheDelete {
         tenant_id: String,
         namespace: String,
@@ -419,12 +397,25 @@ pub enum Message {
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
     },
-    // Watch a cache key or key prefix for changes; answered with
-    // `CacheWatchStarted` and a uni event stream carrying `CacheEvent`s.
-    //
-    // Sent only to a broker that advertised `FEATURE_CACHE_WATCH`: an older one
-    // has no arm for this variant, and an unrecognised message type ends its
-    // control loop.
+    /// Cache read response (value is optional for misses).
+    CacheValue {
+        tenant_id: String,
+        namespace: String,
+        cache: String,
+        key: String,
+        #[serde(with = "crate::client::message::base64_serde::base64_option_bytes")]
+        value: Option<Bytes>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        request_id: Option<u64>,
+    },
+    /// Cache write response with request id.
+    CacheOk { request_id: u64 },
+    /// Watch a cache key or key prefix for changes; answered with
+    /// `CacheWatchStarted` and a uni event stream carrying `CacheEvent`s.
+    ///
+    /// Sent only to a broker that advertised `FEATURE_CACHE_WATCH`: an older one
+    /// has no arm for this variant, and an unrecognised message type ends its
+    /// control loop.
     CacheWatch {
         tenant_id: String,
         namespace: String,
@@ -518,19 +509,21 @@ pub enum Message {
         /// The offset of the first change this watch missed.
         resume_from: u64,
     },
-    // Apply a signed delta to a counter; answered with `CounterValue` carrying
-    // the sum including this delta.
-    //
-    // Sent only to a broker that advertised `FEATURE_COUNTERS`: an older one
-    // has no arm for this variant, and an unrecognised message type ends its
-    // control loop.
-    //
-    // A counter is scoped exactly as a cache key is — the same registered
-    // cache scope, the same key-to-shard hash, the same owner — but lives in a
-    // store of its own: a counter and a cache value may share a key and are
-    // unrelated. **Delivery is at least once**: a retried add after a lost
-    // acknowledgement counts twice, and deltas carry no dedupe identity. See
-    // `docs/projections.md` for the decision.
+
+    // Counters.
+    /// Apply a signed delta to a counter; answered with `CounterValue` carrying
+    /// the sum including this delta.
+    ///
+    /// Sent only to a broker that advertised `FEATURE_COUNTERS`: an older one
+    /// has no arm for this variant, and an unrecognised message type ends its
+    /// control loop.
+    ///
+    /// A counter is scoped exactly as a cache key is — the same registered
+    /// cache scope, the same key-to-shard hash, the same owner — but lives in a
+    /// store of its own: a counter and a cache value may share a key and are
+    /// unrelated. **Delivery is at least once**: a retried add after a lost
+    /// acknowledgement counts twice, and deltas carry no dedupe identity. See
+    /// `docs/projections.md` for the decision.
     CounterAdd {
         tenant_id: String,
         namespace: String,
@@ -539,7 +532,7 @@ pub enum Message {
         delta: i64,
         request_id: u64,
     },
-    // Read a counter's current sum; answered with `CounterValue`.
+    /// Read a counter's current sum; answered with `CounterValue`.
     CounterGet {
         tenant_id: String,
         namespace: String,
@@ -555,101 +548,101 @@ pub enum Message {
         value: Option<i64>,
         request_id: u64,
     },
-    // Cache read response (value is optional for misses).
-    CacheValue {
-        tenant_id: String,
-        namespace: String,
-        cache: String,
-        key: String,
-        #[serde(with = "crate::client::message::base64_serde::base64_option_bytes")]
-        value: Option<Bytes>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        request_id: Option<u64>,
-    },
-    // Cache write response with request id.
-    CacheOk {
-        request_id: u64,
-    },
-    // Publish ack with request id.
-    PublishOk {
-        request_id: u64,
-    },
-    // Publish error with request id.
-    PublishError {
-        request_id: u64,
-        message: String,
-    },
-    /// Ask the broker for a producer id.
+
+    // Consumer groups and their dead letters.
+    /// Take records for a consumer group, claimed until the visibility timeout.
     ///
-    /// Only ever sent to a broker that advertised `FEATURE_IDEMPOTENT_PRODUCER`.
-    /// The id is the broker's to assign, so two producers can never pick the
-    /// same one and have their sequences confused for each other's.
-    ProducerInit {
-        request_id: u64,
-    },
-    /// The producer id the broker assigned.
-    ProducerInitOk {
-        request_id: u64,
-        producer_id: u64,
-    },
-    /// A batch the broker appends once, however many times it arrives.
-    ///
-    /// `sequence` counts this producer's batches on this shard from zero, one
-    /// per batch whatever its size. The broker appends a batch whose sequence
-    /// is the next it expects, answers a re-send of one it already holds with
-    /// `publish_ok` and no second append, and refuses anything else with
-    /// `publish_refused`. Only ever sent to a broker that advertised
-    /// `FEATURE_IDEMPOTENT_PRODUCER`, and always acknowledged: a producer that
-    /// never learns the answer cannot know what to send next.
-    PublishIdempotent {
+    /// A poll rather than a subscription: a queue consumer takes work when it
+    /// has capacity for it, and the broker cannot know that. Sent only to a
+    /// broker that advertised `FEATURE_CONSUMER_GROUP`.
+    GroupPoll {
         tenant_id: String,
         namespace: String,
         stream: String,
-        #[serde(with = "crate::client::message::base64_serde::base64_vec")]
-        payloads: Vec<Vec<u8>>,
-        /// Routes the batch like `PublishBatch.key`. The sequence is per
-        /// shard, so a producer keeps one counter per key's shard.
-        #[serde(
-            default,
-            skip_serializing_if = "Option::is_none",
-            with = "crate::client::message::base64_serde::base64_option_bytes"
-        )]
-        key: Option<Bytes>,
+        shard: u32,
+        group: String,
+        /// Most records to take. The broker may return fewer, including none.
+        max_records: u32,
+        /// How long the broker may hold the request open waiting for work,
+        /// in milliseconds.
+        ///
+        /// Omitted or `0` answers immediately with whatever is available, which
+        /// is what a broker that predates this does — so an older peer degrades
+        /// to a plain poll rather than misreading the request. The broker caps
+        /// it; a client cannot hold a stream open indefinitely.
+        #[serde(default)]
+        wait_ms: u64,
         request_id: u64,
-        producer_id: u64,
-        sequence: u64,
     },
-    /// A `publish_idempotent` the broker would not append, with a reason the
-    /// producer can act on rather than prose it would have to parse.
+    /// Records claimed by a `GroupPoll`, in offset order.
     ///
-    /// Only ever sent to a client that offered `FEATURE_IDEMPOTENT_PRODUCER`,
-    /// which it did by sending `publish_idempotent` at all.
-    PublishRefused {
+    /// Empty means nothing was available, which is an answer rather than an
+    /// error: the log has no unclaimed records for this group right now.
+    GroupRecords {
+        records: Vec<GroupRecord>,
         request_id: u64,
-        reason: PublishRefusalReason,
-        message: String,
     },
-    // Generic success response.
-    Ok,
-    // Protocol-level error for invalid requests or unexpected message types.
-    Error {
-        message: String,
+    /// Finish one record. Everything below the group's cursor stays finished.
+    GroupAck {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
     },
-    /// A subscribe could not start where it was asked to.
+    /// Hand one record back without finishing it, to be redelivered at once
+    /// rather than after the visibility timeout.
+    GroupNack {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
+    },
+    /// Offsets this group gave up on. Answered with `GroupDeadLetterList`.
     ///
-    /// Distinct from `Error` because the client must be able to *act* on it:
-    /// `too_old` means pick a newer offset (or `earliest`), `in_future` means
-    /// the log has not reached that offset yet. A generic string forces every
-    /// client to parse prose to tell those apart, and a client that guesses
-    /// wrong silently restarts at the tail -- the failure resume exists to
-    /// remove.
-    SubscribeCursorError {
-        reason: CursorErrorReason,
-        /// The offset that was asked for.
-        requested: u64,
-        /// For `too_old`, the oldest offset still retained. For `in_future`,
-        /// the current tail. Either way: the nearest offset that would work.
-        available: u64,
+    /// Sent only to a broker that advertised `FEATURE_GROUP_DEAD_LETTERS`.
+    GroupDeadLetters {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        request_id: u64,
+    },
+    /// Offsets the group gave up on, lowest first.
+    ///
+    /// The records are still in the stream's log at these offsets: this is a
+    /// list of what to look at, not a copy of it.
+    GroupDeadLetterList { offsets: Vec<u64>, request_id: u64 },
+    /// Drop one dead letter from the list, having decided the record is not
+    /// worth reprocessing. Does not touch the record itself.
+    GroupDiscard {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
+    },
+    /// Put one dead letter back in the queue, its attempt count reset.
+    ///
+    /// For when the reason it failed has been fixed. The group's cursor is not
+    /// moved backwards — the record is owed again, which is a different thing:
+    /// everything the group finished stays finished.
+    GroupRedrive {
+        tenant_id: String,
+        namespace: String,
+        stream: String,
+        shard: u32,
+        group: String,
+        offset: u64,
+        request_id: u64,
     },
 }
 
