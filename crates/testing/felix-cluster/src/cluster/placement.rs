@@ -4,6 +4,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use felix_controlplane_service::cluster::placement::{MovePolicy, ReconcileOutcome};
 
 use super::{Cluster, READY_TIMEOUT};
 use crate::node::spawn_broker;
@@ -16,17 +17,14 @@ impl Cluster {
     /// on a timer: a test that slept for one would be timing-dependent in
     /// exactly the way the acceptance criteria rule out. A failure test has to
     /// drive placement while it waits, or nothing re-plans after the fault.
-    pub async fn place_shards(&self) -> felix_controlplane_service::placement::ReconcileOutcome {
+    pub async fn place_shards(&self) -> ReconcileOutcome {
         self.control_plane().place_shards().await
     }
 
     /// Step placement once with up to `max_concurrent` shard moves in flight.
-    pub async fn place_shards_moving(
-        &self,
-        max_concurrent: usize,
-    ) -> felix_controlplane_service::placement::ReconcileOutcome {
+    pub async fn place_shards_moving(&self, max_concurrent: usize) -> ReconcileOutcome {
         self.control_plane()
-            .place_shards_with(felix_controlplane_service::placement::MovePolicy { max_concurrent })
+            .place_shards_with(MovePolicy { max_concurrent })
             .await
     }
 

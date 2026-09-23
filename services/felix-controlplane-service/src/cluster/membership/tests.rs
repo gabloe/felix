@@ -212,7 +212,7 @@ async fn the_census_counts_exactly_what_the_listing_returns() {
     assert_eq!(listed.len(), 2);
 
     // A census over the listing is the same operation the sweep performs.
-    crate::membership::metrics::publish_census(&listed);
+    crate::cluster::membership::metrics::publish_census(&listed);
 
     let live = listed
         .iter()

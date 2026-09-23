@@ -361,7 +361,7 @@ impl ControlPlaneConfig {
         let max_concurrent_shard_moves = std::env::var("FELIX_SHARD_MOVES_MAX_CONCURRENT")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(crate::placement::DEFAULT_MAX_CONCURRENT_MOVES);
+            .unwrap_or(crate::cluster::placement::DEFAULT_MAX_CONCURRENT_MOVES);
         let readiness_timeout_ms = parse_positive_env("FELIX_READINESS_TIMEOUT_MS")
             .unwrap_or(DEFAULT_READINESS_TIMEOUT_MS);
         let readiness_cache_ttl_ms = parse_positive_env("FELIX_READINESS_CACHE_TTL_MS")

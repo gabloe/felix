@@ -25,6 +25,10 @@
 //! `NodeCapacity::weight` is ignored: weighted rendezvous needs a logarithm,
 //! and floating point that must agree bit-for-bit across instances is a bad
 //! foundation for a decision that has to be identical everywhere.
+mod replica_positions;
+
+pub use replica_positions::ReplicaPositions;
+
 use std::collections::HashMap;
 
 use crate::model::{
@@ -1201,7 +1205,7 @@ pub async fn reconcile_once(
     // Read once, as of the store's clock: one instant for the whole pass, so a
     // report cannot be fresh for one shard and stale for the next within the
     // same plan, and the same clock the reports were stamped with.
-    let caught_up = match crate::replica_positions::ReplicaPositions::load(store, liveness).await {
+    let caught_up = match ReplicaPositions::load(store, liveness).await {
         Ok(positions) => positions,
         Err(err) => {
             tracing::error!(error = %err, "could not read replica reports to place shards");

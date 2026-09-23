@@ -111,7 +111,7 @@ impl ControlPlane {
 
         // Expiry has to run, or a stopped broker stays `live` forever and no
         // failure test can observe it leaving.
-        let expiry = felix_controlplane_service::membership::spawn_expiry_sweep(
+        let expiry = felix_controlplane_service::cluster::membership::spawn_expiry_sweep(
             Arc::clone(&store)
                 as Arc<dyn felix_controlplane_service::store::ControlPlaneStore + Send + Sync>,
             LIVENESS,
@@ -263,17 +263,21 @@ impl ControlPlane {
     /// by this harness's own liveness settings: the report TTL is derived from
     /// them, and the defaults would give a report a 20-second life against a
     /// cluster tuned to notice a dead broker in one.
-    pub async fn place_shards(&self) -> felix_controlplane_service::placement::ReconcileOutcome {
-        self.place_shards_with(felix_controlplane_service::placement::MovePolicy::default())
-            .await
+    pub async fn place_shards(
+        &self,
+    ) -> felix_controlplane_service::cluster::placement::ReconcileOutcome {
+        self.place_shards_with(
+            felix_controlplane_service::cluster::placement::MovePolicy::default(),
+        )
+        .await
     }
 
     /// Step placement once under an explicit move policy.
     pub async fn place_shards_with(
         &self,
-        policy: felix_controlplane_service::placement::MovePolicy,
-    ) -> felix_controlplane_service::placement::ReconcileOutcome {
-        felix_controlplane_service::placement::reconcile_once(
+        policy: felix_controlplane_service::cluster::placement::MovePolicy,
+    ) -> felix_controlplane_service::cluster::placement::ReconcileOutcome {
+        felix_controlplane_service::cluster::placement::reconcile_once(
             self.store.as_ref(),
             &LIVENESS,
             policy,

@@ -241,7 +241,7 @@ async fn an_abrupt_stop_is_detected_by_expiry() {
         .expect("get")
         .status
         .last_heartbeat_at_millis;
-    let expired = felix_controlplane_service::membership::expire_once(
+    let expired = felix_controlplane_service::cluster::membership::expire_once(
         cluster.store.as_ref(),
         &LIVENESS,
         registered_at + LIVENESS.expiry_timeout_ms + 1,
@@ -321,7 +321,7 @@ async fn heartbeats_keep_a_broker_live_past_its_expiry_window() {
     // survive every pass.
     for _ in 0..12 {
         tokio::time::sleep(Duration::from_millis(20)).await;
-        felix_controlplane_service::membership::expire_once(
+        felix_controlplane_service::cluster::membership::expire_once(
             cluster.store.as_ref(),
             &LIVENESS,
             felix_controlplane_service::clock::now_millis(),

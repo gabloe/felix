@@ -549,8 +549,8 @@ async fn reported_caught_up(
     key: &felix_controlplane_service::model::ShardKey,
     node_id: &str,
 ) -> bool {
-    use felix_controlplane_service::placement::CaughtUp;
-    felix_controlplane_service::replica_positions::ReplicaPositions::load(store, &LIVENESS)
+    use felix_controlplane_service::cluster::placement::CaughtUp;
+    felix_controlplane_service::cluster::placement::ReplicaPositions::load(store, &LIVENESS)
         .await
         .expect("load reports")
         .is_caught_up(key, node_id)

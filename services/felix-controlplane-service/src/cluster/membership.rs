@@ -40,13 +40,13 @@ pub async fn expire_once(
                     "broker missed its heartbeat window and was marked down",
                 );
             }
-            ::metrics::counter!(crate::membership::metrics::NODE_EXPIRY_TOTAL)
+            ::metrics::counter!(crate::cluster::membership::metrics::NODE_EXPIRY_TOTAL)
                 .increment(expired.len() as u64);
             // Published from the store, not from the delta above, so the gauge
             // is a statement about current state that cannot drift from what
             // the node listing returns.
             match store.list_nodes().await {
-                Ok(nodes) => crate::membership::metrics::publish_census(&nodes),
+                Ok(nodes) => crate::cluster::membership::metrics::publish_census(&nodes),
                 Err(err) => {
                     tracing::warn!(error = %err, "could not refresh the membership census")
                 }
@@ -57,7 +57,7 @@ pub async fn expire_once(
             // Logged and retried on the next tick. A transient database error
             // must not leave liveness frozen for the rest of the process's life.
             tracing::error!(error = %err, "node expiry sweep failed");
-            ::metrics::counter!(crate::membership::metrics::NODE_EXPIRY_FAILURES_TOTAL)
+            ::metrics::counter!(crate::cluster::membership::metrics::NODE_EXPIRY_FAILURES_TOTAL)
                 .increment(1);
             0
         }

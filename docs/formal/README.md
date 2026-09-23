@@ -112,7 +112,7 @@ test proving the check they remove is really there.
 Citations do not catch the change that actually drifted: #268 changed the
 protocol without renaming a cited test. So a pull request that touches the
 code this model describes — `services/felix-broker-service/src/{lease,replication,shard_lifecycle}`
-and `services/felix-controlplane-service/src/{placement,replica_positions}`, tests and
+and `services/felix-controlplane-service/src/cluster/placement`, tests and
 metrics aside — must also touch `docs/formal/`, or carry a line
 
 ```

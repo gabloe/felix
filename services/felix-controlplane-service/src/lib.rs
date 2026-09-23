@@ -51,9 +51,7 @@ pub mod tls;
 pub mod raft;
 pub mod store;
 
-pub mod membership;
-pub mod placement;
-pub mod replica_positions;
+pub mod cluster;
 
 pub mod clock;
 pub mod config;

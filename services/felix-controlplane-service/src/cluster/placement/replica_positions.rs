@@ -35,9 +35,9 @@
 //! [`ControlPlaneStore`]: crate::store::ControlPlaneStore
 use std::collections::HashMap;
 
+use crate::cluster::placement::CaughtUp;
 use crate::config::NodeLivenessConfig;
 use crate::model::{ReplicaReport, ShardKey};
-use crate::placement::CaughtUp;
 
 /// Believe a report for twice the expiry timeout plus one heartbeat.
 ///
@@ -58,7 +58,7 @@ use crate::placement::CaughtUp;
 ///
 /// So the asymmetry decides it: too short is a shard that never comes back,
 /// too long is a bounded and already-documented exposure.
-pub fn report_ttl_millis(liveness: &NodeLivenessConfig) -> u64 {
+pub(crate) fn report_ttl_millis(liveness: &NodeLivenessConfig) -> u64 {
     liveness.expiry_timeout_ms * 2 + liveness.heartbeat_interval_ms
 }
 

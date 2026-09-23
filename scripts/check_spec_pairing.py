@@ -38,8 +38,7 @@ MODELLED = (
     "services/felix-broker-service/src/lease",
     "services/felix-broker-service/src/replication",
     "services/felix-broker-service/src/shard_lifecycle",
-    "services/felix-controlplane-service/src/placement",
-    "services/felix-controlplane-service/src/replica_positions",
+    "services/felix-controlplane-service/src/cluster/placement",
 )
 SPEC = "docs/formal/"
 MARKER = re.compile(r"^\s*Spec-Unaffected:\s*\S", re.MULTILINE)
