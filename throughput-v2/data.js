@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790200575994,
+  "lastUpdate": 1790203885198,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14248,6 +14248,58 @@ window.BENCHMARK_DATA = {
             "range": "18322.93",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 754031.82\nmean: 760893.17\nstdev: 18322.93\ncv: 2.41%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "29feda772cf8085d73f83e7cc6c35d34cb4a8fc7",
+          "message": "feat(client): watch a cache prefix across every shard (#654)\n\n* feat(client): watch a cache prefix across every shard\n\nCloses #611. A prefix watch reads one shard and keys sharing a prefix hash\napart, so a prefix on a multi-shard cache needed one watch per shard, found\nand routed by hand, with no way to even learn the shard count.\n\nThe broker now answers `cache_shards` (FEATURE_CACHE_SHARDS), the cache\ncounterpart of `stream_shards`. `ClusterClient::watch_cache_sharded` asks it,\nopens one prefix watch per shard following each shard's redirect, and merges\nthem into a `ShardedCacheWatch`. Ordering is per key, since a key lives on one\nshard, and resumption is a vector of per-shard offsets.\n\nOn a retained watch the shards finish their state phases at different times,\ninterleaved with each other's live changes, so counting items can't say when\nthe state is complete. The merged watch emits `StateComplete` once every shard\nhas delivered its retained values, and never if one ended mid-state. A shard\nstill mid-state resumes from 0, since its retained values can carry any older\noffset.\n\n* docs: tighten the sharded cache watch docs",
+          "timestamp": "2026-09-23T15:48:52-07:00",
+          "tree_id": "bef2eb7dc4dbd5af6479ebddbe8ae2fad9c995ba",
+          "url": "https://github.com/gabloe/felix/commit/29feda772cf8085d73f83e7cc6c35d34cb4a8fc7"
+        },
+        "date": 1790203884747,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 384096.71,
+            "range": "9394.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 384096.71\nmean: 387714.67\nstdev: 9394.31\ncv: 2.42%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 384096.71,
+            "range": "9394.31",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 384096.71\nmean: 387714.67\nstdev: 9394.31\ncv: 2.42%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94162.62,
+            "range": "652.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94162.62\nmean: 93875.65\nstdev: 652.90\ncv: 0.70%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 941626.15,
+            "range": "6528.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 941626.15\nmean: 938756.53\nstdev: 6528.99\ncv: 0.70%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
