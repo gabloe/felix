@@ -21,7 +21,7 @@ Keep these in your head; everything below is these types moving data around.
 | `Publisher` / `PublisherInner` | `crates/sdk/felix-client/src/client/publisher.rs` | Client-side handle; owns a pool of `PublishWorker`s and a byte-budget `PublishAdmission` |
 | `PublishRequest` | same | Enum sent over an mpsc channel to a `PublishWorker`'s writer task — carries the encoded message *and* an admission permit |
 | `PublishJob` | `services/felix-broker-service/src/transport/quic/handlers/publish.rs` | Broker-side unit of work — a resolved `PublishTarget`, payloads, optional ack channel, optional admission permit |
-| `StreamHandle` | `crates/server/felix-broker/src/lib.rs` | A cheap `Arc<StreamState>` clone — the dense, pre-resolved identity of a stream. Resolving this once and reusing it is what removed string hashing from the hot path (see [below](#stream-resolution-why-a-handle-not-a-string)) |
+| `StreamHandle` | `crates/server/felix-broker/src/broker/shards.rs` | A cheap `Arc<StreamState>` clone — the dense, pre-resolved identity of a stream. Resolving this once and reusing it is what removed string hashing from the hot path (see [below](#stream-resolution-why-a-handle-not-a-string)) |
 | `StreamState` | same | The actual per-stream state: subscriber registry, in-memory replay log, queue policy |
 | `DeliveryEnvelope` | same | An `Arc`-wrapped batch of payloads handed to every subscriber of a stream — the same `Arc`, not a copy per subscriber |
 
@@ -128,7 +128,7 @@ state. One fixed pool, sharded by stream, avoids that.
    and read through an `RwLock<HashMap<..>>` to find the stream's state. A
    `StreamHandle` is just `Arc<StreamState>` with an `id()` — clone it, pass
    it around, and worker/shard selection becomes `handle.id() % worker_count`
-   instead of a string hash. See `crates/server/felix-broker/src/lib.rs:StreamHandle`.
+   instead of a string hash. See `crates/server/felix-broker/src/broker/shards.rs:StreamHandle`.
 
 2. **Admission.** Mirrors the client exactly: `enqueue_publish()` computes
    `job_bytes = payloads.iter().map(Bytes::len).sum()` and acquires from a
@@ -176,7 +176,7 @@ state. One fixed pool, sharded by stream, avoids that.
 
 ## Broker core: `Broker::publish_batch_to_handle`
 
-**File**: `crates/server/felix-broker/src/lib.rs`
+**File**: `crates/server/felix-broker/src/broker/publish.rs`
 
 This is where the message actually becomes visible to subscribers.
 
@@ -258,9 +258,9 @@ Publishing one message to a stream with 3 active subscribers, unacked,
 | Change how publishes are encoded (binary vs JSON, new wire format) | `crates/sdk/felix-client/src/client/publisher.rs` (`publish`/`publish_json`), `crates/protocol/felix-wire/src/client/` |
 | Change client-side publish backpressure | `PublishAdmission` in `publisher.rs`; `publish_queue_depth`/`publish_inflight_bytes` in `crates/sdk/felix-client/src/config.rs` |
 | Change broker ingest admission/shedding behavior | `EnqueuePolicy` in `handlers/publish/ack.rs` and `enqueue_publish()` in `handlers/publish/ingress.rs` |
-| Change stream resolution/caching | `resolve_stream_cached`, `StreamHandleCache` in `publish.rs`; `StreamHandle` in `crates/server/felix-broker/src/broker.rs` and `resolve_stream_handle` in `crates/server/felix-broker/src/registry.rs` |
-| Change fanout/queue policy for subscribers | `SubQueuePolicy` match in `Broker::publish_batch_to_handle`, `crates/server/felix-broker/src/lib.rs` |
-| Change the in-memory replay log | `StreamState::append_batch`/`snapshot_range`, `crates/server/felix-broker/src/lib.rs` |
+| Change stream resolution/caching | `resolve_stream_cached`, `StreamHandleCache` in `publish.rs`; `StreamHandle` and `resolve_stream_handle` in `crates/server/felix-broker/src/broker/shards.rs` |
+| Change fanout/queue policy for subscribers | `SubQueuePolicy` match in `Broker::complete_publish`, `crates/server/felix-broker/src/broker/publish.rs` |
+| Change the in-memory replay log | `StreamState::append_batch_at`, `crates/server/felix-broker/src/stream/state.rs` |
 | Add a new publish worker sharding strategy | `PublishSharding` in `crates/sdk/felix-client/src/client/sharding.rs`; `publish_worker_index` in `publish/ingress.rs` |
 
 Next: [Internals: Subscribe & Fanout](/felix/development/internals-subscribe/) picks up where

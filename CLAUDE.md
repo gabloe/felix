@@ -59,13 +59,13 @@ A publish crosses four components in a fixed order, and the order is the design:
 1. **`services/felix-broker-service/src/transport/quic/`** decodes the frame. `handlers/publish.rs` and
    `handlers/subscribe.rs` own the per-message work; `streams/control.rs` is the control-stream
    loop that owns auth state and dispatches every `Message` variant.
-2. **`crates/server/felix-broker/src/broker.rs`** takes offsets from storage *before* waiting on
-   durability (`begin_append` → `commit`), so the batch claims its place in the stream's order
-   the instant its offsets are consumed. `commit_order.rs` (`CommitSequencer`) then makes
+2. **`crates/server/felix-broker/src/broker/publish.rs`** takes offsets from storage *before*
+   waiting on durability (`begin_append` → `commit`), so the batch claims its place in the
+   stream's order the instant its offsets are consumed. `felix-storage`'s `CommitSequencer` then makes
    later publishes wait behind earlier ones regardless of whether those succeed, fail, or are
    cancelled.
 3. **`crates/server/felix-storage/src/disk_log/`** persists it. See below.
-4. **Fanout** happens after durability, via `delivery.rs`. One `DeliveryEnvelope` is shared by
+4. **Fanout** happens after durability, via `stream/delivery.rs`. One `DeliveryEnvelope` is shared by
    every subscriber and caches its encoded frame, so a publish is encoded once regardless of
    fanout — with a second cached encoding when some subscribers negotiated event offsets and
    others did not.

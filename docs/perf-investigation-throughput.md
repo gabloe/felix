@@ -234,7 +234,7 @@ Recorded deliberately, because several are plausible enough to be re-proposed.
    It reuses correctly.
 3. **Replay-ring retention is not the cause.** `latency_demo.rs:679` sizes the
    ring to the whole run (`warmup + total + 1`) instead of the production
-   default of 1024 (`crates/server/felix-broker/src/config.rs:4`), and RSS climbs
+   default of 1024 (`DEFAULT_LOG_CAPACITY` in `crates/server/felix-broker/src/broker.rs`), and RSS climbs
    13 → 410 MB during a run without plateauing. A/B against a 1024-entry ring:
    **0.92× / 1.01× / 1.02×** at totals 8,000 / 20,000 / 40,000. Not causal.
 4. **`net.inet.udp.maxdgram` does not cap this path.** It is 9216, below Felix's
@@ -471,7 +471,7 @@ not necessarily the ideal width for a standalone broker.
 ### The 64 KiB egress granularity is real but is not the cost
 
 Static analysis (correctly) identified that `event_batch_max_bytes` defaults to
-64 KiB (`crates/server/felix-broker/src/config.rs:115`), that
+64 KiB (`services/felix-broker-service/src/config.rs`), that
 `handlers/subscribe/feeder.rs` splits a 256 KiB envelope into four separately
 encoded 64 KiB lane frames, and that `_lane_flush_hints` in `feeder.rs:24-29` is
 a dead binding — `flush_max_items`, `flush_max_delay` and `max_bytes_per_write`

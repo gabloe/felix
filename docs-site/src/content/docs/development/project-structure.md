@@ -55,29 +55,30 @@ crates/
 - Connection lifecycle management
 
 **Key modules**:
-- `broker.rs`: The `Broker` aggregate, construction, and the publish/subscribe data path
-- `registry.rs`: Tenant / namespace / stream / cache registries
-- `stream_state.rs`: Per-stream subscriber registry, publish snapshot, and replay log
-- `subscription.rs`: Subscriber-facing receive handles and the unregister guard
-- `delivery.rs`: Shared delivery batches and subscriber queue-depth accounting
-- `commit_order.rs`: `CommitSequencer`, which holds a publish behind the ones that took their offsets before it
+- `broker.rs`: The `Broker` struct, its construction and accessors. What it does is split under `broker/`:
+  - `registry.rs`: Tenant / namespace / stream / cache registries
+  - `shards.rs`: Resolving a stream shard to its state, and `StreamHandle`
+  - `publish.rs`: The publish path — claim offsets, wait for durability, append, fan out
+  - `subscribe.rs`: Live subscriptions, resuming from a position, and paging history off disk
+  - `shard_logs.rs`: `LogKind` and the hooks replication calls
+  - `metadata.rs` / `keys.rs`: Stream and cache metadata; map keys plus their borrowed lookup twins
+- `stream/`: One shard in memory — `state.rs` (subscriber registry, publish snapshot, replay ring), `delivery.rs` (shared delivery batches, queue-depth accounting, `SubQueuePolicy`), `subscription.rs` (receive handles and the unregister guard), `producers.rs` (idempotent producer sequences)
+- `cache/watch.rs`: Cache-watch fanout over a cache shard's write order
+- `queue/`: Consumer groups — `reader.rs` joins the stream's log, the cursor and the tracker into poll / ack / nack; `cursors.rs` is a group's durable cursor; `tracker.rs` holds in-flight claims, the visibility timeout and attempt counts; `dead_letters.rs` records offsets a group gave up on, as pointers into the stream's log rather than copies
 - `durable.rs`: The `DurableStorage` / `StreamLog` seam between the broker and a shard's log
-- `replication.rs`: Leader-side shipping and follower-side acceptance of committed records
-- `consumer_groups.rs`: A group's durable cursor, a key → latest-value projection over its own log
-- `group_delivery.rs`: `GroupTracker` — in-flight claims, the visibility timeout, attempt counts, and the contiguous-run advance
-- `group_reader.rs`: Joins the stream's log, the cursor and the tracker into poll / ack / nack
-- `dead_letters.rs`: Offsets a group gave up on, stored as pointers into the stream's log rather than copies
-- `keys.rs`: Map keys plus their borrowed lookup twins
-- `config.rs` / `error.rs` / `telemetry.rs`: Capacity defaults and queue policy, `BrokerError`, cfg-gated metrics shims
+- `replication.rs`: Follower-side acceptance of records a leader shipped
+- `error.rs` / `telemetry.rs` / `timings.rs`: `BrokerError`, cfg-gated metrics shims, sampled publish timings
 
-Everything public is re-exported from `lib.rs`, so downstream code addresses these
-types as `felix_broker::<Name>` regardless of which module defines them.
+`CommitSequencer`, which holds a publish behind the ones that took their offsets
+before it, lives in `felix-storage`.
+
+Apart from the `replication` and `timings` modules, everything public is
+re-exported from `lib.rs`, so downstream code addresses these types as
+`felix_broker::<Name>`.
 
 **Dependencies**:
 - `felix-wire`: Protocol framing
-- `felix-transport`: QUIC abstraction
 - `felix-storage`: Data persistence
-- `felix-common`: Shared types
 
 #### felix-wire
 
@@ -199,28 +200,23 @@ publisher
 
 #### felix-common
 
-**Purpose**: Shared types and utilities used across crates.
+**Purpose**: What two crates that do not depend on each other must agree on exactly.
 
 **Contents**:
-- `types.rs`: Common type definitions
-- `error.rs`: Error types
-- `ids.rs`: ID types (TenantId, StreamId, etc.)
-- `config.rs`: Configuration types
-- `time.rs`: Time utilities
+- `membership.rs`: The broker-to-control-plane membership shapes
+- `env_registry.rs`: Every `FELIX_*` variable the workspace reads
+- `lifecycle.rs`: Termination signals, readiness gating and bounded drain (feature `lifecycle`)
+- `ids.rs` / `error.rs`: `RegionId` and its parse error
 
 **Principle**: Minimal dependencies, stable API.
 
 #### felix-router
 
-**Purpose**: Region-aware routing and locality policies.
+**Purpose**: Which node serves a shard, and whether traffic may reach it.
 
-**Responsibilities**:
-- Region topology
-- Locality-based routing
-- Cross-region bridge configuration
-- Request routing logic
-
-**Future**: Control plane integration for dynamic routing.
+**Contents**:
+- `shard.rs` with `shard/table.rs` and `shard/router.rs`: The routing table the control plane's assignments are built into, and `ShardRouter`, which resolves a shard against it
+- `region.rs`: `RegionRouter`, the cross-region bridge allowlist
 
 #### felix-authz
 

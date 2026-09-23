@@ -103,13 +103,13 @@ Three outcomes, and no fourth:
   nobody. There is deliberately no "not sure, handle it locally": a broker that
   treats an unknown route as its own is a broker writing a shard it does not own.
 
-> `crates/server/felix-router/src/shard.rs`, `services/felix-broker-service/src/shard_routing.rs`.
+> `crates/server/felix-router/src/shard/router.rs`, `services/felix-broker-service/src/shard_routing.rs`.
 
 ### 4. Offsets are taken before durability is waited on
 
 This is the ordering most likely to be "fixed" into a bug.
 
-`crates/server/felix-broker/src/broker.rs` calls `begin_append` and *then* `commit`.
+`crates/server/felix-broker/src/broker/publish.rs` calls `begin_append` and *then* `commit`.
 The batch claims its place in the stream's order the instant its offsets are
 consumed, before anyone waits on the disk. `commit_order.rs` then makes later
 publishes wait behind earlier ones — **whether those succeed, fail, or are
@@ -156,7 +156,7 @@ downstream would report it as one.
 
 ### 7. Fanout happens after durability
 
-`crates/server/felix-broker/src/delivery.rs`. One `DeliveryEnvelope` is shared by every
+`crates/server/felix-broker/src/stream/delivery.rs`. One `DeliveryEnvelope` is shared by every
 subscriber and caches its encoded frame, so a publish is encoded once regardless
 of fanout.
 

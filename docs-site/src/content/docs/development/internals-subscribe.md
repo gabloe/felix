@@ -12,7 +12,7 @@ place.
 
 | Type | Where | What it is |
 |---|---|---|
-| `SubscriptionReceiver` | `crates/server/felix-broker/src/lib.rs` | The broker-core side of a subscriber's channel; yields `DeliveryEnvelope`s |
+| `SubscriptionReceiver` | `crates/server/felix-broker/src/stream/subscription.rs` | The broker-core side of a subscriber's channel; yields `DeliveryEnvelope`s |
 | `WriterLaneManager` | `services/felix-broker-service/src/transport/quic/handlers/subscribe/lane.rs` | Owns a fixed set of writer lanes and the per-connection writer tasks they feed |
 | `LaneCommand` | same | `Register` / `Delivery` / `Unregister`, sent from a subscription's feeder to its assigned lane |
 | `ConnectionCommand` | same | Same three variants, one hop further — sent from a lane to the connection that owns the subscriber's QUIC stream |
@@ -104,7 +104,7 @@ async fn run_lane_feeder(
 }
 ```
 
-`shared_event_frame()` (on `DeliveryEnvelope`, `crates/server/felix-broker/src/lib.rs`)
+`shared_event_frame()` (on `DeliveryEnvelope`, `crates/server/felix-broker/src/stream/delivery.rs`)
 is a lazily-populated cache: the *first* subscriber's feeder to call it pays
 the real encode cost (`felix_wire::binary::encode_shared_event_batch_bytes`)
 and stores the result in `Mutex<Option<Bytes>>` inside the envelope; every

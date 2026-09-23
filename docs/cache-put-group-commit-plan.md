@@ -42,7 +42,7 @@ one append in flight to batch.
 
 ### Why the stream path does not have this
 
-`crates/server/felix-broker/src/broker.rs` (publish path) splits the write in two and
+`crates/server/felix-broker/src/broker/publish.rs` (publish path) splits the write in two and
 lets many run concurrently:
 
 1. `durable.begin_append(payloads)` → `PendingAppend` — claims disk offsets under
@@ -55,7 +55,7 @@ lets many run concurrently:
 4. `turn.wait()` — blocks until every lower offset has been applied.
 5. Apply to the in-memory replay ring + fanout, **in disk-offset order**.
 
-The `CommitSequencer` (`crates/server/felix-broker/src/commit_order.rs`) is the crux:
+The `CommitSequencer` (`crates/server/felix-storage/src/commit_order.rs`) is the crux:
 commits complete out of order, but step 4/5 re-serialise the *observable* effects
 into disk order, so "what the log says" and "what readers/subscribers see" never
 disagree — even though the expensive fsyncs ran in parallel.

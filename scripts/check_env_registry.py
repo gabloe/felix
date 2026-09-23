@@ -50,6 +50,7 @@ def read_by_code() -> set[str]:
             "--",
             "*.rs",
             ":!*_tests.rs",
+            ":!*/tests.rs",
             ":!*/tests/*",
         ],
         cwd=REPO,

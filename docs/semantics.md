@@ -288,7 +288,7 @@ nothing. See `docs/cache-on-log.md` and `docs/protocol.md`.
 > `a_key_watch_sees_its_key_and_no_others`,
 > `a_resumed_watch_is_gapless_under_concurrent_writes` and
 > `a_watch_from_a_compacted_offset_resnapshots`;
-> `crates/server/felix-broker/src/cache_watch_tests.rs::overflow_ends_the_watch_and_names_the_first_missed_offset`.
+> `crates/server/felix-broker/src/cache/watch/tests.rs::overflow_ends_the_watch_and_names_the_first_missed_offset`.
 
 **A watch can start from current state** (#349). A `retained` watch delivers
 each matching key's current value first — at the offset of the write that

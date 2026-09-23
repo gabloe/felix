@@ -54,7 +54,7 @@ trait-bound error at a distant call site — which is the pressure that produces
   config-derived, not request-derived, and `Wait` is handled in an earlier branch.
 - `handlers/subscribe/writer.rs` — `frames.pop().expect("single frame")` is guarded by an
   enclosing `frames.len() == 1`.
-- `felix-broker/src/stream_state.rs` — `next_seq.checked_add(1).expect("log sequence overflow")`
+- `felix-broker/src/stream/state.rs` — `next_seq.checked_add(1).expect("log sequence overflow")`
   requires 2^64 publishes to a single stream.
 - `felix-wire` — `encode_slice(..).expect("base64 encode slice")` writes into a buffer
   resized to exactly `base64_len(payload.len())?`, and that helper returns `Err` on

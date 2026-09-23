@@ -288,7 +288,7 @@ tenant -> namespace -> cache -> key
 ```
 
 The broker keeps local registries for these objects in
-`crates/server/felix-broker/src/broker.rs::Broker`. A stream does not become valid merely
+`crates/server/felix-broker/src/broker/registry.rs`. A stream does not become valid merely
 because a client names it; it must exist in the broker's synchronized metadata.
 
 The running service obtains metadata from the control plane through
@@ -579,7 +579,7 @@ worker `i` runs on shard runtime `i`.
 ### 9.10 Broker core append and fanout
 
 The worker calls
-`crates/server/felix-broker/src/broker.rs::Broker::publish_batch_to_handle`.
+`crates/server/felix-broker/src/broker/publish.rs::Broker::publish_batch_to_handle`.
 
 That function:
 
@@ -962,7 +962,7 @@ The broker exposes:
 Hot-path timing code is feature-gated. The relevant modules are:
 
 - `services/felix-broker-service/src/timings.rs`
-- `services/felix-broker-service/src/timings_telemetry.rs`
+- `services/felix-broker-service/src/timings/telemetry.rs`
 - `crates/server/felix-broker/src/timings.rs`
 - `crates/sdk/felix-client/src/timings.rs`
 - `services/felix-broker-service/src/transport/quic/telemetry.rs`
@@ -1129,10 +1129,10 @@ Read in this order and follow each symbol with editor "go to definition":
    - `resolve_stream_cached` (`publish.rs`)
    - `enqueue_publish` (`ingress.rs`)
 9. `crates/server/felix-broker/src/`
-   - `StreamState` (`stream_state.rs`)
-   - `DeliveryEnvelope` (`delivery.rs`)
-   - `Broker::publish_batch_to_handle` (`broker.rs`)
-   - `Broker::subscribe` (`broker.rs`)
+   - `StreamState` (`stream/state.rs`)
+   - `DeliveryEnvelope` (`stream/delivery.rs`)
+   - `Broker::publish_batch_to_handle` (`broker/publish.rs`)
+   - `Broker::subscribe` (`broker/subscribe.rs`)
 10. `services/felix-broker-service/src/transport/quic/handlers/subscribe/`
     - `handle_subscribe_message` (`subscribe.rs`)
     - `run_lane_feeder` (`feeder.rs`)
