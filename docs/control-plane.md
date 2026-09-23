@@ -218,8 +218,9 @@ not a backdoor into tenant data.
 
 #### Authorizing membership writes
 
-Registration, heartbeat, drain, and deregistration all require `node.manage`
-over the node being changed:
+Registration, heartbeat, drain, deregistration and `PATCH /v1/nodes/{id}` all
+require `node.manage` over the node being changed (`DELETE /v1/nodes/{id}`
+requires it on `cluster:*`, so a broker cannot remove its own record):
 
 | Object | Who holds it | Can change |
 | --- | --- | --- |

@@ -135,13 +135,20 @@ signing keys to verify against.
 
 `POST /v1/nodes/{node_id}/drain` marks a broker as leaving: it keeps serving,
 and placement moves every shard it leads to brokers that are staying, one
-handoff at a time. `GET /v1/shard-assignments?leader={node_id}` is empty when
-it is done, and `DELETE /v1/nodes/{node_id}` is refused until then. A shard
-being moved shows its destination as `successor` and, once the leader has
-been told to stop, `"state": "draining"`. See
+handoff at a time. A shard being moved shows its destination as `successor`
+and, once the leader has been told to stop, `"state": "draining"`.
+
+`PATCH /v1/nodes/{node_id}` changes `region`, `labels` or `capacity`, and moves
+`lifecycle` between `live` and `draining` — `{"lifecycle": "live"}` cancels a
+drain. Nothing observed is patchable: a `down` or `left` broker is revived only
+by registering, so a patch cannot claim a silent broker is alive.
+
+`DELETE /v1/nodes/{node_id}` removes a broker's record. It needs `node.manage`
+on `cluster:*`, and is refused (409) while the broker is `live` or `draining`
+or while any shard names it as leader or replica. See
 [Adding, draining and removing brokers](/felix/deployment/scaling/).
 
-The registration, heartbeat, drain, and deregister endpoints require
+The registration, heartbeat, drain, deregister and patch endpoints require
 `node.manage` over the node being changed. A broker's credential is scoped to
 `node:{its own id}`, so it cannot act for another broker; an operator holding
 `cluster:*` can manage the whole fleet. Registration authorises the identity in
