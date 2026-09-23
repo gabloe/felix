@@ -30,21 +30,8 @@ pub struct Session {
     pub nodes: Vec<SessionNode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionNode {
-    pub node_id: String,
-    pub client_addr: SocketAddr,
-    pub metrics_addr: SocketAddr,
-}
-
-/// Where `up` leaves the file and the other commands look for it.
-///
-/// A fixed path, so a second window needs nothing copied into it.
-pub fn default_path() -> PathBuf {
-    std::env::temp_dir().join("felix-cluster.json")
-}
-
 impl Session {
+    /// Write the session to `path`, readable by its owner only.
     pub fn write(&self, path: &Path) -> Result<()> {
         let body = serde_json::to_vec_pretty(self).context("encode session")?;
         std::fs::write(path, body).with_context(|| format!("write {}", path.display()))?;
@@ -52,6 +39,7 @@ impl Session {
         Ok(())
     }
 
+    /// Read a session written by [`Session::write`].
     pub fn read(path: &Path) -> Result<Self> {
         let body = std::fs::read(path).with_context(|| {
             format!(
@@ -62,6 +50,7 @@ impl Session {
         serde_json::from_slice(&body).context("decode session")
     }
 
+    /// The broker named `node_id`, if the session lists one.
     pub fn node(&self, node_id: &str) -> Option<&SessionNode> {
         self.nodes.iter().find(|node| node.node_id == node_id)
     }
@@ -82,6 +71,21 @@ impl Session {
             _ => {}
         }
     }
+}
+
+/// One broker in a [`Session`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionNode {
+    pub node_id: String,
+    pub client_addr: SocketAddr,
+    pub metrics_addr: SocketAddr,
+}
+
+/// Where `up` leaves the file and the other commands look for it.
+///
+/// A fixed path, so a second window needs nothing copied into it.
+pub fn default_path() -> PathBuf {
+    std::env::temp_dir().join("felix-cluster.json")
 }
 
 /// A session already on disk whose cluster is still answering.
@@ -121,5 +125,4 @@ fn restrict(_path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-#[path = "session_tests.rs"]
 mod tests;

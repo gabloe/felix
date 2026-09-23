@@ -15,6 +15,13 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 
 /// Connect to a broker's client-facing port as `tenant_id`.
+pub async fn connect(addr: SocketAddr, tenant_id: &str, token: &str) -> Result<Client> {
+    let config = client_config(tenant_id, token)?;
+    Client::connect(addr, "localhost", config)
+        .await
+        .with_context(|| format!("connect to broker at {addr}"))
+}
+
 /// Connect to whichever of `addrs` answers, the way an application with a seed
 /// list would.
 ///
@@ -42,13 +49,6 @@ pub async fn connect_cluster(
     felix_client::ClusterClient::connect(addrs, "localhost", config)
         .await
         .with_context(|| format!("connect a cluster client to any of {addrs:?}"))
-}
-
-pub async fn connect(addr: SocketAddr, tenant_id: &str, token: &str) -> Result<Client> {
-    let config = client_config(tenant_id, token)?;
-    Client::connect(addr, "localhost", config)
-        .await
-        .with_context(|| format!("connect to broker at {addr}"))
 }
 
 fn client_config(tenant_id: &str, token: &str) -> Result<ClientConfig> {

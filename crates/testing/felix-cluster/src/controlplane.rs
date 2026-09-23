@@ -279,6 +279,7 @@ impl ControlPlane {
         .await
     }
 
+    /// Stop serving and cut every connection brokers hold to it.
     pub async fn shutdown(self) {
         self.shutdown.cancel();
         // Aborted, not drained. A graceful shutdown keeps serving the keep-alive

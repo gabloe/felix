@@ -41,42 +41,6 @@ pub enum Outcome {
     Skipped(&'static str),
 }
 
-/// Context for a failure message.
-async fn diagnose(cluster: &Cluster, stream: &str, ingress: &str) -> String {
-    let key = format!("{}/{}/{}/0", cluster.tenant_id, cluster.namespace, stream);
-    match cluster.shard_assignments().await {
-        Ok(map) => match map.get(&key) {
-            Some(assignment) => format!(
-                "ingress={ingress} owner={} shard={key} generation={}",
-                assignment.leader, assignment.generation
-            ),
-            None => format!("ingress={ingress} shard={key} (unassigned)"),
-        },
-        Err(err) => format!("ingress={ingress} shard={key} (assignments unreadable: {err})"),
-    }
-}
-
-/// Resolve which broker to publish through, or say why the scenario cannot run.
-async fn ingress_node(
-    cluster: &Cluster,
-    stream: &str,
-    ingress: Ingress,
-) -> Result<Result<(String, String), Outcome>> {
-    let owner = cluster.owner(stream).await?;
-    match ingress {
-        Ingress::Owner => Ok(Ok((owner.clone(), owner))),
-        Ingress::NonOwner => match cluster.owner_and_non_owner(stream).await {
-            Ok((owner, non_owner)) => Ok(Ok((non_owner, owner))),
-            // A single-node deployment has an owner and nobody else. Skipped
-            // rather than run against the owner, which would assert nothing
-            // while looking like coverage.
-            Err(_) => Ok(Err(Outcome::Skipped(
-                "no non-owner exists on a single-node deployment",
-            ))),
-        },
-    }
-}
-
 /// A published record reaches a subscriber, whichever broker it was published
 /// through.
 ///
@@ -313,6 +277,42 @@ pub async fn unauthorized_publish_is_refused(
             diagnose(cluster, stream, &via).await
         ),
         Err(_) => Ok(Outcome::Passed),
+    }
+}
+
+/// Context for a failure message.
+async fn diagnose(cluster: &Cluster, stream: &str, ingress: &str) -> String {
+    let key = format!("{}/{}/{}/0", cluster.tenant_id, cluster.namespace, stream);
+    match cluster.shard_assignments().await {
+        Ok(map) => match map.get(&key) {
+            Some(assignment) => format!(
+                "ingress={ingress} owner={} shard={key} generation={}",
+                assignment.leader, assignment.generation
+            ),
+            None => format!("ingress={ingress} shard={key} (unassigned)"),
+        },
+        Err(err) => format!("ingress={ingress} shard={key} (assignments unreadable: {err})"),
+    }
+}
+
+/// Resolve which broker to publish through, or say why the scenario cannot run.
+async fn ingress_node(
+    cluster: &Cluster,
+    stream: &str,
+    ingress: Ingress,
+) -> Result<Result<(String, String), Outcome>> {
+    let owner = cluster.owner(stream).await?;
+    match ingress {
+        Ingress::Owner => Ok(Ok((owner.clone(), owner))),
+        Ingress::NonOwner => match cluster.owner_and_non_owner(stream).await {
+            Ok((owner, non_owner)) => Ok(Ok((non_owner, owner))),
+            // A single-node deployment has an owner and nobody else. Skipped
+            // rather than run against the owner, which would assert nothing
+            // while looking like coverage.
+            Err(_) => Ok(Err(Outcome::Skipped(
+                "no non-owner exists on a single-node deployment",
+            ))),
+        },
     }
 }
 
