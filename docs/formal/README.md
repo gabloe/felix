@@ -109,6 +109,22 @@ A configuration that deliberately models something the code does *not* do says
 `Evidence: none` and why — the counterexample configurations instead cite the
 test proving the check they remove is really there.
 
+Citations do not catch the change that actually drifted: #268 changed the
+protocol without renaming a cited test. So a pull request that touches the
+code this model describes — `services/broker/src/{lease,replication,shard_lifecycle}`
+and `services/controlplane/src/{placement,replica_positions}`, tests and
+metrics aside — must also touch `docs/formal/`, or carry a line
+
+```
+Spec-Unaffected: <why>
+```
+
+in a commit message or the PR description. `scripts/check_spec_pairing.py`
+enforces it in CI (`task tla:pairing BASE=origin/main` locally). It is blunt on
+purpose: most edits to those files are not protocol changes, and the marker is
+how you say so. What it buys is that nobody changes the protocol without being
+asked whether the model still describes it.
+
 **What this does not do.** A cited test can keep its name while its assertions
 change, and the spec can model a behaviour wrongly while every citation
 resolves. This makes drift harder to introduce silently; it does not detect it.
