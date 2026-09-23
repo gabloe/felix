@@ -230,6 +230,7 @@ version = "0.6.0-preview"
 dependencies = [
  "ahash",
  "anyhow",
+ "base64",
  "bytes",
  "felix-transport",
  "felix-wire",
@@ -237,6 +238,7 @@ dependencies = [
  "metrics",
  "quinn",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
  "thiserror",
  "tokio",
