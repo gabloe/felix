@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790192216144,
+  "lastUpdate": 1790195081335,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -13884,6 +13884,58 @@ window.BENCHMARK_DATA = {
             "range": "17532.11",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1153137.42\nmean: 1153224.90\nstdev: 17532.11\ncv: 1.52%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1b6a265d7c2a4e2809f47c716c984bdddfc12ecc",
+          "message": "feat: a cache can declare Quorum consistency (#648)\n\nCloses #614. A cache's shards were already replicated, and the replication\ndriver already published quorum marks for them, but a cache had no field to\nask for more than Leader, so every write was acknowledged the moment the\nleader had it.\n\nA cache now carries `consistency` (Leader by default) through the control\nplane (model, create API, the three stores, migration 0013) to the broker,\nwhich registers it on the cache's metadata. A put or delete on a Quorum\ncache is acknowledged only once the shard's quorum mark passes the log tail\nread after the write, on both the client's own path and a forwarded one.\nThe tail is at or past the write, so reaching it covers the write.\n\nCounter updates are not covered: the counter log feeds no quorum mark, so\nthey stay leader-acknowledged, and the docs say so.",
+          "timestamp": "2026-09-23T13:22:03-07:00",
+          "tree_id": "4bc8326e77d6fc801e148eccdcb2e32a9b971515",
+          "url": "https://github.com/gabloe/felix/commit/1b6a265d7c2a4e2809f47c716c984bdddfc12ecc"
+        },
+        "date": 1790195080086,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 393586.58,
+            "range": "17907.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 393586.58\nmean: 387941.73\nstdev: 17907.11\ncv: 4.62%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 393586.58,
+            "range": "17907.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 393586.58\nmean: 387941.73\nstdev: 17907.11\ncv: 4.62%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94085.96,
+            "range": "1313.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94085.96\nmean: 94069.68\nstdev: 1313.40\ncv: 1.40%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 940859.57,
+            "range": "13133.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 940859.57\nmean: 940696.84\nstdev: 13133.99\ncv: 1.40%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
