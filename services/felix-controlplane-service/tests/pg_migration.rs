@@ -15,9 +15,12 @@ use felix_controlplane_service::model::{
     StreamKind, Tenant,
 };
 use felix_controlplane_service::raft::{AppStateMachine, NodeId, RaftHandle, RaftSettings};
-use felix_controlplane_service::store::command::{MetaCommand, decode_result, encode_command};
-use felix_controlplane_service::store::memory::{InMemoryStore, export_state_from};
-use felix_controlplane_service::store::state_machine::MetadataStateMachine;
+use felix_controlplane_service::store::export::export_state_from;
+use felix_controlplane_service::store::memory::InMemoryStore;
+use felix_controlplane_service::store::raft::command::{
+    MetaCommand, decode_result, encode_command,
+};
+use felix_controlplane_service::store::raft::state_machine::MetadataStateMachine;
 use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig,
 };
@@ -344,7 +347,7 @@ async fn the_cli_exports_a_snapshot_the_import_side_accepts() {
     );
 
     let bytes = std::fs::read(&out_file).expect("read export");
-    let state: felix_controlplane_service::store::memory::ExportedState =
+    let state: felix_controlplane_service::store::export::ExportedState =
         serde_json::from_slice(&bytes).expect("the file parses as an exported state");
     assert!(state.summary().contains("1 streams"), "{}", state.summary());
 }

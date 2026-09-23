@@ -178,7 +178,7 @@ pub enum MetaCommand {
     ImportState {
         // Boxed: this one variant is as big as the whole store, and every
         // command would otherwise pay its size.
-        state: Box<crate::store::memory::ExportedState>,
+        state: Box<crate::store::export::ExportedState>,
         overwrite: bool,
     },
     /// Refresh-token writes.

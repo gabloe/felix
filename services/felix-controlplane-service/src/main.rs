@@ -11,8 +11,8 @@ use felix_controlplane_service::api::{AppState, build_bootstrap_router, build_ro
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
 use felix_controlplane_service::cluster::{membership, placement};
 use felix_controlplane_service::raft::{LeadershipGate, RaftHandle, RaftSettings};
-use felix_controlplane_service::store::raft_backend::RaftStore;
-use felix_controlplane_service::store::state_machine::MetadataStateMachine;
+use felix_controlplane_service::store::raft::RaftStore;
+use felix_controlplane_service::store::raft::state_machine::MetadataStateMachine;
 use felix_controlplane_service::{config, observability, store};
 use std::future::{Future, IntoFuture};
 use std::sync::Arc;

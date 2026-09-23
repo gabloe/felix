@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use felix_controlplane_service::auth::felix_token::{SigningKey, TenantSigningKeys};
 use felix_controlplane_service::model::Tenant;
 use felix_controlplane_service::raft::{AppStateMachine, NodeId, RaftHandle, RaftSettings};
-use felix_controlplane_service::store::command::{
+use felix_controlplane_service::store::memory::InMemoryStore;
+use felix_controlplane_service::store::raft::command::{
     MetaCommand, MetaError, MetaResponse, decode_result, encode_command,
 };
-use felix_controlplane_service::store::memory::InMemoryStore;
-use felix_controlplane_service::store::state_machine::MetadataStateMachine;
+use felix_controlplane_service::store::raft::state_machine::MetadataStateMachine;
 use felix_controlplane_service::store::{StoreConfig, TenantAuthSeed};
 
 struct TestNode {

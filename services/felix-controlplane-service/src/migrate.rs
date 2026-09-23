@@ -12,7 +12,7 @@
 //! beyond quorum loss is a fresh group plus `import --overwrite`.
 use anyhow::{Context, Result, bail};
 
-use crate::store::command::{MetaCommand, MetaResult, decode_result, encode_command};
+use crate::store::raft::command::{MetaCommand, MetaResult, decode_result, encode_command};
 
 pub async fn run(args: Vec<String>) -> Result<()> {
     match args.first().map(String::as_str) {
@@ -65,7 +65,7 @@ async fn export_postgres(out: &str) -> Result<()> {
     .await
     .context("connect to the source database")?;
 
-    let state = crate::store::memory::export_state_from(&store)
+    let state = crate::store::export::export_state_from(&store)
         .await
         .map_err(|err| anyhow::anyhow!("{err}"))
         .context("export state")?;
@@ -86,7 +86,7 @@ async fn export_postgres(out: &str) -> Result<()> {
 /// this at the wrong cluster is an error message, not a catastrophe.
 async fn import(file: &str, target: &str, overwrite: bool) -> Result<()> {
     let bytes = std::fs::read(file).with_context(|| format!("read {file}"))?;
-    let state: crate::store::memory::ExportedState =
+    let state: crate::store::export::ExportedState =
         serde_json::from_slice(&bytes).context("parse exported state")?;
     let summary = state.summary();
 

@@ -19,11 +19,11 @@ use crate::model::{
     Cache, ConsistencyLevel, DeliveryGuarantee, Namespace, NamespaceKey, Node, NodeCapacity,
     NodeLifecycle, NodeSpec, NodeStatus, RetentionPolicy, Stream, StreamKey, StreamKind, Tenant,
 };
-use crate::store::command::{
+use crate::store::memory::InMemoryStore;
+use crate::store::raft::command::{
     COMMAND_VERSION, MetaCommand, MetaError, MetaResponse, decode_command, decode_result,
     encode_command,
 };
-use crate::store::memory::InMemoryStore;
 use crate::store::{ControlPlaneStore, StoreConfig};
 
 fn machine() -> MetadataStateMachine {
@@ -396,7 +396,7 @@ async fn an_import_replaces_everything_and_respects_the_guard() {
     // Postgres: through the traits, sequence heads carried, windows empty.
     let source = machine();
     run_script(&source).await;
-    let exported = crate::store::memory::export_state_from(
+    let exported = crate::store::export::export_state_from(
         source.store().as_ref() as &(dyn crate::store::ControlPlaneAuthStore + Send + Sync)
     )
     .await
@@ -515,7 +515,7 @@ async fn a_retried_proposal_is_answered_from_the_first_apply() {
     let create = encode_command(&MetaCommand::CreateTenant {
         tenant: tenant("acme"),
     });
-    let proposal = crate::store::command::stamp_request_id(&create, "rid-1").expect("stamps");
+    let proposal = crate::store::raft::command::stamp_request_id(&create, "rid-1").expect("stamps");
 
     let first = machine.apply(&proposal).await;
     assert!(
@@ -558,14 +558,14 @@ async fn an_unstamped_retry_still_conflicts() {
 #[tokio::test]
 async fn different_request_ids_are_applied_separately() {
     let machine = machine();
-    let first = crate::store::command::stamp_request_id(
+    let first = crate::store::raft::command::stamp_request_id(
         &encode_command(&MetaCommand::CreateTenant {
             tenant: tenant("acme"),
         }),
         "rid-1",
     )
     .expect("stamps");
-    let second = crate::store::command::stamp_request_id(
+    let second = crate::store::raft::command::stamp_request_id(
         &encode_command(&MetaCommand::CreateTenant {
             tenant: tenant("acme"),
         }),
@@ -592,7 +592,7 @@ async fn different_request_ids_are_applied_separately() {
 #[tokio::test]
 async fn applied_ids_survive_a_snapshot_restore() {
     let original = machine();
-    let proposal = crate::store::command::stamp_request_id(
+    let proposal = crate::store::raft::command::stamp_request_id(
         &encode_command(&MetaCommand::CreateTenant {
             tenant: tenant("acme"),
         }),

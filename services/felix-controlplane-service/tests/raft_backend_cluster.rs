@@ -19,8 +19,8 @@ use felix_controlplane_service::raft::{
     AppStateMachine, LeadershipGate, NodeId, RaftHandle, RaftSettings,
 };
 use felix_controlplane_service::store::memory::InMemoryStore;
-use felix_controlplane_service::store::raft_backend::RaftStore;
-use felix_controlplane_service::store::state_machine::MetadataStateMachine;
+use felix_controlplane_service::store::raft::RaftStore;
+use felix_controlplane_service::store::raft::state_machine::MetadataStateMachine;
 use felix_controlplane_service::store::{ControlPlaneStore, StoreConfig};
 
 struct TestNode {

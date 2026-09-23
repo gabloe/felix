@@ -312,9 +312,11 @@ impl RaftHandle {
         //
         // Stamped here rather than per attempt, and never restamped: a fresh
         // id on each retry is indistinguishable from a fresh command.
-        let command =
-            crate::store::command::stamp_request_id(&command, &uuid::Uuid::new_v4().to_string())
-                .unwrap_or(command);
+        let command = crate::store::raft::command::stamp_request_id(
+            &command,
+            &uuid::Uuid::new_v4().to_string(),
+        )
+        .unwrap_or(command);
 
         let mut last_refusal = None;
         loop {

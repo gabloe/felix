@@ -31,8 +31,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use felix_controlplane_service::store::command::{MetaCommand, decode_result, encode_command};
-use felix_controlplane_service::store::memory::{InMemoryStore, export_state_from};
+use felix_controlplane_service::store::export::export_state_from;
+use felix_controlplane_service::store::memory::InMemoryStore;
+use felix_controlplane_service::store::raft::command::{
+    MetaCommand, decode_result, encode_command,
+};
 use felix_controlplane_service::store::{AuthStore, ControlPlaneStore, StoreConfig};
 
 fn http(

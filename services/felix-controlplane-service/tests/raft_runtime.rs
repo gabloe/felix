@@ -6,8 +6,9 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use felix_controlplane_service::store::command::{MetaCommand, encode_command};
-use felix_controlplane_service::store::memory::{InMemoryStore, export_state_from};
+use felix_controlplane_service::store::export::export_state_from;
+use felix_controlplane_service::store::memory::InMemoryStore;
+use felix_controlplane_service::store::raft::command::{MetaCommand, encode_command};
 use felix_controlplane_service::store::{AuthStore, ControlPlaneStore, StoreConfig};
 
 fn http(

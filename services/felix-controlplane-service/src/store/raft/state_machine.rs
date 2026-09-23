@@ -21,8 +21,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::raft::AppStateMachine;
-use crate::store::command::{MetaCommand, MetaResponse, MetaResult, decode_command, encode_result};
 use crate::store::memory::InMemoryStore;
+use crate::store::raft::command::{
+    MetaCommand, MetaResponse, MetaResult, decode_command, encode_result,
+};
 use crate::store::{AuthStore, ControlPlaneStore};
 
 /// How many applied request ids to remember.
@@ -79,7 +81,7 @@ impl AppliedIds {
 /// store's.
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
-    state: crate::store::memory::ExportedState,
+    state: crate::store::export::ExportedState,
     #[serde(default)]
     applied: AppliedIds,
 }
@@ -312,7 +314,7 @@ impl MetadataStateMachine {
                 // this would silently invalidate; only an operator saying
                 // `overwrite` — the restore ceremony — may replace it.
                 if !overwrite && !store.is_unused().await {
-                    return Err(crate::store::command::MetaError::Conflict(
+                    return Err(crate::store::raft::command::MetaError::Conflict(
                         "store already holds state; import requires overwrite".to_string(),
                     ));
                 }
@@ -336,7 +338,7 @@ impl AppStateMachine for MetadataStateMachine {
         //
         // Read before dispatching, because dispatching is the thing that must
         // not happen twice.
-        let rid = crate::store::command::request_id_of(command);
+        let rid = crate::store::raft::command::request_id_of(command);
         if let Some(rid) = rid.as_deref()
             && let Some(response) = self.applied.read().await.get(rid)
         {
@@ -387,7 +389,7 @@ impl AppStateMachine for MetadataStateMachine {
     }
 
     fn restamp(&self, command: &[u8], now_millis: u64) -> Option<Vec<u8>> {
-        crate::store::command::restamp(command, now_millis)
+        crate::store::raft::command::restamp(command, now_millis)
     }
 }
 

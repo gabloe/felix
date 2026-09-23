@@ -30,6 +30,7 @@
 //! # Metrics
 //! This store updates a small set of gauges/counters to keep observability behavior consistent with
 //! durable backends.
+use super::export::{EXPORTED_STATE_VERSION, ExportedLog, ExportedState};
 use super::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreError, StoreResult,
 };
@@ -1571,14 +1572,6 @@ impl AuthStore for InMemoryStore {
     }
 }
 
-/// One change stream, exported: position and retained window, but not
-/// capacity — that is configuration, and every instance applies its own.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExportedLog<T> {
-    next_seq: u64,
-    items: Vec<T>,
-}
-
 impl<T> ExportedLog<T> {
     fn from_log(log: &ChangeLog<T>) -> Self
     where
@@ -1598,57 +1591,6 @@ impl<T> ExportedLog<T> {
         }
     }
 }
-
-/// The whole store as one serializable value — the Raft state machine's
-/// snapshot format.
-///
-/// Every map is exported as a **sorted** vector: two replicas that applied
-/// the same command log must serialize byte-identical state, and HashMap
-/// iteration order is the one thing in this store that would differ between
-/// them. Change logs come with their sequence positions, so a restored
-/// store keeps answering `changes(since)` exactly as the original —
-/// including the resnapshot signals a stale `since` triggers.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ExportedState {
-    v: u16,
-    tenants: Vec<(String, Tenant)>,
-    namespaces: Vec<(NamespaceKey, Namespace)>,
-    streams: Vec<(StreamKey, Stream)>,
-    caches: Vec<(CacheKey, Cache)>,
-    nodes: Vec<(String, Node)>,
-    node_changes: ExportedLog<NodeChange>,
-    shards: Vec<(ShardKey, ShardAssignment)>,
-    shard_changes: ExportedLog<ShardAssignmentChange>,
-    tenant_changes: ExportedLog<TenantChange>,
-    namespace_changes: ExportedLog<NamespaceChange>,
-    stream_changes: ExportedLog<StreamChange>,
-    cache_changes: ExportedLog<CacheChange>,
-    idp_issuers: Vec<(String, Vec<IdpIssuerConfig>)>,
-    tenant_signing_keys: Vec<(String, TenantSigningKeys)>,
-    rbac_policies: Vec<(String, Vec<PolicyRule>)>,
-    rbac_groupings: Vec<(String, Vec<GroupingRule>)>,
-    auth_bootstrapped: Vec<(String, bool)>,
-}
-
-impl ExportedState {
-    /// What the operator is about to move, for the tool's own output —
-    /// the cheap sanity check before and after a cutover.
-    pub fn summary(&self) -> String {
-        format!(
-            "{} tenants, {} namespaces, {} streams, {} caches, {} nodes, {} shard assignments",
-            self.tenants.len(),
-            self.namespaces.len(),
-            self.streams.len(),
-            self.caches.len(),
-            self.nodes.len(),
-            self.shards.len(),
-        )
-    }
-}
-
-/// The exported snapshot format version. Bump on shape changes; an import
-/// refuses a newer version rather than misreading it.
-const EXPORTED_STATE_VERSION: u16 = 1;
 
 fn sorted_by_string_key<V: Clone>(map: &HashMap<String, V>) -> Vec<(String, V)> {
     let mut entries: Vec<(String, V)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -1820,184 +1762,6 @@ impl InMemoryStore {
             && self.nodes.read().await.changes.next_seq == 0
             && self.shards.read().await.changes.next_seq == 0
     }
-}
-
-/// Export any store — Postgres included — through the traits it already
-/// implements, into the Raft state machine's snapshot format.
-///
-/// This is the migration's whole read side, and it deliberately reuses the
-/// snapshot endpoints (`*_snapshot()` returns records **and** the feed
-/// position as one value) so the exported change feeds carry the source's
-/// sequence high-water marks with **empty retained windows**. A broker whose
-/// checkpoint equals the head continues without noticing; one behind the
-/// head gets the ordinary "your checkpoint predates the window, resnapshot"
-/// signal — the at-most-one-resnapshot cost the migration accepts instead
-/// of dragging Postgres's change rows along.
-///
-/// Consistency is the caller's job: run this only against a store whose
-/// writes are frozen (the cutover ceremony's first step), because the reads
-/// span many calls.
-pub async fn export_state_from(
-    store: &(dyn crate::store::ControlPlaneAuthStore + Send + Sync),
-) -> StoreResult<ExportedState> {
-    let tenant_snapshot = store.tenant_snapshot().await?;
-    let namespace_snapshot = store.namespace_snapshot().await?;
-    let stream_snapshot = store.stream_snapshot().await?;
-    let cache_snapshot = store.cache_snapshot().await?;
-    let node_snapshot = store.node_snapshot().await?;
-    let shard_snapshot = store.shard_assignment_snapshot().await?;
-
-    let mut tenants: Vec<(String, Tenant)> = tenant_snapshot
-        .items
-        .into_iter()
-        .map(|tenant| (tenant.tenant_id.clone(), tenant))
-        .collect();
-    tenants.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut idp_issuers = Vec::new();
-    let mut tenant_signing_keys = Vec::new();
-    let mut rbac_policies = Vec::new();
-    let mut rbac_groupings = Vec::new();
-    let mut auth_bootstrapped = Vec::new();
-    for (tenant_id, _) in &tenants {
-        let issuers = store.list_idp_issuers(tenant_id).await?;
-        if !issuers.is_empty() {
-            idp_issuers.push((tenant_id.clone(), issuers));
-        }
-        match store.get_tenant_signing_keys(tenant_id).await {
-            Ok(keys) => tenant_signing_keys.push((tenant_id.clone(), keys)),
-            Err(StoreError::NotFound(_)) => {}
-            Err(err) => return Err(err),
-        }
-        let policies = store.list_rbac_policies(tenant_id).await?;
-        if !policies.is_empty() {
-            rbac_policies.push((tenant_id.clone(), policies));
-        }
-        let groupings = store.list_rbac_groupings(tenant_id).await?;
-        if !groupings.is_empty() {
-            rbac_groupings.push((tenant_id.clone(), groupings));
-        }
-        if store.tenant_auth_is_bootstrapped(tenant_id).await? {
-            auth_bootstrapped.push((tenant_id.clone(), true));
-        }
-    }
-
-    let mut namespaces: Vec<(NamespaceKey, Namespace)> = namespace_snapshot
-        .items
-        .into_iter()
-        .map(|namespace| {
-            (
-                NamespaceKey {
-                    tenant_id: namespace.tenant_id.clone(),
-                    namespace: namespace.namespace.clone(),
-                },
-                namespace,
-            )
-        })
-        .collect();
-    namespaces
-        .sort_by(|a, b| (&a.0.tenant_id, &a.0.namespace).cmp(&(&b.0.tenant_id, &b.0.namespace)));
-
-    let mut streams: Vec<(StreamKey, Stream)> = stream_snapshot
-        .items
-        .into_iter()
-        .map(|stream| {
-            (
-                StreamKey {
-                    tenant_id: stream.tenant_id.clone(),
-                    namespace: stream.namespace.clone(),
-                    stream: stream.stream.clone(),
-                },
-                stream,
-            )
-        })
-        .collect();
-    streams.sort_by(|a, b| {
-        (&a.0.tenant_id, &a.0.namespace, &a.0.stream).cmp(&(
-            &b.0.tenant_id,
-            &b.0.namespace,
-            &b.0.stream,
-        ))
-    });
-
-    let mut caches: Vec<(CacheKey, Cache)> = cache_snapshot
-        .items
-        .into_iter()
-        .map(|cache| {
-            (
-                CacheKey {
-                    tenant_id: cache.tenant_id.clone(),
-                    namespace: cache.namespace.clone(),
-                    cache: cache.cache.clone(),
-                },
-                cache,
-            )
-        })
-        .collect();
-    caches.sort_by(|a, b| {
-        (&a.0.tenant_id, &a.0.namespace, &a.0.cache).cmp(&(
-            &b.0.tenant_id,
-            &b.0.namespace,
-            &b.0.cache,
-        ))
-    });
-
-    let mut nodes: Vec<(String, Node)> = node_snapshot
-        .items
-        .into_iter()
-        .map(|node| (node.node_id.clone(), node))
-        .collect();
-    nodes.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut shards: Vec<(ShardKey, ShardAssignment)> = shard_snapshot
-        .items
-        .into_iter()
-        .map(|assignment| (assignment.key.clone(), assignment))
-        .collect();
-    shards.sort_by(|a, b| {
-        (
-            &a.0.tenant_id,
-            &a.0.namespace,
-            a.0.kind,
-            &a.0.stream,
-            a.0.shard,
-        )
-            .cmp(&(
-                &b.0.tenant_id,
-                &b.0.namespace,
-                b.0.kind,
-                &b.0.stream,
-                b.0.shard,
-            ))
-    });
-
-    fn empty_log_at<T>(next_seq: u64) -> ExportedLog<T> {
-        ExportedLog {
-            next_seq,
-            items: Vec::new(),
-        }
-    }
-
-    Ok(ExportedState {
-        v: EXPORTED_STATE_VERSION,
-        tenants,
-        namespaces,
-        streams,
-        caches,
-        nodes,
-        node_changes: empty_log_at(node_snapshot.next_seq),
-        shards,
-        shard_changes: empty_log_at(shard_snapshot.next_seq),
-        tenant_changes: empty_log_at(tenant_snapshot.next_seq),
-        namespace_changes: empty_log_at(namespace_snapshot.next_seq),
-        stream_changes: empty_log_at(stream_snapshot.next_seq),
-        cache_changes: empty_log_at(cache_snapshot.next_seq),
-        idp_issuers,
-        tenant_signing_keys,
-        rbac_policies,
-        rbac_groupings,
-        auth_bootstrapped,
-    })
 }
 
 #[cfg(test)]

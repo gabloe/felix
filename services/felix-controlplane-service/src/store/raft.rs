@@ -15,6 +15,9 @@
 //! Nothing in this file interprets a command. It is a typed shim between
 //! two vocabularies that must not drift: the store traits on one side, the
 //! versioned command set on the other.
+pub mod command;
+pub mod state_machine;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -30,9 +33,9 @@ use crate::model::{
     TenantChange,
 };
 use crate::raft::RaftHandle;
-use crate::store::command::{MetaCommand, MetaResponse, decode_result, encode_command};
 use crate::store::memory::InMemoryStore;
-use crate::store::state_machine::MetadataStateMachine;
+use crate::store::raft::command::{MetaCommand, MetaResponse, decode_result, encode_command};
+use crate::store::raft::state_machine::MetadataStateMachine;
 use crate::store::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult, TenantAuthSeed,
 };

@@ -17,11 +17,10 @@ use crate::model::{
 use async_trait::async_trait;
 use thiserror::Error;
 
-pub mod command;
+pub mod export;
 pub mod memory;
 pub mod postgres;
-pub mod raft_backend;
-pub mod state_machine;
+pub mod raft;
 
 #[cfg(test)]
 pub(crate) mod node_contract;
@@ -207,7 +206,7 @@ pub trait ControlPlaneStore: Send + Sync {
     /// `clock_timestamp()`. The default is the process clock, which is
     /// correct for a single-process store and for the Raft backend, where
     /// the leader overwrites a proposer's reading before the command enters
-    /// the log (`store::command::restamp`) and the sweep that reads it back
+    /// the log (`store::raft::command::restamp`) and the sweep that reads it back
     /// runs only on that same leader. Both sides of the comparison are one
     /// process's clock either way; the two backends just reach that
     /// differently.
