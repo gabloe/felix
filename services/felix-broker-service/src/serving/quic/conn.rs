@@ -13,7 +13,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::config::BrokerConfig;
 use crate::serving::auth::BrokerAuth;
-use crate::shard_routing::IngressRouter;
+use crate::shards::routing::IngressRouter;
 use crate::timings;
 
 use super::GLOBAL_INGRESS_DEPTH;

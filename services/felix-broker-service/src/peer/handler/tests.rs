@@ -215,28 +215,28 @@ fn handler_with(
     auth: Arc<BrokerAuth>,
 ) -> ForwardingHandler {
     let router = router();
-    let ingress = Arc::new(crate::shard_routing::IngressRouter::new(Arc::clone(
+    let ingress = Arc::new(crate::shards::routing::IngressRouter::new(Arc::clone(
         &router,
     )));
     ingress.publish_servable(
         [
             (
-                crate::shard_watch::ShardKey {
+                crate::shards::ShardKey {
                     tenant_id: TENANT.to_string(),
                     namespace: NAMESPACE.to_string(),
                     stream: STREAM.to_string(),
                     shard: 0,
-                    kind: crate::shard_watch::ShardKind::Stream,
+                    kind: crate::shards::ShardKind::Stream,
                 },
                 GENERATION,
             ),
             (
-                crate::shard_watch::ShardKey {
+                crate::shards::ShardKey {
                     tenant_id: TENANT.to_string(),
                     namespace: NAMESPACE.to_string(),
                     stream: CACHE.to_string(),
                     shard: 0,
-                    kind: crate::shard_watch::ShardKind::Cache,
+                    kind: crate::shards::ShardKind::Cache,
                 },
                 GENERATION,
             ),
@@ -409,12 +409,12 @@ async fn a_forwarded_quorum_publish_waits_for_the_majority() {
     let marks = Arc::new(QuorumMarks::new());
     // A mark that never reaches the record: no follower ever stores it.
     marks.publish(
-        &crate::shard_watch::ShardKey {
+        &crate::shards::ShardKey {
             tenant_id: TENANT.to_string(),
             namespace: NAMESPACE.to_string(),
             stream: STREAM.to_string(),
             shard: 0,
-            kind: crate::shard_watch::ShardKind::Stream,
+            kind: crate::shards::ShardKind::Stream,
         },
         GENERATION,
         0,
@@ -440,12 +440,12 @@ async fn a_forwarded_quorum_publish_is_acknowledged_once_the_majority_holds_it()
     let (broker, _dir) = broker_with(ConsistencyLevel::Quorum).await;
     let marks = Arc::new(QuorumMarks::new());
     marks.publish(
-        &crate::shard_watch::ShardKey {
+        &crate::shards::ShardKey {
             tenant_id: TENANT.to_string(),
             namespace: NAMESPACE.to_string(),
             stream: STREAM.to_string(),
             shard: 0,
-            kind: crate::shard_watch::ShardKind::Stream,
+            kind: crate::shards::ShardKind::Stream,
         },
         GENERATION,
         // Past the record this publish writes.

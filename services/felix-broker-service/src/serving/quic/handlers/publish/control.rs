@@ -337,14 +337,14 @@ pub(crate) fn resolve_shard(
         .as_ref()
         .map(|ingress| {
             ingress.shards_for(
-                crate::shard_watch::ShardKind::Stream,
+                crate::shards::ShardKind::Stream,
                 tenant_id,
                 namespace,
                 stream,
             )
         })
         .unwrap_or(1);
-    crate::shard_routing::shard_for(shards, key)
+    crate::shards::routing::shard_for(shards, key)
 }
 
 #[allow(clippy::too_many_arguments)]

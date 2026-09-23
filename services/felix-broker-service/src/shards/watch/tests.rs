@@ -1,6 +1,8 @@
 //! Continuity and apply rules: every branch here is a way to silently lose an
 //! ownership change.
+
 use super::*;
+use crate::shards::ShardKind;
 
 fn key(shard: u32) -> ShardKey {
     ShardKey {
@@ -8,7 +10,7 @@ fn key(shard: u32) -> ShardKey {
         namespace: "ns".to_string(),
         stream: "orders".to_string(),
         shard,
-        kind: crate::shard_watch::ShardKind::Stream,
+        kind: crate::shards::ShardKind::Stream,
     }
 }
 

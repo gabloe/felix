@@ -811,7 +811,7 @@ pub(crate) async fn handle_subscribe_message(
 // handlers' allows already note.
 #[allow(clippy::too_many_arguments)]
 pub fn redirect_for(
-    ingress: Option<&crate::shard_routing::IngressRouter>,
+    ingress: Option<&crate::shards::routing::IngressRouter>,
     client_endpoints: Option<&crate::cluster::client_endpoints::ClientEndpoints>,
     tenant_id: &str,
     namespace: &str,
@@ -820,12 +820,12 @@ pub fn redirect_for(
     // The kind travels with every ownership question. A cache and a stream may
     // share a name, and answering for the wrong one redirects a watch to a
     // broker that does not own the key.
-    kind: crate::shard_watch::ShardKind,
+    kind: crate::shards::ShardKind,
     peer_features: u32,
 ) -> Option<Message> {
-    use crate::shard_routing::{Dispatch, dispatch};
+    use crate::shards::routing::{Dispatch, dispatch};
 
-    let key = crate::shard_watch::ShardKey {
+    let key = crate::shards::ShardKey {
         tenant_id: tenant_id.to_string(),
         namespace: namespace.to_string(),
         stream: stream.to_string(),

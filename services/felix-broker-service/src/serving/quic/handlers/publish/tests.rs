@@ -1784,7 +1784,7 @@ async fn handle_publish_batch_message_uni_drop_returns_true() {
 /// shows up at the seam.
 #[tokio::test]
 async fn a_connections_context_keeps_the_cluster_view() {
-    use crate::shard_routing::IngressRouter;
+    use crate::shards::routing::IngressRouter;
     use felix_router::{RegionRouter, ShardRouter};
 
     let (mut context, _rx, _tx) = make_publish_context(1);
@@ -2823,8 +2823,8 @@ async fn backpressure_gives_up_when_the_connection_is_cancelled() {
 /// The gate on the publish path itself, not just the decision behind it.
 mod ownership_gate {
     use super::*;
-    use crate::shard_routing::{IngressRouter, routing_table_from};
-    use crate::shard_watch::{ShardAssignment, ShardKey as WatchKey};
+    use crate::shards::routing::{IngressRouter, routing_table_from};
+    use crate::shards::{ShardKey as WatchKey, watch::ShardAssignment};
     use felix_router::{RegionRouter, ShardRouter};
     use std::collections::HashMap;
 
@@ -2855,7 +2855,7 @@ mod ownership_gate {
             namespace: "ns".to_string(),
             stream: "stream".to_string(),
             shard: 0,
-            kind: crate::shard_watch::ShardKind::Stream,
+            kind: crate::shards::ShardKind::Stream,
         }
     }
 

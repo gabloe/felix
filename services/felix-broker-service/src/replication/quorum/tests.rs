@@ -11,7 +11,7 @@ fn key(stream: &str) -> ShardKey {
         namespace: "ns".to_string(),
         stream: stream.to_string(),
         shard: 0,
-        kind: crate::shard_watch::ShardKind::Stream,
+        kind: crate::shards::ShardKind::Stream,
     }
 }
 

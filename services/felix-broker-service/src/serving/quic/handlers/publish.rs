@@ -87,8 +87,8 @@ use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::{
     ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
 };
-use crate::shard_routing::{Dispatch, IngressRouter, dispatch};
-use crate::shard_watch::{ShardKey, ShardKind};
+use crate::shards::routing::{Dispatch, IngressRouter, dispatch};
+use crate::shards::{ShardKey, ShardKind};
 #[cfg(test)]
 use felix_wire::{Frame, Message};
 #[cfg(test)]

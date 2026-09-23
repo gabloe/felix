@@ -21,36 +21,11 @@ use serde::Deserialize;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use crate::shard_watch::metrics as mm;
+use crate::shards::ShardKey;
+use crate::shards::watch::metrics as mm;
 
 /// Ceiling on poll backoff after a failure.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
-
-/// What an assignment is an assignment *of*.
-///
-/// The control plane places cache shards alongside stream shards, and the two
-/// share every other field of the key. A broker that ignored this would file a
-/// cache's shard under the stream of the same name and let one overwrite the
-/// other's ownership.
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[serde(rename_all = "camelCase")]
-pub enum ShardKind {
-    /// Absent on the wire means this, which is what a control plane that
-    /// predates cache placement sends.
-    #[default]
-    Stream,
-    Cache,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ShardKey {
-    pub tenant_id: String,
-    pub namespace: String,
-    pub stream: String,
-    pub shard: u32,
-    #[serde(default)]
-    pub kind: ShardKind,
-}
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ShardAssignment {

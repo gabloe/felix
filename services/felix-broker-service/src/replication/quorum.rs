@@ -19,7 +19,7 @@
 //! toward a newer generation's quorum. Resetting is what enforces that here.
 use std::collections::HashMap;
 
-use crate::shard_watch::ShardKey;
+use crate::shards::ShardKey;
 use parking_lot::Mutex;
 use tokio::sync::watch;
 
@@ -170,10 +170,10 @@ pub enum QuorumWait {
 /// mean less than the stream promises.
 pub async fn await_quorum(
     handle: &felix_broker::StreamHandle,
-    shard: Option<&crate::shard_watch::ShardKey>,
+    shard: Option<&crate::shards::ShardKey>,
     outcome: &felix_broker::PublishOutcome,
     marks: Option<&crate::replication::quorum::QuorumMarks>,
-    ingress: Option<&crate::shard_routing::IngressRouter>,
+    ingress: Option<&crate::shards::routing::IngressRouter>,
     timeout: std::time::Duration,
 ) -> Result<(), anyhow::Error> {
     if handle.consistency() != felix_broker::ConsistencyLevel::Quorum {
@@ -228,9 +228,9 @@ pub async fn await_quorum(
 /// longer, never make it end before this write is on a majority.
 pub async fn await_cache_quorum(
     broker: &felix_broker::Broker,
-    shard: &crate::shard_watch::ShardKey,
+    shard: &crate::shards::ShardKey,
     marks: Option<&QuorumMarks>,
-    ingress: Option<&crate::shard_routing::IngressRouter>,
+    ingress: Option<&crate::shards::routing::IngressRouter>,
     timeout: std::time::Duration,
 ) -> Result<(), anyhow::Error> {
     let consistency = broker

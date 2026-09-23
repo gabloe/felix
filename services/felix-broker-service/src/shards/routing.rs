@@ -16,7 +16,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use felix_router::{Resolution, ShardRouter, Unavailable};
 
-use crate::shard_watch::{ShardKey, ShardKind};
+use crate::shards::{ShardKey, ShardKind};
 
 /// What ingress should do with a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,7 +241,7 @@ pub(crate) fn to_router_kind(kind: ShardKind) -> felix_router::ShardKind {
 /// separate views -- ownership and node addresses -- are joined into the one
 /// the hot path reads.
 pub fn routing_table_from(
-    assignments: &std::collections::HashMap<ShardKey, crate::shard_watch::ShardAssignment>,
+    assignments: &std::collections::HashMap<ShardKey, crate::shards::watch::ShardAssignment>,
     nodes: &std::collections::HashMap<String, felix_router::NodeRef>,
 ) -> felix_router::RoutingTable {
     felix_router::RoutingTable::build_with(
@@ -259,9 +259,9 @@ pub fn routing_table_from(
 /// The cluster state one task keeps in step. Grouped because they are only ever
 /// used together, and only in the order this feed applies them.
 pub struct FeedState {
-    pub ownership: Arc<tokio::sync::RwLock<crate::shard_watch::ShardOwnership>>,
-    pub lifecycle: Arc<tokio::sync::Mutex<crate::shard_lifecycle::ShardLifecycle>>,
-    pub store: Arc<dyn crate::shard_lifecycle::ShardStore>,
+    pub ownership: Arc<tokio::sync::RwLock<crate::shards::watch::ShardOwnership>>,
+    pub lifecycle: Arc<tokio::sync::Mutex<crate::shards::lifecycle::ShardLifecycle>>,
+    pub store: Arc<dyn crate::shards::lifecycle::ShardStore>,
     pub ingress: Arc<IngressRouter>,
     pub router: Arc<ShardRouter>,
     /// Refreshed on the same tick as the catalog it is derived from, so what a
@@ -337,18 +337,18 @@ pub fn spawn_feed(
                     // publish.
                     Err(err) => {
                         tracing::warn!(error = %err, "node catalog refresh failed; keeping the last one");
-                        crate::shard_watch::metrics::record_catalog_refresh_failure();
+                        crate::shards::watch::metrics::record_catalog_refresh_failure();
                     }
                 }
             }
 
             let assignments = ownership.read().await.assignments().clone();
-            crate::shard_lifecycle::reconcile(&lifecycle, store.as_ref(), &assignments).await;
+            crate::shards::lifecycle::reconcile(&lifecycle, store.as_ref(), &assignments).await;
 
             let servable = lifecycle.lock().await.servable();
             ingress.publish_servable(servable);
             router.publish(routing_table_from(&assignments, &catalog), &catalog);
-            crate::shard_watch::metrics::set_catalog_nodes(catalog.len());
+            crate::shards::watch::metrics::set_catalog_nodes(catalog.len());
         }
     })
 }

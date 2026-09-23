@@ -1,8 +1,8 @@
 //! Which broker a cache key resolves to, and what happens when it is not this one.
 use super::*;
-use crate::shard_lifecycle::ShardLifecycle;
-use crate::shard_routing::routing_table_from;
-use crate::shard_watch::ShardAssignment;
+use crate::shards::lifecycle::ShardLifecycle;
+use crate::shards::routing::routing_table_from;
+use crate::shards::watch::ShardAssignment;
 use felix_router::{NodeRef, RegionRouter, ShardRouter};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -159,8 +159,8 @@ fn a_cache_and_a_stream_of_the_same_name_resolve_to_their_own_owners() {
     }
 
     assert_eq!(
-        crate::shard_routing::dispatch(Some(&ours), &stream_key(0)),
-        crate::shard_routing::Dispatch::Local,
+        crate::shards::routing::dispatch(Some(&ours), &stream_key(0)),
+        crate::shards::routing::Dispatch::Local,
         "the stream is led here, and the cache must not have taken its row",
     );
 }

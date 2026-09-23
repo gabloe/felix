@@ -656,7 +656,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 let shards = match publish_ctx.ingress.as_deref() {
                     Some(ingress) => ingress
                         .placed_shards_for(
-                            crate::shard_watch::ShardKind::Stream,
+                            crate::shards::ShardKind::Stream,
                             &tenant_id,
                             &namespace,
                             &stream,
@@ -717,7 +717,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // too. A cache nobody knows is 0, not 1.
                 let placed = publish_ctx.ingress.as_deref().and_then(|ingress| {
                     ingress.placed_shards_for(
-                        crate::shard_watch::ShardKind::Cache,
+                        crate::shards::ShardKind::Cache,
                         &tenant_id,
                         &namespace,
                         &cache,
@@ -780,7 +780,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     // shard being subscribed to: different shards of one stream
                     // can have different owners.
                     shard.unwrap_or(0),
-                    crate::shard_watch::ShardKind::Stream,
+                    crate::shards::ShardKind::Stream,
                     peer_features,
                 ) {
                     handle_ack_enqueue_result(
@@ -2059,7 +2059,7 @@ fn group_redirect(
         namespace,
         stream,
         shard,
-        crate::shard_watch::ShardKind::Stream,
+        crate::shards::ShardKind::Stream,
         peer_features,
     ) {
         answer @ Some(Message::NotLeader { .. }) => answer,

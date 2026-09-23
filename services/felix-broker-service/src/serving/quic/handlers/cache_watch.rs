@@ -136,7 +136,7 @@ pub(crate) async fn handle_cache_watch_message(
         .as_deref()
         .map(|ingress| {
             ingress.shards_for(
-                crate::shard_watch::ShardKind::Cache,
+                crate::shards::ShardKind::Cache,
                 &request.tenant_id,
                 &request.namespace,
                 &request.cache,
@@ -145,7 +145,7 @@ pub(crate) async fn handle_cache_watch_message(
         .unwrap_or(1);
     let shard = match (&filter, request.shard) {
         (CacheWatchFilter::Key(key), _) => {
-            crate::shard_routing::shard_for(shards, Some(key.as_bytes()))
+            crate::shards::routing::shard_for(shards, Some(key.as_bytes()))
         }
         (CacheWatchFilter::Prefix(_), Some(shard)) => shard,
         (CacheWatchFilter::Prefix(_), None) if shards <= 1 => 0,
@@ -191,7 +191,7 @@ pub(crate) async fn handle_cache_watch_message(
         &request.namespace,
         &request.cache,
         shard,
-        crate::shard_watch::ShardKind::Cache,
+        crate::shards::ShardKind::Cache,
         peer_features,
     ) {
         responder.send(answer).await?;

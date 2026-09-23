@@ -15,8 +15,8 @@ use felix_broker::{Broker, GroupKey};
 use felix_wire::GroupRecord;
 
 use crate::serving::quic::handlers::publish::PublishContext;
-use crate::shard_routing::{Dispatch, dispatch};
-use crate::shard_watch::{ShardKey, ShardKind};
+use crate::shards::routing::{Dispatch, dispatch};
+use crate::shards::{ShardKey, ShardKind};
 
 /// Check that this broker leads the shard, and name the owner if it does not.
 fn owned_here(

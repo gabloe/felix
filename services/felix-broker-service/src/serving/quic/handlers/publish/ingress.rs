@@ -24,14 +24,14 @@ pub(crate) enum PublishTarget {
         /// The shard this publish resolved to, when this broker is in a
         /// cluster. `None` on a single-node broker, which has no replica set
         /// and so nothing to wait for.
-        shard: Option<crate::shard_watch::ShardKey>,
+        shard: Option<crate::shards::ShardKey>,
     },
     /// This broker leads the shard and the batch names its producer: appended
     /// once however many times it arrives. Never forwarded, because only the
     /// leader holds the sequences a re-send is checked against.
     Idempotent {
         handle: StreamHandle,
-        shard: Option<crate::shard_watch::ShardKey>,
+        shard: Option<crate::shards::ShardKey>,
         producer_id: u64,
         sequence: u64,
     },

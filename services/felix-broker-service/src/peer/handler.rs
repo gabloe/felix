@@ -35,8 +35,8 @@ use felix_wire::internal::{
 use super::metrics;
 use super::server::PeerRequestHandler;
 use crate::serving::auth::BrokerAuth;
-use crate::shard_routing::{Dispatch, IngressRouter};
-use crate::shard_watch::{ShardKey, ShardKind};
+use crate::shards::routing::{Dispatch, IngressRouter};
+use crate::shards::{ShardKey, ShardKind};
 
 /// Applies forwarded publishes against the local broker.
 pub struct ForwardingHandler {
@@ -163,7 +163,7 @@ impl ForwardingHandler {
         // agreed on.
         let ours = match self
             .router
-            .resolve(&crate::shard_routing::to_router_key(key))
+            .resolve(&crate::shards::routing::to_router_key(key))
         {
             Resolution::Local { generation } => generation,
             // Between the dispatch above and here the view changed. Refusing is

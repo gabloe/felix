@@ -1,7 +1,7 @@
 //! Ingress dispatch: what a broker does with a request for each ownership state.
 use super::*;
-use crate::shard_lifecycle::ShardLifecycle;
-use crate::shard_watch::ShardAssignment;
+use crate::shards::lifecycle::ShardLifecycle;
+use crate::shards::watch::ShardAssignment;
 use felix_router::{NodeRef, RegionRouter};
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ fn key(shard: u32) -> ShardKey {
         namespace: "ns".to_string(),
         stream: "orders".to_string(),
         shard,
-        kind: crate::shard_watch::ShardKind::Stream,
+        kind: crate::shards::ShardKind::Stream,
     }
 }
 
@@ -266,8 +266,8 @@ fn a_single_shard_stream_always_maps_to_zero() {
 /// table in step, and it is the only thing that refreshes the address book.
 mod feed {
     use super::*;
-    use crate::shard_lifecycle::EphemeralShardStore;
-    use crate::shard_watch::ShardOwnership;
+    use crate::shards::lifecycle::EphemeralShardStore;
+    use crate::shards::watch::ShardOwnership;
     use axum::Router;
     use axum::routing::get;
     use std::sync::atomic::{AtomicBool, Ordering};

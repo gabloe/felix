@@ -5,7 +5,7 @@
 //! in `failed` is one nobody is serving.
 use std::collections::HashMap;
 
-use crate::shard_lifecycle::Phase;
+use crate::shards::lifecycle::Phase;
 
 /// Shards this broker holds, by phase. Bounded at six series.
 pub const PHASE: &str = "felix_broker_shard_phase";

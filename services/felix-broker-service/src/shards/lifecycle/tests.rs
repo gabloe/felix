@@ -7,7 +7,7 @@ fn key(shard: u32) -> ShardKey {
         namespace: "ns".to_string(),
         stream: "orders".to_string(),
         shard,
-        kind: crate::shard_watch::ShardKind::Stream,
+        kind: crate::shards::ShardKind::Stream,
     }
 }
 
@@ -583,7 +583,7 @@ mod recording_where_a_leadership_begins {
         let (storage, _dir) = storage(3).await;
         let store = DurableShardStore::new(storage);
         let mut cache_key = key(0);
-        cache_key.kind = crate::shard_watch::ShardKind::Cache;
+        cache_key.kind = crate::shards::ShardKind::Cache;
 
         store.open(&cache_key, 4).await.expect("open");
     }

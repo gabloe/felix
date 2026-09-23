@@ -38,8 +38,8 @@ use crate::cluster::membership;
 use crate::peer;
 use crate::replication;
 use crate::serving::{auth::BrokerAuth, quic};
+use crate::shards::{lifecycle as shard_lifecycle, routing as shard_routing, watch as shard_watch};
 use crate::{config, durable_config::DurableStorageConfig};
-use crate::{shard_lifecycle, shard_routing, shard_watch};
 
 /// Start the broker and run until the provided `shutdown` future resolves.
 ///

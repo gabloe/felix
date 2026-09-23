@@ -3,7 +3,8 @@
 //! The property under test is the one that cannot be checked in isolation: a
 //! broker starting from nothing converges on the current assignments, and no
 //! committed change is lost in the seam between the snapshot and the first poll.
-use felix_broker_service::shard_watch::{self, ShardKey as WatchedShardKey, ShardOwnership};
+use felix_broker_service::shards::watch::{self as shard_watch, ShardOwnership};
+use felix_broker_service::shards::{ShardKey as WatchedShardKey, ShardKind as WatchedShardKind};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::felix_token::{TenantSigningKeys, mint_token};
@@ -303,7 +304,7 @@ async fn a_leader_change_reaches_the_broker() {
         namespace: "ns".to_string(),
         stream: "orders".to_string(),
         shard: 0,
-        kind: shard_watch::ShardKind::Stream,
+        kind: WatchedShardKind::Stream,
     };
     assert!(until(async || ownership.read().await.is_leader(&shard, "broker-a")).await);
 

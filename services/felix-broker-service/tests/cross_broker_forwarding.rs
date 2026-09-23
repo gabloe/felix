@@ -23,8 +23,8 @@ use felix_broker_service::peer::{
     PeerTransportConfig, forward_publish,
 };
 use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
-use felix_broker_service::shard_routing::{IngressRouter, routing_table_from};
-use felix_broker_service::shard_watch::{ShardAssignment, ShardKey};
+use felix_broker_service::shards::routing::{IngressRouter, routing_table_from};
+use felix_broker_service::shards::{ShardKey, watch::ShardAssignment};
 use felix_router::{NodeRef, RegionRouter, ShardRouter};
 use felix_storage::EphemeralCache;
 use felix_wire::internal::{AckMode, ErrorCode, InternalMessage};
@@ -110,7 +110,7 @@ fn shard_key() -> ShardKey {
         namespace: NAMESPACE.to_string(),
         stream: STREAM.to_string(),
         shard: 0,
-        kind: felix_broker_service::shard_watch::ShardKind::Stream,
+        kind: felix_broker_service::shards::ShardKind::Stream,
     }
 }
 

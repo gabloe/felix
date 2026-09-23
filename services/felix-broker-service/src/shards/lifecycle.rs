@@ -17,8 +17,8 @@ pub mod metrics;
 
 use std::collections::HashMap;
 
-use crate::shard_lifecycle::metrics as mm;
-use crate::shard_watch::{ShardAssignment, ShardKey, ShardKind};
+use crate::shards::lifecycle::metrics as mm;
+use crate::shards::{ShardKey, ShardKind, watch::ShardAssignment};
 
 /// Where this broker is with one shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

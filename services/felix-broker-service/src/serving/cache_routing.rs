@@ -7,8 +7,8 @@
 use bytes::Bytes;
 
 use crate::peer::{CacheRequest, ForwardKey, ForwardTarget};
-use crate::shard_routing::{Dispatch, IngressRouter, dispatch, shard_for};
-use crate::shard_watch::{ShardKey, ShardKind};
+use crate::shards::routing::{Dispatch, IngressRouter, dispatch, shard_for};
+use crate::shards::{ShardKey, ShardKind};
 
 /// Where one cache operation belongs.
 #[derive(Debug)]

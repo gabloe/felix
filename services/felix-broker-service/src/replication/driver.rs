@@ -752,15 +752,15 @@ async fn ship_aux_log<R: PeerRequester>(
 /// The watch's key for a route, carrying the kind across rather than assuming
 /// it. A cache shard filed under a stream key would take the mark belonging to
 /// the stream of the same name.
-fn watch_key(key: &ShardKey) -> crate::shard_watch::ShardKey {
-    crate::shard_watch::ShardKey {
+fn watch_key(key: &ShardKey) -> crate::shards::ShardKey {
+    crate::shards::ShardKey {
         tenant_id: key.tenant_id.clone(),
         namespace: key.namespace.clone(),
         stream: key.stream.clone(),
         shard: key.shard,
         kind: match key.kind {
-            felix_router::ShardKind::Cache => crate::shard_watch::ShardKind::Cache,
-            felix_router::ShardKind::Stream => crate::shard_watch::ShardKind::Stream,
+            felix_router::ShardKind::Cache => crate::shards::ShardKind::Cache,
+            felix_router::ShardKind::Stream => crate::shards::ShardKind::Stream,
         },
     }
 }
