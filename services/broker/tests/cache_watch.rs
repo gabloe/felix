@@ -67,7 +67,7 @@ async fn start_with(cache: Box<dyn felix_storage::StorageApi + Send>) -> Result<
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", CACHE, CacheMetadata)
+        .register_cache("t1", "default", CACHE, CacheMetadata::default())
         .await?;
 
     let config = broker::config::BrokerConfig::from_env()?;

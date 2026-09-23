@@ -84,6 +84,10 @@ pub struct CacheCreateRequest {
     /// How many brokers hold each shard, leader included. Omitted means one.
     #[serde(default = "crate::model::default_cache_replication_factor")]
     pub replication_factor: u32,
+    /// `Quorum` holds each write's acknowledgement until a majority of the
+    /// shard's replicas have it. Omitted means `Leader`.
+    #[serde(default = "crate::model::default_cache_consistency")]
+    pub consistency: crate::model::ConsistencyLevel,
 }
 
 /// Matches the serde defaults, so a caller that fills in `..Default::default()`
@@ -96,6 +100,7 @@ impl Default for CacheCreateRequest {
             display_name: String::new(),
             shards: crate::model::default_cache_shards(),
             replication_factor: crate::model::default_cache_replication_factor(),
+            consistency: crate::model::default_cache_consistency(),
         }
     }
 }

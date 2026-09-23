@@ -371,6 +371,7 @@ impl ForwardingHandler {
         }
 
         let cache = self.broker.cache();
+        let writes = matches!(op.op, CacheOpKind::Put | CacheOpKind::Delete);
         let value = match op.op {
             CacheOpKind::Put => {
                 let ttl = (op.ttl_ms > 0).then(|| std::time::Duration::from_millis(op.ttl_ms));
@@ -413,6 +414,27 @@ impl ForwardingHandler {
                 return self.apply_counter_op(op, &key).await;
             }
         };
+
+        // The same wait the requester's own path makes for a local write: the
+        // client asked for the cache's guarantee, wherever the key happens to
+        // live.
+        if writes
+            && let Err(err) = crate::replication::quorum::await_cache_quorum(
+                &self.broker,
+                &key,
+                self.marks.as_deref(),
+                Some(self.ingress.as_ref()),
+                self.quorum_timeout,
+            )
+            .await
+        {
+            metrics::record_served(metrics::OUTCOME_ERROR);
+            return InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                code: ErrorCode::StorageFailed,
+                detail: err.to_string(),
+            });
+        }
 
         metrics::record_served(metrics::OUTCOME_OK);
         InternalMessage::ForwardCacheOk(ForwardCacheOk {

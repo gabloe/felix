@@ -324,11 +324,17 @@ acknowledgement double-counts — deltas carry no dedupe identity, and
 > `crates/felix-storage/src/counter_log/tests.rs::compaction_moves_neither_the_sum_nor_the_offsets`;
 > `crates/felix-cluster/tests/cache_failover.rs::a_counter_survives_the_loss_of_its_owner`.
 
-What a cache still does not declare is a consistency level. A stream chooses
-`Leader` or `Quorum`; a cache write is acknowledged by its leader once the
-record is durable there, and replication follows. So losing a leader in the
-window between the acknowledgement and the ship loses that write, which is the
-`Leader` guarantee rather than the `Quorum` one.
+A cache declares a consistency level, as a stream does, and it defaults to
+`Leader`: a write is acknowledged once durable on the leader and replication
+follows, so losing the leader between the acknowledgement and the ship loses
+the write. Under `Quorum` a put or delete is acknowledged only once a majority
+of the shard's replicas hold it, and survives the loss of its leader.
+
+> `crates/felix-cluster/tests/cache_failover.rs::a_quorum_acknowledged_cache_write_survives_its_leader`
+> and `a_quorum_cache_write_without_a_majority_is_refused`.
+
+Counter updates are the exception: the counter log feeds no quorum mark, so a
+counter update on a `Quorum` cache is still acknowledged by the leader.
 
 ## Authorization
 

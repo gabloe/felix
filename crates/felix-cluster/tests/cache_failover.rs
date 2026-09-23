@@ -359,3 +359,82 @@ async fn a_counter_survives_the_loss_of_its_owner() {
         "the promoted replica restarted the count",
     );
 }
+
+fn quorum_cache() -> ClusterConfig {
+    ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::new("orders", 1)],
+        caches: vec![CacheSpec::quorum(CACHE, 1, 3)],
+        ..Default::default()
+    }
+}
+
+/// A `Quorum` cache does not acknowledge a write no majority holds. With both
+/// followers paused the leader has the write and nobody to confirm it, and
+/// saying it succeeded would promise survival it cannot deliver.
+#[serial]
+#[tokio::test]
+async fn a_quorum_cache_write_without_a_majority_is_refused() {
+    let cluster = Cluster::start(quorum_cache()).await.expect("start cluster");
+    let leader = cluster
+        .shard_owner_of("cache", CACHE, 0)
+        .await
+        .expect("cache shard owner");
+    let followers: Vec<String> = cluster
+        .node_ids()
+        .into_iter()
+        .filter(|id| id != &leader)
+        .collect();
+
+    for follower in &followers {
+        cluster.pause_node(follower).expect("pause");
+    }
+    let outcome = cluster
+        .cache_put_via(&leader, CACHE, "k", b"no-majority")
+        .await;
+    for follower in &followers {
+        let _ = cluster.resume_node(follower);
+    }
+
+    assert!(
+        outcome.is_err(),
+        "a Quorum cache write was acknowledged with no majority available",
+    );
+    cluster.shutdown().await;
+}
+
+/// **A `Quorum`-acknowledged cache write survives its leader**, with no wait
+/// for replication between the acknowledgement and the kill: the
+/// acknowledgement itself is the promise that a majority holds it.
+#[serial]
+#[tokio::test]
+async fn a_quorum_acknowledged_cache_write_survives_its_leader() {
+    let mut cluster = Cluster::start(quorum_cache()).await.expect("start cluster");
+    let leader = cluster
+        .shard_owner_of("cache", CACHE, 0)
+        .await
+        .expect("cache shard owner");
+
+    cluster
+        .cache_put_via(&leader, CACHE, "k", b"survives")
+        .await
+        .expect("cache put under quorum");
+    cluster.kill_node(&leader).expect("kill the owner");
+
+    assert!(
+        failover_from(&cluster, &leader, Duration::from_secs(30)).await,
+        "a replica should have been promoted",
+    );
+    let readers: Vec<String> = cluster
+        .node_ids()
+        .into_iter()
+        .filter(|id| id != &leader)
+        .collect();
+    let value = read_until(&cluster, &readers, "k", Duration::from_secs(30)).await;
+    assert_eq!(
+        value.as_deref(),
+        Some(&b"survives"[..]),
+        "a quorum-acknowledged cache write did not survive its leader",
+    );
+    cluster.shutdown().await;
+}

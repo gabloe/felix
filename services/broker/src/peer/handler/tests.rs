@@ -358,7 +358,12 @@ async fn a_forward_whose_credential_cannot_publish_is_refused() {
 async fn a_forwarded_cache_op_is_checked_against_its_own_action() {
     let (broker, _dir) = broker_with(ConsistencyLevel::Leader).await;
     broker
-        .register_cache(TENANT, NAMESPACE, CACHE, felix_broker::CacheMetadata)
+        .register_cache(
+            TENANT,
+            NAMESPACE,
+            CACHE,
+            felix_broker::CacheMetadata::default(),
+        )
         .await
         .expect("cache");
     let credentials = Credentials::new();

@@ -106,6 +106,7 @@ struct DbCache {
     display_name: String,
     shards: i32,
     replication_factor: i32,
+    consistency: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -434,7 +435,7 @@ impl ControlPlaneStore for PostgresStore {
         ?;
 
         let caches = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor, consistency FROM caches WHERE tenant_id = $1"#,
         )
         .bind(tenant_id)
         .fetch_all(&mut *tx)
@@ -461,6 +462,7 @@ impl ControlPlaneStore for PostgresStore {
                 display_name: cache.display_name,
                 shards: cache.shards as u32,
                 replication_factor: cache.replication_factor as u32,
+                consistency: parse_consistency(&cache.consistency)?,
             };
             sqlx::query(
                 r#"INSERT INTO cache_changes (op, tenant_id, namespace, cache, payload) VALUES ($1, $2, $3, $4, $5)"#,
@@ -680,7 +682,7 @@ impl ControlPlaneStore for PostgresStore {
         ?;
 
         let caches = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor, consistency FROM caches WHERE tenant_id = $1 AND namespace = $2"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
@@ -707,6 +709,7 @@ impl ControlPlaneStore for PostgresStore {
                 display_name: cache.display_name,
                 shards: cache.shards as u32,
                 replication_factor: cache.replication_factor as u32,
+                consistency: parse_consistency(&cache.consistency)?,
             };
             sqlx::query(
                 r#"INSERT INTO cache_changes (op, tenant_id, namespace, cache, payload) VALUES ($1, $2, $3, $4, $5)"#,
@@ -1075,29 +1078,31 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn list_caches(&self, tenant_id: &str, namespace: &str) -> StoreResult<Vec<Cache>> {
         let rows = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2 ORDER BY cache"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor, consistency FROM caches WHERE tenant_id = $1 AND namespace = $2 ORDER BY cache"#,
         )
         .bind(tenant_id)
         .bind(namespace)
         .fetch_all(&self.pool)
         .await
         ?;
-        Ok(rows
-            .into_iter()
-            .map(|row| Cache {
-                tenant_id: row.tenant_id,
-                namespace: row.namespace,
-                cache: row.cache,
-                display_name: row.display_name,
-                shards: row.shards as u32,
-                replication_factor: row.replication_factor as u32,
+        rows.into_iter()
+            .map(|row| {
+                Ok(Cache {
+                    tenant_id: row.tenant_id,
+                    namespace: row.namespace,
+                    cache: row.cache,
+                    display_name: row.display_name,
+                    shards: row.shards as u32,
+                    replication_factor: row.replication_factor as u32,
+                    consistency: parse_consistency(&row.consistency)?,
+                })
             })
-            .collect())
+            .collect()
     }
 
     async fn get_cache(&self, key: &CacheKey) -> StoreResult<Cache> {
         let row = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor, consistency FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
@@ -1113,6 +1118,7 @@ impl ControlPlaneStore for PostgresStore {
                 display_name: row.display_name,
                 shards: row.shards as u32,
                 replication_factor: row.replication_factor as u32,
+                consistency: parse_consistency(&row.consistency)?,
             }),
             None => Err(StoreError::NotFound("cache".into())),
         }
@@ -1132,8 +1138,8 @@ impl ControlPlaneStore for PostgresStore {
         }
 
         let insert = sqlx::query(
-            r#"INSERT INTO caches (tenant_id, namespace, cache, display_name, shards, replication_factor)
-               VALUES ($1, $2, $3, $4, $5, $6)"#,
+            r#"INSERT INTO caches (tenant_id, namespace, cache, display_name, shards, replication_factor, consistency)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
         )
         .bind(&cache.tenant_id)
         .bind(&cache.namespace)
@@ -1141,6 +1147,7 @@ impl ControlPlaneStore for PostgresStore {
         .bind(&cache.display_name)
         .bind(cache.shards as i32)
         .bind(cache.replication_factor as i32)
+        .bind(consistency_to_str(&cache.consistency))
         .execute(&mut *tx)
         .await;
         if let Err(err) = insert {
@@ -1171,7 +1178,7 @@ impl ControlPlaneStore for PostgresStore {
     async fn patch_cache(&self, key: &CacheKey, patch: CachePatchRequest) -> StoreResult<Cache> {
         let mut tx = self.pool.begin().await?;
         let current = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3 FOR UPDATE"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor, consistency FROM caches WHERE tenant_id = $1 AND namespace = $2 AND cache = $3 FOR UPDATE"#,
         )
         .bind(&key.tenant_id)
         .bind(&key.namespace)
@@ -1187,6 +1194,7 @@ impl ControlPlaneStore for PostgresStore {
                 display_name: row.display_name,
                 shards: row.shards as u32,
                 replication_factor: row.replication_factor as u32,
+                consistency: parse_consistency(&row.consistency)?,
             },
             None => return Err(StoreError::NotFound("cache".into())),
         };
@@ -1257,22 +1265,25 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn cache_snapshot(&self) -> StoreResult<Snapshot<Cache>> {
         let rows = sqlx::query_as::<_, DbCache>(
-            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor FROM caches ORDER BY tenant_id, namespace, cache"#,
+            r#"SELECT tenant_id, namespace, cache, display_name, shards, replication_factor, consistency FROM caches ORDER BY tenant_id, namespace, cache"#,
         )
         .fetch_all(&self.pool)
         .await
         ?;
         let items = rows
             .into_iter()
-            .map(|row| Cache {
-                tenant_id: row.tenant_id,
-                namespace: row.namespace,
-                cache: row.cache,
-                display_name: row.display_name,
-                shards: row.shards as u32,
-                replication_factor: row.replication_factor as u32,
+            .map(|row| {
+                Ok(Cache {
+                    tenant_id: row.tenant_id,
+                    namespace: row.namespace,
+                    cache: row.cache,
+                    display_name: row.display_name,
+                    shards: row.shards as u32,
+                    replication_factor: row.replication_factor as u32,
+                    consistency: parse_consistency(&row.consistency)?,
+                })
             })
-            .collect();
+            .collect::<StoreResult<Vec<_>>>()?;
         let next_seq =
             sqlx::query_scalar::<_, i64>("SELECT COALESCE(MAX(seq) + 1, 0) FROM cache_changes")
                 .fetch_one(&self.pool)

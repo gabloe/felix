@@ -250,6 +250,8 @@ pub struct CacheSpec {
     /// makes a test actually exercise routing rather than a single owner.
     pub shards: u32,
     pub replication_factor: u32,
+    /// `"Leader"` or `"Quorum"`, as the control plane spells them.
+    pub consistency: String,
 }
 
 impl CacheSpec {
@@ -258,6 +260,17 @@ impl CacheSpec {
             name: name.into(),
             shards,
             replication_factor: 1,
+            consistency: "Leader".to_string(),
+        }
+    }
+
+    /// Replicated, with each write acknowledged only once a majority holds it.
+    pub fn quorum(name: impl Into<String>, shards: u32, replication_factor: u32) -> Self {
+        Self {
+            name: name.into(),
+            shards,
+            replication_factor,
+            consistency: "Quorum".to_string(),
         }
     }
 
@@ -269,6 +282,7 @@ impl CacheSpec {
             name: name.into(),
             shards,
             replication_factor,
+            consistency: "Leader".to_string(),
         }
     }
 }
@@ -2040,6 +2054,7 @@ async fn seed_metadata(
                 "display_name": cache,
                 "shards": spec.shards,
                 "replication_factor": spec.replication_factor,
+                "consistency": spec.consistency,
             }),
         )
         .await

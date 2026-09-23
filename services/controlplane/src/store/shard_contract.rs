@@ -89,6 +89,7 @@ pub(crate) async fn seed(store: &dyn ControlPlaneStore) {
             display_name: "Orders cache".to_string(),
             shards: CACHE_SHARDS,
             replication_factor: 1,
+            consistency: crate::model::ConsistencyLevel::Leader,
         })
         .await;
 
@@ -791,6 +792,7 @@ async fn deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(
             display_name: "Doomed".to_string(),
             shards: 2,
             replication_factor: 1,
+            consistency: crate::model::ConsistencyLevel::Leader,
         })
         .await
         .expect("create the cache to delete");

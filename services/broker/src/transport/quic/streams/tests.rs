@@ -166,7 +166,12 @@ async fn cache_put_get_round_trip() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let auth = auth_fixture("t1", default_perms());
     let (server_config, cert) = build_server_config()?;
@@ -588,6 +593,8 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
         client_endpoints: None,
         peers: None,
         lease: None,
+        marks: None,
+        quorum_timeout: Duration::from_secs(1),
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -696,7 +703,12 @@ async fn control_loop_handles_publish_and_cache_requests() -> Result<()> {
         .register_stream("t1", "default", "updates", Default::default())
         .await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let auth = auth_fixture("t1", default_perms());
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
@@ -1123,7 +1135,12 @@ async fn control_loop_cache_put_best_effort_closed_reports_error() -> Result<()>
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let auth = auth_fixture("t1", default_perms());
@@ -1290,7 +1307,12 @@ async fn control_loop_cache_put_records_timing_and_ack() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let auth = auth_fixture("t1", default_perms());
     timings::enable_collection(1);
@@ -1593,7 +1615,12 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let auth = auth_fixture("t1", default_perms());
@@ -3114,7 +3141,12 @@ async fn control_loop_cache_get_records_lookup_timing() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let auth = auth_fixture("t1", default_perms());
@@ -3195,7 +3227,12 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let auth = auth_fixture("t1", default_perms());
@@ -3491,6 +3528,8 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         client_endpoints: None,
         peers: None,
         lease: None,
+        marks: None,
+        quorum_timeout: Duration::from_secs(1),
         workers: Arc::new(vec![tx]),
         worker_count: 1,
         depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3671,6 +3710,8 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             client_endpoints: None,
             peers: None,
             lease: None,
+            marks: None,
+            quorum_timeout: Duration::from_secs(1),
             workers: Arc::new(vec![tx]),
             worker_count: 1,
             depth: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3774,7 +3815,12 @@ async fn control_loop_refuses_a_retained_watch_with_an_offset() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let auth = auth_fixture("t1", default_perms());
     let frames = vec![
@@ -3825,7 +3871,12 @@ async fn control_loop_refuses_a_watch_with_an_ambiguous_filter() -> Result<()> {
     broker.register_tenant("t1").await?;
     broker.register_namespace("t1", "default").await?;
     broker
-        .register_cache("t1", "default", "primary", felix_broker::CacheMetadata)
+        .register_cache(
+            "t1",
+            "default",
+            "primary",
+            felix_broker::CacheMetadata::default(),
+        )
         .await?;
     let auth = auth_fixture("t1", default_perms());
     let watch = |key: Option<&str>, prefix: Option<&str>| Message::CacheWatch {

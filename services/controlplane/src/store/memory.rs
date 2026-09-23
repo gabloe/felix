@@ -2148,6 +2148,7 @@ mod tests {
                 display_name: "Primary".to_string(),
                 shards: 1,
                 replication_factor: 1,
+                consistency: crate::model::ConsistencyLevel::Leader,
             })
             .await
             .expect("cache");

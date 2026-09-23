@@ -554,6 +554,7 @@ async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
             display_name: "Primary".to_string(),
             shards: 1,
             replication_factor: 1,
+            consistency: crate::model::ConsistencyLevel::Leader,
         })
         .await?;
     store
