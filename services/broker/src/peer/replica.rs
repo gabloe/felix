@@ -510,5 +510,4 @@ fn refused(
 }
 
 #[cfg(test)]
-#[path = "replica_tests.rs"]
 mod tests;

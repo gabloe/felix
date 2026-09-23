@@ -353,7 +353,7 @@ async fn a_refusal_and_an_outage_are_different_kinds() {
     )
     .await
     .expect_err("should be refused");
-    assert_eq!(refused.kind(), crate::membership_metrics::KIND_REJECTED);
+    assert_eq!(refused.kind(), crate::membership::metrics::KIND_REJECTED);
 
     let _ = stop.send(());
     let _ = handle.await;
@@ -367,7 +367,7 @@ async fn a_refusal_and_an_outage_are_different_kinds() {
     )
     .await
     .expect_err("should be unavailable");
-    assert_eq!(outage.kind(), crate::membership_metrics::KIND_UNAVAILABLE);
+    assert_eq!(outage.kind(), crate::membership::metrics::KIND_UNAVAILABLE);
 }
 
 /// A 5xx is the control plane failing, not refusing, so it is retryable like an
@@ -394,7 +394,7 @@ async fn a_server_error_counts_as_an_outage_not_a_refusal() {
     )
     .await
     .expect_err("should fail");
-    assert_eq!(err.kind(), crate::membership_metrics::KIND_UNAVAILABLE);
+    assert_eq!(err.kind(), crate::membership::metrics::KIND_UNAVAILABLE);
     assert!(
         matches!(err, MembershipError::Unavailable(_)),
         "a 5xx must stay retryable",

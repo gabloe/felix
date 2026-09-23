@@ -514,5 +514,4 @@ fn error(correlation_id: u64, code: ErrorCode, detail: String) -> InternalMessag
 }
 
 #[cfg(test)]
-#[path = "handler_tests.rs"]
 mod tests;

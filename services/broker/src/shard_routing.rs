@@ -337,7 +337,7 @@ pub fn spawn_feed(
                     // publish.
                     Err(err) => {
                         tracing::warn!(error = %err, "node catalog refresh failed; keeping the last one");
-                        crate::shard_watch_metrics::record_catalog_refresh_failure();
+                        crate::shard_watch::metrics::record_catalog_refresh_failure();
                     }
                 }
             }
@@ -348,11 +348,10 @@ pub fn spawn_feed(
             let servable = lifecycle.lock().await.servable();
             ingress.publish_servable(servable);
             router.publish(routing_table_from(&assignments, &catalog), &catalog);
-            crate::shard_watch_metrics::set_catalog_nodes(catalog.len());
+            crate::shard_watch::metrics::set_catalog_nodes(catalog.len());
         }
     })
 }
 
 #[cfg(test)]
-#[path = "shard_routing_tests.rs"]
 mod tests;

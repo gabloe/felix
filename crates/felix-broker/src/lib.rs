@@ -1,21 +1,41 @@
-// In-process pub/sub broker with a tiny cache hook.
-// The broker enforces tenant/namespace/stream existence via local registries
-// that are kept in sync by the control plane watcher.
-//
-// Module layout:
-// - `telemetry`: cfg-gated sampling shims and the `t_histogram!` macro.
-// - `error` / `config`: shared error type, capacity defaults, queue policy.
-// - `keys`: map keys plus their borrowed lookup twins.
-// - `delivery`: shared delivery batches and queue-depth accounting.
-// - `felix_storage::commit_order`: one authoritative apply order per durable
-//   log, shared with the cache write path.
-// - `stream_state`: per-stream subscriber registry, snapshot, and replay log.
-// - `durable`: disk-backed logs for streams registered with `durable: true`.
-// - `subscription`: subscriber-facing receive handles.
-// - `broker` / `registry`: the `Broker` aggregate and its two impl blocks.
-//
-// Everything public is re-exported at the crate root; downstream crates and the
-// docs site address these types as `felix_broker::<Name>`.
+//! The broker core: streams, caches and queues over one log.
+//!
+//! **Start at [`Broker`].** It owns every stream and cache this process
+//! serves, and the publish path runs through it: [`Broker::claim_publish`]
+//! takes offsets and a place in the commit order, [`Broker::complete_publish`]
+//! makes the record durable and fans it out. A [`StreamHandle`] is the cached
+//! lookup a hot publish path holds instead of resolving the stream again.
+//!
+//! This crate is the *logic*, not the process. It has no sockets and no
+//! control-plane client: `services/broker` wires those around it. That split
+//! is why the semantics can be tested without a network.
+//!
+//! # One log, three semantics
+//!
+//! A stream is the log read forward, a cache is a key-to-latest-value
+//! projection of it, and a queue is a durable cursor over it. They are not
+//! three subsystems:
+//!
+//! - [`Subscription`] and [`Cursor`] read the log forward.
+//! - [`cache_watch`] delivers each applied write in the shard's write order.
+//! - [`consumer_groups`], [`group_reader`], [`group_delivery`] and
+//!   [`dead_letters`] are the queue: a claim, an acknowledgement, a
+//!   redelivery after a visibility timeout, and an offset given up on.
+//! - [`replication`] ships committed records to the followers of a shard this
+//!   broker leads.
+//! - [`durable`] is the disk-backed side, for streams created `durable: true`.
+//!
+//! Everything public is re-exported at the crate root, so downstream code
+//! writes `felix_broker::<Name>` and never names an internal module.
+//!
+//! # Invariants worth knowing before changing anything here
+//!
+//! Offsets are taken *before* the durability wait, so a batch claims its place
+//! in the stream's order the instant its offsets are consumed; `CommitSequencer`
+//! in `felix-storage` then makes later publishes wait behind earlier ones
+//! whether those succeed, fail, or are cancelled. Fanout happens *after*
+//! durability. Reordering those steps is almost always a bug — see
+//! `docs/architecture.md`.
 
 // Declared first so the `t_histogram!` macro is in scope for every module below.
 #[macro_use]

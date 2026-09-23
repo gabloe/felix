@@ -971,5 +971,4 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
 }
 
 #[cfg(test)]
-#[path = "driver_tests.rs"]
 mod tests;

@@ -107,5 +107,4 @@ impl HaltedReplicas {
 }
 
 #[cfg(test)]
-#[path = "halted_tests.rs"]
 mod tests;

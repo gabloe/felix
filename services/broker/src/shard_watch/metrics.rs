@@ -42,10 +42,10 @@ pub fn record_failure() {
     metrics::counter!(FAILURES_TOTAL).increment(1);
 }
 
-pub fn record_resync(reason: super::shard_watch::Resync) {
+pub fn record_resync(reason: super::Resync) {
     let label = match reason {
-        super::shard_watch::Resync::GapInHistory => "gap_in_history",
-        super::shard_watch::Resync::SequenceReset => "sequence_reset",
+        super::Resync::GapInHistory => "gap_in_history",
+        super::Resync::SequenceReset => "sequence_reset",
     };
     metrics::counter!(RESYNCS_TOTAL, "reason" => label).increment(1);
 }

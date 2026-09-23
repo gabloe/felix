@@ -321,5 +321,4 @@ fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), NodeValidati
 }
 
 #[cfg(test)]
-#[path = "node_tests.rs"]
 mod tests;

@@ -10,7 +10,7 @@
 //!   `felix_node_transitions_total{from,to}`. `live -> down` is a failure;
 //!   `draining -> left` is a deploy.
 //! * *Is this a bad broker or a bad network?* The broker-side split between
-//!   rejected and unavailable, in the broker crate's `membership_metrics`.
+//!   rejected and unavailable, in the broker crate's `membership::metrics`.
 //!
 //! Every label here is bounded. Lifecycle has four values and region has as
 //! many as an operator configures; neither grows with fleet size, and `node_id`
@@ -114,5 +114,4 @@ pub fn publish_census(nodes: &[crate::model::Node]) {
 }
 
 #[cfg(test)]
-#[path = "membership_metrics_tests.rs"]
 mod tests;

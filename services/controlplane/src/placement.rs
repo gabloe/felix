@@ -1377,5 +1377,4 @@ pub fn spawn_reconciler(
 }
 
 #[cfg(test)]
-#[path = "placement_tests.rs"]
 mod tests;

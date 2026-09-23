@@ -225,5 +225,4 @@ pub(crate) fn put_request(value: Bytes, ttl: Option<std::time::Duration>) -> Cac
 }
 
 #[cfg(test)]
-#[path = "cache_routing_tests.rs"]
 mod tests;

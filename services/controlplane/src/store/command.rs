@@ -452,5 +452,4 @@ pub fn decode_result(bytes: &[u8]) -> Result<MetaResult, MetaError> {
 }
 
 #[cfg(test)]
-#[path = "command_tests.rs"]
 mod tests;

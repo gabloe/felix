@@ -34,5 +34,4 @@ pub use replica::ReplicaHandler;
 pub use server::{PeerRequestHandler, PeerServer, UnavailableHandler};
 
 #[cfg(test)]
-#[path = "peer/tests.rs"]
 mod tests;

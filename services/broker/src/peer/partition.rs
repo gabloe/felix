@@ -78,5 +78,4 @@ impl PartitionInjector {
 }
 
 #[cfg(test)]
-#[path = "partition_tests.rs"]
 mod tests;
