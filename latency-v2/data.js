@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790192211660,
+  "lastUpdate": 1790195077527,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -17622,6 +17622,72 @@ window.BENCHMARK_DATA = {
             "range": "104.46",
             "unit": "us",
             "extra": "trials: 5\nmedian: 319.00\nmean: 346.00\nstdev: 104.46\ncv: 30.19%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1b6a265d7c2a4e2809f47c716c984bdddfc12ecc",
+          "message": "feat: a cache can declare Quorum consistency (#648)\n\nCloses #614. A cache's shards were already replicated, and the replication\ndriver already published quorum marks for them, but a cache had no field to\nask for more than Leader, so every write was acknowledged the moment the\nleader had it.\n\nA cache now carries `consistency` (Leader by default) through the control\nplane (model, create API, the three stores, migration 0013) to the broker,\nwhich registers it on the cache's metadata. A put or delete on a Quorum\ncache is acknowledged only once the shard's quorum mark passes the log tail\nread after the write, on both the client's own path and a forwarded one.\nThe tail is at or past the write, so reaching it covers the write.\n\nCounter updates are not covered: the counter log feeds no quorum mark, so\nthey stay leader-acknowledged, and the docs say so.",
+          "timestamp": "2026-09-23T13:22:03-07:00",
+          "tree_id": "4bc8326e77d6fc801e148eccdcb2e32a9b971515",
+          "url": "https://github.com/gabloe/felix/commit/1b6a265d7c2a4e2809f47c716c984bdddfc12ecc"
+        },
+        "date": 1790195074973,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 164,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 163.60\nstdev: 1.14\ncv: 0.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 208,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 208.00\nmean: 208.00\nstdev: 1.00\ncv: 0.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 246,
+            "range": "29.59",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 246.00\nmean: 259.60\nstdev: 29.59\ncv: 11.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 200,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 200.00\nmean: 199.40\nstdev: 0.89\ncv: 0.45%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 405,
+            "range": "24.43",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 405.00\nmean: 412.80\nstdev: 24.43\ncv: 5.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 565,
+            "range": "853.81",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 565.00\nmean: 922.80\nstdev: 853.81\ncv: 92.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
