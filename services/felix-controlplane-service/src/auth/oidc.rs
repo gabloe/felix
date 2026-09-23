@@ -16,17 +16,19 @@
 //!
 //! Construct an [`UpstreamOidcValidator`] and call
 //! [`UpstreamOidcValidator::validate`].
+mod keys;
+
 use crate::auth::idp_registry::IdpIssuerConfig;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use dashmap::DashMap;
-use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
-use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use keys::{CachedDiscovery, CachedJwks, ensure_jwk_matches_algorithm, find_jwk};
 
 /// Validates upstream OIDC bearer tokens, with cached discovery documents and
 /// JWKS. ES256 by default; RS*/PS* only when explicitly allowlisted.
@@ -39,57 +41,6 @@ pub struct UpstreamOidcValidator {
     discovery_ttl: Duration,
     clock_skew_seconds: u64,
     allowed_algorithms: Arc<Vec<Algorithm>>,
-}
-
-/// The identity extracted from a verified upstream token — just enough to
-/// derive a Felix principal.
-#[derive(Debug, Clone)]
-pub struct ValidatedToken {
-    pub issuer: String,
-    pub subject: String,
-    pub groups: Vec<String>,
-}
-
-/// Upstream validation failures. Messages never include token contents.
-#[derive(Debug, thiserror::Error)]
-pub enum OidcError {
-    #[error("missing issuer")]
-    MissingIssuer,
-    #[error("issuer not allowed")]
-    IssuerNotAllowed,
-    #[error("missing subject")]
-    MissingSubject,
-    #[error("missing key id")]
-    MissingKeyId,
-    #[error("unsupported algorithm")]
-    UnsupportedAlgorithm,
-    #[error("invalid jwk: {0}")]
-    InvalidJwk(String),
-    #[error("jwks key not found")]
-    JwksKeyNotFound,
-    #[error("http error: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("jwt error: {0}")]
-    Jwt(#[from] jsonwebtoken::errors::Error),
-    #[error("invalid claim: {0}")]
-    InvalidClaim(String),
-}
-
-#[derive(Debug, Clone)]
-struct CachedJwks {
-    jwks: JwkSet,
-    expires_at: Instant,
-}
-
-#[derive(Debug, Clone)]
-struct CachedDiscovery {
-    jwks_url: String,
-    expires_at: Instant,
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscoveryDocument {
-    jwks_uri: String,
 }
 
 impl Default for UpstreamOidcValidator {
@@ -205,127 +156,43 @@ impl UpstreamOidcValidator {
         })
     }
 
-    async fn resolve_jwks_url(
-        &self,
-        issuer: &str,
-        issuer_cfg: &IdpIssuerConfig,
-    ) -> Result<String, OidcError> {
-        // An explicit JWKS URL skips discovery entirely.
-        if let Some(url) = &issuer_cfg.jwks_url {
-            return Ok(url.to_string());
-        }
-        let discovery_url = issuer_cfg.discovery_url.clone().unwrap_or_else(|| {
-            format!(
-                "{}/.well-known/openid-configuration",
-                issuer.trim_end_matches('/')
-            )
-        });
-
-        if let Some(entry) = self.discovery_cache.get(&discovery_url)
-            && entry.expires_at > Instant::now()
-        {
-            return Ok(entry.jwks_url.clone());
-        }
-
-        let doc: DiscoveryDocument = self.client.get(&discovery_url).send().await?.json().await?;
-        self.discovery_cache.insert(
-            discovery_url,
-            CachedDiscovery {
-                jwks_url: doc.jwks_uri.clone(),
-                expires_at: Instant::now() + self.discovery_ttl,
-            },
-        );
-        Ok(doc.jwks_uri)
-    }
-
-    async fn get_jwks(&self, jwks_url: &str) -> Result<JwkSet, OidcError> {
-        if let Some(entry) = self.jwks_cache.get(jwks_url)
-            && entry.expires_at > Instant::now()
-        {
-            return Ok(entry.jwks.clone());
-        }
-        self.refresh_jwks(jwks_url).await
-    }
-
-    async fn refresh_jwks(&self, jwks_url: &str) -> Result<JwkSet, OidcError> {
-        let jwks: JwkSet = self.client.get(jwks_url).send().await?.json().await?;
-        self.jwks_cache.insert(
-            jwks_url.to_string(),
-            CachedJwks {
-                jwks: jwks.clone(),
-                expires_at: Instant::now() + self.jwks_ttl,
-            },
-        );
-        Ok(jwks)
-    }
-
     fn is_algorithm_allowed(&self, alg: Algorithm) -> bool {
         self.allowed_algorithms.contains(&alg)
     }
 }
 
-fn ensure_jwk_matches_algorithm(
-    jwk: &jsonwebtoken::jwk::Jwk,
-    alg: Algorithm,
-) -> Result<(), OidcError> {
-    // `alg` is OPTIONAL in a JWK (RFC 7517 §4.4), and major IdPs — Microsoft
-    // Entra among them — publish signing keys without it. Requiring it here
-    // rejected every token those IdPs issue. When the member is present it must
-    // match the token's algorithm; when absent, the key-type/params check below
-    // is what binds the key to the algorithm (an RSA key cannot verify an EC
-    // token or vice versa, and the header `alg` is already allowlisted upstream).
-    if let Some(key_alg) = jwk.common.key_algorithm {
-        let expected = expected_key_algorithm(alg)
-            .ok_or_else(|| OidcError::InvalidJwk("unsupported algorithm".to_string()))?;
-        if key_alg != expected {
-            return Err(OidcError::InvalidJwk("alg mismatch".to_string()));
-        }
-    }
-
-    match (&jwk.algorithm, alg) {
-        (AlgorithmParameters::EllipticCurve(params), Algorithm::ES256) => {
-            if params.curve != EllipticCurve::P256 {
-                return Err(OidcError::InvalidJwk("unexpected EC curve".to_string()));
-            }
-            if params.x.is_empty() || params.y.is_empty() {
-                return Err(OidcError::InvalidJwk("missing EC coordinates".to_string()));
-            }
-            Ok(())
-        }
-        (AlgorithmParameters::RSA(params), Algorithm::RS256)
-        | (AlgorithmParameters::RSA(params), Algorithm::RS384)
-        | (AlgorithmParameters::RSA(params), Algorithm::RS512)
-        | (AlgorithmParameters::RSA(params), Algorithm::PS256)
-        | (AlgorithmParameters::RSA(params), Algorithm::PS384)
-        | (AlgorithmParameters::RSA(params), Algorithm::PS512) => {
-            if params.n.is_empty() || params.e.is_empty() {
-                return Err(OidcError::InvalidJwk(
-                    "missing RSA modulus/exponent".to_string(),
-                ));
-            }
-            Ok(())
-        }
-        _ => Err(OidcError::InvalidJwk("kty mismatch".to_string())),
-    }
+/// The identity extracted from a verified upstream token — just enough to
+/// derive a Felix principal.
+#[derive(Debug, Clone)]
+pub struct ValidatedToken {
+    pub issuer: String,
+    pub subject: String,
+    pub groups: Vec<String>,
 }
 
-fn expected_key_algorithm(alg: Algorithm) -> Option<KeyAlgorithm> {
-    match alg {
-        Algorithm::ES256 => Some(KeyAlgorithm::ES256),
-        Algorithm::RS256 => Some(KeyAlgorithm::RS256),
-        Algorithm::RS384 => Some(KeyAlgorithm::RS384),
-        Algorithm::RS512 => Some(KeyAlgorithm::RS512),
-        Algorithm::PS256 => Some(KeyAlgorithm::PS256),
-        Algorithm::PS384 => Some(KeyAlgorithm::PS384),
-        Algorithm::PS512 => Some(KeyAlgorithm::PS512),
-        _ => None,
-    }
-}
-
-fn find_jwk<'a>(jwks: &'a JwkSet, kid: &str) -> Option<&'a jsonwebtoken::jwk::Jwk> {
-    jwks.keys
-        .iter()
-        .find(|key| key.common.key_id.as_deref() == Some(kid))
+/// Upstream validation failures. Messages never include token contents.
+#[derive(Debug, thiserror::Error)]
+pub enum OidcError {
+    #[error("missing issuer")]
+    MissingIssuer,
+    #[error("issuer not allowed")]
+    IssuerNotAllowed,
+    #[error("missing subject")]
+    MissingSubject,
+    #[error("missing key id")]
+    MissingKeyId,
+    #[error("unsupported algorithm")]
+    UnsupportedAlgorithm,
+    #[error("invalid jwk: {0}")]
+    InvalidJwk(String),
+    #[error("jwks key not found")]
+    JwksKeyNotFound,
+    #[error("http error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("jwt error: {0}")]
+    Jwt(#[from] jsonwebtoken::errors::Error),
+    #[error("invalid claim: {0}")]
+    InvalidClaim(String),
 }
 
 // Unverified decode, only ever used to locate the issuer before the real

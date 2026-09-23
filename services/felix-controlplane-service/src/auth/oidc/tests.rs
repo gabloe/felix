@@ -1,3 +1,4 @@
+use super::keys::expected_key_algorithm;
 use super::*;
 use crate::auth::idp_registry::ClaimMappings;
 use crate::auth::idp_registry::IdpIssuerConfig;
@@ -5,6 +6,7 @@ use axum::{Json, Router, routing::get};
 use base64::Engine;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
+use jsonwebtoken::jwk::KeyAlgorithm;
 use jsonwebtoken::{EncodingKey, Header};
 use serde_json::{Value, json};
 use std::net::SocketAddr;

@@ -26,10 +26,30 @@ pub const ACTION_NODE_VIEW: &str = "node.view";
 /// whole fleet.
 pub const ACTION_NODE_MANAGE: &str = "node.manage";
 
+/// Validate and normalize RBAC action names.
+pub fn canonical_action(action: &str) -> Option<&'static str> {
+    match action {
+        ACTION_RBAC_VIEW => Some(ACTION_RBAC_VIEW),
+        ACTION_RBAC_POLICY_MANAGE => Some(ACTION_RBAC_POLICY_MANAGE),
+        ACTION_RBAC_ASSIGNMENT_MANAGE => Some(ACTION_RBAC_ASSIGNMENT_MANAGE),
+        ACTION_TENANT_MANAGE => Some(ACTION_TENANT_MANAGE),
+        ACTION_NS_MANAGE => Some(ACTION_NS_MANAGE),
+        ACTION_STREAM_MANAGE => Some(ACTION_STREAM_MANAGE),
+        ACTION_CACHE_MANAGE => Some(ACTION_CACHE_MANAGE),
+        ACTION_STREAM_PUBLISH => Some(ACTION_STREAM_PUBLISH),
+        ACTION_STREAM_SUBSCRIBE => Some(ACTION_STREAM_SUBSCRIBE),
+        ACTION_CACHE_READ => Some(ACTION_CACHE_READ),
+        ACTION_CACHE_WRITE => Some(ACTION_CACHE_WRITE),
+        ACTION_NODE_VIEW => Some(ACTION_NODE_VIEW),
+        ACTION_NODE_MANAGE => Some(ACTION_NODE_MANAGE),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Segment {
-    Exact(String),
-    Any,
+pub struct ParsedPermission {
+    pub action: String,
+    pub object: ParsedObject,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,29 +91,9 @@ pub enum ParsedObject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedPermission {
-    pub action: String,
-    pub object: ParsedObject,
-}
-
-/// Validate and normalize RBAC action names.
-pub fn canonical_action(action: &str) -> Option<&'static str> {
-    match action {
-        ACTION_RBAC_VIEW => Some(ACTION_RBAC_VIEW),
-        ACTION_RBAC_POLICY_MANAGE => Some(ACTION_RBAC_POLICY_MANAGE),
-        ACTION_RBAC_ASSIGNMENT_MANAGE => Some(ACTION_RBAC_ASSIGNMENT_MANAGE),
-        ACTION_TENANT_MANAGE => Some(ACTION_TENANT_MANAGE),
-        ACTION_NS_MANAGE => Some(ACTION_NS_MANAGE),
-        ACTION_STREAM_MANAGE => Some(ACTION_STREAM_MANAGE),
-        ACTION_CACHE_MANAGE => Some(ACTION_CACHE_MANAGE),
-        ACTION_STREAM_PUBLISH => Some(ACTION_STREAM_PUBLISH),
-        ACTION_STREAM_SUBSCRIBE => Some(ACTION_STREAM_SUBSCRIBE),
-        ACTION_CACHE_READ => Some(ACTION_CACHE_READ),
-        ACTION_CACHE_WRITE => Some(ACTION_CACHE_WRITE),
-        ACTION_NODE_VIEW => Some(ACTION_NODE_VIEW),
-        ACTION_NODE_MANAGE => Some(ACTION_NODE_MANAGE),
-        _ => None,
-    }
+pub enum Segment {
+    Exact(String),
+    Any,
 }
 
 pub fn parse_permission(raw: &str, tenant_id: &str) -> Result<ParsedPermission, String> {
