@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790204487412,
+  "lastUpdate": 1790204889611,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18216,6 +18216,72 @@ window.BENCHMARK_DATA = {
             "range": "23.22",
             "unit": "us",
             "extra": "trials: 5\nmedian: 332.00\nmean: 334.20\nstdev: 23.22\ncv: 6.95%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9a6e9d9e067b148efc872f83a8224fd60bdd8359",
+          "message": "feat(wire): carry an idempotent producer's sequence in the binary publish frame (#656)\n\nCloses #609. `publish_idempotent` only existed as JSON, so an idempotent\nproducer had to give up the binary encoding.\n\nFLAG_BINARY_PUBLISH_IDEMPOTENT (0x0100) is a modifier on an acked binary\npublish. A u64 producer id and u64 sequence follow the acked prefix and come\nbefore any key, so the request id stays at offset 0. The broker hands these\nbatches to the same path as `publish_idempotent` and answers the same way,\nincluding `publish_refused`, which the client already reads on that stream.\n\nThe client uses the binary frame when the broker advertises the bit and\nfalls back to `publish_idempotent` otherwise. The unacked decoder refuses a\nframe carrying the bit, since it would read the producer id as a length.",
+          "timestamp": "2026-09-23T16:05:08-07:00",
+          "tree_id": "071f6921b2c8824e6770d6071a27f48a9c795fe9",
+          "url": "https://github.com/gabloe/felix/commit/9a6e9d9e067b148efc872f83a8224fd60bdd8359"
+        },
+        "date": 1790204887076,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 96,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 96.00\nmean: 96.20\nstdev: 0.84\ncv: 0.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 132,
+            "range": "45.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 148.40\nstdev: 45.22\ncv: 30.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 155,
+            "range": "93.03",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 155.00\nmean: 210.60\nstdev: 93.03\ncv: 44.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 130,
+            "range": "5.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 132.60\nstdev: 5.27\ncv: 3.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 268,
+            "range": "395.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 268.00\nmean: 442.00\nstdev: 395.30\ncv: 89.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 399,
+            "range": "815.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 399.00\nmean: 843.00\nstdev: 815.68\ncv: 96.76%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
