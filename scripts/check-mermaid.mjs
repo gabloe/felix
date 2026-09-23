@@ -22,7 +22,17 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fromDocsSite = (rel) =>
   pathToFileURL(resolve(REPO, 'docs-site/node_modules', rel)).href;
 
-const { JSDOM } = await import(fromDocsSite('jsdom/lib/api.js'));
+const load = async (rel) => {
+  try {
+    return await import(fromDocsSite(rel));
+  } catch (err) {
+    if (err.code !== 'ERR_MODULE_NOT_FOUND') throw err;
+    console.error(`check-mermaid: ${rel} is not installed. Run \`npm ci\` in docs-site/ first.`);
+    process.exit(2);
+  }
+};
+
+const { JSDOM } = await load('jsdom/lib/api.js');
 
 // mermaid.parse needs a DOM even though it never renders here.
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
@@ -36,7 +46,7 @@ Object.defineProperty(globalThis, 'navigator', {
 });
 globalThis.DOMPurify = { sanitize: (s) => s, addHook: () => {}, setConfig: () => {} };
 
-const { default: mermaid } = await import(fromDocsSite('mermaid/dist/mermaid.core.mjs'));
+const { default: mermaid } = await load('mermaid/dist/mermaid.core.mjs');
 mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
 
 const files = process.argv.slice(2).length
