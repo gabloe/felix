@@ -26,7 +26,7 @@ pub async fn connect(addr: SocketAddr, tenant_id: &str, token: &str) -> Result<C
 /// list would.
 ///
 /// The server name is `"localhost"` for every broker, which is only sound
-/// because this harness installs [`AcceptAnyBroker`] and never validates a
+/// because this harness installs `AcceptAnyBroker` and never validates a
 /// certificate — the name reaches the wire as SNI and is not checked against
 /// anything. A deployment that verified certificates would need a name per
 /// broker, or a certificate naming them all. `Client::connect_any` takes the
