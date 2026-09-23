@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790204490167,
+  "lastUpdate": 1790204892890,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14352,6 +14352,58 @@ window.BENCHMARK_DATA = {
             "range": "5139.60",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1193523.71\nmean: 1191038.24\nstdev: 5139.60\ncv: 0.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9a6e9d9e067b148efc872f83a8224fd60bdd8359",
+          "message": "feat(wire): carry an idempotent producer's sequence in the binary publish frame (#656)\n\nCloses #609. `publish_idempotent` only existed as JSON, so an idempotent\nproducer had to give up the binary encoding.\n\nFLAG_BINARY_PUBLISH_IDEMPOTENT (0x0100) is a modifier on an acked binary\npublish. A u64 producer id and u64 sequence follow the acked prefix and come\nbefore any key, so the request id stays at offset 0. The broker hands these\nbatches to the same path as `publish_idempotent` and answers the same way,\nincluding `publish_refused`, which the client already reads on that stream.\n\nThe client uses the binary frame when the broker advertises the bit and\nfalls back to `publish_idempotent` otherwise. The unacked decoder refuses a\nframe carrying the bit, since it would read the producer id as a length.",
+          "timestamp": "2026-09-23T16:05:08-07:00",
+          "tree_id": "071f6921b2c8824e6770d6071a27f48a9c795fe9",
+          "url": "https://github.com/gabloe/felix/commit/9a6e9d9e067b148efc872f83a8224fd60bdd8359"
+        },
+        "date": 1790204892094,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 499353.11,
+            "range": "14579.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 499353.11\nmean: 496250.42\nstdev: 14579.22\ncv: 2.94%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 499353.11,
+            "range": "14579.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 499353.11\nmean: 496250.42\nstdev: 14579.22\ncv: 2.94%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 118909.83,
+            "range": "1322.39",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 118909.83\nmean: 118753.57\nstdev: 1322.39\ncv: 1.11%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1189098.25,
+            "range": "13223.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1189098.25\nmean: 1187535.71\nstdev: 13223.89\ncv: 1.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
