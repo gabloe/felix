@@ -68,6 +68,8 @@ for what the current release actually guarantees.
 - `felix_router::shard` is no longer public. Everything in it was already
   re-exported at the crate root, so `felix_router::ShardRouter` and friends
   are the paths to use.
+- `felix-common` drops what nothing used: `NodeConfig`, `LimitsConfig`,
+  `Error::Config`, and every id type but `RegionId`.
 
 ## [0.6.0-preview] - 2026-09-20
 

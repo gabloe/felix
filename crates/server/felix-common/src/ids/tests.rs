@@ -21,15 +21,9 @@ fn region_id_rejects_invalid_input() {
 #[test]
 fn all_id_types_work() {
     let region = RegionId::new();
-    let tenant = TenantId::new();
-    let _namespace = NamespaceId::new();
-    let _stream = StreamId::new();
-    let _topic = TopicId::new();
-    let _shard = ShardId::new();
 
     // Test display
     assert!(!region.to_string().is_empty());
-    assert!(!tenant.to_string().is_empty());
 
     // Test from_uuid
     let uuid = Uuid::new_v4();
@@ -42,21 +36,18 @@ fn all_id_types_work() {
     assert_eq!(region, region3);
 
     // Test default
-    let _ = TenantId::default();
-    let _ = NamespaceId::default();
+    let _ = RegionId::default();
 }
 
 #[test]
 fn id_types_parse_valid_uuids() {
     let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
-    let tenant = TenantId::from_str(uuid_str).expect("parse");
-    assert_eq!(tenant.to_string(), uuid_str);
+    let region = RegionId::from_str(uuid_str).expect("parse");
+    assert_eq!(region.to_string(), uuid_str);
 }
 
 #[test]
 fn id_types_reject_invalid_uuids() {
     let invalid = "not-valid";
-    assert!(TenantId::from_str(invalid).is_err());
-    assert!(NamespaceId::from_str(invalid).is_err());
-    assert!(StreamId::from_str(invalid).is_err());
+    assert!(RegionId::from_str(invalid).is_err());
 }

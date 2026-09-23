@@ -22,7 +22,6 @@ Or in `Cargo.toml`:
 ```toml
 [dependencies]
 felix-client = "0.5"
-felix-common = "0.5"  # error types and shared identifiers
 ```
 
 Optional features:
@@ -1053,11 +1052,10 @@ async fn publish_with_retry(
     unreachable!()
 }
 
-fn is_retriable(error: &felix_common::Error) -> bool {
-    matches!(error,
-        felix_common::Error::Timeout { .. } |
-        felix_common::Error::ConnectionLost
-    )
+// Client calls return `anyhow::Error`. What counts as transient is the
+// application's call; inspect the error chain to decide.
+fn is_retriable(_error: &anyhow::Error) -> bool {
+    true
 }
 ```
 

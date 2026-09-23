@@ -13,10 +13,8 @@
 //! - [`lifecycle`] — start-up, readiness and bounded drain, shared by both
 //!   service binaries. Feature-gated behind `lifecycle` so a library that
 //!   never runs a process does not pull in tokio.
-//! - [`ids`] and [`Error`] — identifier newtypes and the shared error shape.
-//! - [`NodeConfig`] and [`LimitsConfig`] — per-node settings.
+//! - [`ids`] and [`Error`] — the region id and its parse error.
 
-mod config;
 pub mod env_registry;
 mod error;
 pub mod ids;
@@ -28,5 +26,4 @@ pub mod lifecycle;
 // either runs a process.
 pub mod membership;
 
-pub use config::{LimitsConfig, NodeConfig};
 pub use error::{Error, Result};

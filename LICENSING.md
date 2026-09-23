@@ -14,7 +14,7 @@ about reciprocity, not about who is allowed to make money.
 | `crates/protocol/felix-wire/` | Apache-2.0 | The wire protocol. Anyone should be able to implement a Felix client or server in any language without friction. |
 | `crates/sdk/felix-client/` (default build) | Apache-2.0 | The Rust client SDK. Embeddable in your own products without restriction. |
 | `crates/protocol/felix-transport/` | Apache-2.0 | Generic QUIC transport plumbing, not Felix-specific server logic. |
-| `crates/server/felix-common/` | Apache-2.0 | Shared IDs/config/error types used by both client and server code. |
+| `crates/server/felix-common/` | Apache-2.0 | Membership shapes, the env-var registry, and process lifecycle shared by the services. |
 | `crates/testing/felix-conformance/` | Apache-2.0 | Conformance test runner and wire-format test vectors, so third-party client/server implementations can validate interop. (It links against the AGPL-3.0 crates below to run its checks against the reference broker — that's normal for a dev/CI tool and doesn't change its own license.) |
 | `crates/server/felix-broker/`, `felix-storage`, `felix-authz`, `felix-router` | AGPL-3.0-only | Server-side core logic. |
 | `services/felix-broker-service/`, `services/felix-controlplane-service/` | AGPL-3.0-only | The runnable server binaries. |
