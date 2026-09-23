@@ -210,7 +210,7 @@ They improve capacity; they do not change Felix's delivery semantics.
 
 QUIC provides reliable byte streams, but it does not define where one Felix
 message ends and another begins. Felix adds its own framing protocol in
-`crates/protocol/felix-wire/src/lib.rs`.
+`crates/protocol/felix-wire/src/client/`.
 
 ### 4.1 Frame envelope
 
@@ -230,7 +230,7 @@ enforce configured frame-size limits.
 
 ### 4.2 JSON control messages
 
-`crates/protocol/felix-wire/src/message.rs::Message` is the version-one protocol enum. With
+`crates/protocol/felix-wire/src/client/message.rs::Message` is the version-one protocol enum. With
 zero flags, `Message::encode` serializes a message as JSON and places it in a
 frame. JSON is used where flexibility and request metadata matter more than
 minimum encoding overhead:
@@ -1098,7 +1098,7 @@ once per subscriber.
 
 Read in this order and follow each symbol with editor "go to definition":
 
-1. `crates/protocol/felix-wire/src/lib.rs`
+1. `crates/protocol/felix-wire/src/client/`
    - `FrameHeader`
    - `Frame`
    - `Message`

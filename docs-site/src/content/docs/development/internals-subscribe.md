@@ -252,7 +252,7 @@ lands as one `DeliveryEnvelope`:
 | Change lane assignment policy | `SubscriberLaneShard` in `services/felix-broker-service/src/config.rs`; `WriterLaneManager::select_lane` in `subscribe/lane.rs` |
 | Change subscriber backpressure policy | `SubQueuePolicy` — two separate checkpoints: `subscriber_queue_policy` (broker-core, `Broker::publish_batch_to_handle`) and `subscriber_lane_queue_policy` (lane ingress, `WriterLaneManager::enqueue`/`enqueue_connection`). See [Internals: Backpressure](/felix/development/internals-concurrency/) |
 | Change write scheduling/fairness across subscribers on one connection | `run_connection_writer`'s `in_flight`/`FuturesUnordered` loop, `subscribe/writer.rs` |
-| Change the wire format for event delivery | `encode_shared_event_batch_bytes`/`decode_shared_event_batch`, `crates/protocol/felix-wire/src/lib.rs`; update [Wire Protocol](/felix/architecture/wire-protocol/) too |
+| Change the wire format for event delivery | `encode_shared_event_batch_bytes`/`decode_shared_event_batch`, `crates/protocol/felix-wire/src/client/binary/event_batch.rs`; update [Wire Protocol](/felix/architecture/wire-protocol/) too |
 | Add a new lane→connection routing mode | `WriterLaneManager::ensure_connection_writer`/`enqueue_connection`, `subscribe/lane.rs` |
 
 Next: [Internals: Backpressure & Core Sharding](/felix/development/internals-concurrency/)

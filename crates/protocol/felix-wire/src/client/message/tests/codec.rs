@@ -1,0 +1,124 @@
+use crate::{AckMode, Message};
+
+#[test]
+fn message_round_trip() {
+    let message = Message::Publish {
+        tenant_id: "t1".to_string(),
+        namespace: "default".to_string(),
+        stream: "topic".to_string(),
+        payload: b"payload".to_vec(),
+        request_id: None,
+        ack: None,
+        key: None,
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+}
+
+#[test]
+fn message_error_round_trip() {
+    let message = Message::Error {
+        message: "oops".to_string(),
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+}
+
+#[test]
+fn message_all_variants_encode_decode() {
+    // Test Subscribe message
+    let message = Message::Subscribe {
+        start: None,
+        subscription_id: Some(42),
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "stream".to_string(),
+        shard: None,
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+
+    // Test Subscribed message
+    let message = Message::Subscribed {
+        subscription_id: 42,
+        start_offset: None,
+        live_offset: None,
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+
+    // Test PublishOk message
+    let message = Message::PublishOk { request_id: 123 };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+
+    // Test PublishError message
+    let message = Message::PublishError {
+        request_id: 123,
+        message: "error".to_string(),
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+
+    // Test Ok message
+    let message = Message::Ok;
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+
+    // Test EventStreamHello message
+    let message = Message::EventStreamHello {
+        subscription_id: 99,
+    };
+    let frame = message.encode().expect("encode");
+    let decoded = Message::decode(frame).expect("decode");
+    assert_eq!(message, decoded);
+}
+
+#[test]
+fn ack_mode_serialization() {
+    // Test all AckMode variants serialize correctly
+    let none = AckMode::None;
+    let per_msg = AckMode::PerMessage;
+    let per_batch = AckMode::PerBatch;
+
+    // Just ensure they can be used in messages
+    let msg = Message::Publish {
+        tenant_id: "t".to_string(),
+        namespace: "n".to_string(),
+        stream: "s".to_string(),
+        payload: vec![1, 2, 3],
+        request_id: Some(1),
+        ack: Some(none),
+        key: None,
+    };
+    assert!(msg.encode().is_ok());
+
+    let msg2 = Message::Publish {
+        tenant_id: "t".to_string(),
+        namespace: "n".to_string(),
+        stream: "s".to_string(),
+        payload: vec![1, 2, 3],
+        request_id: Some(2),
+        ack: Some(per_msg),
+        key: None,
+    };
+    assert!(msg2.encode().is_ok());
+
+    let msg3 = Message::PublishBatch {
+        tenant_id: "t".to_string(),
+        namespace: "n".to_string(),
+        stream: "s".to_string(),
+        payloads: vec![vec![1, 2], vec![3, 4]],
+        request_id: Some(3),
+        ack: Some(per_batch),
+        key: None,
+    };
+    assert!(msg3.encode().is_ok());
+}

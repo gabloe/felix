@@ -106,8 +106,9 @@ delivered events carry log offsets for durable streams: a jump in offsets is exa
 
 ### Wire protocol: capability negotiation, not versioning
 
-`crates/protocol/felix-wire/`. Frame flags (`frame.rs`) select the *payload layout*, so an unknown flag
-bit is rejected rather than masked off — masking one means confidently misparsing the body.
+`crates/protocol/felix-wire/`. Frame flags (`client/flags.rs`) select the *payload layout*, so an
+unknown flag bit is rejected rather than masked off — masking one means confidently misparsing
+the body.
 
 New features are added as negotiated flag bits, not version bumps: a client offers
 `Auth.client_flags`, the broker answers `AuthOk.server_flags`. A peer that predates negotiation

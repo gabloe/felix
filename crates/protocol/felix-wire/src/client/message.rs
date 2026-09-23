@@ -1,26 +1,17 @@
-// V1 protocol message enum and its JSON codec.
+//! V1 protocol message enum and its JSON codec.
 
-use crate::error::{Error, Result};
-use crate::frame::Frame;
+mod base64_serde;
+mod fields;
+
+pub use fields::{
+    AckMode, BrokerEndpoint, CursorErrorReason, GroupRecord, PublishRefusalReason, StartPosition,
+};
+
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
-/// One record handed to a consumer, with the offset it must acknowledge.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupRecord {
-    pub offset: u64,
-    #[serde(with = "crate::base64_serde::base64_bytes_bytes")]
-    pub payload: Bytes,
-    /// How many times this record has been handed out, this delivery included.
-    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
-    /// can treat a retry differently.
-    ///
-    /// `0` means the broker did not report it — absent rather than first, since
-    /// claiming a first attempt for an unknown one would have a consumer skip
-    /// exactly the retry handling it wanted.
-    #[serde(default)]
-    pub attempts: u32,
-}
+use crate::client::frame::Frame;
+use crate::error::{Error, Result};
 
 /// V1 wire messages encoded in framed payloads.
 ///
@@ -177,7 +168,7 @@ pub enum Message {
         tenant_id: String,
         namespace: String,
         stream: String,
-        #[serde(with = "crate::base64_serde::base64_bytes")]
+        #[serde(with = "crate::client::message::base64_serde::base64_bytes")]
         payload: Vec<u8>,
         /// Which shard this record belongs to, resolved by hashing.
         ///
@@ -193,7 +184,7 @@ pub enum Message {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            with = "crate::base64_serde::base64_option_bytes"
+            with = "crate::client::message::base64_serde::base64_option_bytes"
         )]
         key: Option<Bytes>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,7 +197,7 @@ pub enum Message {
         tenant_id: String,
         namespace: String,
         stream: String,
-        #[serde(with = "crate::base64_serde::base64_vec")]
+        #[serde(with = "crate::client::message::base64_serde::base64_vec")]
         payloads: Vec<Vec<u8>>,
         /// One key for the whole batch, with the same semantics as
         /// `Publish.key`. A batch is routed as a unit, so every record in it
@@ -216,7 +207,7 @@ pub enum Message {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            with = "crate::base64_serde::base64_option_bytes"
+            with = "crate::client::message::base64_serde::base64_option_bytes"
         )]
         key: Option<Bytes>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -275,7 +266,7 @@ pub enum Message {
         tenant_id: String,
         namespace: String,
         stream: String,
-        #[serde(with = "crate::base64_serde::base64_bytes")]
+        #[serde(with = "crate::client::message::base64_serde::base64_bytes")]
         payload: Vec<u8>,
         /// Log offset of this event, for durable streams.
         ///
@@ -290,7 +281,7 @@ pub enum Message {
         tenant_id: String,
         namespace: String,
         stream: String,
-        #[serde(with = "crate::base64_serde::base64_vec")]
+        #[serde(with = "crate::client::message::base64_serde::base64_vec")]
         payloads: Vec<Vec<u8>>,
         /// Offset of the first payload. The rest are contiguous from there, so
         /// payload `i` sits at `base_offset + i`.
@@ -303,7 +294,7 @@ pub enum Message {
         namespace: String,
         cache: String,
         key: String,
-        #[serde(with = "crate::base64_serde::base64_bytes_bytes")]
+        #[serde(with = "crate::client::message::base64_serde::base64_bytes_bytes")]
         value: Bytes,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
@@ -506,7 +497,7 @@ pub enum Message {
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            with = "crate::base64_serde::base64_option_bytes"
+            with = "crate::client::message::base64_serde::base64_option_bytes"
         )]
         value: Option<Bytes>,
         /// The cache-log offset of the change. Offsets are naturally sparse on
@@ -570,7 +561,7 @@ pub enum Message {
         namespace: String,
         cache: String,
         key: String,
-        #[serde(with = "crate::base64_serde::base64_option_bytes")]
+        #[serde(with = "crate::client::message::base64_serde::base64_option_bytes")]
         value: Option<Bytes>,
         #[serde(skip_serializing_if = "Option::is_none")]
         request_id: Option<u64>,
@@ -614,14 +605,14 @@ pub enum Message {
         tenant_id: String,
         namespace: String,
         stream: String,
-        #[serde(with = "crate::base64_serde::base64_vec")]
+        #[serde(with = "crate::client::message::base64_serde::base64_vec")]
         payloads: Vec<Vec<u8>>,
         /// Routes the batch like `PublishBatch.key`. The sequence is per
         /// shard, so a producer keeps one counter per key's shard.
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
-            with = "crate::base64_serde::base64_option_bytes"
+            with = "crate::client::message::base64_serde::base64_option_bytes"
         )]
         key: Option<Bytes>,
         request_id: u64,
@@ -662,103 +653,6 @@ pub enum Message {
     },
 }
 
-/// Somewhere a client may connect, as one broker understands the cluster.
-///
-/// Carries only what a client needs in order to connect: an identity to
-/// recognise it by and an address to dial. Deliberately not the control plane's
-/// node record -- placement, capacity, and liveness detail are the cluster's
-/// business, and a tenant's client has no standing to read them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BrokerEndpoint {
-    pub node_id: String,
-    /// `host:port`, as the broker was configured to advertise to clients.
-    pub addr: String,
-}
-
-/// Why a subscribe could not start at the requested position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CursorErrorReason {
-    /// The offset has been discarded by retention, or has fallen out of an
-    /// in-memory stream's replay ring.
-    TooOld,
-    /// The offset is past the end of the stream.
-    InFuture,
-}
-
-/// Why a `publish_idempotent` was not appended.
-///
-/// Each names a different remedy, which is why they are not one string. A
-/// gap means the producer skipped ahead and must not continue as if it had
-/// not; an unknown producer means this broker holds nothing to check against
-/// and the producer must start again with a new id; an expired sequence is a
-/// re-send from further back than the broker remembers; and not-leader means
-/// the batch went to a broker that does not hold the shard's sequences.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PublishRefusalReason {
-    /// The sequence is past the next one expected; what was skipped is lost
-    /// to this broker and the producer must not carry on past it.
-    SequenceGap {
-        /// The sequence the broker would have appended.
-        expected: u64,
-    },
-    /// The broker holds no sequence for this producer on this shard and the
-    /// batch was not its first. Nothing can be checked against, so nothing
-    /// is appended; the producer needs a new id.
-    UnknownProducer,
-    /// The sequence is older than the window the broker keeps, so whether it
-    /// was appended cannot be told any more.
-    SequenceExpired,
-    /// This broker does not lead the shard, and only the leader holds the
-    /// sequences; the batch has to go to the broker named here.
-    NotLeader {
-        /// Who leads it.
-        node_id: String,
-        /// `host:port` the leader serves clients on, or absent when the
-        /// cluster has not been told where clients reach it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        addr: Option<String>,
-    },
-}
-
-/// Where a subscription should begin.
-///
-/// Untagged on the wire so `"latest"` and `{"offset": 42}` are both accepted,
-/// and so the common cases stay short in a JSON control message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StartPosition {
-    /// The live tail: deliver only what is published from now on. Identical to
-    /// omitting the field, and spelled out for clients that prefer to be
-    /// explicit.
-    Latest,
-    /// The oldest record the broker still retains.
-    ///
-    /// Deliberately not "offset 0": for a stream whose head has been trimmed,
-    /// offset 0 is gone and asking for it is an error, whereas `earliest` means
-    /// "as far back as you can" and always succeeds.
-    Earliest,
-    /// Resume at an exact log offset — the first record the client has *not*
-    /// seen, so a client checkpoints the offset it last handled plus one.
-    Offset(u64),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AckMode {
-    None,
-    PerMessage,
-    PerBatch,
-}
-
-/// For `skip_serializing_if`: an unset flag stays off the wire entirely, so a
-/// message that does not use it is byte-identical to one that predates it.
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 impl Message {
     pub fn encode(&self) -> Result<Frame> {
         // JSON-encode into a framed payload.
@@ -770,3 +664,13 @@ impl Message {
         serde_json::from_slice(&frame.payload).map_err(Error::Deserialize)
     }
 }
+
+/// For `skip_serializing_if`: an unset flag stays off the wire entirely, so a
+/// message that does not use it is byte-identical to one that predates it.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[cfg(test)]
+mod tests;

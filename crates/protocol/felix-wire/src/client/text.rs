@@ -1,11 +1,12 @@
-// Hand-rolled zero-copy JSON writer for the publish-batch hot path.
-// Avoids serde_json's intermediate allocations by computing the exact encoded
-// length up front and writing directly into the caller's buffer.
+//! Hand-rolled zero-copy JSON writer for the publish-batch hot path.
+//! Avoids serde_json's intermediate allocations by computing the exact encoded
+//! length up front and writing directly into the caller's buffer.
 
-use crate::error::{Error, Result};
-use crate::message::AckMode;
 use base64::Engine;
 use bytes::{BufMut, BytesMut};
+
+use crate::client::message::AckMode;
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EncodeStats {
@@ -252,3 +253,6 @@ fn write_decimal(buf: &mut BytesMut, mut value: u64) {
     }
     buf.extend_from_slice(&scratch[idx..]);
 }
+
+#[cfg(test)]
+mod tests;

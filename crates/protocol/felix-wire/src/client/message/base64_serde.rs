@@ -1,5 +1,6 @@
-// serde `with` adapters that base64-encode binary fields in JSON messages.
-// Referenced by absolute path from `#[serde(with = "...")]` attributes in `message.rs`.
+//! serde `with` adapters that base64-encode binary fields in JSON messages.
+//! Referenced by absolute path from `#[serde(with = "...")]` attributes in
+//! `message.rs` and `message/fields.rs`.
 
 use base64::Engine;
 use bytes::Bytes;

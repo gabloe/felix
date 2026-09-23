@@ -255,7 +255,7 @@ Publishing one message to a stream with 3 active subscribers, unacked,
 
 | You want to... | Look at |
 |---|---|
-| Change how publishes are encoded (binary vs JSON, new wire format) | `crates/sdk/felix-client/src/client/publisher.rs` (`publish`/`publish_json`), `crates/protocol/felix-wire/src/lib.rs` |
+| Change how publishes are encoded (binary vs JSON, new wire format) | `crates/sdk/felix-client/src/client/publisher.rs` (`publish`/`publish_json`), `crates/protocol/felix-wire/src/client/` |
 | Change client-side publish backpressure | `PublishAdmission` in `publisher.rs`; `publish_queue_depth`/`publish_inflight_bytes` in `crates/sdk/felix-client/src/config.rs` |
 | Change broker ingest admission/shedding behavior | `EnqueuePolicy` in `handlers/publish/ack.rs` and `enqueue_publish()` in `handlers/publish/ingress.rs` |
 | Change stream resolution/caching | `resolve_stream_cached`, `StreamHandleCache` in `publish.rs`; `StreamHandle` in `crates/server/felix-broker/src/broker.rs` and `resolve_stream_handle` in `crates/server/felix-broker/src/registry.rs` |

@@ -86,23 +86,28 @@ types as `felix_broker::<Name>` regardless of which module defines them.
 **Responsibilities**:
 - Frame type definitions
 - Binary batch encoding/decoding
-- Protocol versioning
+- Capability negotiation (frame flags and feature bits)
 - Frame validation
+- The broker-to-broker protocol
 
 **Key modules**:
-- `frame.rs`: Protocol constants, `FrameHeader`, and `Frame`
-- `message.rs`: The `Message` enum and its JSON codec
-- `text.rs`: Hand-rolled zero-copy JSON writer for the publish-batch hot path
-- `binary.rs`: Binary batch codec for publish and event batches
-- `error.rs` / `base64_serde.rs`: Wire `Error` type, base64 serde adapters
+- `client/frame.rs`: Protocol constants, `FrameHeader`, and `Frame`
+- `client/flags.rs` / `client/features.rs`: Frame-flag bits and feature bits
+- `client/message.rs`: The `Message` enum and its JSON codec; the types its fields carry are in `client/message/fields.rs`
+- `client/text.rs`: Hand-rolled zero-copy JSON writer for the publish-batch hot path
+- `client/binary.rs`: Binary batch codec, one submodule per frame (publish, acked publish, publish ack, event batch)
+- `internal.rs`: The protocol brokers speak to each other, split by message family under `internal/`
+- `routing.rs`: Which shard a routing key belongs to
+- `error.rs`: Wire `Error` type
 
 **Key types**:
 - `Frame` / `FrameHeader`: Top-level frame and its 12-byte header
 - `Message`: The v1 message enum carried in JSON control frames
 - `binary::PublishBatch` / `binary::EventBatch`: Binary batch frame formats
 
-`frame`, `message`, and `error` items are re-exported at the crate root; `text` and
-`binary` are addressed through their module paths (`felix_wire::binary::…`).
+Frame, flag, feature, message, and error items are re-exported at the crate root;
+`text`, `binary`, `internal`, and `routing` are addressed through their module paths
+(`felix_wire::binary::…`).
 
 **Protocol layers**:
 1. **Envelope**: Version, type, length

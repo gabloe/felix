@@ -70,7 +70,7 @@ send a featured request to a peer that did not advertise the bit: an
 unrecognised message type is fatal to a broker's control loop, so probing costs
 the connection rather than returning an error.
 
-> `crates/protocol/felix-wire/src/frame.rs`, `message.rs`.
+> `crates/protocol/felix-wire/src/client/` — `frame.rs`, `flags.rs`, `features.rs`, `message.rs`.
 
 ### 2. The broker decodes and routes it to a handler
 
