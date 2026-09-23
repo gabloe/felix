@@ -40,7 +40,8 @@ use axum::http::StatusCode;
 use axum::{Json, Router};
 use base64::Engine as _;
 use felix_broker::Broker;
-use felix_broker_service::{auth::BrokerAuth, controlplane as broker_controlplane, quic};
+use felix_broker_service::controlplane as broker_controlplane;
+use felix_broker_service::serving::{auth::BrokerAuth, quic};
 use felix_client::{Client, ClientConfig};
 use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
 use felix_controlplane_service::api::types::{

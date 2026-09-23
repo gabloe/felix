@@ -35,7 +35,7 @@ use felix_authz::{
     TenantKeyStore,
 };
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use felix_client::{Client, ClientConfig};
 use felix_common::lifecycle::{DrainBudget, Readiness};
 use felix_storage::EphemeralCache;
@@ -270,7 +270,7 @@ async fn start_broker(auth: &AuthFixture) -> Result<BrokerHarness> {
         let connections = connections.clone();
         let auth = Arc::clone(&auth.broker_auth);
         tokio::spawn(async move {
-            if let Err(err) = felix_broker_service::quic::serve_with_shutdown(
+            if let Err(err) = felix_broker_service::serving::quic::serve_with_shutdown(
                 server,
                 broker,
                 config,

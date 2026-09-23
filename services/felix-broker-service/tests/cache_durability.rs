@@ -13,7 +13,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_authz::{FelixTokenIssuer, Jwks, TenantId, TenantKeyCache, TenantKeyMaterial};
 use felix_broker::{Broker, CacheMetadata};
-use felix_broker_service::{auth::BrokerAuth, quic};
+use felix_broker_service::serving::{auth::BrokerAuth, quic};
 use felix_client::{Client, ClientConfig};
 use felix_storage::LogCache;
 use felix_storage::log::{FsyncMode, LogConfig};
@@ -265,10 +265,12 @@ fn demo_auth_for_tenants(tenants: &[&str], ttl: Duration) -> Result<DemoAuthBund
         );
     }
 
-    let key_store = Arc::new(felix_broker_service::auth::ControlPlaneKeyStore::new(
-        "http://127.0.0.1".to_string(),
-        Arc::new(TenantKeyCache::default()),
-    ));
+    let key_store = Arc::new(
+        felix_broker_service::serving::auth::ControlPlaneKeyStore::new(
+            "http://127.0.0.1".to_string(),
+            Arc::new(TenantKeyCache::default()),
+        ),
+    );
     for (tenant, jwks) in jwks_per_tenant {
         key_store.insert_jwks(&TenantId::new(&tenant), jwks);
     }

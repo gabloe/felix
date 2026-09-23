@@ -25,7 +25,7 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
 };
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
@@ -151,7 +151,7 @@ async fn quic_publish_unauthorized_and_stream_missing() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.subscribe:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -222,7 +222,7 @@ async fn quic_publish_ack_and_batch_success() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -280,7 +280,7 @@ async fn quic_publish_commit_ack_ok() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -326,7 +326,7 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config.clone(),
@@ -340,7 +340,7 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, mut recv) = connection.open_bi().await?;
-    felix_broker_service::quic::write_message(
+    felix_broker_service::serving::quic::write_message(
         &mut send,
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
@@ -353,7 +353,7 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
     )
     .await?;
     let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -371,7 +371,7 @@ async fn quic_publish_binary_decode_error_closes_stream() -> Result<()> {
 
     let close = timeout(
         Duration::from_millis(200),
-        felix_broker_service::quic::read_message_limited(
+        felix_broker_service::serving::quic::read_message_limited(
             &mut recv,
             config.max_frame_bytes,
             &mut frame_scratch,
@@ -407,7 +407,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config.clone(),
@@ -421,7 +421,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, mut recv) = connection.open_bi().await?;
-    felix_broker_service::quic::write_message(
+    felix_broker_service::serving::quic::write_message(
         &mut send,
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
@@ -434,7 +434,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
     )
     .await?;
     let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -443,7 +443,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
     assert!(matches!(response, Some(Message::Ok)));
 
     // Acked publish without request_id should yield an error on the control stream.
-    felix_broker_service::quic::write_message(
+    felix_broker_service::serving::quic::write_message(
         &mut send,
         Message::Publish {
             tenant_id: "t1".to_string(),
@@ -456,7 +456,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
         },
     )
     .await?;
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -496,7 +496,7 @@ async fn quic_publish_binary_batch_success() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -548,7 +548,7 @@ async fn quic_publish_binary_acked_success() -> Result<()> {
             let addr = server.local_addr()?;
             let config = felix_broker_service::config::BrokerConfig::from_env()?;
             let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-            let server_task = tokio::spawn(felix_broker_service::quic::serve(
+            let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
                 Arc::clone(&server),
                 Arc::clone(&broker),
                 config,
@@ -622,7 +622,7 @@ async fn quic_publish_binary_acked_unknown_stream_returns_error() -> Result<()> 
     let addr = server.local_addr()?;
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -676,7 +676,7 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
     let addr = server.local_addr()?;
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config.clone(),
@@ -690,7 +690,7 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, mut recv) = connection.open_bi().await?;
-    felix_broker_service::quic::write_message(
+    felix_broker_service::serving::quic::write_message(
         &mut send,
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
@@ -703,7 +703,7 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
     )
     .await?;
     let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -725,7 +725,7 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
     send.write_all(&header_bytes).await?;
     send.write_all(&[0x00, 0x00]).await?;
 
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -771,7 +771,7 @@ async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
     let addr = server.local_addr()?;
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config.clone(),
@@ -785,7 +785,7 @@ async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, mut recv) = connection.open_bi().await?;
-    felix_broker_service::quic::write_message(
+    felix_broker_service::serving::quic::write_message(
         &mut send,
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
@@ -798,7 +798,7 @@ async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
     )
     .await?;
     let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -822,7 +822,7 @@ async fn quic_publish_binary_acked_reply_is_a_binary_frame() -> Result<()> {
     );
     send.write_all(&bytes).await?;
 
-    let frame = felix_broker_service::quic::read_frame_limited_into(
+    let frame = felix_broker_service::serving::quic::read_frame_limited_into(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,

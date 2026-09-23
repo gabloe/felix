@@ -1,0 +1,627 @@
+//! The broker's QUIC entrypoint: the accept loop, per-connection setup, and
+//! dispatch of bi/uni streams to the publish/subscribe/cache handlers.
+//! Authentication happens per stream via `BrokerAuth`.
+use anyhow::Result;
+use felix_broker::Broker;
+use felix_broker::timings as broker_publish_timings;
+use felix_transport::{QuicConnection, QuicServer};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+
+use crate::config::BrokerConfig;
+use crate::serving::auth::BrokerAuth;
+use crate::shard_routing::IngressRouter;
+use crate::timings;
+
+use super::GLOBAL_INGRESS_DEPTH;
+use super::handlers::publish::{
+    PublishAdmission, PublishContext, PublishJob, PublishTarget, SubscriptionLimiter,
+    decrement_depth,
+};
+use super::handlers::subscribe::WriterLaneManager;
+
+use super::streams::{handle_stream, handle_uni_stream};
+
+/// Serve incoming QUIC connections: accept loop, one task per connection.
+///
+/// # Errors
+/// Propagates QUIC accept errors from the server.
+pub async fn serve(
+    server: Arc<QuicServer>,
+    broker: Arc<Broker>,
+    config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
+) -> Result<()> {
+    // Runs until the listener errors. Callers that need to stop accepting without
+    // killing in-flight connections should use `serve_with_shutdown`.
+    serve_with_shutdown(
+        server,
+        broker,
+        config,
+        auth,
+        CancellationToken::new(),
+        TaskTracker::new(),
+        // The simple entry point is single-node; a cluster member goes through
+        // `serve_with_shutdown` so it can pass its ownership view and its peers.
+        ClusterContext::default(),
+    )
+    .await
+}
+
+/// Accept loop with cooperative shutdown.
+///
+/// Same as [`serve`], but stops accepting when `shutdown` is cancelled and registers
+/// every per-connection task with `connections` so a drain can wait for in-flight
+/// work to finish.
+///
+/// Aborting the accept task kills the loop but says nothing about the connections it
+/// already spawned — those are detached and die with the process. Separating "stop
+/// admitting" from "wait for in-flight" is what makes a bounded drain possible.
+///
+/// - Cancelling `shutdown` stops admission only; accepted connections keep running.
+/// - The caller owns `connections`, and must `close()` it before `wait()`ing or the
+///   wait never resolves.
+pub async fn serve_with_shutdown(
+    server: Arc<QuicServer>,
+    broker: Arc<Broker>,
+    config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
+    shutdown: CancellationToken,
+    connections: TaskTracker,
+    cluster: ClusterContext,
+) -> Result<()> {
+    let publish_ctx = build_publish_context(Arc::clone(&broker), &config, cluster);
+    // Main accept loop: spawn a task per incoming QUIC connection.
+    if config.disable_timings {
+        timings::set_enabled(false);
+        broker_publish_timings::set_enabled(false);
+    }
+    loop {
+        // Accept the next QUIC connection, unless we have been asked to stop
+        // admitting. Selecting here rather than checking between accepts means a
+        // loop parked on an idle listener still exits promptly.
+        let connection = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!("quic accept loop stopping; no longer admitting connections");
+                return Ok(());
+            }
+            accepted = server.accept() => accepted?,
+        };
+        let broker = Arc::clone(&broker);
+        let config = config.clone();
+        let auth = Arc::clone(&auth);
+        let publish_ctx = publish_ctx.clone();
+        // Each connection observes the same shutdown signal, so a drain winds
+        // down accepted connections cooperatively rather than waiting for peers
+        // that may never disconnect.
+        let conn_shutdown = shutdown.clone();
+        connections.spawn(async move {
+            if let Err(err) = handle_connection_with_shutdown(
+                broker,
+                connection,
+                config,
+                auth,
+                publish_ctx,
+                conn_shutdown,
+            )
+            .await
+            {
+                tracing::warn!(error = %err, "quic connection handler failed");
+            }
+        });
+    }
+}
+
+/// What a broker needs to serve traffic as part of a cluster.
+///
+/// Both halves or neither: a broker that can resolve a remote owner and has no
+/// way to reach it would refuse publishes it should forward. `Default` is a
+/// single-node broker, which has neither.
+#[derive(Clone, Default)]
+pub struct ClusterContext {
+    pub ingress: Option<Arc<IngressRouter>>,
+    pub peers: Option<Arc<crate::peer::PeerPool>>,
+    /// This broker's authority to serve the shards it leads.
+    pub lease: Option<Arc<crate::lease::LeaseState>>,
+    /// How far a majority of each shard's replica set has got. Read by a
+    /// publish to a `Quorum` stream, which cannot acknowledge until the
+    /// majority holds its records.
+    pub marks: Option<Arc<crate::replication::quorum::QuorumMarks>>,
+    /// Where a client may connect, for answering `Topology`. `None` on a broker
+    /// with no cluster behind it, which then advertises no such feature.
+    pub client_endpoints: Option<Arc<crate::client_endpoints::ClientEndpoints>>,
+}
+
+fn build_publish_context(
+    broker: Arc<Broker>,
+    config: &BrokerConfig,
+    cluster: ClusterContext,
+) -> PublishContext {
+    let ClusterContext {
+        ingress,
+        peers,
+        lease,
+        marks,
+        client_endpoints,
+    } = cluster;
+    let quorum_timeout = std::time::Duration::from_millis(config.publish_quorum_timeout_ms.max(1));
+    // Copied per worker below. A forward that outlasts this is cut off with its
+    // own answer rather than the waiter's, which is the whole point -- see
+    // `BrokerConfig::forward_budget`.
+    let forward_budget = config.forward_budget();
+    // NOTE: This is intentionally global for the process (not per-connection).
+    // With per-connection worker pools, adding more publisher connections multiplied
+    // concurrent broker.publish_batch callers and caused lock contention on shared broker state.
+    let shards = crate::serving::core_shards::global_shards(config);
+    // With core shards enabled, run exactly one publish worker per shard so
+    // each stream's state has a single owning core (worker i lives on shard i,
+    // and `publish_worker_index` maps handle id -> worker == shard).
+    let worker_count = match &shards {
+        Some(shards) => shards.len(),
+        None => config.pub_workers_per_conn.max(1),
+    };
+    let publish_queue_depth = config.pub_queue_depth.max(1);
+    let admission = Arc::new(PublishAdmission::new(config.pub_inflight_bytes));
+    let queue_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut worker_txs = Vec::with_capacity(worker_count);
+    for worker_id in 0..worker_count {
+        #[cfg(not(feature = "perf_debug"))]
+        let _ = worker_id;
+        #[cfg(feature = "perf_debug")]
+        let worker_label = worker_id.to_string();
+        let (publish_tx, mut publish_rx) = mpsc::channel::<PublishJob>(publish_queue_depth);
+        let queue_depth_worker = Arc::clone(&queue_depth);
+        let broker_for_worker = Arc::clone(&broker);
+        let peers_for_worker = peers.clone();
+        let lease_for_worker = lease.clone();
+        let marks_for_worker = marks.clone();
+        let ingress_for_worker = ingress.clone();
+        // How many durable publishes this worker may have awaiting their device
+        // flush at once. The worker claims offsets serially -- that is what
+        // keeps disk order equal to arrival order -- and then lets the flushes
+        // overlap, because group commit only coalesces what is concurrently in
+        // `ensure_durable`. At a fan-in of one the ceiling was one batch per
+        // flush (#535).
+        //
+        // Bounded, not unbounded: the reason this pool is process-wide in the
+        // first place is that unbounded concurrent `publish_batch` callers
+        // contended on shared broker state (see the note above). This buys the
+        // flush overlap without going back to that.
+        let flush_slots = Arc::new(tokio::sync::Semaphore::new(
+            config.pub_flush_concurrency.max(1),
+        ));
+        let worker_task = async move {
+            while let Some(job) = publish_rx.recv().await {
+                #[cfg(feature = "perf_debug")]
+                metrics::counter!(
+                    "felix_perf_publish_worker_wakeups_total",
+                    "worker" => worker_label.clone()
+                )
+                .increment(1);
+                let _ = decrement_depth(
+                    &queue_depth_worker,
+                    &GLOBAL_INGRESS_DEPTH,
+                    "felix_broker_ingress_queue_depth",
+                );
+                #[cfg(feature = "perf_debug")]
+                let worker_start = std::time::Instant::now();
+
+                // Durable local publishes take the split path: claim here, in
+                // queue order, then complete off-worker so the device flushes
+                // overlap. Everything else -- forwards, idempotent sequences,
+                // the single-node local target -- stays inline, because none of
+                // them is waiting on a flush this worker could be sharing.
+                if let PublishTarget::Resolved { handle, shard } = &job.target {
+                    let lease_ok = match &lease_for_worker {
+                        Some(lease) => lease.is_valid_now(),
+                        None => true,
+                    };
+                    if lease_ok && handle.is_durable() {
+                        // Serial, and the only ordered part: offsets are
+                        // consumed here, so the order these return in is the
+                        // order records land on disk.
+                        match broker_for_worker.claim_publish(handle, &job.payloads).await {
+                            Ok(claimed) => {
+                                let permit = Arc::clone(&flush_slots)
+                                    .acquire_owned()
+                                    .await
+                                    .expect("flush slots are never closed");
+                                let broker = Arc::clone(&broker_for_worker);
+                                let handle = handle.clone();
+                                let shard = shard.clone();
+                                let marks = marks_for_worker.clone();
+                                let ingress = ingress_for_worker.clone();
+                                let response = job.response;
+                                tokio::spawn(async move {
+                                    let result = match broker.complete_publish(claimed).await {
+                                        Ok(outcome) => {
+                                            crate::replication::quorum::await_quorum(
+                                                &handle,
+                                                shard.as_ref(),
+                                                &outcome,
+                                                marks.as_deref(),
+                                                ingress.as_deref(),
+                                                quorum_timeout,
+                                            )
+                                            .await
+                                        }
+                                        Err(err) => Err(err.into()),
+                                    };
+                                    if let Some(response) = response {
+                                        let _ = response.send(result);
+                                    }
+                                    drop(permit);
+                                });
+                                continue;
+                            }
+                            Err(err) => {
+                                if let Some(response) = job.response {
+                                    let _ = response.send(Err(err.into()));
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                let result: Result<(), anyhow::Error> = match &job.target {
+                    PublishTarget::Resolved { handle, shard } => {
+                        // The commit fence, and the authoritative one. Everything
+                        // between admission and here can take arbitrarily long --
+                        // a full queue, a slow fsync, a suspended process -- so a
+                        // lease that was valid on the way in may have lapsed. A
+                        // broker that writes here after losing its lease is a
+                        // broker writing a shard someone else may already lead.
+                        match &lease_for_worker {
+                            Some(lease) if !lease.is_valid_now() => {
+                                crate::lease::metrics::record_refusal(
+                                    crate::lease::metrics::BOUNDARY_COMMIT,
+                                );
+                                Err(anyhow::anyhow!(
+                                    "lease lapsed before the record could be committed"
+                                ))
+                            }
+                            _ => {
+                                match broker_for_worker
+                                    .publish_batch_with_outcome(handle, &job.payloads)
+                                    .await
+                                {
+                                    Ok(outcome) => {
+                                        crate::replication::quorum::await_quorum(
+                                            handle,
+                                            shard.as_ref(),
+                                            &outcome,
+                                            marks_for_worker.as_deref(),
+                                            ingress_for_worker.as_deref(),
+                                            quorum_timeout,
+                                        )
+                                        .await
+                                    }
+                                    Err(err) => Err(err.into()),
+                                }
+                            }
+                        }
+                    }
+                    PublishTarget::Idempotent {
+                        handle,
+                        shard,
+                        producer_id,
+                        sequence,
+                    } => match &lease_for_worker {
+                        // The same commit fence as a plain publish: see above.
+                        Some(lease) if !lease.is_valid_now() => {
+                            crate::lease::metrics::record_refusal(
+                                crate::lease::metrics::BOUNDARY_COMMIT,
+                            );
+                            Err(anyhow::anyhow!(
+                                "lease lapsed before the record could be committed"
+                            ))
+                        }
+                        _ => {
+                            match broker_for_worker
+                                .publish_batch_idempotent(
+                                    handle,
+                                    *producer_id,
+                                    *sequence,
+                                    &job.payloads,
+                                )
+                                .await
+                            {
+                                // A duplicate waits on the same quorum the
+                                // original did: its offsets are the original's,
+                                // and the answer must mean the same thing.
+                                Ok(idempotent) => {
+                                    crate::replication::quorum::await_quorum(
+                                        handle,
+                                        shard.as_ref(),
+                                        &idempotent.outcome,
+                                        marks_for_worker.as_deref(),
+                                        ingress_for_worker.as_deref(),
+                                        quorum_timeout,
+                                    )
+                                    .await
+                                }
+                                Err(err) => Err(err.into()),
+                            }
+                        }
+                    },
+                    #[cfg(test)]
+                    PublishTarget::Named {
+                        tenant_id,
+                        namespace,
+                        stream,
+                    } => broker_for_worker
+                        .publish_batch(tenant_id, namespace, stream, 0, &job.payloads)
+                        .await
+                        .map(|_| ())
+                        .map_err(Into::into),
+                    PublishTarget::Forward {
+                        target,
+                        key,
+                        ack,
+                        credential,
+                    } => {
+                        // Forwarding runs on the publish worker, not inline on
+                        // the read loop, so a slow peer backs up the same queue
+                        // a slow disk would and the existing backpressure and
+                        // ack plumbing apply unchanged.
+                        match &peers_for_worker {
+                            Some(pool) => crate::peer::forward_publish(
+                                pool,
+                                target,
+                                key,
+                                *ack,
+                                credential,
+                                job.payloads.clone(),
+                                forward_budget,
+                            )
+                            .await
+                            .map(|_| ())
+                            .map_err(|err| anyhow::anyhow!("{err}")),
+                            // The route said forward and there is nothing to
+                            // forward with. Refusing beats writing another
+                            // broker's shard locally.
+                            None => Err(anyhow::anyhow!(
+                                "no peer transport: this broker cannot forward to {}",
+                                target.node_id
+                            )),
+                        }
+                    }
+                };
+                #[cfg(feature = "perf_debug")]
+                {
+                    let ns = worker_start.elapsed().as_nanos() as u64;
+                    metrics::histogram!("felix_perf_pub_worker_ns", "worker" => worker_label.clone())
+                        .record(ns as f64);
+                    metrics::counter!(
+                        "felix_perf_publish_worker_jobs_total",
+                        "worker" => worker_label.clone()
+                    )
+                    .increment(1);
+                }
+                if let Some(response) = job.response {
+                    let _ = response.send(result);
+                }
+            }
+        };
+        match &shards {
+            Some(shards) => {
+                shards.handle_for(worker_id as u64).spawn(worker_task);
+            }
+            None => {
+                tokio::spawn(worker_task);
+            }
+        }
+        worker_txs.push(publish_tx);
+    }
+    PublishContext {
+        ingress,
+        peers,
+        lease,
+        client_endpoints,
+        marks,
+        quorum_timeout,
+        workers: Arc::new(worker_txs),
+        worker_count,
+        depth: queue_depth,
+        wait_timeout: Duration::from_millis(config.publish_queue_wait_timeout_ms),
+        admission,
+        // Placeholder; `handle_connection` replaces this (and `subscriptions`/`lane_manager`)
+        // with fresh per-connection instances before this context is used by any stream on
+        // that connection. These template values are never themselves shared across
+        // connections.
+        conn_admission: Arc::new(PublishAdmission::new(config.pub_conn_inflight_bytes)),
+        subscriptions: Arc::new(SubscriptionLimiter::new()),
+        lane_manager: WriterLaneManager::new(config),
+        ingress_wait: config.pub_ingress_wait,
+    }
+}
+
+/// Handle one QUIC connection, winding down when `shutdown` is cancelled.
+///
+/// The shutdown token exists because a connection task otherwise ends only
+/// when the *peer* disconnects — subscribers hold connections open
+/// indefinitely by design, so a drain that just waited for connection tasks
+/// would burn its whole deadline and then force-abort exactly the in-flight
+/// work it meant to protect. Cancellation stops this connection accepting
+/// *new* streams, gives streams already in flight a bounded grace period,
+/// then closes the QUIC connection so the peer sees a clean shutdown rather
+/// than a disappearance.
+pub(crate) async fn handle_connection_with_shutdown(
+    broker: Arc<Broker>,
+    connection: QuicConnection,
+    config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
+    publish_ctx: PublishContext,
+    shutdown: CancellationToken,
+) -> Result<()> {
+    // Give this connection its own slice of the shared publish byte budget, its own
+    // subscription-count limiter, and its own writer-lane manager, so one connection can't
+    // exhaust the process-wide publish budget (`publish_ctx.admission`), open unbounded
+    // subscriptions, or (via a stale/colliding cache) share subscription delivery state with
+    // an unrelated connection. `workers`/`admission`/`depth` stay the shared, process-wide
+    // instances from `build_publish_context`. What is and is not carried through
+    // is `PublishContext::for_connection`'s to decide, in one place, because
+    // dropping the cluster view here silently disabled shard ownership for every
+    // client connection once already.
+    let publish_ctx = publish_ctx.for_connection(&config);
+    // Tracks the per-stream handler tasks so shutdown can wait for in-flight
+    // work instead of dropping it.
+    let streams = TaskTracker::new();
+
+    // Periodic path stats for a *healthy* connection. The close-path logs below
+    // only fire once the connection is already going away, which is too late to
+    // see how path MTU, loss and congestion evolved under load — the numbers that
+    // decide whether a throughput problem is transport-side or above it.
+    // Off unless `FELIX_CONN_STATS_MS` is set, so it costs nothing in production.
+    // Driven from the accept loop rather than a spawned task so it cannot outlive
+    // the connection it reports on.
+    let stats_interval_ms = std::env::var("FELIX_CONN_STATS_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|ms| *ms > 0);
+    let mut stats_ticker =
+        stats_interval_ms.map(|ms| tokio::time::interval(Duration::from_millis(ms)));
+    loop {
+        // Accept both bidirectional control streams and uni-directional publish streams.
+        tokio::select! {
+            biased;
+            // `udp_tx.ios` vs `udp_tx.datagrams` separates syscall count from
+            // datagram count (they diverge only where GSO applies), and
+            // `udp_tx.bytes / udp_tx.datagrams` is the effective datagram size —
+            // which is what tells you whether path MTU is actually being used.
+            _ = async { stats_ticker.as_mut().expect("ticker present").tick().await },
+                if stats_ticker.is_some() =>
+            {
+                let stats = connection.stats();
+                tracing::info!(
+                    conn = connection.info().id.0,
+                    mtu = stats.path.current_mtu,
+                    // A small cwnd here is a send-rate cap no queue or
+                    // topology change can lift.
+                    cwnd = stats.path.cwnd,
+                    rtt_us = stats.path.rtt.as_micros() as u64,
+                    sent_packets = stats.path.sent_packets,
+                    lost_packets = stats.path.lost_packets,
+                    congestion_events = stats.path.congestion_events,
+                    black_holes = stats.path.black_holes_detected,
+                    udp_tx_datagrams = stats.udp_tx.datagrams,
+                    udp_tx_bytes = stats.udp_tx.bytes,
+                    udp_tx_ios = stats.udp_tx.ios,
+                    udp_rx_datagrams = stats.udp_rx.datagrams,
+                    udp_rx_bytes = stats.udp_rx.bytes,
+                    udp_rx_ios = stats.udp_rx.ios,
+                    // Non-zero *_blocked means this endpoint had bytes to send and
+                    // was denied credit by the peer -- i.e. the peer is not
+                    // consuming fast enough. Zero means flow control is not the
+                    // constraint and the sender simply had nothing more to send.
+                    tx_data_blocked = stats.frame_tx.data_blocked,
+                    tx_stream_data_blocked = stats.frame_tx.stream_data_blocked,
+                    rx_data_blocked = stats.frame_rx.data_blocked,
+                    rx_stream_data_blocked = stats.frame_rx.stream_data_blocked,
+                    tx_max_data = stats.frame_tx.max_data,
+                    rx_max_data = stats.frame_rx.max_data,
+                    "quic connection path stats"
+                );
+            }
+            _ = shutdown.cancelled() => {
+                tracing::info!(
+                    stats = ?connection.stats(),
+                    "connection draining; no longer accepting streams"
+                );
+                break;
+            }
+            result = connection.accept_bi() => {
+                let (send, recv) = match result {
+                    Ok(streams) => streams,
+                    Err(err) => {
+                        tracing::info!(error = %err, stats = ?connection.stats(), "quic connection closed");
+                        break;
+                    }
+                };
+                let broker = Arc::clone(&broker);
+                let connection = connection.clone();
+                let config = config.clone();
+                let auth = Arc::clone(&auth);
+                let publish_ctx = publish_ctx.clone();
+                streams.spawn(async move {
+                    // Dispatch the bidirectional control stream handler.
+                    if let Err(err) = handle_stream(
+                        broker,
+                        connection,
+                        config,
+                        auth,
+                        publish_ctx,
+                        send,
+                        recv,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %err, "quic stream handler failed");
+                    }
+                });
+            }
+            result = connection.accept_uni() => {
+                let recv = match result {
+                    Ok(recv) => recv,
+                    Err(err) => {
+                        tracing::info!(error = %err, stats = ?connection.stats(), "quic connection closed");
+                        break;
+                    }
+                };
+                let broker = Arc::clone(&broker);
+                let config = config.clone();
+                let auth = Arc::clone(&auth);
+                let publish_ctx = publish_ctx.clone();
+                streams.spawn(async move {
+                    // Dispatch the unidirectional publish stream handler.
+                    if let Err(err) = handle_uni_stream(
+                        broker,
+                        config,
+                        auth,
+                        publish_ctx,
+                        recv,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %err, "quic uni stream handler failed");
+                    }
+                });
+            }
+        }
+    }
+
+    // Give the streams already accepted a bounded window to finish.
+    //
+    // The bound is essential, not defensive. Control and subscription streams are
+    // long-lived by design: a publisher holds one open and streams requests down
+    // it, a subscriber holds one open to receive events. Neither ends until the
+    // *client* closes it, so waiting unconditionally would hang exactly as long
+    // as waiting for the connection itself did. In-flight requests get the grace
+    // window; anything still open after it is ended by closing the connection.
+    //
+    // Half the process drain budget, so a connection cannot consume the whole
+    // allowance and starve the accept loop and metrics server that drain after it.
+    let grace =
+        Duration::from_millis(config.shutdown_drain_timeout_ms / 2).max(Duration::from_secs(1));
+    streams.close();
+    if tokio::time::timeout(grace, streams.wait()).await.is_err() {
+        tracing::info!(
+            ?grace,
+            stats = ?connection.stats(),
+            "connection drain grace expired with streams still open; closing"
+        );
+    }
+
+    // Tell the peer this was a deliberate close rather than a vanished server, so
+    // it can reconnect elsewhere instead of waiting out an idle timeout.
+    connection.close(0u32.into(), b"broker shutting down");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

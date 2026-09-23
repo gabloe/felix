@@ -7,7 +7,7 @@ use felix_authz::{
     Action, FelixClaims, FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache,
     TenantKeyMaterial,
 };
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use std::collections::HashMap;
 use std::sync::Arc;

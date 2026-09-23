@@ -12,7 +12,7 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
     TenantKeyStore,
 };
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use felix_client::ClientConfig;
 use jsonwebtoken::Algorithm;
 use quinn::ClientConfig as QuinnClientConfig;

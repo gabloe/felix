@@ -22,7 +22,7 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
     TenantKeyStore,
 };
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore, ensure_jwks_cached};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore, ensure_jwks_cached};
 use jsonwebtoken::Algorithm;
 use std::collections::HashMap;
 use std::net::SocketAddr;

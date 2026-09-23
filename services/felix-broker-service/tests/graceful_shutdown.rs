@@ -11,7 +11,7 @@
 //! Run with `cargo test -p felix-broker-service --test graceful_shutdown`.
 use anyhow::Result;
 use felix_broker::Broker;
-use felix_broker_service::auth::BrokerAuth;
+use felix_broker_service::serving::auth::BrokerAuth;
 use felix_common::lifecycle::{DrainBudget, Readiness};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
@@ -67,7 +67,7 @@ async fn start_broker() -> Result<Harness> {
     let accept_shutdown = CancellationToken::new();
     let connections = TaskTracker::new();
 
-    let server_task = tokio::spawn(felix_broker_service::quic::serve_with_shutdown(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve_with_shutdown(
         Arc::clone(&server),
         broker,
         config,

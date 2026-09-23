@@ -10,7 +10,7 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
 };
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -115,7 +115,7 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
     broker_config.subscriber_lane_queue_policy = felix_broker::SubQueuePolicy::Block;
     broker_config.subscriber_lane_queue_depth = 8192;
     let auth = auth_fixture("t1");
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         broker,
         broker_config,
@@ -162,7 +162,7 @@ async fn text_publish_batch_large_payload_no_drop() -> Result<()> {
         .await
         .context("receive timeout")??;
 
-    let broker_counters = felix_broker_service::quic::frame_counters_snapshot();
+    let broker_counters = felix_broker_service::serving::quic::frame_counters_snapshot();
     let client_counters = felix_client::frame_counters_snapshot();
     assert_eq!(received, total);
     assert_eq!(broker_counters.frames_in_err, 0);

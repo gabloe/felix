@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use felix_broker::{Broker, CacheMetadata};
-use felix_broker_service::quic;
+use felix_broker_service::serving::quic;
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicClient, QuicServer, TransportConfig};
 

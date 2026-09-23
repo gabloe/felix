@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use bytes::{Bytes, BytesMut};
-use felix_broker_service::quic;
+use felix_broker_service::serving::quic;
 use felix_wire::{AckMode, Message};
 
 use super::MAX_TEST_FRAME_BYTES;

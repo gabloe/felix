@@ -37,7 +37,8 @@ use crate::credential;
 use crate::membership;
 use crate::peer;
 use crate::replication;
-use crate::{auth::BrokerAuth, config, durable_config::DurableStorageConfig, quic};
+use crate::serving::{auth::BrokerAuth, quic};
+use crate::{config, durable_config::DurableStorageConfig};
 use crate::{shard_lifecycle, shard_routing, shard_watch};
 
 /// Start the broker and run until the provided `shutdown` future resolves.
@@ -317,7 +318,8 @@ where
 
     // Apply transport-level configuration (flow control windows, pooling behavior, etc.)
     // derived from broker config.
-    let transport = crate::transport::cache_transport_config(&config, TransportConfig::default());
+    let transport =
+        crate::serving::quic::cache_transport_config(&config, TransportConfig::default());
 
     // One `QuicServer` per configured listener. Each owns its own UDP socket and
     // therefore its own `quinn` endpoint driver -- the single task that reads

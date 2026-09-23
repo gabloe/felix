@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 type DemoAuthResult = Result<(
-    Arc<felix_broker_service::auth::BrokerAuth>,
+    Arc<felix_broker_service::serving::auth::BrokerAuth>,
     Option<(String, String)>,
 )>;
 
@@ -753,7 +753,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     }
     #[cfg(feature = "telemetry")]
     {
-        felix_broker_service::quic::reset_frame_counters();
+        felix_broker_service::serving::quic::reset_frame_counters();
         felix_client::reset_frame_counters();
     }
     let (server_config, cert) = build_server_config().context("build server config")?;
@@ -850,7 +850,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         };
     }
     let (auth, auth_override) = resolve_demo_auth(&broker_config)?;
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         broker,
         broker_config,
@@ -1727,9 +1727,9 @@ fn print_timing_summary(_summary: Option<TimingSummary>) {}
 #[cfg(feature = "telemetry")]
 fn print_frame_counters() -> (
     felix_client::FrameCountersSnapshot,
-    felix_broker_service::quic::FrameCountersSnapshot,
+    felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
-    let broker = felix_broker_service::quic::frame_counters_snapshot();
+    let broker = felix_broker_service::serving::quic::frame_counters_snapshot();
     let client = felix_client::frame_counters_snapshot();
     println!(
         "  frame_counters: client frames_in_ok={} frames_in_err={} frames_out_ok={} bytes_in={} bytes_out={} pub_out_ok={} pub_out_err={} pub_items_out_ok={} pub_items_out_err={} pub_batches_out_ok={} pub_batches_out_err={} sub_in_ok={} sub_items_in_ok={} sub_batches_in_ok={} ack_in_ok={} ack_items_in_ok={} binary_encode_reallocs={} text_encode_reallocs={}",
@@ -1784,12 +1784,12 @@ fn print_frame_counters() -> (
 #[cfg(not(feature = "telemetry"))]
 fn print_frame_counters() -> (
     felix_client::FrameCountersSnapshot,
-    felix_broker_service::quic::FrameCountersSnapshot,
+    felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
     println!("  frame_counters: telemetry disabled");
     (
         felix_client::frame_counters_snapshot(),
-        felix_broker_service::quic::frame_counters_snapshot(),
+        felix_broker_service::serving::quic::frame_counters_snapshot(),
     )
 }
 
@@ -1798,7 +1798,7 @@ fn print_sanity_checks(
     config: &DemoConfig,
     result: &DemoResult,
     client: &felix_client::FrameCountersSnapshot,
-    broker: &felix_broker_service::quic::FrameCountersSnapshot,
+    broker: &felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
     let expected_items = config.warmup + config.total;
     let expected_batches = if config.batch_size == 0 {
@@ -1876,7 +1876,7 @@ fn print_sanity_checks(
     _config: &DemoConfig,
     _result: &DemoResult,
     _client: &felix_client::FrameCountersSnapshot,
-    _broker: &felix_broker_service::quic::FrameCountersSnapshot,
+    _broker: &felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
 }
 
@@ -2246,14 +2246,14 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
 fn resolve_demo_auth(config: &felix_broker_service::config::BrokerConfig) -> DemoAuthResult {
     if let Some(controlplane_url) = config.controlplane_url.clone() {
         return Ok((
-            Arc::new(felix_broker_service::auth::BrokerAuth::new(
+            Arc::new(felix_broker_service::serving::auth::BrokerAuth::new(
                 controlplane_url,
             )),
             None,
         ));
     }
 
-    let demo = felix_broker_service::auth_demo::demo_auth_for_tenant("t1")?;
+    let demo = felix_broker_service::serving::auth::demo::demo_auth_for_tenant("t1")?;
     Ok((demo.auth, Some((demo.tenant_id, demo.token))))
 }
 
@@ -2791,7 +2791,7 @@ mod tests {
                 binary_encode_reallocs: 0,
                 text_encode_reallocs: 0,
             };
-            let broker = felix_broker_service::quic::FrameCountersSnapshot {
+            let broker = felix_broker_service::serving::quic::FrameCountersSnapshot {
                 frames_in_ok: 0,
                 frames_in_err: 0,
                 frames_out_ok: 0,

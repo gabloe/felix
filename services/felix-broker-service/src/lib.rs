@@ -14,14 +14,14 @@
 //!
 //! # 1. Serving clients
 //!
-//! [`quic`] accepts connections and [`transport`] decodes frames and runs the
-//! per-message work. [`auth`] checks the token on each action, and
+//! [`serving::quic`] accepts connections, decodes frames and runs the
+//! per-message work, and [`serving::auth`] checks the token on each action.
 //! [`shard_routing`] answers the question every publish asks first: is this
 //! shard mine, should it be forwarded, or can nobody serve it right now?
-//! [`cache_routing`] is the same question for a cache key, [`group_ops`] and
-//! [`core_shards`] are the queue and shard operations behind the handlers, and
-//! [`client_endpoints`] is what this broker tells a client about where to
-//! connect.
+//! `serving::cache_routing` is the same question for a cache key,
+//! `serving::group_ops` and [`serving::core_shards`] are the queue and shard
+//! operations behind the handlers, and [`client_endpoints`] is what this broker
+//! tells a client about where to connect.
 //!
 //! # 2. Belonging to a cluster
 //!
@@ -54,14 +54,9 @@
 //! at `<module>/metrics.rs`.
 
 // --- 1. Serving clients -------------------------------------------------
-pub mod auth;
-pub mod cache_routing;
 pub mod client_endpoints;
-pub mod core_shards;
-pub mod group_ops;
-pub mod quic;
+pub mod serving;
 pub mod shard_routing;
-pub mod transport;
 
 // --- 2. Belonging to a cluster ------------------------------------------
 pub mod controlplane;
@@ -84,9 +79,6 @@ pub mod durable_config;
 pub mod node;
 pub mod observability;
 pub mod timings;
-
-/// A worked example of the authorization rules, used by `demos/rbac-live`.
-pub mod auth_demo;
 
 #[cfg(test)]
 // Test utilities live alongside the library for reuse in integration tests.

@@ -7,8 +7,9 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_broker::{Broker, CacheMetadata};
+use felix_broker_service::serving::auth::{BrokerAuth, demo::demo_auth_for_tenant};
+use felix_broker_service::serving::quic;
 use felix_broker_service::timings as broker_timings;
-use felix_broker_service::{auth::BrokerAuth, auth_demo, quic};
 use felix_client::timings as client_timings;
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
@@ -39,7 +40,7 @@ async fn run_demo(mut bench: BenchConfig) -> Result<()> {
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let (auth, auth_override) = resolve_demo_auth(&config)?;
     let (server_config, cert) = build_server_config().context("build server config")?;
-    let transport = felix_broker_service::transport::cache_transport_config(
+    let transport = felix_broker_service::serving::quic::cache_transport_config(
         &config,
         TransportConfig::default(),
     );
@@ -773,7 +774,7 @@ fn resolve_demo_auth(config: &felix_broker_service::config::BrokerConfig) -> Dem
         return Ok((Arc::new(BrokerAuth::new(controlplane_url)), None));
     }
 
-    let demo = auth_demo::demo_auth_for_tenant("t1")?;
+    let demo = demo_auth_for_tenant("t1")?;
     Ok((demo.auth, Some((demo.tenant_id, demo.token))))
 }
 

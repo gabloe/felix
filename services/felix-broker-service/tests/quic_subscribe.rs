@@ -25,7 +25,7 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
 };
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::auth::{BrokerAuth, ControlPlaneKeyStore};
+use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -154,7 +154,7 @@ async fn quic_subscribe_unauthorized_and_stream_missing() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.publish:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -220,7 +220,7 @@ async fn quic_subscribe_batch_receive_and_cancel() -> Result<()> {
             "stream.subscribe:stream:t1/*/*".to_string(),
         ],
     );
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -288,7 +288,7 @@ async fn quic_subscribe_fanout_and_drop_cleanup() -> Result<()> {
             "stream.subscribe:stream:t1/*/*".to_string(),
         ],
     );
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -358,7 +358,7 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
 
     let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let auth = auth_fixture("t1", vec!["stream.subscribe:stream:t1/*/*".to_string()]);
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config.clone(),
@@ -372,7 +372,7 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
     )?;
     let connection = client.connect(addr, "localhost").await?;
     let (mut send, mut recv) = connection.open_bi().await?;
-    felix_broker_service::quic::write_message(
+    felix_broker_service::serving::quic::write_message(
         &mut send,
         Message::Auth {
             tenant_id: auth.tenant_id.clone(),
@@ -385,7 +385,7 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
     )
     .await?;
     let mut frame_scratch = bytes::BytesMut::with_capacity(1024);
-    let response = felix_broker_service::quic::read_message_limited(
+    let response = felix_broker_service::serving::quic::read_message_limited(
         &mut recv,
         config.max_frame_bytes,
         &mut frame_scratch,
@@ -403,7 +403,7 @@ async fn quic_subscribe_invalid_frame_closes_stream() -> Result<()> {
 
     let close = timeout(
         Duration::from_millis(200),
-        felix_broker_service::quic::read_message_limited(
+        felix_broker_service::serving::quic::read_message_limited(
             &mut recv,
             config.max_frame_bytes,
             &mut frame_scratch,
@@ -479,7 +479,7 @@ async fn quic_subscribe_resumes_from_a_checkpointed_offset() -> Result<()> {
             "stream.subscribe:stream:t1/*/*".to_string(),
         ],
     );
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,
@@ -635,7 +635,7 @@ async fn quic_subscribe_rejects_a_cursor_past_the_tail() -> Result<()> {
             "stream.subscribe:stream:t1/*/*".to_string(),
         ],
     );
-    let server_task = tokio::spawn(felix_broker_service::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         Arc::clone(&broker),
         config,

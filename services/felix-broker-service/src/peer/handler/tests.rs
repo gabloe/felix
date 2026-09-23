@@ -72,7 +72,7 @@ impl Credentials {
         );
         // JWKS injected rather than fetched: the owner verifies with what it
         // holds, and no control plane is involved in these tests.
-        let key_store = Arc::new(crate::auth::ControlPlaneKeyStore::new(
+        let key_store = Arc::new(crate::serving::auth::ControlPlaneKeyStore::new(
             "http://localhost".to_string(),
             Arc::new(TenantKeyCache::default()),
         ));

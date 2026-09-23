@@ -6,7 +6,8 @@
 //! This is a developer-facing demo; it favors clarity over performance.
 use anyhow::{Context, Result};
 use felix_broker::{Broker, StreamMetadata};
-use felix_broker_service::{auth::BrokerAuth, auth_demo, quic};
+use felix_broker_service::serving::auth::{BrokerAuth, demo::demo_auth_for_tenant};
+use felix_broker_service::serving::quic;
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
 use felix_transport::{QuicServer, TransportConfig};
@@ -137,7 +138,7 @@ fn resolve_demo_auth(config: &felix_broker_service::config::BrokerConfig) -> Dem
         return Ok((Arc::new(BrokerAuth::new(controlplane_url)), None));
     }
 
-    let demo = auth_demo::demo_auth_for_tenant("t1")?;
+    let demo = demo_auth_for_tenant("t1")?;
     Ok((demo.auth, Some((demo.tenant_id, demo.token))))
 }
 

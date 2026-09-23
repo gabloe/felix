@@ -34,7 +34,7 @@ use felix_wire::internal::{
 
 use super::metrics;
 use super::server::PeerRequestHandler;
-use crate::auth::BrokerAuth;
+use crate::serving::auth::BrokerAuth;
 use crate::shard_routing::{Dispatch, IngressRouter};
 use crate::shard_watch::{ShardKey, ShardKind};
 
