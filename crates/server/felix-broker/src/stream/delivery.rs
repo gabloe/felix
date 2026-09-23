@@ -1,82 +1,22 @@
-// Shared delivery batches and the queue-depth accounting that rides with them.
-//
-// `QueuedDelivery` owns one unit of queue depth: the count is incremented by the
-// publisher between reserving a permit and sending, and released in `Drop`. Keeping
-// the increment, the `Drop`, and `decrement_queue_depth` together is what makes
-// depth accounting leak-free across receiver drops and cancelled `recv` calls.
+//! Shared delivery batches and the queue-depth accounting that rides with them.
+//!
+//! `QueuedDelivery` owns one unit of queue depth: the count is incremented by
+//! the publisher between reserving a permit and sending, and released in
+//! `Drop`. Keeping the increment, the `Drop`, and `decrement_queue_depth`
+//! together is what makes depth accounting leak-free across receiver drops and
+//! cancelled `recv` calls.
 
-use bytes::Bytes;
-use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-/// What a publish does when a subscriber's queue is full.
-///
-/// `DropNew` is the default, so a slow subscriber costs itself records rather
-/// than slowing the publisher.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubQueuePolicy {
-    /// Wait for room. Every publisher of the shard waits with it.
-    Block,
-    /// Drop the batch for this subscriber.
-    DropNew,
-    /// Treated as `DropNew`: a bounded channel cannot evict what it already holds.
-    DropOld,
-}
+use bytes::Bytes;
+use parking_lot::Mutex;
 
+/// One published batch, shared by every subscriber it is delivered to.
 #[derive(Debug, Clone)]
 pub struct DeliveryEnvelope {
     inner: Arc<DeliveryBatch>,
-}
-
-#[derive(Debug)]
-pub(crate) struct QueuedDelivery {
-    envelope: Option<DeliveryEnvelope>,
-    item_count: usize,
-    queued_items: Arc<AtomicUsize>,
-}
-
-impl QueuedDelivery {
-    pub(crate) fn new(envelope: DeliveryEnvelope, queued_items: Arc<AtomicUsize>) -> Self {
-        let item_count = envelope.len();
-        Self {
-            envelope: Some(envelope),
-            item_count,
-            queued_items,
-        }
-    }
-
-    pub(crate) fn into_envelope(mut self) -> DeliveryEnvelope {
-        self.envelope.take().expect("queued delivery has envelope")
-    }
-}
-
-impl Drop for QueuedDelivery {
-    fn drop(&mut self) {
-        decrement_queue_depth(&self.queued_items, self.item_count);
-    }
-}
-
-#[derive(Debug)]
-struct DeliveryBatch {
-    payloads: Arc<[Bytes]>,
-    /// Offset of `payloads[0]` for a durable stream; `None` for an in-memory
-    /// one, which has no durable position to report.
-    ///
-    /// One value per batch is enough because a publish batch takes a contiguous
-    /// run of offsets. That is what keeps offsets off the per-event cost model
-    /// and lets them ride the shared encode-once frame: the offsets belong to
-    /// the stream, not to any subscriber.
-    base_offset: Option<u64>,
-    enqueued_at: Instant,
-    encoded_frame: Mutex<Option<Bytes>>,
-    /// The same batch encoded *with* offsets, for subscribers that negotiated
-    /// them. Cached separately rather than replacing the plain encoding,
-    /// because a stream can have subscribers of both kinds and each must get
-    /// the frame shape it agreed to. At most two encodings per batch, however
-    /// many subscribers there are.
-    encoded_frame_with_offsets: Mutex<Option<Bytes>>,
 }
 
 impl DeliveryEnvelope {
@@ -92,14 +32,17 @@ impl DeliveryEnvelope {
         }
     }
 
+    /// The batch's records, in publish order.
     pub fn payloads(&self) -> &[Bytes] {
         &self.inner.payloads
     }
 
+    /// How many records the batch holds.
     pub fn len(&self) -> usize {
         self.inner.payloads.len()
     }
 
+    /// Whether the batch holds no records.
     pub fn is_empty(&self) -> bool {
         self.inner.payloads.is_empty()
     }
@@ -109,6 +52,8 @@ impl DeliveryEnvelope {
         self.inner.base_offset
     }
 
+    /// The batch encoded as one event frame, encoded on first use and shared
+    /// with every subscriber after that.
     pub fn shared_event_frame(&self) -> felix_wire::Result<Bytes> {
         let mut cached = self.inner.encoded_frame.lock();
         if let Some(frame) = cached.as_ref() {
@@ -141,12 +86,76 @@ impl DeliveryEnvelope {
         Ok(frame)
     }
 
+    /// When the batch was built, for measuring how long it waited in a queue.
     pub fn enqueued_at(&self) -> Instant {
         self.inner.enqueued_at
     }
 }
 
-pub(crate) fn decrement_queue_depth(queued_items: &AtomicUsize, count: usize) {
+#[derive(Debug)]
+struct DeliveryBatch {
+    payloads: Arc<[Bytes]>,
+    /// Offset of `payloads[0]` for a durable stream; `None` for an in-memory
+    /// one, which has no durable position to report.
+    ///
+    /// One value per batch is enough because a publish batch takes a contiguous
+    /// run of offsets. That is what keeps offsets off the per-event cost model
+    /// and lets them ride the shared encode-once frame: the offsets belong to
+    /// the stream, not to any subscriber.
+    base_offset: Option<u64>,
+    enqueued_at: Instant,
+    encoded_frame: Mutex<Option<Bytes>>,
+    /// The same batch encoded *with* offsets, for subscribers that negotiated
+    /// them. Cached separately rather than replacing the plain encoding,
+    /// because a stream can have subscribers of both kinds and each must get
+    /// the frame shape it agreed to. At most two encodings per batch, however
+    /// many subscribers there are.
+    encoded_frame_with_offsets: Mutex<Option<Bytes>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct QueuedDelivery {
+    envelope: Option<DeliveryEnvelope>,
+    item_count: usize,
+    queued_items: Arc<AtomicUsize>,
+}
+
+impl QueuedDelivery {
+    pub(crate) fn new(envelope: DeliveryEnvelope, queued_items: Arc<AtomicUsize>) -> Self {
+        let item_count = envelope.len();
+        Self {
+            envelope: Some(envelope),
+            item_count,
+            queued_items,
+        }
+    }
+
+    pub(crate) fn into_envelope(mut self) -> DeliveryEnvelope {
+        self.envelope.take().expect("queued delivery has envelope")
+    }
+}
+
+impl Drop for QueuedDelivery {
+    fn drop(&mut self) {
+        decrement_queue_depth(&self.queued_items, self.item_count);
+    }
+}
+
+/// What a publish does when a subscriber's queue is full.
+///
+/// `DropNew` is the default, so a slow subscriber costs itself records rather
+/// than slowing the publisher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubQueuePolicy {
+    /// Wait for room. Every publisher of the shard waits with it.
+    Block,
+    /// Drop the batch for this subscriber.
+    DropNew,
+    /// Treated as `DropNew`: a bounded channel cannot evict what it already holds.
+    DropOld,
+}
+
+fn decrement_queue_depth(queued_items: &AtomicUsize, count: usize) {
     if queued_items
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_sub(count)

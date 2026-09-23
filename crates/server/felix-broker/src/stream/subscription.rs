@@ -1,28 +1,14 @@
-// Subscriber-facing handles: the receiver half plus the guard that unregisters
-// the subscriber from its stream on drop.
+//! Subscriber-facing handles: the receiver half plus the guard that
+//! unregisters the subscriber from its stream on drop.
 
-use bytes::Bytes;
 use std::collections::VecDeque;
 use std::sync::Weak;
+
+use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use super::delivery::{DeliveryEnvelope, QueuedDelivery};
 use super::state::StreamState;
-
-/// RAII handle that unregisters a stream subscriber on drop.
-#[derive(Debug)]
-pub struct SubscriptionGuard {
-    pub(crate) stream_state: Weak<StreamState>,
-    pub(crate) subscriber_id: u64,
-}
-
-impl Drop for SubscriptionGuard {
-    fn drop(&mut self) {
-        if let Some(stream_state) = self.stream_state.upgrade() {
-            stream_state.remove_subscriber(self.subscriber_id);
-        }
-    }
-}
 
 /// Receiver wrapper that keeps the unsubscribe guard alive for the receiver lifetime.
 #[derive(Debug)]
@@ -57,7 +43,7 @@ impl Subscription {
     /// **`None` means the channel closed, and nothing else.** Every caller
     /// treats it as the end of the stream, so a batch that happens to yield no
     /// records must not produce one: a batch landing entirely below
-    /// [`Self::skip_below`] is ordinary during a resume, and reporting it as an
+    /// the resume point is ordinary during a resume, and reporting it as an
     /// end of stream loses every record after the cursor.
     pub async fn recv(&mut self) -> Option<Bytes> {
         loop {
@@ -86,6 +72,25 @@ impl Subscription {
         }
     }
 
+    /// Take whatever is already queued, without waiting.
+    ///
+    /// Used by resume to drain what accumulated while history was being read,
+    /// so the handler can spot a queue drop -- a jump in offsets -- and fill it
+    /// from disk before live delivery starts.
+    pub fn drain_ready(&mut self) -> Vec<DeliveryEnvelope> {
+        let mut drained = Vec::new();
+        while let Ok(envelope) = self.receiver.try_recv() {
+            drained.push(envelope);
+        }
+        drained
+    }
+
+    /// Split into the batch receiver and the guard that keeps the
+    /// subscriber registered.
+    pub fn into_parts(self) -> (SubscriptionReceiver, SubscriptionGuard) {
+        (self.receiver, self.guard)
+    }
+
     /// Queue an envelope's payloads, dropping any below the resume point.
     ///
     /// Deliveries arrive in offset order, so once one lands at or above the
@@ -110,12 +115,9 @@ impl Subscription {
             }
         }
     }
-
-    pub fn into_parts(self) -> (SubscriptionReceiver, SubscriptionGuard) {
-        (self.receiver, self.guard)
-    }
 }
 
+/// The receiving end of a subscription, yielding whole batches.
 #[derive(Debug)]
 pub struct SubscriptionReceiver {
     pub(crate) receiver: mpsc::Receiver<QueuedDelivery>,
@@ -126,33 +128,35 @@ impl SubscriptionReceiver {
         Self { receiver }
     }
 
+    /// The next batch, or `None` once the subscription has ended.
     pub async fn recv(&mut self) -> Option<DeliveryEnvelope> {
         Some(self.receiver.recv().await?.into_envelope())
     }
 
+    /// The next batch if one is already queued.
     pub fn try_recv(&mut self) -> std::result::Result<DeliveryEnvelope, mpsc::error::TryRecvError> {
         self.receiver.try_recv().map(QueuedDelivery::into_envelope)
-    }
-}
-
-impl Subscription {
-    /// Take whatever is already queued, without waiting.
-    ///
-    /// Used by resume to drain what accumulated while history was being read,
-    /// so the handler can spot a queue drop -- a jump in offsets -- and fill it
-    /// from disk before live delivery starts.
-    pub fn drain_ready(&mut self) -> Vec<DeliveryEnvelope> {
-        let mut drained = Vec::new();
-        while let Ok(envelope) = self.receiver.try_recv() {
-            drained.push(envelope);
-        }
-        drained
     }
 }
 
 impl Drop for SubscriptionReceiver {
     fn drop(&mut self) {
         self.receiver.close();
+    }
+}
+
+/// RAII handle that unregisters a stream subscriber on drop.
+#[derive(Debug)]
+pub struct SubscriptionGuard {
+    pub(crate) stream_state: Weak<StreamState>,
+    pub(crate) subscriber_id: u64,
+}
+
+impl Drop for SubscriptionGuard {
+    fn drop(&mut self) {
+        if let Some(stream_state) = self.stream_state.upgrade() {
+            stream_state.remove_subscriber(self.subscriber_id);
+        }
     }
 }
 

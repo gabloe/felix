@@ -1,7 +1,7 @@
-// Telemetry shims for the broker hot path.
-//
-// Under `--features telemetry` these forward to the `metrics` crate; otherwise
-// they compile down to no-ops so the publish path pays nothing for sampling.
+//! Telemetry shims for the broker hot path.
+//!
+//! Under `--features telemetry` these forward to the `metrics` crate; otherwise
+//! they compile down to no-ops so the publish path pays nothing for sampling.
 
 use std::time::Instant;
 
@@ -18,6 +18,8 @@ macro_rules! t_histogram {
         $crate::telemetry::NoopHistogram
     };
 }
+
+pub(crate) use t_histogram;
 
 #[cfg(not(feature = "telemetry"))]
 #[derive(Copy, Clone)]

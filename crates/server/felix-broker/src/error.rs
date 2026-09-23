@@ -1,7 +1,6 @@
-// Broker error type shared across the registry, stream, and subscription modules.
+//! The broker's error type.
 
-pub type Result<T> = std::result::Result<T, BrokerError>;
-
+/// Why a broker operation failed.
 #[derive(thiserror::Error, Debug)]
 pub enum BrokerError {
     #[error("topic capacity too large")]
@@ -83,6 +82,9 @@ pub enum BrokerError {
     #[error("sequence {sequence} is older than the window this broker keeps")]
     SequenceExpired { sequence: u64 },
 }
+
+/// Shorthand for results carrying a [`BrokerError`].
+pub type Result<T> = std::result::Result<T, BrokerError>;
 
 #[cfg(test)]
 mod tests;

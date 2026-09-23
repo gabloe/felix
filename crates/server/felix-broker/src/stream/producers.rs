@@ -34,32 +34,6 @@ pub(crate) const WINDOW: usize = 64;
 /// grow without bound.
 pub(crate) const MAX_PRODUCERS: usize = 4096;
 
-/// What to do with a batch, decided under the producer's turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Sequenced {
-    /// The next batch this producer owes: append it.
-    Append,
-    /// A batch already appended: answer with what happened the first time.
-    Duplicate(PublishOutcome),
-}
-
-#[derive(Debug)]
-struct Producer {
-    next_sequence: u64,
-    recent: VecDeque<(u64, PublishOutcome)>,
-    last_used: u64,
-    /// Serialises this producer's batches. Two re-sends of one sequence in
-    /// flight at once must not both find it unappended.
-    turn: Arc<tokio::sync::Mutex<()>>,
-}
-
-#[derive(Debug, Default)]
-struct Table {
-    producers: HashMap<u64, Producer>,
-    /// Advances on every use; the smallest value is the coldest producer.
-    clock: u64,
-}
-
 /// The producers a shard's leader remembers.
 #[derive(Debug, Default)]
 pub(crate) struct ProducerTable {
@@ -156,6 +130,32 @@ impl ProducerTable {
     pub(crate) fn len(&self) -> usize {
         self.inner.lock().producers.len()
     }
+}
+
+/// What to do with a batch, decided under the producer's turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sequenced {
+    /// The next batch this producer owes: append it.
+    Append,
+    /// A batch already appended: answer with what happened the first time.
+    Duplicate(PublishOutcome),
+}
+
+#[derive(Debug, Default)]
+struct Table {
+    producers: HashMap<u64, Producer>,
+    /// Advances on every use; the smallest value is the coldest producer.
+    clock: u64,
+}
+
+#[derive(Debug)]
+struct Producer {
+    next_sequence: u64,
+    recent: VecDeque<(u64, PublishOutcome)>,
+    last_used: u64,
+    /// Serialises this producer's batches. Two re-sends of one sequence in
+    /// flight at once must not both find it unappended.
+    turn: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[cfg(test)]

@@ -19,15 +19,6 @@ use parking_lot::Mutex as SyncMutex;
 
 use crate::error::{BrokerError, Result};
 
-/// Storage failures reach callers as `BrokerError::Storage`, the same way the
-/// durable stream path reports them.
-fn storage_error(err: felix_storage::StorageError) -> BrokerError {
-    BrokerError::Storage(err.to_string())
-}
-
-/// Where one group stands on one shard.
-type ShardKey = (String, String, String, u32);
-
 /// Durable positions for every consumer group on every shard this broker leads.
 #[derive(Debug)]
 pub struct ConsumerGroups {
@@ -41,6 +32,9 @@ pub struct ConsumerGroups {
     /// so this adds no contention that ownership did not.
     locks: SyncMutex<HashMap<ShardKey, Arc<tokio::sync::Mutex<()>>>>,
 }
+
+/// Where one group stands on one shard.
+type ShardKey = (String, String, String, u32);
 
 impl ConsumerGroups {
     /// Open group state rooted at `root`, recovering whatever is on disk.
@@ -206,6 +200,12 @@ fn decode_offset(bytes: &[u8]) -> Result<u64> {
         ))
     })?;
     Ok(u64::from_be_bytes(raw))
+}
+
+/// Storage failures reach callers as `BrokerError::Storage`, the same way the
+/// durable stream path reports them.
+fn storage_error(err: felix_storage::StorageError) -> BrokerError {
+    BrokerError::Storage(err.to_string())
 }
 
 #[cfg(test)]

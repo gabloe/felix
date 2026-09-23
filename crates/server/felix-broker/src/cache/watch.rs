@@ -15,67 +15,17 @@
 //! the queue, and the delivery path tells the client to re-watch from that
 //! offset. Loss is loud, and the recovery is gapless.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
+
 use bytes::Bytes;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
 use tokio::sync::mpsc;
 
 /// Sentinel for "not lagged" in [`WatcherState::lagged_at`]. No real offset can
 /// collide with it: a log would have to hold 2^64 records first.
 const NOT_LAGGED: u64 = u64::MAX;
-
-/// Which changes one watcher wants.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CacheWatchFilter {
-    /// Exactly this key.
-    Key(String),
-    /// Every key beginning with this prefix; `""` is every key in the shard.
-    Prefix(String),
-}
-
-impl CacheWatchFilter {
-    pub fn matches(&self, key: &str) -> bool {
-        match self {
-            Self::Key(exact) => key == exact,
-            Self::Prefix(prefix) => key.starts_with(prefix.as_str()),
-        }
-    }
-}
-
-/// One cache change, as a watcher receives it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheChangeEvent {
-    pub key: String,
-    /// The value the key now holds; `None` means the key was deleted.
-    pub value: Option<Bytes>,
-    /// The cache-log offset of the change.
-    pub offset: u64,
-    /// Absolute Unix milliseconds; zero means it never expires.
-    pub expires_at_millis: u64,
-}
-
-/// Tenant, namespace, cache, shard — one fanout list per cache shard.
-type WatchShardKey = (String, String, String, u32);
-
-#[derive(Debug)]
-struct Watcher {
-    /// Monotonic and never reused. A recycled id here would let a reap aimed at
-    /// a closed watcher remove a live one — the Slab-recycling defect class.
-    id: u64,
-    filter: CacheWatchFilter,
-    sender: mpsc::Sender<CacheChangeEvent>,
-    state: Arc<WatcherState>,
-}
-
-/// Shared between the hub (writer side) and the subscription (reader side).
-#[derive(Debug)]
-struct WatcherState {
-    /// Offset of the first change the queue could not hold, or [`NOT_LAGGED`].
-    /// Written once, by the fanout that overflowed the queue.
-    lagged_at: AtomicU64,
-}
 
 /// Fanout registry for every cache watch this broker serves.
 #[derive(Debug, Default)]
@@ -85,6 +35,8 @@ pub struct CacheWatchHub {
 }
 
 impl CacheWatchHub {
+    /// An empty hub. Shared, because each watch guard holds a weak reference
+    /// back to it.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
@@ -214,18 +166,42 @@ impl felix_storage::CacheObserver for CacheWatchHub {
     }
 }
 
-/// RAII handle that unregisters the watcher on drop.
+/// Tenant, namespace, cache, shard — one fanout list per cache shard.
+type WatchShardKey = (String, String, String, u32);
+
 #[derive(Debug)]
-pub(crate) struct CacheWatchGuard {
-    hub: Weak<CacheWatchHub>,
-    key: WatchShardKey,
+struct Watcher {
+    /// Monotonic and never reused. A recycled id here would let a reap aimed at
+    /// a closed watcher remove a live one — the Slab-recycling defect class.
     id: u64,
+    filter: CacheWatchFilter,
+    sender: mpsc::Sender<CacheChangeEvent>,
+    state: Arc<WatcherState>,
 }
 
-impl Drop for CacheWatchGuard {
-    fn drop(&mut self) {
-        if let Some(hub) = self.hub.upgrade() {
-            hub.remove(&self.key, self.id);
+/// Shared between the hub (writer side) and the subscription (reader side).
+#[derive(Debug)]
+struct WatcherState {
+    /// Offset of the first change the queue could not hold, or [`NOT_LAGGED`].
+    /// Written once, by the fanout that overflowed the queue.
+    lagged_at: AtomicU64,
+}
+
+/// Which changes one watcher wants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheWatchFilter {
+    /// Exactly this key.
+    Key(String),
+    /// Every key beginning with this prefix; `""` is every key in the shard.
+    Prefix(String),
+}
+
+impl CacheWatchFilter {
+    /// Whether a change to `key` belongs to this watcher.
+    pub fn matches(&self, key: &str) -> bool {
+        match self {
+            Self::Key(exact) => key == exact,
+            Self::Prefix(prefix) => key.starts_with(prefix.as_str()),
         }
     }
 }
@@ -258,6 +234,34 @@ impl CacheWatchSubscription {
         let at = self.state.lagged_at.load(Ordering::Acquire);
         (at != NOT_LAGGED).then_some(at)
     }
+}
+
+/// RAII handle that unregisters the watcher on drop.
+#[derive(Debug)]
+pub(crate) struct CacheWatchGuard {
+    hub: Weak<CacheWatchHub>,
+    key: WatchShardKey,
+    id: u64,
+}
+
+impl Drop for CacheWatchGuard {
+    fn drop(&mut self) {
+        if let Some(hub) = self.hub.upgrade() {
+            hub.remove(&self.key, self.id);
+        }
+    }
+}
+
+/// One cache change, as a watcher receives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheChangeEvent {
+    pub key: String,
+    /// The value the key now holds; `None` means the key was deleted.
+    pub value: Option<Bytes>,
+    /// The cache-log offset of the change.
+    pub offset: u64,
+    /// Absolute Unix milliseconds; zero means it never expires.
+    pub expires_at_millis: u64,
 }
 
 #[cfg(test)]

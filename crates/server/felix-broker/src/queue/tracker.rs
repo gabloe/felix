@@ -16,16 +16,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-/// What one `claim` produced.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Claim {
-    /// Offsets handed to the caller, to deliver and then settle.
-    pub(crate) offsets: Vec<u64>,
-    /// Offsets given up on, having been delivered too many times. The caller
-    /// records them and then settles them.
-    pub(crate) dead_lettered: Vec<DeadLettered>,
-}
-
 /// One group's position on one shard.
 #[derive(Debug)]
 pub(crate) struct GroupTracker {
@@ -52,14 +42,6 @@ pub(crate) struct GroupTracker {
     /// Without a bound a record that always fails is redelivered for ever and
     /// the group never gets past it — one poison record stops the queue.
     max_attempts: u32,
-}
-
-/// A record the group has given up on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DeadLettered {
-    pub(crate) offset: u64,
-    /// How many times it was handed out before being given up on.
-    pub(crate) attempts: u32,
 }
 
 impl GroupTracker {
@@ -135,11 +117,6 @@ impl GroupTracker {
         }
 
         claim
-    }
-
-    fn hand_out(&mut self, offset: u64, deadline: Instant) {
-        self.in_flight.insert(offset, deadline);
-        *self.attempts.entry(offset).or_insert(0) += 1;
     }
 
     /// Settle one offset. Returns the new committed position if it moved.
@@ -220,6 +197,29 @@ impl GroupTracker {
             self.redeliver.insert(offset);
         }
     }
+
+    fn hand_out(&mut self, offset: u64, deadline: Instant) {
+        self.in_flight.insert(offset, deadline);
+        *self.attempts.entry(offset).or_insert(0) += 1;
+    }
+}
+
+/// What one `claim` produced.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Claim {
+    /// Offsets handed to the caller, to deliver and then settle.
+    pub(crate) offsets: Vec<u64>,
+    /// Offsets given up on, having been delivered too many times. The caller
+    /// records them and then settles them.
+    pub(crate) dead_lettered: Vec<DeadLettered>,
+}
+
+/// A record the group has given up on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeadLettered {
+    pub(crate) offset: u64,
+    /// How many times it was handed out before being given up on.
+    pub(crate) attempts: u32,
 }
 
 #[cfg(test)]

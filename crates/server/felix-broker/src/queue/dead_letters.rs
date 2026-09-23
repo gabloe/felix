@@ -26,10 +26,6 @@ use felix_storage::log::LogConfig;
 use super::reader::GroupKey;
 use crate::error::{BrokerError, Result};
 
-fn storage_error(err: felix_storage::StorageError) -> BrokerError {
-    BrokerError::Storage(err.to_string())
-}
-
 /// Every group's dead letters, on their own root.
 #[derive(Debug)]
 pub struct DeadLetters {
@@ -202,6 +198,10 @@ fn entry_key(group: &str, offset: u64) -> String {
 /// How the earlier layout named a `(stream, group)` log.
 fn legacy_scope(key: &GroupKey) -> String {
     format!("{}\u{1f}{}", key.stream, key.group)
+}
+
+fn storage_error(err: felix_storage::StorageError) -> BrokerError {
+    BrokerError::Storage(err.to_string())
 }
 
 #[cfg(test)]

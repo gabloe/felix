@@ -14,7 +14,7 @@ use super::Broker;
 use super::shards::StreamHandle;
 use crate::error::{BrokerError, Result};
 use crate::stream::{DeliveryEnvelope, QueuedDelivery, Sequenced, StreamState, SubQueuePolicy};
-use crate::telemetry::{t_now_if, t_should_sample};
+use crate::telemetry::{t_histogram, t_now_if, t_should_sample};
 use crate::timings;
 
 impl Broker {

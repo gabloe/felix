@@ -1,28 +1,24 @@
-// Per-stream state: the subscriber registry, its lock-free publish snapshot, and
-// the bounded in-memory log that backs cursor replay.
+//! Per-stream state: the subscriber registry, its lock-free publish snapshot,
+//! and the bounded in-memory log that backs cursor replay.
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use arc_swap::ArcSwap;
 use bytes::Bytes;
+use felix_storage::CommitSequencer;
+use felix_storage::log::LogRecord;
 use parking_lot::Mutex;
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 use super::delivery::{QueuedDelivery, SubQueuePolicy};
 use super::producers::ProducerTable;
 use super::subscription::SubscriptionReceiver;
+use crate::ConsistencyLevel;
 use crate::durable::StreamLog;
-use felix_storage::CommitSequencer;
-use felix_storage::log::LogRecord;
 
-#[derive(Debug)]
-pub(crate) struct LogEntry {
-    pub(crate) seq: u64,
-    pub(crate) payload: Bytes,
-}
-
+/// One stream shard's live state, shared by every handle to it.
 #[derive(Debug)]
 pub(crate) struct StreamState {
     pub(crate) handle_id: u64,
@@ -66,42 +62,13 @@ pub(crate) struct StreamState {
     pub(crate) in_flight: AtomicUsize,
 }
 
-/// The stream's live subscribers, keyed by an id that is never reused.
-///
-/// Reuse is the whole point of the counter. Both unregister paths work from an
-/// id captured earlier — the publish fanout reaps senders it found closed, and
-/// the subscription guard unregisters on drop — and neither can hold a lock
-/// across that gap. If an id named a slot, a subscriber that registered in the
-/// gap would inherit the slot and be unregistered in place of the one that
-/// actually went away: silently unsubscribed, holding a live subscription that
-/// never delivers again.
-#[derive(Debug, Default)]
-pub(crate) struct SubscriberRegistry {
-    pub(crate) senders: HashMap<u64, mpsc::Sender<QueuedDelivery>>,
-    next_id: u64,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SubscriberEntry {
-    pub(crate) id: u64,
-    pub(crate) sender: mpsc::Sender<QueuedDelivery>,
-}
-
-#[derive(Debug)]
-pub(crate) struct LogState {
-    // Bounded log; oldest entries are dropped as new ones arrive.
-    pub(crate) log: VecDeque<LogEntry>,
-    // Next sequence number to assign.
-    pub(crate) next_seq: u64,
-}
-
 impl StreamState {
     pub(crate) fn new(
         handle_id: u64,
         subscriber_queue_capacity: usize,
         subscriber_queue_policy: SubQueuePolicy,
         durable: Option<StreamLog>,
-        consistency: crate::broker::ConsistencyLevel,
+        consistency: ConsistencyLevel,
     ) -> Self {
         Self {
             handle_id,
@@ -123,12 +90,60 @@ impl StreamState {
         }
     }
 
-    /// Start the in-memory sequence at `next_seq`.
+    /// What an acknowledgement of a publish to this stream currently means.
+    pub(crate) fn consistency(&self) -> ConsistencyLevel {
+        ConsistencyLevel::from_u8(self.consistency.load(Ordering::Acquire))
+    }
+
+    /// Apply a consistency change to a stream that is already live.
+    ///
+    /// Registering a stream that already exists takes a fast path that only
+    /// refreshes the metadata map. Without this the live state kept whatever it
+    /// was built with, so raising a stream to `Quorum` did nothing until the
+    /// broker restarted — publishes carried on acknowledging on the leader
+    /// alone while the catalog said a majority was required.
+    pub(crate) fn set_consistency(&self, consistency: ConsistencyLevel) {
+        self.consistency
+            .store(consistency.as_u8(), Ordering::Release);
+    }
+
+    pub(crate) fn deactivate(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn tail_seq(&self) -> u64 {
+        let state = self.log_state.lock();
+        // The cursor tail points to the next sequence to be published.
+        state.next_seq
+    }
+
+    /// Oldest sequence the in-memory replay ring can still serve.
+    pub(crate) fn oldest_seq(&self) -> u64 {
+        let state = self.log_state.lock();
+        state
+            .log
+            .front()
+            .map(|entry| entry.seq)
+            .unwrap_or(state.next_seq)
+    }
+
+    /// How many subscriber slots are registered right now.
+    ///
+    /// `Broker::registered_subscribers` exposes it so a test can prove a
+    /// *failed* subscribe left nothing behind. A stranded registration is
+    /// otherwise invisible until some later publish reaps it.
+    pub(crate) fn subscriber_count(&self) -> usize {
+        let state = self.subscribers.lock();
+        state.senders.len()
+    }
+
+    /// Refill the replay ring from a recovered durable log, and start the
+    /// sequence at `next_seq`.
     ///
     /// A durable stream that recovered records from disk must not restart its
     /// cursor numbering at zero, or a subscriber resuming from a pre-restart
     /// cursor would silently receive the wrong records.
-    /// Refill the replay ring from a recovered durable log.
+    ///
     ///
     /// Without this, a restart leaves the ring empty while `next_seq` jumps to
     /// the durable tail, so every cursor a client held from before the restart
@@ -186,6 +201,16 @@ impl StreamState {
     /// replicated batch would read the whole window each time, and a reader is
     /// served from the log when the ring has nothing — see
     /// `Broker::subscribe_from`.
+    pub(crate) fn advance_to(&self, next_seq: u64) {
+        let mut state = self.log_state.lock();
+        if next_seq <= state.next_seq {
+            return;
+        }
+        state.next_seq = next_seq;
+        drop(state);
+        self.commit_sequencer.reset(next_seq);
+    }
+
     /// Forget everything and continue from `next_seq`, wherever that is.
     ///
     /// For a follower whose log was just rebuilt: the ring and the sequence
@@ -197,112 +222,6 @@ impl StreamState {
         state.next_seq = next_seq;
         drop(state);
         self.commit_sequencer.reset(next_seq);
-    }
-
-    pub(crate) fn advance_to(&self, next_seq: u64) {
-        let mut state = self.log_state.lock();
-        if next_seq <= state.next_seq {
-            return;
-        }
-        state.next_seq = next_seq;
-        drop(state);
-        self.commit_sequencer.reset(next_seq);
-    }
-
-    /// What an acknowledgement of a publish to this stream currently means.
-    pub(crate) fn consistency(&self) -> crate::broker::ConsistencyLevel {
-        crate::broker::ConsistencyLevel::from_u8(self.consistency.load(Ordering::Acquire))
-    }
-
-    /// Apply a consistency change to a stream that is already live.
-    ///
-    /// Registering a stream that already exists takes a fast path that only
-    /// refreshes the metadata map. Without this the live state kept whatever it
-    /// was built with, so raising a stream to `Quorum` did nothing until the
-    /// broker restarted — publishes carried on acknowledging on the leader
-    /// alone while the catalog said a majority was required.
-    pub(crate) fn set_consistency(&self, consistency: crate::broker::ConsistencyLevel) {
-        self.consistency
-            .store(consistency.as_u8(), Ordering::Release);
-    }
-
-    pub(crate) fn deactivate(&self) {
-        self.active.store(false, Ordering::Release);
-    }
-
-    pub(crate) fn register_subscriber(&self) -> (u64, SubscriptionReceiver) {
-        let mut state = self.subscribers.lock();
-        let (tx, rx) = mpsc::channel(self.subscriber_queue_capacity);
-        let id = state.next_id;
-        state.next_id += 1;
-        state.senders.insert(id, tx);
-        self.rebuild_subscriber_snapshot(&state);
-        (id, SubscriptionReceiver::new(rx))
-    }
-
-    pub(crate) fn remove_subscriber(&self, id: u64) {
-        let mut state = self.subscribers.lock();
-        if state.senders.remove(&id).is_some() {
-            self.rebuild_subscriber_snapshot(&state);
-        }
-    }
-
-    pub(crate) fn remove_subscribers(&self, subscriber_ids: &[u64]) {
-        let mut state = self.subscribers.lock();
-        let mut removed = false;
-        for subscriber_id in subscriber_ids {
-            removed |= state.senders.remove(subscriber_id).is_some();
-        }
-        if removed {
-            self.rebuild_subscriber_snapshot(&state);
-        }
-    }
-
-    /// The current fanout list.
-    ///
-    /// The publish path no longer calls this: it takes the list from
-    /// [`StreamState::append_batch_at`] under the log lock, which is what makes
-    /// a joining subscriber's handoff lossless. Retained for tests.
-    #[cfg(test)]
-    #[inline]
-    pub(crate) fn subscriber_snapshot(&self) -> Arc<Vec<SubscriberEntry>> {
-        self.subscribers_snapshot.load_full()
-    }
-
-    pub(crate) fn rebuild_subscriber_snapshot(&self, state: &SubscriberRegistry) {
-        let mut snapshot = Vec::with_capacity(state.senders.len());
-        for (id, sender) in state.senders.iter() {
-            snapshot.push(SubscriberEntry {
-                id: *id,
-                sender: sender.clone(),
-            });
-        }
-        // The fanout reads this in order and a HashMap does not have one.
-        // Delivery order across subscribers is not a guarantee, but an order
-        // that reshuffles between publishes makes a fanout timing difference
-        // look like a bug in whatever changed last.
-        snapshot.sort_unstable_by_key(|entry| entry.id);
-        self.subscribers_snapshot.store(Arc::new(snapshot));
-    }
-
-    /// How many subscriber slots are registered right now.
-    ///
-    /// No longer test-only: `Broker::registered_subscribers` exposes it so a
-    /// test can prove a *failed* subscribe left nothing behind. A stranded
-    /// registration is otherwise invisible until some later publish reaps it.
-    pub(crate) fn subscriber_count(&self) -> usize {
-        let state = self.subscribers.lock();
-        state.senders.len()
-    }
-
-    /// Append with sequence numbers drawn from the ring's own counter.
-    ///
-    /// Only ephemeral streams use this; a durable stream pins its sequences to
-    /// disk offsets via [`StreamState::append_batch_at`]. Kept for tests, which
-    /// exercise the ring without a log behind it.
-    #[cfg(test)]
-    pub(crate) fn append_batch(&self, payloads: &[Bytes], log_capacity: usize) {
-        self.append_batch_at(payloads, None, log_capacity);
     }
 
     /// Append to the replay ring, optionally pinning the sequence numbers.
@@ -319,9 +238,9 @@ impl StreamState {
     /// because hydration rebuilds sequences from disk offsets. Pinning removes
     /// the possibility rather than relying on every path to keep two counters
     /// in step.
-    /// Append and capture the subscriber list that must receive this batch.
     ///
-    /// The two happen under one lock on purpose. A subscriber joining is only
+    /// Returns the subscriber list that must receive this batch. The append
+    /// and the capture happen under one lock on purpose. A subscriber joining is only
     /// well defined relative to a point in the log: it takes everything before
     /// that point as backlog and everything after it live. If a publish could
     /// append *after* a joining subscriber captured its backlog and then fan
@@ -379,6 +298,26 @@ impl StreamState {
         // Captured while the log lock is still held, so any subscriber that
         // registers after this point takes these records as backlog instead.
         self.subscribers_snapshot.load_full()
+    }
+
+    /// Append with sequence numbers drawn from the ring's own counter.
+    ///
+    /// Only ephemeral streams use this; a durable stream pins its sequences to
+    /// disk offsets via [`StreamState::append_batch_at`]. Kept for tests, which
+    /// exercise the ring without a log behind it.
+    #[cfg(test)]
+    pub(crate) fn append_batch(&self, payloads: &[Bytes], log_capacity: usize) {
+        self.append_batch_at(payloads, None, log_capacity);
+    }
+
+    pub(crate) fn register_subscriber(&self) -> (u64, SubscriptionReceiver) {
+        let mut state = self.subscribers.lock();
+        let (tx, rx) = mpsc::channel(self.subscriber_queue_capacity);
+        let id = state.next_id;
+        state.next_id += 1;
+        state.senders.insert(id, tx);
+        self.rebuild_subscriber_snapshot(&state);
+        (id, SubscriptionReceiver::new(rx))
     }
 
     /// Register a subscriber and capture its backlog atomically.
@@ -470,20 +409,33 @@ impl StreamState {
         (backlog, backlog_start, subscriber_id, receiver)
     }
 
-    /// Oldest sequence the in-memory replay ring can still serve.
-    pub(crate) fn oldest_seq(&self) -> u64 {
-        let state = self.log_state.lock();
-        state
-            .log
-            .front()
-            .map(|entry| entry.seq)
-            .unwrap_or(state.next_seq)
+    pub(crate) fn remove_subscriber(&self, id: u64) {
+        let mut state = self.subscribers.lock();
+        if state.senders.remove(&id).is_some() {
+            self.rebuild_subscriber_snapshot(&state);
+        }
     }
 
-    pub(crate) fn tail_seq(&self) -> u64 {
-        let state = self.log_state.lock();
-        // The cursor tail points to the next sequence to be published.
-        state.next_seq
+    pub(crate) fn remove_subscribers(&self, subscriber_ids: &[u64]) {
+        let mut state = self.subscribers.lock();
+        let mut removed = false;
+        for subscriber_id in subscriber_ids {
+            removed |= state.senders.remove(subscriber_id).is_some();
+        }
+        if removed {
+            self.rebuild_subscriber_snapshot(&state);
+        }
+    }
+
+    /// The current fanout list.
+    ///
+    /// Test-only: the publish path takes the list from
+    /// [`StreamState::append_batch_at`] under the log lock, which is what makes
+    /// a joining subscriber's handoff lossless.
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn subscriber_snapshot(&self) -> Arc<Vec<SubscriberEntry>> {
+        self.subscribers_snapshot.load_full()
     }
 
     pub(crate) fn increment_queue_depth(&self, count: usize) {
@@ -491,6 +443,57 @@ impl StreamState {
         metrics::gauge!("felix_sub_queue_len").increment(count as f64);
         metrics::counter!("felix_sub_queue_enqueued_total").increment(count as u64);
     }
+
+    fn rebuild_subscriber_snapshot(&self, state: &SubscriberRegistry) {
+        let mut snapshot = Vec::with_capacity(state.senders.len());
+        for (id, sender) in state.senders.iter() {
+            snapshot.push(SubscriberEntry {
+                id: *id,
+                sender: sender.clone(),
+            });
+        }
+        // The fanout reads this in order and a HashMap does not have one.
+        // Delivery order across subscribers is not a guarantee, but an order
+        // that reshuffles between publishes makes a fanout timing difference
+        // look like a bug in whatever changed last.
+        snapshot.sort_unstable_by_key(|entry| entry.id);
+        self.subscribers_snapshot.store(Arc::new(snapshot));
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubscriberEntry {
+    pub(crate) id: u64,
+    pub(crate) sender: mpsc::Sender<QueuedDelivery>,
+}
+
+/// The stream's live subscribers, keyed by an id that is never reused.
+///
+/// Reuse is the whole point of the counter. Both unregister paths work from an
+/// id captured earlier — the publish fanout reaps senders it found closed, and
+/// the subscription guard unregisters on drop — and neither can hold a lock
+/// across that gap. If an id named a slot, a subscriber that registered in the
+/// gap would inherit the slot and be unregistered in place of the one that
+/// actually went away: silently unsubscribed, holding a live subscription that
+/// never delivers again.
+#[derive(Debug, Default)]
+pub(crate) struct SubscriberRegistry {
+    pub(crate) senders: HashMap<u64, mpsc::Sender<QueuedDelivery>>,
+    next_id: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct LogState {
+    // Bounded log; oldest entries are dropped as new ones arrive.
+    pub(crate) log: VecDeque<LogEntry>,
+    // Next sequence number to assign.
+    pub(crate) next_seq: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct LogEntry {
+    pub(crate) seq: u64,
+    pub(crate) payload: Bytes,
 }
 
 #[cfg(test)]

@@ -1,25 +1,25 @@
-// Durable storage for streams marked `durable: true`.
-//
-// A durable stream keeps the in-memory ring buffer — cursor replay and fanout
-// still read from it, and it is what keeps non-durable performance intact — but
-// every publish is written to a disk-backed log *before* it is fanned out or
-// acknowledged.
-//
-// ## Ordering, and why it is this way
-//
-// ```text
-//   publish → append to the durable log → (fsync, if OnCommit) → fanout → ack
-// ```
-//
-// The append comes first because the alternative is unrecoverable: a record
-// delivered to subscribers and acknowledged to the publisher, but lost in a
-// crash, is a silent hole in a log that consumers believe they have read. Paying
-// the append latency before fanout means a failed write becomes a failed
-// publish, which the publisher can retry.
-//
-// The cost is real and deliberate: a durable publish carries the storage write
-// (and under `FsyncMode::OnCommit`, a device flush) inside its latency.
-// Non-durable streams never touch this path at all.
+//! Durable storage for streams marked `durable: true`.
+//!
+//! A durable stream keeps the in-memory ring buffer — cursor replay and fanout
+//! still read from it, and it is what keeps non-durable performance intact — but
+//! every publish is written to a disk-backed log *before* it is fanned out or
+//! acknowledged.
+//!
+//! ## Ordering, and why it is this way
+//!
+//! ```text
+//!   publish → append to the durable log → (fsync, if OnCommit) → fanout → ack
+//! ```
+//!
+//! The append comes first because the alternative is unrecoverable: a record
+//! delivered to subscribers and acknowledged to the publisher, but lost in a
+//! crash, is a silent hole in a log that consumers believe they have read. Paying
+//! the append latency before fanout means a failed write becomes a failed
+//! publish, which the publisher can retry.
+//!
+//! The cost is real and deliberate: a durable publish carries the storage write
+//! (and under `FsyncMode::OnCommit`, a device flush) inside its latency.
+//! Non-durable streams never touch this path at all.
 
 use std::sync::Arc;
 

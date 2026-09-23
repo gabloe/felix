@@ -38,16 +38,13 @@
 //! durability. Reordering those steps is almost always a bug — see
 //! `docs/architecture.md`.
 
-// Declared first so the `t_histogram!` macro is in scope for every module below.
-#[macro_use]
-mod telemetry;
-
 mod broker;
 mod cache;
 mod durable;
 mod error;
 mod queue;
 mod stream;
+mod telemetry;
 
 pub mod replication;
 pub mod timings;

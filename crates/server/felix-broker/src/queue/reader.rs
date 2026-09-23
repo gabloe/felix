@@ -11,9 +11,8 @@
 //! structure on disk to say which of the acknowledged offsets were contiguous.
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
@@ -21,26 +20,6 @@ use super::cursors::ConsumerGroups;
 use super::dead_letters::DeadLetters;
 use super::tracker::GroupTracker;
 use crate::error::{BrokerError, Result};
-
-/// A group reading one shard of one stream.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GroupKey {
-    pub tenant_id: String,
-    pub namespace: String,
-    pub stream: String,
-    pub shard: u32,
-    pub group: String,
-}
-
-/// One record handed to a consumer, with the offset it must acknowledge.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Claimed {
-    pub offset: u64,
-    pub payload: bytes::Bytes,
-    /// How many times this record has been handed out, this delivery included.
-    /// `1` is the first attempt; anything higher is a redelivery.
-    pub attempts: u32,
-}
 
 /// Every group this broker is serving, and the state each one holds.
 ///
@@ -283,6 +262,26 @@ impl GroupReader {
         trackers.insert(key.clone(), Arc::clone(&tracker));
         Ok(tracker)
     }
+}
+
+/// A group reading one shard of one stream.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GroupKey {
+    pub tenant_id: String,
+    pub namespace: String,
+    pub stream: String,
+    pub shard: u32,
+    pub group: String,
+}
+
+/// One record handed to a consumer, with the offset it must acknowledge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claimed {
+    pub offset: u64,
+    pub payload: bytes::Bytes,
+    /// How many times this record has been handed out, this delivery included.
+    /// `1` is the first attempt; anything higher is a redelivery.
+    pub attempts: u32,
 }
 
 #[cfg(test)]

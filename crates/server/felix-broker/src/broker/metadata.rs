@@ -43,7 +43,7 @@ impl ConsistencyLevel {
 pub struct StreamMetadata {
     /// When true, every publish is written to disk before it is fanned out or
     /// acknowledged. Requires the broker to have been built with
-    /// [`Broker::with_durable_storage`].
+    /// [`Broker::with_durable_storage`](crate::Broker::with_durable_storage).
     pub durable: bool,
     pub shards: u32,
     /// What an acknowledgement of a publish to this stream means.
