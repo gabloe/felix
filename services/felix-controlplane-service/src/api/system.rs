@@ -1,9 +1,9 @@
 //! System metadata and health/liveness/readiness endpoints. Probes must stay
 //! fast and side-effect free; see the per-endpoint docs for why liveness and
 //! readiness deliberately answer different questions.
+use crate::api::AppState;
 use crate::api::error::ApiError;
 use crate::api::types::{HealthStatus, SystemInfo};
-use crate::app::AppState;
 use axum::Json;
 use axum::extract::State;
 
@@ -75,7 +75,7 @@ pub(crate) async fn system_live() -> Json<HealthStatus> {
 )]
 /// Whether this instance should be sent traffic.
 ///
-/// Checks the store, bounded and cached — see [`crate::readiness`]. Answers 503
+/// Checks the store, bounded and cached — see [`crate::api::readiness`]. Answers 503
 /// rather than 500: this is a statement about *this instance right now*, and a
 /// load balancer removing it is the correct response, not an error to alert on.
 pub(crate) async fn system_ready(

@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::AppState;
+use crate::api::AppState;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::config::{DEFAULT_CHANGE_RETENTION_MAX_ROWS, DEFAULT_CHANGES_LIMIT};
 use crate::store::memory::InMemoryStore;

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::felix_token::TenantSigningKeys;
 use felix_controlplane_service::config::NodeLivenessConfig;
 use felix_controlplane_service::store::memory::InMemoryStore;
@@ -86,9 +86,11 @@ impl ControlPlane {
             bootstrap_enabled: false,
             bootstrap_tokens: Vec::new(),
             node_liveness: LIVENESS,
-            readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-                std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
-            )),
+            readiness: std::sync::Arc::new(
+                felix_controlplane_service::api::readiness::Readiness::new(std::sync::Arc::new(
+                    felix_controlplane_service::api::readiness::AlwaysReady,
+                )),
+            ),
             in_flight: Default::default(),
         };
 

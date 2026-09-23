@@ -1,41 +1,18 @@
-//! Control-plane HTTP application wiring.
+//! The control plane's two routers: the public API and the bootstrap listener.
 //!
-//! Builds the Axum router, configures middleware, and defines the shared
-//! application state injected into handlers.
-//!
-//! This module centralizes route composition to keep `main` small and testable.
-use crate::api;
-use crate::api::openapi::ApiDoc;
-use crate::api::types::{FeatureFlags, Region};
-use crate::auth;
-use crate::auth::oidc::UpstreamOidcValidator;
-use crate::config::NodeLivenessConfig;
-use crate::observability;
-use crate::store::ControlPlaneAuthStore;
+//! Every public route is registered here and, separately, in
+//! [`crate::api::openapi`]; axum does not care about the order routes are
+//! added, so they are grouped by resource.
 use axum::Router;
-use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use utoipa::OpenApi;
 
-#[derive(Clone)]
-pub struct AppState {
-    pub region: Region,
-    pub api_version: String,
-    pub features: FeatureFlags,
-    pub store: Arc<dyn ControlPlaneAuthStore + Send + Sync>,
-    pub oidc_validator: UpstreamOidcValidator,
-    pub bootstrap_enabled: bool,
-    /// Accepted bootstrap tokens, current first. More than one only during a
-    /// rotation, so replacing the token is a rolling deploy rather than an
-    /// outage — see [`crate::api::bootstrap::initialize`].
-    pub bootstrap_tokens: Vec<String>,
-    pub node_liveness: NodeLivenessConfig,
-    /// Whether this instance can serve, bounded and cached.
-    pub readiness: Arc<crate::readiness::Readiness>,
-    /// Requests currently being served, so a drain can say what it waited for.
-    pub in_flight: felix_common::lifecycle::InFlight,
-}
+use crate::api;
+use crate::api::AppState;
+use crate::api::openapi::ApiDoc;
+use crate::api::trace_context::trace_context_from_headers;
+use crate::auth;
 
 /// Count a request for the whole time it is being served.
 ///
@@ -51,10 +28,12 @@ async fn count_in_flight(
     next.run(request).await
 }
 
+/// The public API: every `/v1` route, the OpenAPI document, and the
+/// middleware that traces and counts each request.
 pub fn build_router(state: AppState) -> Router {
     let trace_layer =
         TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
-            let parent = observability::trace_context_from_headers(request.headers());
+            let parent = trace_context_from_headers(request.headers());
             let span = tracing::info_span!(
                 "http.request",
                 method = %request.method(),
@@ -94,12 +73,29 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::regions::get_region),
         )
         .route(
+            "/v1/tenants",
+            axum::routing::get(api::tenants::list_tenants).post(api::tenants::create_tenant),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}",
+            axum::routing::delete(api::tenants::delete_tenant),
+        )
+        .route(
             "/v1/tenants/snapshot",
             axum::routing::get(api::tenants::tenant_snapshot),
         )
         .route(
             "/v1/tenants/changes",
             axum::routing::get(api::tenants::tenant_changes),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/namespaces",
+            axum::routing::get(api::namespaces::list_namespaces)
+                .post(api::namespaces::create_namespace),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}",
+            axum::routing::delete(api::namespaces::delete_namespace),
         )
         .route(
             "/v1/namespaces/snapshot",
@@ -110,12 +106,14 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::namespaces::namespace_changes),
         )
         .route(
-            "/v1/caches/snapshot",
-            axum::routing::get(api::caches::cache_snapshot),
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams",
+            axum::routing::get(api::streams::list_streams).post(api::streams::create_stream),
         )
         .route(
-            "/v1/caches/changes",
-            axum::routing::get(api::caches::cache_changes),
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams/{stream}",
+            axum::routing::get(api::streams::get_stream)
+                .patch(api::streams::patch_stream)
+                .delete(api::streams::delete_stream),
         )
         .route(
             "/v1/streams/snapshot",
@@ -126,12 +124,22 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::streams::stream_changes),
         )
         .route(
-            "/v1/tenants",
-            axum::routing::get(api::tenants::list_tenants).post(api::tenants::create_tenant),
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches",
+            axum::routing::get(api::caches::list_caches).post(api::caches::create_cache),
         )
         .route(
-            "/v1/tenants/{tenant_id}",
-            axum::routing::delete(api::tenants::delete_tenant),
+            "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
+            axum::routing::get(api::caches::get_cache)
+                .patch(api::caches::patch_cache)
+                .delete(api::caches::delete_cache),
+        )
+        .route(
+            "/v1/caches/snapshot",
+            axum::routing::get(api::caches::cache_snapshot),
+        )
+        .route(
+            "/v1/caches/changes",
+            axum::routing::get(api::caches::cache_changes),
         )
         .route(
             "/v1/nodes",
@@ -142,18 +150,6 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::nodes::get_node)
                 .patch(api::nodes::patch_node)
                 .delete(api::nodes::delete_node),
-        )
-        .route(
-            "/v1/shard-assignments",
-            axum::routing::get(api::nodes::list_shard_assignments),
-        )
-        .route(
-            "/v1/shard-assignments/snapshot",
-            axum::routing::get(api::nodes::shard_assignment_snapshot),
-        )
-        .route(
-            "/v1/shard-assignments/changes",
-            axum::routing::get(api::nodes::shard_assignment_changes),
         )
         .route(
             "/v1/nodes/{node_id}/heartbeat",
@@ -170,6 +166,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/nodes/{node_id}/deregister",
             axum::routing::post(api::nodes::deregister_node),
+        )
+        .route(
+            "/v1/shard-assignments",
+            axum::routing::get(api::nodes::list_shard_assignments),
+        )
+        .route(
+            "/v1/shard-assignments/snapshot",
+            axum::routing::get(api::nodes::shard_assignment_snapshot),
+        )
+        .route(
+            "/v1/shard-assignments/changes",
+            axum::routing::get(api::nodes::shard_assignment_changes),
         )
         .route(
             "/v1/tenants/{tenant_id}/token/exchange",
@@ -199,35 +207,6 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/tenants/{tenant_id}/rbac/groupings",
             axum::routing::get(auth::admin::list_groupings).post(auth::admin::add_grouping),
         )
-        .route(
-            "/v1/tenants/{tenant_id}/namespaces",
-            axum::routing::get(api::namespaces::list_namespaces)
-                .post(api::namespaces::create_namespace),
-        )
-        .route(
-            "/v1/tenants/{tenant_id}/namespaces/{namespace}",
-            axum::routing::delete(api::namespaces::delete_namespace),
-        )
-        .route(
-            "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams",
-            axum::routing::get(api::streams::list_streams).post(api::streams::create_stream),
-        )
-        .route(
-            "/v1/tenants/{tenant_id}/namespaces/{namespace}/streams/{stream}",
-            axum::routing::get(api::streams::get_stream)
-                .patch(api::streams::patch_stream)
-                .delete(api::streams::delete_stream),
-        )
-        .route(
-            "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches",
-            axum::routing::get(api::caches::list_caches).post(api::caches::create_cache),
-        )
-        .route(
-            "/v1/tenants/{tenant_id}/namespaces/{namespace}/caches/{cache}",
-            axum::routing::get(api::caches::get_cache)
-                .patch(api::caches::patch_cache)
-                .delete(api::caches::delete_cache),
-        )
         .merge(
             utoipa_swagger_ui::SwaggerUi::new("/docs").url("/v1/openapi.json", ApiDoc::openapi()),
         )
@@ -239,6 +218,7 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// The bootstrap listener's router: tenant auth initialization and nothing else.
 pub fn build_bootstrap_router(state: AppState) -> Router {
     Router::new()
         .route(

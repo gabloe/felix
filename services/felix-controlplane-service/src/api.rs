@@ -6,14 +6,20 @@ pub mod error;
 pub mod namespaces;
 pub mod nodes;
 pub mod openapi;
+pub mod readiness;
 pub mod regions;
+mod router;
+mod state;
 pub mod streams;
 pub mod system;
 pub mod tenants;
+mod trace_context;
 pub mod types;
 
+pub use router::{build_bootstrap_router, build_router};
+pub use state::AppState;
+
 use crate::api::error::{ApiError, api_internal, api_not_found};
-use crate::app::AppState;
 use crate::model::NamespaceKey;
 
 /// 404 unless both the tenant and the namespace exist. The tenant is checked

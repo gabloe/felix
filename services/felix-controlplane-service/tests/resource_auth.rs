@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{Credentials, json_request, json_request_as, read_json, request_as, seed_credentials};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::model::{Namespace, Tenant};
 use felix_controlplane_service::store::memory::InMemoryStore;
 use felix_controlplane_service::store::{ControlPlaneStore, StoreConfig};
@@ -67,8 +67,8 @@ async fn harness() -> Harness {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };

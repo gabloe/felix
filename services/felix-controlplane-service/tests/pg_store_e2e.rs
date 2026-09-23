@@ -30,7 +30,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::read_json;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
-use felix_controlplane_service::app;
+use felix_controlplane_service::api;
 use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use felix_controlplane_service::auth::keys::generate_signing_keys;
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
@@ -1784,7 +1784,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
     };
     let store = fixture.store.clone();
     eprintln!("pg-tests: pg_bootstrap_initialize_and_jwks_includes_previous_keys begin");
-    let state = app::AppState {
+    let state = api::AppState {
         region: felix_controlplane_service::api::types::Region {
             region_id: "local".to_string(),
             display_name: "Local".to_string(),
@@ -1800,12 +1800,12 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
         bootstrap_enabled: true,
         bootstrap_tokens: vec!["token".to_string()],
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
-    let bootstrap_app = app::build_bootstrap_router(state.clone());
+    let bootstrap_app = api::build_bootstrap_router(state.clone());
     let body = json!({
         "display_name": "Tenant One",
         "idp_issuers": [{
@@ -1840,7 +1840,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
     keys.previous.push(previous.current.clone());
     store.set_tenant_signing_keys("t1", keys.clone()).await?;
 
-    let app = app::build_router(state);
+    let app = api::build_router(state);
     let jwks_request = Request::builder()
         .method("GET")
         .uri("/v1/tenants/t1/.well-known/jwks.json")

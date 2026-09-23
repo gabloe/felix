@@ -43,7 +43,6 @@
 //! Each module owns its own tests at `<module>/tests.rs`.
 
 pub mod api;
-pub mod app;
 pub mod model;
 
 pub mod auth;
@@ -54,7 +53,6 @@ pub mod store;
 
 pub mod membership;
 pub mod placement;
-pub mod readiness;
 pub mod replica_positions;
 
 pub mod clock;

@@ -833,7 +833,7 @@ readiness_pg`):
 | A probe answers rather than hangs | Black-holes the connection — established, then silent — and the probe still comes back inside its own bound |
 
 The mechanism itself (cache window, timeout, draining short-circuit) is covered
-separately in `src/readiness_tests.rs` against a probe that fails on command;
+separately in `src/api/readiness/tests.rs` against a probe that fails on command;
 the tests above are what make those the *database's* behaviour rather than a
 fake's.
 

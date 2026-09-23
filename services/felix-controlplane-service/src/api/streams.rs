@@ -7,12 +7,12 @@
 //! a token minted for the tenant in the path; the feeds require
 //! `node.view:cluster:*`. The credential is checked before existence, so an
 //! unauthenticated caller cannot learn what exists by asking.
+use crate::api::AppState;
 use crate::api::ensure_tenant_namespace;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
 use crate::api::types::{
     StreamChangesResponse, StreamCreateRequest, StreamListResponse, StreamSnapshotResponse,
 };
-use crate::app::AppState;
 use crate::auth::bearer::{require_cluster_action, require_tenant_action, tenant_scopes_for};
 use crate::auth::rbac::authorize::{
     ACTION_NODE_VIEW, ACTION_STREAM_MANAGE, ParsedObject, Segment, object_within_scope,

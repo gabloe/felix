@@ -1,7 +1,7 @@
 //! Region API. The control plane currently represents exactly one region.
+use crate::api::AppState;
 use crate::api::error::{ApiError, api_not_found};
 use crate::api::types::{ListRegionsResponse, Region};
-use crate::app::AppState;
 use axum::Json;
 use axum::extract::{Path, State};
 

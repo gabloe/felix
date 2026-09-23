@@ -20,7 +20,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::read_json;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::keys::generate_signing_keys;
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
 use felix_controlplane_service::store::{
@@ -65,8 +65,8 @@ async fn jwks_endpoint_returns_keys_for_tenant() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
@@ -118,8 +118,8 @@ async fn jwks_endpoint_missing_tenant_returns_404() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };

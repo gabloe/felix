@@ -8,9 +8,9 @@
 
 use std::sync::Arc;
 
+use crate::api::AppState;
+use crate::api::readiness::{AlwaysReady, HealthProbe, Readiness};
 use crate::api::types::{FeatureFlags, Region};
-use crate::app::AppState;
-use crate::readiness::{AlwaysReady, HealthProbe, Readiness};
 use crate::store::ControlPlaneAuthStore;
 
 /// An `AppState` over `store`, ready unless `probe` says otherwise.

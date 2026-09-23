@@ -13,7 +13,7 @@ use axum::http::{Request, StatusCode};
 use common::read_json;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::felix_token::{SigningKey, TenantSigningKeys};
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
 use felix_controlplane_service::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -109,8 +109,8 @@ async fn fixture() -> (AppState, Arc<InMemoryStore>) {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };

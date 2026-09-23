@@ -11,9 +11,9 @@
 //! permissions. Scope checks happen server-side before store writes, and the
 //! credential is checked before the tenant's existence, so an unauthenticated
 //! caller cannot probe for tenants.
+use crate::api::AppState;
 use crate::api::ensure_tenant_exists;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_validation_error};
-use crate::app::AppState;
 use crate::auth::bearer::{Refusal, refused, tenant_permissions};
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::authorize::{

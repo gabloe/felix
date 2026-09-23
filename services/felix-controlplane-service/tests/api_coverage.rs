@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use common::read_json;
 use common::{Credentials, json_request_as, seed_credentials};
 use felix_controlplane_service::api::types::FeatureFlags;
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::model::{RetentionPolicy, StreamKind};
 use felix_controlplane_service::store::{ControlPlaneStore, StoreConfig};
 use std::sync::Arc;
@@ -54,8 +54,8 @@ async fn harness() -> Harness {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };

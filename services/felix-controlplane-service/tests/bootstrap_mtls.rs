@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_bootstrap_router};
+use felix_controlplane_service::api::{AppState, build_bootstrap_router};
 use felix_controlplane_service::config::BootstrapTlsConfig;
 use felix_controlplane_service::store::{ControlPlaneAuthStore, ControlPlaneStore, StoreConfig};
 use tokio_util::sync::CancellationToken;
@@ -78,8 +78,8 @@ fn state_with_token() -> AppState {
         bootstrap_enabled: true,
         bootstrap_tokens: vec!["secret".to_string()],
         node_liveness: Default::default(),
-        readiness: Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     }

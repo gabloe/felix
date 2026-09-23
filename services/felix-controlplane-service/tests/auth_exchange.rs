@@ -23,7 +23,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::read_json;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::felix_token::{FelixClaims, SigningKey, TenantSigningKeys};
 use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
@@ -218,8 +218,8 @@ async fn exchange_returns_tenant_scoped_token() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
@@ -368,8 +368,8 @@ async fn exchange_forbidden_without_policies() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
@@ -491,8 +491,8 @@ async fn exchange_supports_group_claim_based_rbac() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
@@ -631,8 +631,8 @@ async fn exchange_group_claim_rbac_requires_groups_claim_mapping() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
@@ -751,8 +751,8 @@ async fn exchange_supports_group_claim_values_with_group_prefix() {
         bootstrap_enabled: false,
         bootstrap_tokens: Vec::new(),
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };

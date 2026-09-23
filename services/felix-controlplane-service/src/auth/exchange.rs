@@ -5,10 +5,10 @@
 //! issuers, RBAC decides the effective permissions, and the result is a Felix
 //! EdDSA token for the broker. The request body can narrow those permissions
 //! but can never widen them.
+use crate::api::AppState;
 use crate::api::error::{
     ApiError, api_forbidden, api_internal, api_internal_message, api_unauthorized,
 };
-use crate::app::AppState;
 use crate::auth::felix_token::mint_token;
 use crate::auth::oidc::OidcError;
 use crate::auth::principal;

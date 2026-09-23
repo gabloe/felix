@@ -1,5 +1,5 @@
 use super::*;
-use crate::readiness::HealthProbe;
+use crate::api::readiness::HealthProbe;
 use crate::store::StoreConfig;
 use crate::store::memory::InMemoryStore;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ async fn a_member_that_has_not_caught_up_cannot_verify_rather_than_refusing() {
 /// credential becomes an infinite retry loop.
 #[tokio::test]
 async fn a_ready_member_still_refuses_a_token_it_cannot_verify() {
-    let state = state_with(Arc::new(crate::readiness::AlwaysReady));
+    let state = state_with(Arc::new(crate::api::readiness::AlwaysReady));
     let err = verify_against(&state, "acme", "not-a-real-token")
         .await
         .expect_err("no keys for this tenant");

@@ -7,7 +7,7 @@
 use anyhow::Context;
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_bootstrap_router, build_router};
+use felix_controlplane_service::api::{AppState, build_bootstrap_router, build_router};
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
 use felix_controlplane_service::raft::{LeadershipGate, RaftHandle, RaftSettings};
 use felix_controlplane_service::store::raft_backend::RaftStore;
@@ -360,12 +360,12 @@ async fn build_state(
     };
 
     let readiness = Arc::new(
-        felix_controlplane_service::readiness::Readiness::with_lifecycle(
+        felix_controlplane_service::api::readiness::Readiness::with_lifecycle(
             // The same flag the metrics endpoint reads, so a drain is visible on
             // both ports at once.
             lifecycle_readiness.clone(),
             // The store, seen through the one method readiness needs.
-            Arc::new(felix_controlplane_service::readiness::StoreProbe(
+            Arc::new(felix_controlplane_service::api::readiness::StoreProbe(
                 Arc::clone(&store),
             )),
             std::time::Duration::from_millis(config.readiness_timeout_ms),

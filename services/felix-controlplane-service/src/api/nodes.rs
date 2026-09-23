@@ -14,13 +14,13 @@
 //! outright. Reads require
 //! `node.view:cluster:*`, since the listing exposes the cluster's network
 //! layout.
+use crate::api::AppState;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
 use crate::api::types::{
     NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
     NodeRegistrationRequest, NodeRegistrationResponse, NodeView, ReplicaStatusRequest,
     ShardAssignmentChangesResponse, ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
 };
-use crate::app::AppState;
 use crate::auth::bearer::{require_cluster_action, verified_claims};
 use crate::auth::rbac::authorize::{
     ACTION_NODE_MANAGE, ACTION_NODE_VIEW, ParsedObject, object_within_scope, parse_permission,

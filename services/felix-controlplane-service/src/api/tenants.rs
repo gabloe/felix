@@ -6,13 +6,13 @@
 //! brokers consume take `node.view:cluster:*` like the rest of the metadata
 //! they sync. Day 0, before any operator credential exists, goes through the
 //! bootstrap listener instead.
+use crate::api::AppState;
 use crate::api::error::{
     ApiError, api_conflict, api_internal, api_internal_message, api_not_found,
 };
 use crate::api::types::{
     TenantChangesResponse, TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
 };
-use crate::app::AppState;
 use crate::auth::bearer::require_cluster_action;
 use crate::auth::keys::generate_signing_keys;
 use crate::auth::rbac::authorize::{ACTION_NODE_VIEW, ACTION_TENANT_MANAGE};

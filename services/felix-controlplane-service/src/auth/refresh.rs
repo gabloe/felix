@@ -11,8 +11,8 @@
 //! the next refresh rather than whenever the caller happens to re-exchange. A
 //! refresh that froze its grants would turn a short access TTL into a long one
 //! for authorization purposes, which is most of what the short TTL was for.
+use crate::api::AppState;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_internal_message};
-use crate::app::AppState;
 use crate::auth::felix_token::mint_token;
 use crate::auth::rbac::enforcer::build_enforcer;
 use crate::auth::rbac::permissions::effective_permissions;

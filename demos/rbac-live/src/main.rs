@@ -46,7 +46,7 @@ use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
 use felix_controlplane_service::api::types::{
     CacheCreateRequest, NamespaceCreateRequest, StreamCreateRequest,
 };
-use felix_controlplane_service::app::{AppState, build_bootstrap_router, build_router};
+use felix_controlplane_service::api::{AppState, build_bootstrap_router, build_router};
 use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use felix_controlplane_service::auth::principal::principal_id;
 use felix_controlplane_service::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -329,8 +329,8 @@ async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
         bootstrap_tokens: vec![BOOTSTRAP_TOKEN.to_string()],
         node_liveness: Default::default(),
         // The demo's store is in-memory, which has nothing to be unready about.
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };

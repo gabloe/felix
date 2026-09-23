@@ -1,7 +1,7 @@
 #![cfg(feature = "pg-tests")]
 //! Readiness, against a database that can actually fail (#122).
 //!
-//! `src/readiness_tests.rs` proves the mechanism — the cache window, the
+//! `src/api/readiness/tests.rs` proves the mechanism — the cache window, the
 //! timeout, the draining short-circuit — against a fake probe that fails on
 //! command. What it cannot prove is the part the acceptance criteria are
 //! written about: that a *real* Postgres going away takes this instance out of
@@ -28,9 +28,9 @@ use std::time::Duration;
 use anyhow::Result;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use felix_controlplane_service::app::{self, AppState};
+use felix_controlplane_service::api::readiness::{Readiness, StoreProbe};
+use felix_controlplane_service::api::{self, AppState};
 use felix_controlplane_service::config::PostgresConfig;
-use felix_controlplane_service::readiness::{Readiness, StoreProbe};
 use felix_controlplane_service::store::{StoreConfig, postgres::PostgresStore};
 use serial_test::serial;
 use sqlx::postgres::PgPoolOptions;
@@ -205,7 +205,7 @@ async fn pump(
 
 /// The real router, with readiness wired to the real store.
 fn router_over(store: Arc<PostgresStore>) -> axum::Router {
-    let probe: Arc<dyn felix_controlplane_service::readiness::HealthProbe> =
+    let probe: Arc<dyn felix_controlplane_service::api::readiness::HealthProbe> =
         Arc::new(StoreProbe(store.clone() as Arc<_>));
     let state = AppState {
         region: felix_controlplane_service::api::types::Region {
@@ -233,7 +233,7 @@ fn router_over(store: Arc<PostgresStore>) -> axum::Router {
         )),
         in_flight: Default::default(),
     };
-    app::build_router(state)
+    api::build_router(state)
 }
 
 async fn probe(router: &axum::Router, path: &str) -> StatusCode {

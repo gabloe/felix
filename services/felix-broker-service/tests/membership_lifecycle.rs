@@ -8,7 +8,7 @@
 use felix_broker_service::config::MembershipConfig;
 use felix_broker_service::membership::{self, MembershipError};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_router};
+use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::config::NodeLivenessConfig;
 use felix_controlplane_service::model::NodeLifecycle;
 use felix_controlplane_service::store::memory::InMemoryStore;
@@ -76,9 +76,11 @@ impl Cluster {
             bootstrap_enabled: false,
             bootstrap_tokens: Vec::new(),
             node_liveness: LIVENESS,
-            readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-                std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
-            )),
+            readiness: std::sync::Arc::new(
+                felix_controlplane_service::api::readiness::Readiness::new(std::sync::Arc::new(
+                    felix_controlplane_service::api::readiness::AlwaysReady,
+                )),
+            ),
             in_flight: Default::default(),
         };
 

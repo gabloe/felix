@@ -14,8 +14,8 @@
 //! Every refusal goes through [`refused`], so a credential that was presented
 //! and turned away is counted and logged: an unauthorized attempt is something
 //! an operator gets to see, not only something the caller gets told.
+use crate::api::AppState;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_unauthorized};
-use crate::app::AppState;
 use crate::auth::felix_token::{FelixClaims, verify_token};
 use crate::auth::rbac::authorize::{
     ParsedObject, ParsedPermission, object_within_scope, parse_permission,

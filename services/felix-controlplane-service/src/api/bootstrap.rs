@@ -2,11 +2,11 @@
 //!
 //! Implements the initial tenant bootstrap flow that seeds auth configuration,
 //! RBAC policies, and signing keys for a newly created tenant.
+use crate::api::AppState;
 use crate::api::error::{
     ApiError, api_conflict, api_internal, api_internal_message, api_not_enabled, api_unauthorized,
     api_validation_error,
 };
-use crate::app::AppState;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::Tenant;

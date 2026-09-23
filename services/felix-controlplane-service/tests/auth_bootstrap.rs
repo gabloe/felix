@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use common::read_json;
 use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
-use felix_controlplane_service::app::{AppState, build_bootstrap_router};
+use felix_controlplane_service::api::{AppState, build_bootstrap_router};
 use felix_controlplane_service::auth::oidc::UpstreamOidcValidator;
 use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore,
@@ -38,8 +38,8 @@ fn bootstrap_state(enabled: bool, tokens: Vec<String>) -> (Arc<InMemoryStore>, A
         bootstrap_enabled: enabled,
         bootstrap_tokens: tokens,
         node_liveness: Default::default(),
-        readiness: std::sync::Arc::new(felix_controlplane_service::readiness::Readiness::new(
-            std::sync::Arc::new(felix_controlplane_service::readiness::AlwaysReady),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
     };
