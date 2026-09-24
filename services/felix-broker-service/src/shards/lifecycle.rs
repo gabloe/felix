@@ -16,11 +16,15 @@
 //!
 //! The phase also drives the [`fence::ShardFence`] every write passes through
 //! when it claims its place in the log: open only while `Active`.
+//!
+//! A broker named as the destination of a move prepares the shard before it
+//! is handed over, so the cut-over only has to record the new generation.
 pub mod fence;
 pub mod metrics;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::shards::lifecycle::metrics as mm;
 use crate::shards::{ShardKey, ShardKind, watch::ShardAssignment};
@@ -100,6 +104,9 @@ pub enum Action {
     Open { key: ShardKey, generation: u64 },
     /// Stop writes, drain, flush, and close.
     Release { key: ShardKey, generation: u64 },
+    /// A move is bringing the shard here. Get ready to serve it; nothing
+    /// serves yet.
+    Prepare { key: ShardKey },
     /// Nothing to do.
     None,
 }
@@ -110,6 +117,16 @@ pub struct ShardLifecycle {
     node_id: String,
     shards: HashMap<ShardKey, LocalShard>,
     fence: Arc<fence::ShardFence>,
+    /// Moves naming this broker as the destination, until it serves the shard
+    /// or stops being named.
+    incoming: HashMap<ShardKey, Incoming>,
+}
+
+/// A move toward this broker, timed from when this broker first saw each step.
+#[derive(Debug, Clone, Copy)]
+struct Incoming {
+    named: Instant,
+    fenced: Option<Instant>,
 }
 
 impl ShardLifecycle {
@@ -118,6 +135,7 @@ impl ShardLifecycle {
             node_id: node_id.into(),
             shards: HashMap::new(),
             fence: Arc::default(),
+            incoming: HashMap::new(),
         }
     }
 
@@ -178,6 +196,11 @@ impl ShardLifecycle {
         let generation = assignment.map_or(0, |a| a.generation);
         let draining = assignment.is_some_and(ShardAssignment::is_draining);
         let current = self.shards.get(key).cloned();
+        let incoming = !ours
+            && assignment.is_some_and(|a| a.successor.as_deref() == Some(self.node_id.as_str()));
+        if !ours && !incoming {
+            self.incoming.remove(key);
+        }
 
         match (ours, current) {
             // Newly ours: open before serving.
@@ -235,15 +258,23 @@ impl ShardLifecycle {
             }
 
             // Not ours, and we hold nothing.
+            (false, None) if incoming => self.expect(key, draining),
             (false, None) => Action::None,
 
             (false, Some(existing)) => match existing.phase {
                 // Already given up.
+                Phase::Closed | Phase::Unassigned | Phase::Draining if incoming => {
+                    self.expect(key, draining)
+                }
                 Phase::Closed | Phase::Unassigned | Phase::Draining => Action::None,
                 // A failed open never served, so there is nothing to drain.
                 Phase::Failed => {
                     self.set(key, Phase::Closed, existing.generation, false);
-                    Action::None
+                    if incoming {
+                        self.expect(key, draining)
+                    } else {
+                        Action::None
+                    }
                 }
                 Phase::Active | Phase::Opening => {
                     self.set(key, Phase::Draining, existing.generation, false);
@@ -254,6 +285,41 @@ impl ShardLifecycle {
                 }
             },
         }
+    }
+
+    /// Note a move naming this broker as the destination. Prepares once per
+    /// move; `fenced` records when the old leader was told to stop.
+    fn expect(&mut self, key: &ShardKey, fenced: bool) -> Action {
+        let now = Instant::now();
+        let mut first = false;
+        let entry = self.incoming.entry(key.clone()).or_insert_with(|| {
+            first = true;
+            Incoming {
+                named: now,
+                fenced: None,
+            }
+        });
+        if fenced && entry.fenced.is_none() {
+            entry.fenced = Some(now);
+        }
+        if first {
+            Action::Prepare { key: key.clone() }
+        } else {
+            Action::None
+        }
+    }
+
+    /// Whether a move naming this broker as its destination is in progress
+    /// for `key`.
+    #[cfg(test)]
+    pub(crate) fn is_incoming(&self, key: &ShardKey) -> bool {
+        self.incoming.contains_key(key)
+    }
+
+    /// Forget moves toward this broker whose shard no longer has an
+    /// assignment at all.
+    fn forget_incoming_except(&mut self, present: &HashMap<ShardKey, ShardAssignment>) {
+        self.incoming.retain(|key, _| present.contains_key(key));
     }
 
     /// Every shard this broker holds that the given assignment set no longer
@@ -291,6 +357,12 @@ impl ShardLifecycle {
                     Opened::Draining
                 } else {
                     self.set(key, Phase::Active, generation, false);
+                    if let Some(incoming) = self.incoming.remove(key) {
+                        mm::record_move_arrived(
+                            incoming.named.elapsed(),
+                            incoming.fenced.map(|at| at.elapsed()),
+                        );
+                    }
                     Opened::Activated
                 }
             }
@@ -403,6 +475,12 @@ pub trait ShardStore: Send + Sync {
     /// and the client has no reason to look for the new leader. Each reader
     /// gets what was already queued for it first.
     async fn end_readers(&self, _key: &ShardKey) {}
+    /// Get ready to serve a shard a move is bringing here: open its log and
+    /// load what serving it needs, so taking it over is quick.
+    ///
+    /// Best effort and must not block: whatever this does not finish, the
+    /// open at the cut-over does.
+    fn prepare(&self, _key: &ShardKey) {}
 }
 
 /// Ends the readers of a released shard, for the stores that serve them.
@@ -413,6 +491,46 @@ pub struct ShardReaders {
 impl ShardReaders {
     pub fn new(broker: std::sync::Arc<felix_broker::Broker>) -> Self {
         Self { broker }
+    }
+
+    /// Open the shard's log and its in-memory state in the background.
+    ///
+    /// A destination that has received part of the copy has both already;
+    /// this covers one that has received nothing yet, and a cache shard,
+    /// whose log is otherwise opened by the first request after the cut-over.
+    fn prepare(&self, key: &ShardKey) {
+        let broker = Arc::clone(&self.broker);
+        let key = key.clone();
+        tokio::spawn(async move {
+            let prepared = match key.kind {
+                ShardKind::Stream => broker
+                    .resolve_stream_handle(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+                    .await
+                    .map(drop)
+                    .map_err(|err| err.to_string()),
+                ShardKind::Cache => broker
+                    .shard_log(
+                        felix_broker::LogKind::Cache,
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                    )
+                    .await
+                    .map(drop)
+                    .ok_or_else(|| "no cache log".to_string()),
+            };
+            // Not a failure of the move: the cut-over opens the shard anyway.
+            if let Err(err) = prepared {
+                tracing::debug!(
+                    kind = ?key.kind,
+                    name = %key.stream,
+                    shard = key.shard,
+                    error = %err,
+                    "could not prepare an incoming shard ahead of its cut-over",
+                );
+            }
+        });
     }
 
     async fn end(&self, key: &ShardKey) {
@@ -528,6 +646,12 @@ impl ShardStore for DurableShardStore {
             readers.end(key).await;
         }
     }
+
+    fn prepare(&self, key: &ShardKey) {
+        if let Some(readers) = &self.readers {
+            readers.prepare(key);
+        }
+    }
 }
 
 /// A [`ShardStore`] for a broker with no durable storage.
@@ -574,6 +698,7 @@ pub async fn apply(
 ) {
     match action {
         Action::None => {}
+        Action::Prepare { key } => store.prepare(&key),
         Action::Open { key, generation } => match store.open(&key, generation).await {
             Ok(()) => {
                 // Bound first: matching on the locked call would hold the guard
@@ -691,6 +816,7 @@ pub async fn reconcile(
         for key in owned.missing_from(assignments.keys()) {
             actions.push(owned.observe(&key, None));
         }
+        owned.forget_incoming_except(assignments);
     }
     for action in actions {
         apply(lifecycle, store, action).await;

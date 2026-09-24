@@ -138,7 +138,11 @@ export FELIX_CONTROLPLANE_URL="https://cp.example.com:8443"
 
 ### `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS`
 
-**Description**: Control plane polling interval in milliseconds.
+**Description**: Control plane polling interval in milliseconds. Paces the
+node-catalog refresh and the broker's background passes. Shard assignment
+changes are long-polled and arrive as they are written; against a control
+plane that does not support long-polling, this is also the assignment poll
+interval.
 
 **Type**: Unsigned integer
 

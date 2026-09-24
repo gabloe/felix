@@ -135,6 +135,13 @@ Metrics on the control plane:
 | `felix_shard_move_duration_seconds` | histogram: from a move's first step to its cut-over |
 | `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over, the window in which the shard is not served |
 
+Metrics on the destination broker:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_broker_shard_move_seconds` | histogram: from the broker first seeing itself named as the destination to serving the shard |
+| `felix_broker_shard_switchover_seconds` | histogram: from the fence to the destination serving the shard — the window clients see |
+
 Every step is written only if the shard is still at the generation the pass
 planned from, so two control-plane instances running placement at once
 cannot undo each other's steps. A conflict is skipped and re-planned on the
@@ -177,7 +184,7 @@ fence and its tests are in `services/felix-broker-service/src/shards/lifecycle/f
 | --- | --- | --- |
 | `FELIX_SHARD_MOVES_MAX_CONCURRENT` | `1` | Moves in flight across the cluster. Each is a full copy of a shard's log; raise it to drain a broker with many shards faster, at the cost of that much more replication traffic at once. `0` holds every move. |
 | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement runs on its own. A report a move is waiting for (the successor caught up, the leader drained) runs a pass straight away when the control-plane instance that receives it is the one running placement. |
-| `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS` (broker) | `5000` | How quickly brokers see each step. Bounds the refused-publish window. |
+| `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS` (broker) | `2000` | How often a broker refreshes its node catalog and runs its background passes. Assignment changes are long-polled and reach the broker as they are written, so this does not bound a move's switch-over, except against a control plane too old to long-poll. |
 
 A drain of `n` shards at the default policy takes up to one placement
 interval per shard to start its move, plus the time to copy each log. The

@@ -487,6 +487,12 @@ duration only if that instance staged it too. With a single placement writer
 over Postgres, a move whose steps were written by different instances is
 missing from some or all of them.
 
+The destination broker times the same move from its side, and that is the
+number to watch for client impact: `felix_broker_shard_switchover_seconds`
+runs from the fence to the destination serving the shard, whereas
+`felix_shard_move_fence_seconds` stops at the cut-over write, before any
+broker has acted on it.
+
 The fence and the broker's side of it are described in
 [replication-design.md](replication-design.md#planned-handoff).
 
@@ -507,6 +513,11 @@ exactly as it is without `wait_ms`, so retention, the page limit and the
 snapshot fallback are unchanged. A wait that runs out answers the same empty
 page an immediate request would have. Without `wait_ms` (or with `0`) the
 request never waits.
+
+Brokers ask to wait 20 s, so a fence or a cut-over reaches them as it is
+written. A control plane that predates `wait_ms` ignores it and answers at
+once; the broker then waits out `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS` between
+empty answers, as it did before.
 
 A waiting request holds no store connection: it re-reads the store every 50 ms,
 each read taking a connection only for itself, which is how it sees a write by
@@ -578,6 +589,8 @@ not the same event as the shard becoming servable.
 | `felix_broker_shard_transitions_total{from,to}` | local ownership moves |
 | `felix_broker_shard_stale_events_total` | events ignored for an old generation |
 | `felix_broker_shard_open_failures_total` | non-zero means a shard the cluster believes is placed here is not being served |
+| `felix_broker_shard_move_seconds` | histogram, on the destination: from first seeing itself named as a shard's `successor` to serving it — the whole move, copy included |
+| `felix_broker_shard_switchover_seconds` | histogram, on the destination: from seeing the old leader fenced to serving the shard — the window in which nobody serves it, as clients see it |
 
 #### Resolving a shard to a node
 
@@ -702,6 +715,8 @@ Broker side:
 | `felix_broker_shard_changes_stale_total` | changes dropped for a stale generation; small numbers are routine, and are what makes duplicate delivery harmless |
 | `felix_broker_shard_watch_resyncs_total{reason}` | forced resnapshots: `gap_in_history` or `sequence_reset` |
 | `felix_broker_shard_watch_failures_total` | polls that failed outright |
+| `felix_broker_shard_move_seconds` | histogram: a move toward this broker, from being named its destination to serving the shard |
+| `felix_broker_shard_switchover_seconds` | histogram: a move toward this broker, from the fence to serving the shard |
 
 Broker:
 

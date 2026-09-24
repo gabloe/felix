@@ -296,6 +296,7 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         },
         None,
         Duration::from_secs(300),
+        Arc::default(),
         RebuildPolicy::default(),
         shutdown.clone(),
     );
@@ -328,6 +329,56 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         "nothing shipped within 5s of the append, against a 300s tick: the \
          append signal is not reaching the driver, so a Quorum publish waits \
          out the interval",
+    );
+}
+
+/// A route change runs a pass without waiting for the tick.
+///
+/// A fenced shard's drained report and a new leader's first shipment both wait
+/// on the next pass, and the control plane's next step of a move waits on
+/// them. The routing feed says when it has acted on a change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_route_change_ships_without_waiting_for_the_tick() {
+    let (broker, _dir) = leader_with(3).await;
+    // Led here with nobody to ship to, until the routes change.
+    let router = router(LOCAL, &[], 4);
+    let follower = Arc::new(AcceptingFollower::default());
+    let routes_changed = Arc::new(tokio::sync::Notify::new());
+
+    let shutdown = CancellationToken::new();
+    let driver = spawn(
+        Arc::clone(&follower),
+        Arc::clone(&broker),
+        Arc::clone(&router),
+        Arc::default(),
+        Published {
+            marks: Arc::new(QuorumMarks::new()),
+            halted: Arc::new(crate::replication::halted::HaltedReplicas::new()),
+        },
+        None,
+        Duration::from_secs(300),
+        Arc::clone(&routes_changed),
+        RebuildPolicy::default(),
+        shutdown.clone(),
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(follower.batches().is_empty(), "nothing to ship to yet");
+
+    publish(&router, LOCAL, &["broker-b"], 5);
+    routes_changed.notify_one();
+
+    let shipped = tokio::time::timeout(Duration::from_secs(5), async {
+        while follower.batches().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    shutdown.cancel();
+    let _ = driver.await;
+    assert!(
+        shipped.is_ok(),
+        "nothing shipped within 5s of the routes changing, against a 300s tick",
     );
 }
 

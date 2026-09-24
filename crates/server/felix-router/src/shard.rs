@@ -12,7 +12,7 @@
 mod router;
 mod table;
 
-pub use router::{ReplicaRole, Resolution, ShardRouter, Unavailable};
+pub use router::{ReplicaRole, Resolution, Routes, ShardRouter, Unavailable};
 pub use table::{NodeRef, Placed, Route, RoutingTable};
 
 /// One shard of one stream or cache.

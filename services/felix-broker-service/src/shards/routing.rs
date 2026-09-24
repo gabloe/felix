@@ -110,23 +110,37 @@ pub type ServableShards = HashMap<ShardKey, u64>;
 ///
 /// Absent on a single-node broker — see [`dispatch`].
 ///
-/// Both reads are `ArcSwap` loads, so `dispatch` is synchronous and allocation
+/// One `ArcSwap` load per request, so `dispatch` is synchronous and allocation
 /// free. That is deliberate: it sits in front of every publish, and a resolver
 /// that cost a lock or an await would show up in p999 long before it showed up
 /// in a correctness test.
 pub struct IngressRouter {
     router: Arc<ShardRouter>,
-    servable: ArcSwap<ServableShards>,
+    view: ArcSwap<View>,
     fence: Arc<ShardFence>,
+}
+
+/// Routes and the servable set, published as one value.
+///
+/// Two swaps would leave a moment where one is updated and the other is not:
+/// a new owner that has opened a shard but still routes it to the old leader,
+/// or an old leader that has stopped serving but still routes it to itself.
+struct View {
+    routes: Arc<felix_router::Routes>,
+    servable: ServableShards,
 }
 
 impl IngressRouter {
     /// `fence` is the one the shard lifecycle opens and closes; see
     /// [`crate::shards::lifecycle::ShardLifecycle::fence`].
     pub fn new(router: Arc<ShardRouter>, fence: Arc<ShardFence>) -> Self {
+        let view = ArcSwap::from_pointee(View {
+            routes: router.routes(),
+            servable: ServableShards::new(),
+        });
         Self {
             router,
-            servable: ArcSwap::from_pointee(ServableShards::new()),
+            view,
             fence,
         }
     }
@@ -137,21 +151,29 @@ impl IngressRouter {
         &self.fence
     }
 
-    /// Replace the set of shards this broker can serve.
+    /// Publish new routes and the shards this broker can serve, together.
     ///
-    /// Called after each lifecycle reconcile, which is the only thing that
-    /// changes it.
-    pub fn publish_servable(&self, servable: ServableShards) {
-        self.servable.store(Arc::new(servable));
+    /// The feed calls this after each lifecycle reconcile, which is the only
+    /// thing that changes the servable set.
+    pub fn publish(
+        &self,
+        table: felix_router::RoutingTable,
+        nodes: &HashMap<String, felix_router::NodeRef>,
+        servable: ServableShards,
+    ) {
+        let routes = self.router.publish(table, nodes);
+        self.view.store(Arc::new(View { routes, servable }));
     }
 
-    /// Decide what to do with a request for `key`.
-    ///
-    /// Two sources have to agree. The router says who the cluster believes owns
-    /// the shard; the servable set says whether this broker has actually opened
-    /// it. Trusting only the router would serve writes during recovery;
-    /// trusting only local state would keep serving a shard that has been
-    /// reassigned.
+    /// Replace the servable set, keeping the routes last published to the
+    /// router.
+    pub fn publish_servable(&self, servable: ServableShards) {
+        self.view.store(Arc::new(View {
+            routes: self.router.routes(),
+            servable,
+        }));
+    }
+
     /// The generation this broker currently leads `key` at, if it does.
     ///
     /// A publish waiting for a quorum needs it: the majority is over the
@@ -166,7 +188,7 @@ impl IngressRouter {
 
     /// How many shards this stream or cache was placed with.
     ///
-    /// Read from the routing snapshot, which is an `ArcSwap` load and no lock.
+    /// Read from the published routes, which is an `ArcSwap` load and no lock.
     pub fn shards_for(
         &self,
         kind: ShardKind,
@@ -174,9 +196,12 @@ impl IngressRouter {
         namespace: &str,
         stream: &str,
     ) -> u32 {
-        self.router
-            .snapshot()
-            .shards_for(to_router_kind(kind), tenant_id, namespace, stream)
+        self.view.load().routes.table().shards_for(
+            to_router_kind(kind),
+            tenant_id,
+            namespace,
+            stream,
+        )
     }
 
     /// The placed shard count, or `None` if the routing snapshot does not know
@@ -188,18 +213,29 @@ impl IngressRouter {
         namespace: &str,
         stream: &str,
     ) -> Option<u32> {
-        self.router
-            .snapshot()
-            .placed_shards_for(to_router_kind(kind), tenant_id, namespace, stream)
+        self.view.load().routes.table().placed_shards_for(
+            to_router_kind(kind),
+            tenant_id,
+            namespace,
+            stream,
+        )
     }
 
+    /// Decide what to do with a request for `key`.
+    ///
+    /// Two sources have to agree. The routes say who the cluster believes owns
+    /// the shard; the servable set says whether this broker has actually opened
+    /// it. Trusting only the routes would serve writes during recovery;
+    /// trusting only local state would keep serving a shard that has been
+    /// reassigned.
     pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
-        match self.router.resolve(&to_router_key(key)) {
+        let view = self.view.load();
+        match self.router.resolve_with(&view.routes, &to_router_key(key)) {
             Resolution::Local { generation } => {
                 // The cluster says ours. Local readiness has the deciding vote,
                 // and only at this exact generation: an older one means we have
                 // not caught up with a reassignment that already happened.
-                if self.servable.load().get(key) == Some(&generation) {
+                if view.servable.get(key) == Some(&generation) {
                     Dispatch::Local { generation }
                 } else {
                     Dispatch::Unavailable(Reason::NotReady)
@@ -290,11 +326,16 @@ pub struct FeedState {
     pub lifecycle: Arc<tokio::sync::Mutex<crate::shards::lifecycle::ShardLifecycle>>,
     pub store: Arc<dyn crate::shards::lifecycle::ShardStore>,
     pub ingress: Arc<IngressRouter>,
-    pub router: Arc<ShardRouter>,
     /// Refreshed on the same tick as the catalog it is derived from, so what a
     /// client is told and what this broker forwards to cannot come from
     /// different fetches.
     pub client_endpoints: Option<Arc<crate::cluster::client_endpoints::ClientEndpoints>>,
+    /// Notified by the watch when ownership changed. The feed acts on it at
+    /// once instead of at its next tick.
+    pub assignments_changed: Arc<tokio::sync::Notify>,
+    /// Notified by the feed after it acts on a change, so replication ships a
+    /// newly fenced or newly led shard without waiting for its own tick.
+    pub routes_changed: Arc<tokio::sync::Notify>,
 }
 
 /// What the feed needs to read the node catalog.
@@ -310,13 +351,14 @@ pub struct CatalogSource {
 /// Keep local shard state and the routing table in step with the watch.
 ///
 /// One task owns the sequence, so the two never disagree: reconcile local state
-/// first, then publish what is servable, then publish the routes. Publishing
-/// routes first would advertise this node as the owner of a shard it has not
-/// opened.
+/// first, then publish what is servable and the routes together.
 ///
-/// The node catalog is refreshed on the same tick, because a route is only
-/// usable when both halves are known: an assignment names an owner by id, and
-/// only the catalog turns that into an address to forward to.
+/// Runs on a tick and whenever the watch reports a change. The tick refreshes
+/// the node catalog, because a route is only usable when both halves are
+/// known: an assignment names an owner by id, and only the catalog turns that
+/// into an address to forward to. A wake skips the refresh unless an
+/// assignment names a node the catalog lacks, so a move is not held up by a
+/// round trip for addresses this broker already has.
 pub fn spawn_feed(
     state: FeedState,
     catalog_source: Option<CatalogSource>,
@@ -328,22 +370,28 @@ pub fn spawn_feed(
         lifecycle,
         store,
         ingress,
-        router,
         client_endpoints,
+        assignments_changed,
+        routes_changed,
     } = state;
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut catalog = HashMap::new();
         loop {
-            tokio::select! {
+            let woken = tokio::select! {
                 _ = shutdown.cancelled() => return,
-                _ = ticker.tick() => {}
-            }
+                _ = ticker.tick() => false,
+                _ = assignments_changed.notified() => true,
+            };
 
-            if let Some(source) = &catalog_source {
-                // Read on every tick rather than once, so a refreshed token is
-                // in use from the next poll.
+            let assignments = ownership.read().await.assignments().clone();
+
+            if let Some(source) = &catalog_source
+                && (!woken || names_unknown_node(&assignments, &catalog))
+            {
+                // Read on every refresh rather than once, so a refreshed token
+                // is in use from the next poll.
                 let bearer = source.token.as_ref().map(|token| token.bearer());
                 match crate::cluster::node_catalog::fetch(
                     &source.client,
@@ -369,14 +417,35 @@ pub fn spawn_feed(
                 }
             }
 
-            let assignments = ownership.read().await.assignments().clone();
             crate::shards::lifecycle::reconcile(&lifecycle, store.as_ref(), &assignments).await;
 
+            // Read after reconcile, so an open that just finished is included:
+            // publishing the routes first would advertise this node as the
+            // owner of a shard it has not opened.
             let servable = lifecycle.lock().await.servable();
-            ingress.publish_servable(servable);
-            router.publish(routing_table_from(&assignments, &catalog), &catalog);
+            ingress.publish(
+                routing_table_from(&assignments, &catalog),
+                &catalog,
+                servable,
+            );
             crate::shards::watch::metrics::set_catalog_nodes(catalog.len());
+            if woken {
+                routes_changed.notify_one();
+            }
         }
+    })
+}
+
+/// Whether an assignment names a node the catalog has no entry for.
+fn names_unknown_node(
+    assignments: &HashMap<ShardKey, crate::shards::watch::ShardAssignment>,
+    catalog: &HashMap<String, felix_router::NodeRef>,
+) -> bool {
+    assignments.values().any(|assignment| {
+        std::iter::once(&assignment.leader)
+            .chain(&assignment.replicas)
+            .chain(&assignment.successor)
+            .any(|node| !catalog.contains_key(node))
     })
 }
 

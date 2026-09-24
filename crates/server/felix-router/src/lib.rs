@@ -10,6 +10,6 @@ mod shard;
 
 pub use region::RegionRouter;
 pub use shard::{
-    NodeRef, Placed, ReplicaRole, Resolution, Route, RoutingTable, ShardKey, ShardKind,
+    NodeRef, Placed, ReplicaRole, Resolution, Route, Routes, RoutingTable, ShardKey, ShardKind,
     ShardRouter, Unavailable,
 };

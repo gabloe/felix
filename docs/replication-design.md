@@ -686,12 +686,30 @@ publishes are refused. That window is the cost of the fence, the same way
 the safety interval is the cost of the lease, and it is a refusal rather than
 an acknowledgement nobody can honour.
 
+The window is kept short by waking each step rather than polling for it. The
+broker long-polls the assignment feed, so the fence and the cut-over reach it
+as they are written. Its assignment watch wakes the routing feed, and the feed
+wakes replication once it has acted on the change, so the drained report goes
+out on the pass right after the fence. The control plane runs placement when
+that report lands. The destination sees itself named as `successor` from the
+stage onward and opens the shard's log and in-memory state while still
+copying, so taking over only records the new generation. The feed then
+publishes the routes and the set of shards it serves in one swap, so no
+publish sees one updated and the other not. On a local cluster with every
+broker on the default 2 s interval the switch-over is tens of milliseconds;
+the destination records it as `felix_broker_shard_switchover_seconds`.
+
 A destination that dies before it leads is passed over: another caught-up
 replica, or the old leader itself, takes the shard at a new generation. A
 leader that dies mid-move is a failover, and the successor is a candidate
 there like any other replica. Neither path can name a broker holding less
 than the report said, because the report is the only input either reads.
 
+> `a_move_switches_over_in_well_under_a_second` — with every broker on the
+> default sync interval and placement on a slow timer, the destination accepts
+> a publish well under a second after the fence, and nothing acknowledged
+> before the move is lost.
+>
 > `a_drained_broker_hands_its_shard_over_with_every_record` — an unreplicated
 > durable shard moves off a draining broker and every record acknowledged
 > before the drain is readable from the new owner.

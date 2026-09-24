@@ -34,7 +34,6 @@ use shard::{AuxCursors, ShardCursors, ShardPass, replicate_shard, watch_key};
 /// to stay a bounded amount of concurrent work.
 const SHARD_CONCURRENCY: usize = 16;
 
-/// Run replication until cancelled.
 /// What a pass publishes for the rest of the broker to read.
 ///
 /// Together because they are the same thing from two sides: the mark is what a
@@ -45,6 +44,10 @@ pub struct Published {
     pub halted: Arc<HaltedReplicas>,
 }
 
+/// Run replication until cancelled.
+///
+/// A pass runs on each tick, after each durable append, and whenever
+/// `routes_changed` is notified.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     requester: Arc<R>,
@@ -54,6 +57,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     published: Published,
     reporter: Option<Reporter>,
     interval: Duration,
+    routes_changed: Arc<tokio::sync::Notify>,
     rebuild_policy: RebuildPolicy,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
@@ -65,8 +69,12 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
         // publish that just landed is about to wait on a majority, and waiting
         // out a tick first put seconds in front of milliseconds of shipping.
         //
+        // Also woken when the routing feed acts on an ownership change: a
+        // fence or a cut-over is otherwise a tick away from its drained report
+        // or first shipment.
+        //
         // The tick stays: it covers shards with no recent appends, the
-        // auxiliary logs, and the replica report, none of which an append
+        // auxiliary logs, and the replica report, none of which a wake
         // signals.
         let appended = broker.appended();
         let mut cursors = HashMap::new();
@@ -82,6 +90,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
                 _ = woken => {}
+                _ = routes_changed.notified() => {}
             }
             let pass = replicate_once_with(
                 requester.as_ref(),
