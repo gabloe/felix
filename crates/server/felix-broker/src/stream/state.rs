@@ -57,9 +57,6 @@ pub(crate) struct StreamState {
     consistency: AtomicU8,
     /// The producers whose sequences this shard's leader remembers.
     pub(crate) producers: ProducerTable,
-    /// Publishes claimed and not yet completed. A draining shard reports
-    /// itself settled only once this is zero.
-    pub(crate) in_flight: AtomicUsize,
 }
 
 impl StreamState {
@@ -86,7 +83,6 @@ impl StreamState {
             durable,
             commit_sequencer: Arc::new(CommitSequencer::new(0)),
             producers: ProducerTable::default(),
-            in_flight: AtomicUsize::new(0),
         }
     }
 

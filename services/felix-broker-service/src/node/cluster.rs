@@ -239,6 +239,7 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                     Arc::clone(pool),
                     Arc::clone(broker),
                     Arc::clone(router),
+                    Arc::clone(ingress.fence()),
                     replication::driver::Published {
                         marks: Arc::clone(quorum_marks),
                         halted: Arc::clone(halted_replicas),

@@ -38,22 +38,6 @@ impl Broker {
         Ok(StreamHandle { state })
     }
 
-    /// Publishes claimed on a stream shard and not yet completed. Zero for a
-    /// shard this broker has no state for.
-    pub async fn in_flight_publishes(
-        &self,
-        tenant_id: &str,
-        namespace: &str,
-        stream: &str,
-        shard: u32,
-    ) -> usize {
-        self.topics
-            .read()
-            .await
-            .get(&TopicKeyRef::new(tenant_id, namespace, stream, shard))
-            .map_or(0, |state| state.in_flight.load(Ordering::Acquire))
-    }
-
     /// End every subscription this broker serves on one stream shard.
     ///
     /// Each subscriber still receives what was already queued for it; its feed

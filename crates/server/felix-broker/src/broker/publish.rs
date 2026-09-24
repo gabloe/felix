@@ -13,7 +13,7 @@ use bytes::Bytes;
 use super::Broker;
 use super::shards::StreamHandle;
 use crate::error::{BrokerError, Result};
-use crate::stream::{DeliveryEnvelope, QueuedDelivery, Sequenced, StreamState, SubQueuePolicy};
+use crate::stream::{DeliveryEnvelope, QueuedDelivery, Sequenced, SubQueuePolicy};
 use crate::telemetry::{t_histogram, t_now_if, t_should_sample};
 use crate::timings;
 
@@ -113,7 +113,6 @@ impl Broker {
             payloads: payloads.to_vec(),
             durable: None,
             sample,
-            in_flight: InFlight::begin(&handle.state),
         };
         if payloads.is_empty() {
             return Ok(claimed);
@@ -154,10 +153,7 @@ impl Broker {
             payloads,
             durable,
             sample,
-            in_flight,
         } = claimed;
-        // Held to the end: the publish is in flight until fanout is done.
-        let _in_flight = in_flight;
         let payloads = payloads.as_slice();
         let stream_state = &handle.state;
 
@@ -425,7 +421,6 @@ pub struct ClaimedPublish {
     payloads: Vec<Bytes>,
     durable: Option<ClaimedDurable>,
     sample: bool,
-    in_flight: InFlight,
 }
 
 impl ClaimedPublish {
@@ -439,22 +434,6 @@ struct ClaimedDurable {
     pending: felix_storage::disk_log::PendingAppend,
     turn: felix_storage::CommitTurn<'static>,
     durable_start: Option<std::time::Instant>,
-}
-
-/// Counts a claimed publish until it completes or is dropped.
-struct InFlight(Arc<StreamState>);
-
-impl InFlight {
-    fn begin(state: &Arc<StreamState>) -> Self {
-        state.in_flight.fetch_add(1, Ordering::AcqRel);
-        Self(Arc::clone(state))
-    }
-}
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        self.0.in_flight.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 /// What an idempotent publish did: the batch's outcome, and whether that
