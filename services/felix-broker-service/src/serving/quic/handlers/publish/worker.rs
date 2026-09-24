@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use felix_broker::Broker;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use super::{
     PublishAdmission, PublishContext, PublishJob, PublishTarget, SubscriptionLimiter,
@@ -15,6 +15,7 @@ use crate::config::BrokerConfig;
 use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::subscribe::WriterLaneManager;
 use crate::serving::quic::{ClusterContext, GLOBAL_INGRESS_DEPTH};
+use crate::shards::ShardKey;
 use crate::shards::lifecycle::fence;
 
 pub(crate) fn build_publish_context(
@@ -118,9 +119,12 @@ pub(crate) fn build_publish_context(
                         ) {
                             Ok(fenced) => fenced,
                             Err(refused) => {
-                                if let Some(response) = job.response {
-                                    let _ = response.send(Err(refused.into()));
-                                }
+                                settle(
+                                    job.response,
+                                    job.acked_on_enqueue,
+                                    shard.as_ref(),
+                                    Err(refused.into()),
+                                );
                                 continue;
                             }
                         };
@@ -139,6 +143,7 @@ pub(crate) fn build_publish_context(
                                 let marks = marks_for_worker.clone();
                                 let ingress = ingress_for_worker.clone();
                                 let response = job.response;
+                                let acked_on_enqueue = job.acked_on_enqueue;
                                 tokio::spawn(async move {
                                     let completed = broker.complete_publish(claimed).await;
                                     drop(fenced);
@@ -156,17 +161,18 @@ pub(crate) fn build_publish_context(
                                         }
                                         Err(err) => Err(err.into()),
                                     };
-                                    if let Some(response) = response {
-                                        let _ = response.send(result);
-                                    }
+                                    settle(response, acked_on_enqueue, shard.as_ref(), result);
                                     drop(permit);
                                 });
                                 continue;
                             }
                             Err(err) => {
-                                if let Some(response) = job.response {
-                                    let _ = response.send(Err(err.into()));
-                                }
+                                settle(
+                                    job.response,
+                                    job.acked_on_enqueue,
+                                    shard.as_ref(),
+                                    Err(err.into()),
+                                );
                                 continue;
                             }
                         }
@@ -329,9 +335,12 @@ pub(crate) fn build_publish_context(
                     )
                     .increment(1);
                 }
-                if let Some(response) = job.response {
-                    let _ = response.send(result);
-                }
+                let shard = match &job.target {
+                    PublishTarget::Resolved { shard, .. }
+                    | PublishTarget::Idempotent { shard, .. } => shard.as_ref(),
+                    _ => None,
+                };
+                settle(job.response, job.acked_on_enqueue, shard, result);
             }
         };
         match &shards {
@@ -348,6 +357,7 @@ pub(crate) fn build_publish_context(
         ingress,
         peers,
         lease,
+        lease_headroom: lease_headroom(config),
         client_endpoints,
         marks,
         quorum_timeout,
@@ -365,6 +375,57 @@ pub(crate) fn build_publish_context(
         lane_manager: WriterLaneManager::new(config),
         ingress_wait: config.pub_ingress_wait,
     }
+}
+
+/// Hand a job's outcome to whoever is waiting for it.
+///
+/// A job acknowledged on enqueue has nobody waiting, so a failure here means
+/// the client holds an ack for a record that was not written. This is the only
+/// place that is visible, so it is counted and logged rather than dropped.
+fn settle(
+    response: Option<oneshot::Sender<anyhow::Result<()>>>,
+    acked_on_enqueue: bool,
+    shard: Option<&ShardKey>,
+    result: anyhow::Result<()>,
+) {
+    match (response, result) {
+        (Some(response), result) => {
+            let _ = response.send(result);
+        }
+        (None, Err(err)) if acked_on_enqueue => {
+            // `fenced`: the broker lost the shard or its lease first, so nothing
+            // was written. `failed`: the write itself went wrong.
+            let reason = match ClientError::from_anyhow(&err).code() {
+                felix_wire::ErrorCode::ShardUnavailable => "fenced",
+                _ => "failed",
+            };
+            metrics::counter!(ACKED_PUBLISHES_DROPPED_TOTAL, "reason" => reason).increment(1);
+            tracing::warn!(
+                shard = ?shard,
+                reason,
+                error = %err,
+                "a publish acknowledged on enqueue was not written",
+            );
+        }
+        (None, _) => {}
+    }
+}
+
+/// Publishes the client was told succeeded when they were queued and that the
+/// worker then could not write, by `reason`.
+const ACKED_PUBLISHES_DROPPED_TOTAL: &str = "felix_broker_acked_publishes_dropped_total";
+
+/// How much lease a publish needs left to be acknowledged before it is
+/// written: long enough to wait out a full queue and then commit. Derived from
+/// the two waits the broker already bounds rather than configured apart from
+/// them. A `Leader` publish does not wait for a quorum, so the raw ack wait is
+/// the commit allowance, not `ack_wait_timeout()`.
+fn lease_headroom(config: &BrokerConfig) -> Duration {
+    Duration::from_millis(
+        config
+            .publish_queue_wait_timeout_ms
+            .saturating_add(config.ack_wait_timeout_ms),
+    )
 }
 
 /// Refused before writing: this broker no longer holds the lease that lets it

@@ -194,13 +194,18 @@ pub(crate) async fn handle_publish_message(
     // queued. `ack_on_commit` is off by default, so that was every direct
     // `Quorum` publish.
     let quorum = needs_quorum(&target);
-    let (response_tx, response_rx) =
-        if ack_mode != felix_wire::AckMode::None && (ack_on_commit || forwarding || quorum) {
-            let (response_tx, response_rx) = oneshot::channel();
-            (Some(response_tx), Some(response_rx))
-        } else {
-            (None, None)
-        };
+    // Last because it reads the clock: an ack on enqueue promises a write the
+    // lease may not live to allow.
+    let commit_ack = ack_on_commit
+        || forwarding
+        || quorum
+        || (ack_mode != felix_wire::AckMode::None && publish_ctx.must_wait_for_write());
+    let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && commit_ack {
+        let (response_tx, response_rx) = oneshot::channel();
+        (Some(response_tx), Some(response_rx))
+    } else {
+        (None, None)
+    };
     let Some(target) = target else {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
         if ack_mode != felix_wire::AckMode::None {
@@ -231,12 +236,13 @@ pub(crate) async fn handle_publish_message(
             target,
             payloads: vec![Bytes::from(payload)],
             response: response_tx,
+            acked_on_enqueue: ack_mode != felix_wire::AckMode::None && !commit_ack,
             admission_permit: None,
             fenced: None,
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
-        } else if ack_on_commit || forwarding || quorum {
+        } else if commit_ack {
             EnqueuePolicy::Wait
         } else {
             EnqueuePolicy::Fail
@@ -322,7 +328,7 @@ pub(crate) async fn handle_publish_message(
     // answer to "is this on a majority", and answering it anyway is how a
     // `Quorum` stream came to behave exactly like a `Leader` one whenever
     // `ack_on_commit` was off -- which is the default.
-    if !ack_on_commit && !forwarding && !quorum {
+    if !commit_ack {
         // Enqueue-ack mode:
         // Ack means "accepted into the ingress queue", not "committed". This keeps
         // latency low but can report success even if a later broker error occurs.

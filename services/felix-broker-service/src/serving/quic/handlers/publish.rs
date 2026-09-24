@@ -106,6 +106,9 @@ pub(crate) struct PublishContext {
     /// `None` on a single-node broker, which leads by construction and has
     /// nobody to lose a shard to.
     pub(crate) lease: Option<Arc<crate::cluster::lease::LeaseState>>,
+    /// Lease a publish must have left to be acknowledged on enqueue. See
+    /// [`PublishContext::must_wait_for_write`].
+    pub(crate) lease_headroom: Duration,
     /// Where a client may connect, for answering `Topology` on the control
     /// stream. Nothing on the publish path reads it; it rides here because this
     /// is the per-connection bundle of what the cluster makes available, beside
@@ -178,6 +181,25 @@ impl PublishContext {
         }
     }
 
+    /// True when a publish that would be acknowledged on enqueue should wait
+    /// for its write instead, because the lease may run out first.
+    ///
+    /// A job whose lease lapses in the queue is refused at the worker and must
+    /// be: another broker may lead the shard by then. An ack already sent for
+    /// it would be a lie, so near the end of the lease the client waits and
+    /// hears the refusal. The headroom is capped at half the usable lease so
+    /// that, at any sensible heartbeat cadence, a broker whose renewals are
+    /// landing never trips it.
+    ///
+    /// Reads the clock, not the cached flag: the flag can be a refresh
+    /// interval behind, which is the window this exists to close. Callers ask
+    /// only after every cheaper reason to wait has said no.
+    pub(crate) fn must_wait_for_write(&self) -> bool {
+        self.lease
+            .as_ref()
+            .is_some_and(|lease| lease.remaining() < self.lease_headroom.min(lease.usable() / 2))
+    }
+
     pub(crate) fn authority(&self) -> Authority<'_> {
         Authority {
             ingress: self.ingress.as_deref(),
@@ -199,6 +221,9 @@ pub(crate) struct PublishJob {
     pub(crate) target: PublishTarget,
     pub(crate) payloads: Vec<Bytes>,
     pub(crate) response: Option<oneshot::Sender<Result<()>>>,
+    /// The client was told this job succeeded when it was queued. If the
+    /// worker then cannot write it, nobody hears, so the worker counts it.
+    pub(crate) acked_on_enqueue: bool,
     /// Held from `enqueue_publish` admission until this job finishes processing (or is dropped
     /// without ever being enqueued). See [`PublishAdmission`].
     pub(crate) admission_permit: Option<AdmissionPermit>,

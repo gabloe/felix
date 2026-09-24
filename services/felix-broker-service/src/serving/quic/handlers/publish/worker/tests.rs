@@ -36,6 +36,7 @@ async fn build_publish_context_clamps_worker_and_queue_minimums() -> Result<()> 
             },
             payloads: vec![Bytes::from_static(b"ok")],
             response: Some(response_tx),
+            acked_on_enqueue: false,
             admission_permit: None,
             fenced: None,
         })
@@ -63,6 +64,7 @@ async fn build_publish_context_worker_returns_publish_error() -> Result<()> {
             },
             payloads: vec![Bytes::from_static(b"payload")],
             response: Some(response_tx),
+            acked_on_enqueue: false,
             admission_permit: None,
             fenced: None,
         })
@@ -153,6 +155,7 @@ mod fence {
                 target,
                 payloads: vec![Bytes::from_static(b"late")],
                 response: Some(response_tx),
+                acked_on_enqueue: false,
                 admission_permit: None,
                 fenced: None,
             })
@@ -228,6 +231,7 @@ mod fence {
                 target,
                 payloads: vec![Bytes::from_static(b"on time")],
                 response: Some(response_tx),
+                acked_on_enqueue: false,
                 admission_permit: None,
                 fenced: None,
             })
