@@ -220,6 +220,11 @@ impl MetadataStateMachine {
                 .await
                 .map(|()| MetaResponse::Unit)
                 .map_err(Into::into),
+            MetaCommand::SetMovesPaused { paused } => store
+                .set_moves_paused(paused)
+                .await
+                .map(|()| MetaResponse::Unit)
+                .map_err(Into::into),
             MetaCommand::DeleteShardAssignment { key } => store
                 .delete_shard_assignment(&key)
                 .await

@@ -217,7 +217,11 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
     );
     // Same as `ensure_schema`: the interpolated identifier is our own generated schema name,
     // which cannot be passed as a bind parameter.
-    sqlx::query(AssertSqlSafe(truncate))
+    sqlx::query(AssertSqlSafe(truncate)).execute(&pool).await?;
+    // A one-row table: reset, not truncated, so the row the migration made
+    // stays.
+    let unpause = format!("UPDATE {schema_ident}.placement_settings SET moves_paused = false");
+    sqlx::query(AssertSqlSafe(unpause))
         .execute(&pool)
         .await
         .map(|_| ())

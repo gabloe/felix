@@ -284,3 +284,102 @@ pub struct ShardAssignmentChangesResponse {
     pub items: Vec<crate::model::ShardAssignmentChange>,
     pub next_seq: u64,
 }
+
+/// Where a move in progress has got to.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShardMoveStep {
+    /// The destination is copying the log; the leader still serves.
+    Staged,
+    /// The leader has stopped serving; the move waits for its drained report
+    /// and then cuts over.
+    Fenced,
+    /// A follower on a draining node is being replaced; leadership stays.
+    Replacing,
+}
+
+/// One move or follower replacement in progress.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct ShardMove {
+    #[serde(flatten)]
+    pub key: crate::model::ShardKey,
+    pub leader: String,
+    /// The node the shard is moving to, or the follower being copied in.
+    /// Absent for a fenced move whose destination died: it cuts over to a
+    /// follower that holds the log, or back to the leader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// For a replacement, the follower on the draining node it replaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacing: Option<String>,
+    pub step: ShardMoveStep,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<crate::model::MoveReason>,
+    /// The store's clock when the move started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_millis: Option<u64>,
+    pub generation: u64,
+    /// How many records the destination is behind the leader, from the
+    /// leader's latest report at this generation. Absent without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lag_records: Option<u64>,
+    /// The leader's latest report at this generation names the destination
+    /// caught up.
+    pub caught_up: bool,
+    /// The fenced leader has reported that it stopped and its logs are level
+    /// on the destination; the next pass cuts over.
+    pub drained: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShardMoveListResponse {
+    /// Whether placement's own moves are paused.
+    pub paused: bool,
+    pub items: Vec<ShardMove>,
+}
+
+/// Move a shard's leadership to `destination`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShardMoveRequest {
+    #[serde(flatten)]
+    pub key: crate::model::ShardKey,
+    pub destination: String,
+}
+
+/// The assignment an operator's request wrote, and which step it was.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ShardMoveResponse {
+    /// `stage` or `fence` for a start; `cancel` or `retake` for a cancel.
+    pub step: String,
+    pub assignment: crate::model::ShardAssignment,
+}
+
+/// One shard in a placement plan.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PlannedShard {
+    #[serde(flatten)]
+    pub key: crate::model::ShardKey,
+    /// `place`, a move step (`stage`, `fence`, `cut_over`, `abandon`,
+    /// `timed_out`, `reseat`, `seat`), `waiting` or `unplaceable`.
+    pub action: String,
+    /// What the step would write, for `place` and move steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignment: Option<crate::model::ShardAssignment>,
+    /// Why nothing can be done yet, for `waiting` and `unplaceable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// What the next placement pass would do, shard by shard. Shards it would
+/// leave alone are not listed.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PlacementPlanResponse {
+    pub paused: bool,
+    pub items: Vec<PlannedShard>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PlacementStatusResponse {
+    /// Whether placement's own moves are paused.
+    pub paused: bool,
+}

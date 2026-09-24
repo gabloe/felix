@@ -137,6 +137,9 @@ pub struct InMemoryStore {
     /// token checked and then marked under separate locks is a token two
     /// concurrent refreshes can both spend.
     refresh_tokens: Arc<RwLock<HashMap<(String, String), RefreshToken>>>,
+    /// Whether placement starts moves of its own; see
+    /// `ControlPlaneStore::moves_paused`.
+    moves_paused: Arc<RwLock<bool>>,
 }
 
 impl InMemoryStore {
@@ -170,6 +173,7 @@ impl InMemoryStore {
             auth_bootstrapped: Arc::new(RwLock::new(HashMap::new())),
             bootstrap_serial: Arc::new(tokio::sync::Mutex::new(())),
             refresh_tokens: Arc::new(RwLock::new(HashMap::new())),
+            moves_paused: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -414,6 +418,15 @@ impl ControlPlaneStore for InMemoryStore {
 
     async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
         shards::list_replica_reports(self).await
+    }
+
+    async fn moves_paused(&self) -> StoreResult<bool> {
+        Ok(*self.moves_paused.read().await)
+    }
+
+    async fn set_moves_paused(&self, paused: bool) -> StoreResult<()> {
+        *self.moves_paused.write().await = paused;
+        Ok(())
     }
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {

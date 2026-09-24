@@ -74,6 +74,25 @@ for what the current release actually guarantees.
   to move destinations that the quorum does not need
   (`felix_broker_replication_move_throttled_bytes_total`). Migration
   `0014_shard_move_pacing` adds the assignment and report columns.
+- **Operators can steer shard moves.** `GET /v1/shard-moves` lists the moves
+  in progress with their step, the reason they started (`drain`, `balance`,
+  `operator`, `replace`, stored as `move_reason` on the assignment), start
+  time and lag; `GET /v1/placement/plan` shows what the next placement pass
+  would do without doing it. `POST /v1/shard-moves` starts a move to a named
+  broker, held to the move limits. `DELETE
+  /v1/shard-moves/{tenant_id}/{namespace}/{name}/{shard}` cancels one: before
+  the fence the destination is dropped; after it the fenced leader serves
+  again at a new generation (`retake`) with every write it accepted, and held
+  publishes and followed subscriptions find it again; after the cut-over it is
+  a 409. `POST /v1/placement/pause` and `/resume` stop and restart
+  placement's own moves on every instance; moves in flight finish, and new
+  shards and failovers are still placed. Reads take `node.view:cluster:*`,
+  changes `node.manage:cluster:*`. `felix-controlplane admin` does the same
+  from a shell (`moves`, `plan`, `move`, `cancel`, `pause`, `resume`, with
+  `--json`). Migration `0015_operator_moves` adds `move_reason` and the
+  `placement_settings` table; the Raft backend gains a `set_moves_paused`
+  command, which an older member refuses. `felix_shard_move_steps_total`
+  gains the `cancel` and `retake` steps.
 
 - **Faster shard move switch-over, control-plane side.**
   `GET /v1/shard-assignments/changes` takes an optional `wait_ms`: with
@@ -182,6 +201,10 @@ for what the current release actually guarantees.
   changed with it: `ReplicateRecords` has a `marks` field, `batch_checksum`
   takes the marks, `AppendRecord` and `LogRecord` have a `mark`, and
   `felix_broker::replication::apply` takes the marks.
+- **Breaking for Rust callers of the control-plane crate:** `AppState` has a
+  `move_policy` field, `ShardAssignment` a `move_reason` field, `MovePolicy` a
+  `paused` field, and `ControlPlaneStore` the `moves_paused` and
+  `set_moves_paused` methods. `Default::default()` fills the first three.
 - **Breaking for Rust callers: `ClusterClient::subscribe` and `subscribe_from`
   take `self: &Arc<Self>` and return a `ClusterSubscription`** instead of a
   `(client, Subscription)` pair, so the subscription can follow its shard.

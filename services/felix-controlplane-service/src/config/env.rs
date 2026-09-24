@@ -165,5 +165,7 @@ fn shard_moves_from_env() -> crate::cluster::placement::MovePolicy {
             Some(millis) => Some(millis),
             None => defaults.timeout_millis,
         },
+        // Read from the store each pass, not configured.
+        paused: false,
     }
 }

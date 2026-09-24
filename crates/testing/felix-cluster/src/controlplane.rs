@@ -94,6 +94,7 @@ impl ControlPlane {
             ),
             in_flight: Default::default(),
             placement_wakes: Default::default(),
+            move_policy: Default::default(),
         };
         let placement_wakes = Arc::clone(&state.placement_wakes);
 
@@ -245,13 +246,16 @@ impl ControlPlane {
     /// Separate from [`Self::admin_token`], which only reads: draining a broker
     /// is a write, and the control plane requires `node.manage` over a scope
     /// containing the node. A test that moves a shard needs this; nothing else
-    /// should.
+    /// should. It also reads, so a test can list the moves it made.
     pub fn operator_token(&self, tenant_id: &str) -> Result<String> {
         felix_controlplane_service::auth::felix_token::mint_token(
             &self.keys,
             tenant_id,
             "p:harness-operator",
-            vec!["node.manage:cluster:*".to_string()],
+            vec![
+                "node.manage:cluster:*".to_string(),
+                "node.view:cluster:*".to_string(),
+            ],
             Duration::from_secs(3600),
         )
         .context("mint operator token")

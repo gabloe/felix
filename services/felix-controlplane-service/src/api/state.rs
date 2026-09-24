@@ -26,4 +26,7 @@ pub struct AppState {
     pub in_flight: felix_common::lifecycle::InFlight,
     /// Wakes this instance's placement loop and assignment long-polls.
     pub placement_wakes: Arc<crate::cluster::placement::PlacementWakes>,
+    /// The limits an operator's move is held to, and the plan is previewed
+    /// under: placement's own.
+    pub move_policy: crate::cluster::placement::MovePolicy,
 }

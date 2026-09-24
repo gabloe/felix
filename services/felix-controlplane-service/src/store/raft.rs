@@ -384,6 +384,17 @@ impl ControlPlaneStore for RaftStore {
         self.local().list_replica_reports().await
     }
 
+    async fn moves_paused(&self) -> StoreResult<bool> {
+        self.local().moves_paused().await
+    }
+
+    async fn set_moves_paused(&self, paused: bool) -> StoreResult<()> {
+        match self.propose(MetaCommand::SetMovesPaused { paused }).await? {
+            MetaResponse::Unit => Ok(()),
+            _ => Err(unexpected_shape("unit")),
+        }
+    }
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
         self.local().tenant_exists(tenant_id).await
     }

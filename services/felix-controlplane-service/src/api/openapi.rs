@@ -4,17 +4,19 @@
 use utoipa::OpenApi;
 
 use crate::api::{
-    caches, namespaces, nodes, regions, shard_assignments, streams, system, tenants,
+    caches, namespaces, nodes, regions, shard_assignments, shard_moves, streams, system, tenants,
     types::{
         CacheChangesResponse, CacheCreateRequest, CacheListResponse, CacheSnapshotResponse,
         ErrorResponse, FeatureFlags, HealthStatus, ListRegionsResponse, NamespaceChangesResponse,
         NamespaceCreateRequest, NamespaceListResponse, NamespaceSnapshotResponse,
         NodeHeartbeatRequest, NodeHeartbeatResponse, NodeListResponse, NodePlacement,
-        NodeRegistrationRequest, NodeRegistrationResponse, NodeView, Region,
-        ShardAssignmentChangesResponse, ShardAssignmentListResponse,
-        ShardAssignmentSnapshotResponse, StreamChangesResponse, StreamCreateRequest,
-        StreamListResponse, StreamSnapshotResponse, SystemInfo, TenantChangesResponse,
-        TenantCreateRequest, TenantListResponse, TenantSnapshotResponse,
+        NodeRegistrationRequest, NodeRegistrationResponse, NodeView, PlacementPlanResponse,
+        PlacementStatusResponse, PlannedShard, Region, ShardAssignmentChangesResponse,
+        ShardAssignmentListResponse, ShardAssignmentSnapshotResponse, ShardMove,
+        ShardMoveListResponse, ShardMoveRequest, ShardMoveResponse, ShardMoveStep,
+        StreamChangesResponse, StreamCreateRequest, StreamListResponse, StreamSnapshotResponse,
+        SystemInfo, TenantChangesResponse, TenantCreateRequest, TenantListResponse,
+        TenantSnapshotResponse,
     },
 };
 use crate::auth::admin;
@@ -25,11 +27,11 @@ use crate::auth::jwks::{self, JwksResponse};
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::{
     Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, ConsistencyLevel,
-    DeliveryGuarantee, Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey, Node,
-    NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus,
-    RetentionPolicy, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
-    ShardState, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest,
-    Tenant, TenantChange, TenantChangeOp,
+    DeliveryGuarantee, MoveReason, Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey,
+    Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec,
+    NodeStatus, RetentionPolicy, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp,
+    ShardKey, ShardKind, ShardState, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind,
+    StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
 };
 
 #[derive(OpenApi)]
@@ -84,7 +86,13 @@ use crate::model::{
         nodes::delete_node,
         shard_assignments::list_shard_assignments,
         shard_assignments::shard_assignment_snapshot,
-        shard_assignments::shard_assignment_changes
+        shard_assignments::shard_assignment_changes,
+        shard_moves::list_shard_moves,
+        shard_moves::start_shard_move,
+        shard_moves::cancel_shard_move,
+        shard_moves::placement_plan,
+        shard_moves::pause_placement,
+        shard_moves::resume_placement
     ),
     components(schemas(
         FeatureFlags,
@@ -153,6 +161,16 @@ use crate::model::{
         ShardAssignmentChangesResponse,
         ShardAssignmentChange,
         ShardAssignmentChangeOp,
+        ShardKind,
+        MoveReason,
+        ShardMove,
+        ShardMoveStep,
+        ShardMoveListResponse,
+        ShardMoveRequest,
+        ShardMoveResponse,
+        PlannedShard,
+        PlacementPlanResponse,
+        PlacementStatusResponse,
         TokenExchangeRequest,
         TokenExchangeResponse,
         IdpIssuerConfig,
@@ -170,7 +188,8 @@ use crate::model::{
         (name = "namespaces", description = "Namespace management"),
         (name = "streams", description = "Stream management"),
         (name = "caches", description = "Cache management"),
-        (name = "nodes", description = "Broker membership")
+        (name = "nodes", description = "Broker membership"),
+        (name = "placement", description = "Shard moves and placement, for operators")
     )
 )]
 pub struct ApiDoc;

@@ -363,6 +363,14 @@ impl ControlPlaneStore for PostgresStore {
         shards::list_replica_reports(self).await
     }
 
+    async fn moves_paused(&self) -> StoreResult<bool> {
+        shards::moves_paused(self).await
+    }
+
+    async fn set_moves_paused(&self, paused: bool) -> StoreResult<()> {
+        shards::set_moves_paused(self, paused).await
+    }
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
         tenants::tenant_exists(self, tenant_id).await
     }

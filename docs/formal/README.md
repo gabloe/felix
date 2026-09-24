@@ -79,6 +79,11 @@ One shard, three brokers, one control plane, discrete time.
   instance whose reads are never stale; the `StalePlanner` and
   `StalePromotion` configurations hold one read across the other instance's
   writes, as two control-plane instances over one database do.
+- **Cancel.** With `Cancel`, an operator's cancel of a fenced move is one more
+  planner decision: the leader that was fenced serves again at a new
+  generation, keeping the writes it has queued and claimed, since they are
+  inside its fence and land in its own log. `CancelCas` makes that write
+  conditional like the others.
 
 Not modelled: the storage layer (a commit is a commit), network partitions as
 such (they are lost heartbeats, lost reports, and delays), retention, and the
@@ -125,12 +130,17 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardStagedMove.cfg` | two replicas and a staged destination left out of the quorum while it copies, then the move | pass every invariant (2.3M states) |
 | `FelixShardStagedMoveSingle.cfg` | the same with one replica: the leader alone is the quorum | pass every invariant (0.8M states) |
 | `FelixShardStagedMoveVotes.cfg` | one replica, with the destination counted toward the quorum | violate `StagedCopyNeverDelaysAck` |
+| `FelixShardCancel.cfg` | writes acknowledged on admission, a fenced move cancelled and the shard taken back, a second move after | pass every invariant (5.6M states) |
+| `FelixShardCancelStalePlannerCas.cfg` | a cancel decided from a held read while the move cuts over; every write conditional | pass every invariant (447K states) |
+| `FelixShardCancelStalePlanner.cfg` | the same with the cancel written unconditionally | violate `AtMostOneServing` |
 | `FelixPlacementPacing.cfg` | `FelixPlacementPacing.tla`: moves and follower replacements across four shards, two copies at once, one per node | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (92 states) |
 | `FelixPlacementPacingUncountedReplacement.cfg` | the same with a follower replacement invisible to the count, as it used to be written | violate `CopiesWithinLimit` |
-| `FelixShardIdempotentFailover.cfg` | a write re-sent across a failover, checked against the promoted broker's log | pass every invariant and `NoDuplicate` (1.5M states) |
+| `FelixShardIdempotentFailover.cfg` | a write re-sent across a failover, checked against the promoted broker's log | pass every invariant and `NoDuplicate` (0.28M distinct states) |
 | `FelixShardIdempotentFailoverMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
-| `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (14M states) |
+| `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (2.7M distinct states) |
 | `FelixShardIdempotentHandoffMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
+| `FelixShardCancelResend.cfg` | `FelixShardCancel.cfg` with writes re-sent, checked against the retaken leader's log | pass every invariant and `NoDuplicate` (5.6M states) |
+| `FelixShardCancelResendMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -202,6 +212,39 @@ reports drained, and the cut-over to the second follower lands while the first
 still holds a live lease. `FelixShardStalePromotion.cfg` is the failover
 version: two promotions from one report of two caught-up followers. With
 `CasWrites`, each late write finds a newer generation and writes nothing.
+
+### Taking back a fenced move
+
+An operator's cancel of a fenced move names the old leader again at a new
+generation. That is safe for the same reason a cut-over back to the leader
+is: nobody else has led since the fence, so the leader's log is the whole
+shard, and the writes still inside its fence were admitted against that log
+and land in it. `FelixShardCancel.cfg` checks it with writes acknowledged on
+admission, the broker's default; dropping the queued writes at the retake, as
+a promotion does for a node that never led, makes TLC find an acknowledged
+write missing at once.
+
+What makes it unsafe is timing, and the conditional write is what rules it
+out. `FelixShardCancelStalePlanner.cfg` decides the cancel from a read taken
+while the move was fenced, lets the other instance cut over, then lands the
+cancel: the old leader serves beside the new one. With `CancelCas`, the late
+cancel writes nothing, and the API decides it again from a fresh read, which
+finds nothing to cancel.
+
+Time stops short of any lease lapse in these configurations. A leader whose
+lease lapses drops what it acknowledged on admission whether or not a move
+is cancelled; that is the acknowledge-on-admission trade-off, not the
+cancel's.
+
+A retake keeps the leader's log, and with it the producer sequences its
+records carry, so a write re-sent after a cancel is answered from there.
+`FelixShardCancelResend.cfg` adds re-sends to `FelixShardCancel.cfg` and
+reaches exactly the same states: every re-send is answered, none appends.
+It runs two writes, unlike the other re-send configurations, because no
+lease lapses and so no deposed leader keeps a stale copy. In
+`FelixShardCancelResendMemory.cfg` the retaken leader, now at a new
+generation, knows none of what it wrote before and stores the re-sent write
+twice.
 
 ### A fence before the destination is level
 

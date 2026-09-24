@@ -193,6 +193,50 @@ pub struct ShardAssignment {
     /// move slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_started_at_millis: Option<u64>,
+    /// Why the move or replacement in progress started. Cleared when it
+    /// ends, so it is set exactly while `successor` or `joining` is, or the
+    /// shard is `Draining`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_reason: Option<MoveReason>,
+}
+
+/// Why a shard is moving.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum MoveReason {
+    /// Its leader's node is draining.
+    Drain,
+    /// Its leader's node leads more than its share.
+    Balance,
+    /// An operator asked for it (`POST /v1/shard-moves`).
+    Operator,
+    /// A follower on a draining node is being replaced.
+    Replace,
+}
+
+impl MoveReason {
+    /// The name this reason is stored and shown under.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Drain => "drain",
+            Self::Balance => "balance",
+            Self::Operator => "operator",
+            Self::Replace => "replace",
+        }
+    }
+
+    /// The reverse of [`Self::as_str`].
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::Drain, Self::Balance, Self::Operator, Self::Replace]
+            .into_iter()
+            .find(|reason| reason.as_str() == value)
+    }
+}
+
+impl std::fmt::Display for MoveReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl ShardAssignment {

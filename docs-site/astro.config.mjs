@@ -133,6 +133,7 @@ export default defineConfig({
             { label: 'Docker Compose', slug: 'deployment/docker-compose' },
             { label: 'Kubernetes', slug: 'deployment/kubernetes' },
             { label: 'Adding and Removing Brokers', slug: 'deployment/scaling' },
+            { label: 'Moving Shards by Hand', slug: 'deployment/moving-shards' },
             { label: 'Control-plane HA', slug: 'deployment/control-plane-ha' },
             { label: 'Graceful Shutdown', slug: 'deployment/graceful-shutdown' },
             { label: 'Upgrades & Compatibility', slug: 'deployment/upgrades' },

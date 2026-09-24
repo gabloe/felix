@@ -20,7 +20,8 @@
 //! so any instance resumes a half-done move from the store. See `move_step`
 //! and `docs/replication-design.md`. Two triggers: a draining node gives up
 //! what it leads, and a node over its share gives shards to one under it,
-//! bounded by `MovePolicy`.
+//! bounded by `MovePolicy`. An operator may also start or cancel a move, and
+//! pause placement's own (`operator`).
 //!
 //! `NodeCapacity::weight` is ignored: weighted rendezvous needs a logarithm,
 //! and floating point that must agree bit-for-bit across instances is a bad
@@ -29,6 +30,7 @@ mod caught_up;
 mod decision;
 mod metrics;
 mod moves;
+mod operator;
 mod plan;
 mod reconciler;
 mod rendezvous;
@@ -43,11 +45,14 @@ pub use moves::{
     DEFAULT_FENCE_MAX_LAG_RECORDS, DEFAULT_MAX_CONCURRENT_MOVES, DEFAULT_MOVE_TIMEOUT_MILLIS,
     MovePolicy,
 };
+pub use operator::{
+    Catalog, OperatorError, OperatorStep, Refused, cancel_move, run_operator, start_move,
+};
 pub use plan::{Plan, ShardPlan, assignment_for, plan, plan_with};
 pub use reconciler::{
-    RECONCILE_FAILURES_TOTAL, ReconcileOutcome, SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL,
-    SHARD_MOVE_STEPS_TOTAL, SHARD_MOVES_TIMED_OUT_TOTAL, SHARD_MOVES_WAITING, SHARDS_PLACED_TOTAL,
-    SHARDS_UNPLACEABLE, reconcile_once, spawn_reconciler,
+    PlacementRead, RECONCILE_FAILURES_TOTAL, ReconcileOutcome,
+    SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL, SHARD_MOVE_STEPS_TOTAL, SHARD_MOVES_TIMED_OUT_TOTAL,
+    SHARD_MOVES_WAITING, SHARDS_PLACED_TOTAL, SHARDS_UNPLACEABLE, reconcile_once, spawn_reconciler,
 };
 pub use replica_positions::ReplicaPositions;
 pub use wakes::PlacementWakes;

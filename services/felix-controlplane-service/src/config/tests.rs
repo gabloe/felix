@@ -444,6 +444,7 @@ bootstrap:
                 max_per_node: Some(2),
                 fence_max_lag_records: 500,
                 timeout_millis: Some(60_000),
+                paused: false,
             }
         );
     }

@@ -98,3 +98,43 @@ fn the_node_patch_schema_exposes_no_observed_field() {
         );
     }
 }
+
+/// The operator's move controls are described, and so are their shapes.
+#[test]
+fn every_placement_route_is_described() {
+    let doc = serde_json::to_value(ApiDoc::openapi()).expect("serialize openapi");
+    let paths = doc["paths"].as_object().expect("paths object");
+    for (path, method) in [
+        ("/v1/shard-moves", "get"),
+        ("/v1/shard-moves", "post"),
+        (
+            "/v1/shard-moves/{tenant_id}/{namespace}/{name}/{shard}",
+            "delete",
+        ),
+        ("/v1/placement/plan", "get"),
+        ("/v1/placement/pause", "post"),
+        ("/v1/placement/resume", "post"),
+    ] {
+        assert!(
+            paths.get(path).and_then(|p| p.get(method)).is_some(),
+            "{method} {path} is not described"
+        );
+    }
+    let schemas = doc["components"]["schemas"]
+        .as_object()
+        .expect("schemas object");
+    for name in [
+        "ShardMove",
+        "ShardMoveListResponse",
+        "ShardMoveRequest",
+        "ShardMoveResponse",
+        "PlacementPlanResponse",
+        "PlacementStatusResponse",
+        "MoveReason",
+    ] {
+        assert!(
+            schemas.contains_key(name),
+            "{name} is missing from the schema"
+        );
+    }
+}

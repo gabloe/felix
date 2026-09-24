@@ -5,7 +5,7 @@ use crate::model::{Namespace, NodeCapacity as Cap, Tenant};
 use crate::store::memory::InMemoryStore;
 use crate::store::{ControlPlaneStore, StoreConfig};
 
-async fn cluster(node_ids: &[&str]) -> InMemoryStore {
+pub(super) async fn cluster(node_ids: &[&str]) -> InMemoryStore {
     let store = InMemoryStore::new(StoreConfig {
         changes_limit: 1000,
         change_retention_max_rows: Some(1000),
@@ -130,7 +130,7 @@ async fn an_empty_cluster_places_nothing_and_says_so() {
     );
 }
 
-fn shard_zero() -> ShardKey {
+pub(super) fn shard_zero() -> ShardKey {
     ShardKey {
         tenant_id: "t1".to_string(),
         namespace: "ns".to_string(),
@@ -140,7 +140,12 @@ fn shard_zero() -> ShardKey {
     }
 }
 
-async fn report(store: &InMemoryStore, generation: u64, caught_up: &[&str], drained: bool) {
+pub(super) async fn report(
+    store: &InMemoryStore,
+    generation: u64,
+    caught_up: &[&str],
+    drained: bool,
+) {
     store
         .record_replica_report(crate::model::ReplicaReport {
             key: shard_zero(),
@@ -184,6 +189,7 @@ async fn a_fence_planned_before_a_cut_over_is_not_written_after_it() {
             successor: Some("broker-y".to_string()),
             joining: None,
             move_started_at_millis: None,
+            move_reason: None,
         })
         .await
         .expect("staged move");
@@ -301,6 +307,7 @@ async fn a_promotion_planned_from_an_old_read_is_not_written_later() {
             successor: None,
             joining: None,
             move_started_at_millis: None,
+            move_reason: None,
         })
         .await
         .expect("placed");

@@ -233,6 +233,67 @@ impl Cluster {
         }
     }
 
+    /// Start moving shard `shard` of `stream` to `destination` through the
+    /// operator API. Returns the step the control plane wrote (`stage` or
+    /// `fence`). Nothing moves further until placement is stepped.
+    pub async fn start_move(&self, stream: &str, shard: u32, destination: &str) -> Result<String> {
+        let body = serde_json::json!({
+            "tenant_id": self.tenant_id,
+            "namespace": self.namespace,
+            "stream": stream,
+            "shard": shard,
+            "destination": destination,
+        });
+        let url = format!("{}/v1/shard-moves", self.control_plane_url());
+        let response = self.operator_call(self.http.post(&url).json(&body)).await?;
+        step_of(response)
+    }
+
+    /// Cancel the move of shard `shard` of `stream` through the operator API.
+    /// Returns the step written: `cancel` before the fence, `retake` after.
+    pub async fn cancel_move(&self, stream: &str, shard: u32) -> Result<String> {
+        let url = format!(
+            "{}/v1/shard-moves/{}/{}/{stream}/{shard}",
+            self.control_plane_url(),
+            self.tenant_id,
+            self.namespace,
+        );
+        let response = self.operator_call(self.http.delete(&url)).await?;
+        step_of(response)
+    }
+
+    /// The moves in progress, as `GET /v1/shard-moves` answers.
+    pub async fn shard_moves(&self) -> Result<serde_json::Value> {
+        let url = format!("{}/v1/shard-moves", self.control_plane_url());
+        self.operator_call(self.http.get(&url)).await
+    }
+
+    /// Stop placement starting moves of its own.
+    pub async fn pause_placement(&self) -> Result<()> {
+        let url = format!("{}/v1/placement/pause", self.control_plane_url());
+        self.operator_call(self.http.post(&url)).await.map(drop)
+    }
+
+    /// Let placement start moves again.
+    pub async fn resume_placement(&self) -> Result<()> {
+        let url = format!("{}/v1/placement/resume", self.control_plane_url());
+        self.operator_call(self.http.post(&url)).await.map(drop)
+    }
+
+    async fn operator_call(&self, request: reqwest::RequestBuilder) -> Result<serde_json::Value> {
+        let response = request
+            .bearer_auth(&self.operator_token)
+            .send()
+            .await
+            .context("call the control plane")?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            bail!("{status}: {body}");
+        }
+        serde_json::from_str(&body).with_context(|| format!("parse {body}"))
+    }
+
     async fn post_lifecycle(&self, node_id: &str, action: &str) -> Result<()> {
         let url = format!("{}/v1/nodes/{node_id}/{action}", self.control_plane_url());
         let response = self
@@ -250,4 +311,11 @@ impl Cluster {
         }
         Ok(())
     }
+}
+
+fn step_of(response: serde_json::Value) -> Result<String> {
+    response["step"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("no step in {response}"))
 }

@@ -114,6 +114,7 @@ async fn fixture() -> (AppState, Arc<InMemoryStore>) {
         )),
         in_flight: Default::default(),
         placement_wakes: Default::default(),
+        move_policy: Default::default(),
     };
     (state, store)
 }

@@ -82,6 +82,14 @@
 (* store's generation. `CasWrites` makes a write land only if `ver` is     *)
 (* still what its read saw; without it, TLC finds a planner writing from a *)
 (* read another instance has already acted on.                             *)
+(*                                                                         *)
+(* `Cancel` lets an operator cancel a fenced move: the leader that stopped *)
+(* serves again at a new generation, keeping the writes still inside its  *)
+(* fence, which land in its own log. The cancel is a planner decision like *)
+(* any other, so it too may come from a held read. With `CancelCas =     *)
+(* FALSE` only the cancel writes unconditionally, and TLC finds one read   *)
+(* while the move was fenced and written after its cut-over, handing the   *)
+(* shard back to a leader that never saw what the new one acknowledged.   *)
 (***************************************************************************)
 
 EXTENDS Naturals, Sequences, FiniteSets, TLC
@@ -109,7 +117,9 @@ CONSTANTS
     StageMove,      \* whether the run starts with a destination staged and copying
     LearnerVotes,   \* whether that destination counts toward the quorum while it copies
     Resends,        \* whether a client may send an unanswered write again
-    SequencesInLog  \* whether a re-send is checked against the log, or the leader's own writes
+    SequencesInLog, \* whether a re-send is checked against the log, or the leader's own writes
+    Cancel,         \* whether an operator may cancel a fenced move
+    CancelCas       \* whether that cancel, too, lands only at the generation it read
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
@@ -118,6 +128,7 @@ ASSUME AckOnAdmit \in BOOLEAN /\ FenceFromAdmit \in BOOLEAN
 ASSUME CasWrites \in BOOLEAN
 ASSUME StageMove \in BOOLEAN /\ LearnerVotes \in BOOLEAN
 ASSUME Resends \in BOOLEAN /\ SequencesInLog \in BOOLEAN
+ASSUME Cancel \in BOOLEAN /\ CancelCas \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -616,9 +627,36 @@ CutOver(v, f, views) ==
     /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
                     staleCommit, successor, moves >>
 
+\* An operator cancels a fenced move (`cancel_move` in
+\* services/felix-controlplane-service/src/cluster/placement/operator.rs): the
+\* leader that was read serves again at a new generation. Unlike a promotion
+\* it keeps what it has queued and claimed: those writes are inside its fence,
+\* were admitted against the same log, and land in it. It keeps that log, and
+\* with it the producer sequences its records carry, so a write re-sent after
+\* the cancel is answered from there. The destination stays out of the
+\* quorum, as the code drops it from the replicas.
+Retake(v, f, views) ==
+    /\ Cancel
+    /\ v.draining
+    /\ f = v.leader
+    /\ CancelCas => Cas(v)
+    /\ ver' = ver + 1
+    /\ cpView' = views
+    /\ gen' = gen + 1
+    /\ leader' = f
+    /\ cpExpiry' = now + L
+    /\ bgen' = [bgen EXCEPT ![f] = gen + 1]
+    /\ bexpiry' = [bexpiry EXCEPT ![f] = clock[f] + L]
+    /\ report' = NoReport
+    /\ draining' = FALSE
+    /\ stopped' = [stopped EXCEPT ![f] = FALSE]
+    /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, queued, pending,
+                    acked, writes, staleCommit, successor, moves, staged >>
+
 \* A placement write, from a read taken in the same step or from one a
 \* planner has held since.
-Decide(v, f, views) == Promote(v, f, views) \/ Fence(v, f, views) \/ CutOver(v, f, views)
+Decide(v, f, views) ==
+    Promote(v, f, views) \/ Fence(v, f, views) \/ CutOver(v, f, views) \/ Retake(v, f, views)
 
 -----------------------------------------------------------------------------
 

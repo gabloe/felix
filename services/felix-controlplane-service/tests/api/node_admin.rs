@@ -63,6 +63,7 @@ async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
         )),
         in_flight: Default::default(),
         placement_wakes: Default::default(),
+        move_policy: Default::default(),
     };
     (build_router(state).into_service(), store, keys)
 }
@@ -405,6 +406,7 @@ async fn seed_shards(store: &InMemoryStore) {
                 successor: None,
                 joining: None,
                 move_started_at_millis: None,
+                move_reason: None,
             })
             .await
             .expect("assign");

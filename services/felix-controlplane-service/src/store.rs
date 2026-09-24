@@ -220,6 +220,14 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Every report held, fresh or not; the reader judges freshness.
     async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>>;
 
+    /// Whether placement is paused: it starts no moves of its own, while
+    /// moves in flight finish and an operator may still start one. Read by
+    /// every instance's placement on every pass, so it lives in the store.
+    async fn moves_paused(&self) -> StoreResult<bool>;
+    /// Pause or resume placement's moves. Setting the value it already has is
+    /// not an error.
+    async fn set_moves_paused(&self, paused: bool) -> StoreResult<()>;
+
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool>;
     async fn namespace_exists(&self, key: &NamespaceKey) -> StoreResult<bool>;
 

@@ -1,7 +1,8 @@
-//! The `felix-controlplane` binary: `migrate` as a subcommand, otherwise the
-//! server, configured from the environment and an optional YAML file.
+//! The `felix-controlplane` binary: `migrate` and `admin` as subcommands,
+//! otherwise the server, configured from the environment and an optional
+//! YAML file.
 use felix_common::lifecycle;
-use felix_controlplane_service::{config, migrate, server};
+use felix_controlplane_service::{admin, config, migrate, server};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -11,6 +12,10 @@ async fn main() -> anyhow::Result<()> {
     if args.first().map(String::as_str) == Some("migrate") {
         args.remove(0);
         return migrate::run(args).await;
+    }
+    if args.first().map(String::as_str) == Some("admin") {
+        args.remove(0);
+        return admin::run(args).await;
     }
 
     let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");

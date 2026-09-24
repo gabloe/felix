@@ -79,6 +79,7 @@ impl Cluster {
             ),
             in_flight: Default::default(),
             placement_wakes: Default::default(),
+            move_policy: Default::default(),
         };
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -195,6 +196,7 @@ impl Cluster {
                 successor: None,
                 joining: None,
                 move_started_at_millis: None,
+                move_reason: None,
             })
             .await
             .expect("assign");

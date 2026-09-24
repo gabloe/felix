@@ -33,6 +33,7 @@ pub(crate) fn app_state(
         readiness: Arc::new(Readiness::new(probe)),
         in_flight: Default::default(),
         placement_wakes: Default::default(),
+        move_policy: Default::default(),
     }
 }
 

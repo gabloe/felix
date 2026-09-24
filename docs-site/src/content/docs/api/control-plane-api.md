@@ -155,6 +155,50 @@ The registration, heartbeat, drain, deregister and patch endpoints require
 the request body, so a broker cannot claim a name its credential does not
 cover.
 
+### Shard moves and placement
+
+What an operator uses to steer shard moves; the walk-through is
+[Moving shards by hand](/felix/deployment/moving-shards/), and
+`felix-controlplane admin` is a command-line client of these endpoints. Reads
+take `node.view:cluster:*`; the rest take `node.manage:cluster:*`.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /v1/shard-moves` | moves and follower replacements in progress, and whether placement is paused |
+| `GET /v1/placement/plan` | what the next placement pass would write, without writing it |
+| `POST /v1/shard-moves` | start moving a shard's leadership to a node |
+| `DELETE /v1/shard-moves/{tenant_id}/{namespace}/{name}/{shard}` | cancel a shard's move; `?kind=cache` for a cache shard |
+| `POST /v1/placement/pause`, `POST /v1/placement/resume` | stop and restart placement's own moves |
+
+```http
+POST /v1/shard-moves
+Authorization: Bearer <felix-token>
+Content-Type: application/json
+
+{ "tenant_id": "t1", "namespace": "ns", "stream": "orders", "shard": 0, "destination": "broker-3" }
+```
+
+```json
+{ "step": "stage",
+  "assignment": { "tenant_id": "t1", "namespace": "ns", "stream": "orders", "shard": 0, "kind": "stream",
+                  "leader": "broker-1", "replicas": ["broker-3"], "generation": 12, "state": "active",
+                  "successor": "broker-3", "move_started_at_millis": 1790000000000, "move_reason": "operator" } }
+```
+
+A start is refused where placement would not make the move: 404
+`unknown_shard` or `unknown_node`, or 409 `destination_not_live`,
+`already_leader`, `at_capacity`, `already_moving`, `leader_unavailable` or
+`move_limit`. A cancel answers `cancel` before the fence and `retake` after
+it, when the leader that stopped serves again at a new generation; with no
+move in progress it is 409 `not_moving`.
+
+`GET /v1/shard-moves` lists each move's `step` (`staged`, `fenced`,
+`replacing`), `reason` (`drain`, `balance`, `operator`, `replace`), start
+time, and from the leader's latest report `lag_records`, `caught_up` and
+`drained`. `GET /v1/placement/plan` lists each shard the next pass would act
+on with its `action` (`place`, a move step, `waiting` or `unplaceable`) and
+the assignment it would write or the reason it cannot.
+
 ### Tenants, namespaces, streams and caches
 
 Every resource endpoint takes a Felix bearer token, checked before anything
@@ -532,61 +576,8 @@ message StreamInfo {
 
 ### Shard Management
 
-#### RebalanceShards
-
-Trigger shard rebalancing across brokers.
-
-**Request**:
-
-```protobuf
-message RebalanceShardsRequest {
-  string tenant_id = 1;
-  string namespace = 2;
-  string stream = 3;
-  RebalanceStrategy strategy = 4;
-}
-
-enum RebalanceStrategy {
-  BALANCED = 0;      // Even distribution
-  MINIMIZE_MOVEMENT = 1;  // Least disruption
-  LOCALITY_AWARE = 2;     // Optimize for region/AZ
-}
-```
-
-**Response**:
-
-```protobuf
-message RebalanceShardsResponse {
-  repeated ShardMove moves = 1;
-  RebalanceStatus status = 2;
-}
-
-message ShardMove {
-  uint32 shard_id = 1;
-  string from_broker = 2;
-  string to_broker = 3;
-  MoveStatus status = 4;
-}
-```
-
-#### TransferShardLeadership
-
-Move shard leadership to another broker.
-
-**Request**:
-
-```protobuf
-message TransferShardLeadershipRequest {
-  string stream_id = 1;
-  uint32 shard_id = 2;
-  string target_broker = 3;
-}
-```
-
-**Use cases**:
-- Planned maintenance (drain broker)
-- Load balancing
-- Failure recovery
+Shard moves are not part of a gRPC API: they are the HTTP endpoints in
+[Shard moves and placement](#shard-moves-and-placement).
 
 ### Broker Management
 

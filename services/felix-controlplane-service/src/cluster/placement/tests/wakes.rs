@@ -22,6 +22,7 @@ async fn a_requested_pass_runs_without_waiting_for_the_interval() {
             successor: Some("broker-y".to_string()),
             joining: None,
             move_started_at_millis: None,
+            move_reason: None,
         })
         .await
         .expect("fenced move");
