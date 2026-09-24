@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790273174338,
+  "lastUpdate": 1790273354953,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14872,6 +14872,58 @@ window.BENCHMARK_DATA = {
             "range": "35129.86",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1122484.74\nmean: 1112246.13\nstdev: 35129.86\ncv: 3.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d71b3efeea53703c046caac04908d6790302285",
+          "message": "A moving shard switches over in milliseconds (#673)\n\n* feat(broker): switch a moving shard over in milliseconds\n\nThe broker heard about each step of a move on a 2 s poll, and each of its\nloops waited for its own tick, so a switch-over took seconds. Now:\n\n- the assignment watch long-polls the change feed (wait_ms=20000) and falls\n  back to the sync interval when the control plane answers at once;\n- the watch wakes the routing feed, and the feed wakes replication after it\n  acts on a change, so the drained report follows the fence directly;\n- a broker named as a shard's successor opens its log and stream state while\n  it is still copying;\n- routes and the servable set are published in one ArcSwap, and the router\n  swaps its table and node set together;\n- the destination records felix_broker_shard_move_seconds and\n  felix_broker_shard_switchover_seconds.\n\nSpec-Unaffected: the wakes change when the lifecycle, replication and the drained report run, not what they decide; preparing a successor opens state without serving it, and the fence and drained condition are unchanged.\n\n* test(cluster): measure a move's switch-over with placement woken by reports\n\nThe harness can now run the control plane's placement loop and set the\nbrokers' sync interval. a_move_switches_over_in_well_under_a_second drains a\nleader with every broker on the 2 s default and asserts the destination\naccepts a publish within a second of the fence.",
+          "timestamp": "2026-09-24T11:04:51-07:00",
+          "tree_id": "6cb9d44b8b6bce2ed5075280b46c67cdbc48b510",
+          "url": "https://github.com/gabloe/felix/commit/9d71b3efeea53703c046caac04908d6790302285"
+        },
+        "date": 1790273354315,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 396947.83,
+            "range": "11187.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 396947.83\nmean: 401450.19\nstdev: 11187.48\ncv: 2.79%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 396947.83,
+            "range": "11187.48",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 396947.83\nmean: 401450.19\nstdev: 11187.48\ncv: 2.79%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94610.38,
+            "range": "1922.96",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94610.38\nmean: 94563.42\nstdev: 1922.96\ncv: 2.03%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 946103.79,
+            "range": "19229.64",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 946103.79\nmean: 945634.15\nstdev: 19229.64\ncv: 2.03%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
