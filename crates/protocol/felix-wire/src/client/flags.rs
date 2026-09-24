@@ -77,6 +77,21 @@ pub const FLAG_BINARY_PUBLISH_ACK_OWNER: u16 = 0x0080;
 /// Sent only to a broker that advertised it in `AuthOk.server_flags`.
 pub const FLAG_BINARY_PUBLISH_IDEMPOTENT: u16 = 0x0100;
 
+/// Modifier on `FLAG_BINARY_PUBLISH_ACK`: a failed ack carries a typed error
+/// code and retry class after its message.
+///
+/// ```text
+/// u16 code          (ErrorCode::to_u16)
+/// u8  retry         (RetryClass::to_u8)
+/// ```
+///
+/// The binary counterpart of `publish_error.code`. A flag rather than the
+/// feature bit because it changes the payload layout: a client that does not
+/// know it would reject the frame, and with it the answer to its publish. Set
+/// only for a client that advertised it in `Auth.client_flags`, and only on a
+/// failed ack.
+pub const FLAG_BINARY_PUBLISH_ACK_CODE: u16 = 0x0200;
+
 /// Every flag bit this version understands.
 ///
 /// Frames carrying bits outside this mask are rejected rather than parsed with
@@ -95,7 +110,8 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_EVENT_BATCH_OFFSETS
     | FLAG_BINARY_PUBLISH_KEYED
     | FLAG_BINARY_PUBLISH_ACK_OWNER
-    | FLAG_BINARY_PUBLISH_IDEMPOTENT;
+    | FLAG_BINARY_PUBLISH_IDEMPOTENT
+    | FLAG_BINARY_PUBLISH_ACK_CODE;
 
 /// The flag bits that existed before capability negotiation.
 ///

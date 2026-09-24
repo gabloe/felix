@@ -52,13 +52,8 @@ async fn cache_worker_exits_on_stream_error() -> Result<()> {
             };
             match message {
                 Message::CacheGet { .. } | Message::CachePut { .. } => {
-                    let write_result = write_message(
-                        &mut send,
-                        Message::Error {
-                            message: "cache failure".to_string(),
-                        },
-                    )
-                    .await;
+                    let write_result =
+                        write_message(&mut send, Message::error("cache failure")).await;
                     debug!(?write_result, "test server sent cache error");
                     let _ = send.finish();
                     Ok(true)

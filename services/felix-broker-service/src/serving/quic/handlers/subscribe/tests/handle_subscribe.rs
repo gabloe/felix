@@ -166,7 +166,7 @@ async fn handle_subscribe_message_errors_when_stream_missing() -> Result<()> {
         .context("ack timeout")?
         .context("ack missing")?;
     match ack {
-        Outgoing::Message(Message::Error { message }) => {
+        Outgoing::Message(Message::Error { message, .. }) => {
             assert!(message.contains("stream not found"));
         }
         _ => panic!("unexpected ack"),
@@ -458,7 +458,7 @@ async fn handle_subscribe_message_open_uni_failure_sends_error_ack() -> Result<(
         .context("ack timeout")?
         .context("missing ack")?;
     match ack {
-        Outgoing::Message(Message::Error { message }) => {
+        Outgoing::Message(Message::Error { message, .. }) => {
             assert!(!message.is_empty());
         }
         _ => panic!("expected error ack"),

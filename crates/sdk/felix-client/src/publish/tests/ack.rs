@@ -102,11 +102,8 @@ async fn maybe_wait_for_ack_ok() -> Result<()> {
 async fn maybe_wait_for_ack_error() -> Result<()> {
     crate::timings::enable_collection(1);
     let request_id = 7;
-    let (mut recv, shutdown_tx, server_task) = open_ack_stream(Some(Message::PublishError {
-        request_id,
-        message: "nope".into(),
-    }))
-    .await?;
+    let (mut recv, shutdown_tx, server_task) =
+        open_ack_stream(Some(Message::publish_error(request_id, "nope"))).await?;
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     assert!(
         maybe_wait_for_ack(

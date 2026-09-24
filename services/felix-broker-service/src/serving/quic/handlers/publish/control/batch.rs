@@ -105,9 +105,7 @@ pub(crate) async fn handle_publish_batch_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::Error {
-                        message: "server overloaded".to_string(),
-                    }),
+                    Outgoing::Message(Message::error("server overloaded")),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -148,9 +146,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::Error {
-                    message: "missing request_id for acked publish batch".to_string(),
-                }),
+                Outgoing::Message(Message::error("missing request_id for acked publish batch")),
             )
             .await,
             ack_timeout_state,

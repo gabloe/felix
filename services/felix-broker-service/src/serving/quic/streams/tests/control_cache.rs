@@ -110,7 +110,7 @@ async fn control_loop_cache_put_missing_scope_with_request_id_continues() -> Res
     assert!(result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::CacheMessage(Message::Error { message }) if message.contains("cache scope not found")
+        Outgoing::CacheMessage(Message::Error { message, .. }) if message.contains("cache scope not found")
     )));
     Ok(())
 }
@@ -142,7 +142,7 @@ async fn control_loop_cache_get_missing_scope_with_request_id_continues() -> Res
     assert!(result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::CacheMessage(Message::Error { message }) if message.contains("cache scope not found")
+        Outgoing::CacheMessage(Message::Error { message, .. }) if message.contains("cache scope not found")
     )));
     Ok(())
 }
@@ -679,7 +679,7 @@ async fn control_loop_refuses_a_retained_watch_with_an_offset() -> Result<()> {
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Outgoing::Message(Message::Error { message })
+            Outgoing::Message(Message::Error { message, .. })
                 if message.contains("retained or from_offset")
         )),
         "the combination must be refused, not guessed at",
@@ -739,7 +739,7 @@ async fn control_loop_refuses_a_watch_with_an_ambiguous_filter() -> Result<()> {
         .filter(|message| {
             matches!(
                 message,
-                Outgoing::Message(Message::Error { message })
+                Outgoing::Message(Message::Error { message, .. })
                     if message.contains("exactly one of key or prefix")
             )
         })

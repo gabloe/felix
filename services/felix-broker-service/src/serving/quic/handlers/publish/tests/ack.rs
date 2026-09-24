@@ -30,9 +30,7 @@ async fn send_outgoing_critical_increments_depth() {
         &depth,
         "test",
         &throttle_tx,
-        Outgoing::Message(Message::Error {
-            message: "e".to_string(),
-        }),
+        Outgoing::Message(Message::error("e")),
     )
     .await;
     handle.await.unwrap();
@@ -72,19 +70,13 @@ async fn send_outgoing_best_effort_reports_full() {
     let depth = Arc::new(AtomicUsize::new(0));
     let (tx, _rx) = mpsc::channel(1);
     let (throttle_tx, _throttle_rx) = watch::channel(false);
-    let _ = tx
-        .send(Outgoing::Message(Message::Error {
-            message: "f".to_string(),
-        }))
-        .await;
+    let _ = tx.send(Outgoing::Message(Message::error("f"))).await;
     let err = send_outgoing_best_effort(
         &tx,
         &depth,
         "test",
         &throttle_tx,
-        Outgoing::Message(Message::Error {
-            message: "overflow".to_string(),
-        }),
+        Outgoing::Message(Message::error("overflow")),
     )
     .await
     .unwrap_err();
@@ -124,9 +116,7 @@ async fn send_outgoing_best_effort_reports_closed() {
         &depth,
         "test",
         &throttle_tx,
-        Outgoing::Message(Message::Error {
-            message: "closed".to_string(),
-        }),
+        Outgoing::Message(Message::error("closed")),
     )
     .await
     .unwrap_err();

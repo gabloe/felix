@@ -129,9 +129,7 @@ pub(crate) async fn handle_subscribe_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::Error {
-                    message: "max subscriptions per connection exceeded".to_string(),
-                }),
+                Outgoing::Message(Message::error("max subscriptions per connection exceeded")),
             )
             .await,
             ack_timeout_state,
@@ -216,9 +214,7 @@ pub(crate) async fn handle_subscribe_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::Error {
-                        message: err.to_string(),
-                    }),
+                    Outgoing::Message(Message::error(err.to_string())),
                 )
                 .await,
                 ack_timeout_state,
@@ -363,9 +359,7 @@ pub(crate) async fn handle_subscribe_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::Error {
-                    message: "subscriber lane queue full during register".to_string(),
-                }),
+                Outgoing::Message(Message::error("subscriber lane queue full during register")),
             )
             .await,
             ack_timeout_state,
@@ -438,9 +432,7 @@ fn subscribe_error_message(err: felix_broker::BrokerError) -> Message {
                 available: tail,
             }
         }
-        other => Message::Error {
-            message: other.to_string(),
-        },
+        other => Message::error(other.to_string()),
     }
 }
 

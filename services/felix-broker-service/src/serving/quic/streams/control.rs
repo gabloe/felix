@@ -688,9 +688,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         &out_ack_depth,
                         "felix_broker_out_ack_depth",
                         &ack_throttle_tx,
-                        Outgoing::Message(Message::Error {
-                            message: "unexpected message type".to_string(),
-                        }),
+                        Outgoing::Message(Message::error("unexpected message type")),
                     )
                     .await,
                     &ack_timeout_state,

@@ -28,10 +28,7 @@ async fn run_publisher_writer_error_drains_queue() -> Result<()> {
             other => return Err(anyhow::anyhow!("unexpected message: {other:?}")),
         }
         .context("missing request_id")?;
-        let ack = Message::PublishError {
-            request_id,
-            message: "denied".to_string(),
-        };
+        let ack = Message::publish_error(request_id, "denied");
         let frame = ack.encode().context("encode ack")?;
         send.write_all(&frame.encode()).await.context("write ack")?;
         send.finish().context("finish ack")?;
@@ -325,10 +322,7 @@ async fn run_publisher_writer_publish_batch_error_drains_queue() -> Result<()> {
         let _ = crate::frame_io::read_frame_into(&mut recv, &mut scratch, false)
             .await?
             .context("missing publish batch frame")?;
-        let ack = Message::PublishError {
-            request_id: 99,
-            message: "denied".to_string(),
-        };
+        let ack = Message::publish_error(99, "denied");
         let frame = ack.encode().context("encode ack")?;
         send.write_all(&frame.encode()).await.context("write ack")?;
         send.finish().context("finish ack")?;

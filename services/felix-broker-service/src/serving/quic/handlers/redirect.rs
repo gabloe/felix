@@ -51,11 +51,9 @@ pub(crate) fn redirect_for(
                 // A client that cannot decode `NotLeader` would lose the
                 // connection to a message meant to help it. An error says the
                 // same thing in a shape every client has always understood.
-                return Some(Message::Error {
-                    message: format!(
-                        "stream {stream} is served by {node_id}; this broker does not own it"
-                    ),
-                });
+                return Some(Message::error(format!(
+                    "stream {stream} is served by {node_id}; this broker does not own it"
+                )));
             }
             let addr = client_endpoints.and_then(|endpoints| {
                 endpoints
@@ -70,8 +68,8 @@ pub(crate) fn redirect_for(
                 generation,
             })
         }
-        Dispatch::Unavailable(reason) => Some(Message::Error {
-            message: format!("stream {stream} cannot be subscribed to right now: {reason}"),
-        }),
+        Dispatch::Unavailable(reason) => Some(Message::error(format!(
+            "stream {stream} cannot be subscribed to right now: {reason}"
+        ))),
     }
 }

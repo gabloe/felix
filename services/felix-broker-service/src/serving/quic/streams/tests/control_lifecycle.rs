@@ -630,9 +630,7 @@ async fn control_loop_error_message_returns_false() -> Result<()> {
 
     let frames = vec![
         Ok(Some(frame_from_message(auth_message(&auth)))),
-        Ok(Some(frame_from_message(Message::Error {
-            message: "bad".to_string(),
-        }))),
+        Ok(Some(frame_from_message(Message::error("bad")))),
     ];
     let mut source = TestFrameSource::new(frames);
     let (out_ack_tx, _out_ack_rx) = mpsc::channel(8);

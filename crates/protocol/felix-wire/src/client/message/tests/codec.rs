@@ -18,9 +18,7 @@ fn message_round_trip() {
 
 #[test]
 fn message_error_round_trip() {
-    let message = Message::Error {
-        message: "oops".to_string(),
-    };
+    let message = Message::error("oops");
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
     assert_eq!(message, decoded);
@@ -58,10 +56,7 @@ fn message_all_variants_encode_decode() {
     assert_eq!(message, decoded);
 
     // Test PublishError message
-    let message = Message::PublishError {
-        request_id: 123,
-        message: "error".to_string(),
-    };
+    let message = Message::publish_error(123, "error");
     let frame = message.encode().expect("encode");
     let decoded = Message::decode(frame).expect("decode");
     assert_eq!(message, decoded);

@@ -69,13 +69,7 @@ async fn quic_publish_subscribe_cache_success() -> Result<()> {
                         write_message(&mut send, Message::Ok).await?;
                     }
                     _ => {
-                        write_message(
-                            &mut send,
-                            Message::Error {
-                                message: "missing auth".to_string(),
-                            },
-                        )
-                        .await?;
+                        write_message(&mut send, Message::error("missing auth")).await?;
                         continue;
                     }
                 }

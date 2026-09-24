@@ -26,7 +26,7 @@ async fn producer_init_answers_with_an_id_once_authenticated() -> Result<()> {
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Outgoing::Message(Message::Error { message }) if message.contains("not authenticated")
+            Outgoing::Message(Message::Error { message, .. }) if message.contains("not authenticated")
         )),
         "an unauthenticated producer_init was answered: {messages:?}"
     );

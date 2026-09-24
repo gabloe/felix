@@ -58,7 +58,7 @@ impl Client {
         let _ = send.finish();
         match answer {
             Some(Message::TopologyView { brokers }) => Ok(brokers),
-            Some(Message::Error { message }) => {
+            Some(Message::Error { message, .. }) => {
                 Err(anyhow::anyhow!("topology rejected: {message}"))
             }
             Some(other) => Err(anyhow::anyhow!("unexpected topology response: {other:?}")),
@@ -119,7 +119,7 @@ impl Client {
         let _ = send.finish();
         match answer {
             Some(Message::StreamShardsView { shards, .. }) => Ok(shards),
-            Some(Message::Error { message }) => {
+            Some(Message::Error { message, .. }) => {
                 Err(anyhow::anyhow!("stream shards rejected: {message}"))
             }
             Some(other) => Err(anyhow::anyhow!(
@@ -171,7 +171,7 @@ impl Client {
         let _ = send.finish();
         match answer {
             Some(Message::CacheShardsView { shards, .. }) => Ok(shards),
-            Some(Message::Error { message }) => {
+            Some(Message::Error { message, .. }) => {
                 Err(anyhow::anyhow!("cache shards rejected: {message}"))
             }
             Some(other) => Err(anyhow::anyhow!(

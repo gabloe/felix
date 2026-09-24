@@ -38,14 +38,7 @@ async fn publish_reports_server_error() -> Result<()> {
                 let next = read_message(&mut recv, &mut frame_scratch).await?;
                 if let Some(Message::Publish { request_id, .. }) = next {
                     let id = request_id.unwrap_or(1);
-                    write_message(
-                        &mut send,
-                        Message::PublishError {
-                            request_id: id,
-                            message: "denied".to_string(),
-                        },
-                    )
-                    .await?;
+                    write_message(&mut send, Message::publish_error(id, "denied")).await?;
                 }
                 Ok::<(), anyhow::Error>(())
             }));

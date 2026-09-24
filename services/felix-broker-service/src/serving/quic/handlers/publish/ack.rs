@@ -99,10 +99,7 @@ impl AckEncoding {
         let message = message.into();
         match self {
             AckEncoding::Json | AckEncoding::Idempotent => {
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message,
-                })
+                Outgoing::Message(Message::publish_error(request_id, message))
             }
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,

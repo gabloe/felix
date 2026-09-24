@@ -36,9 +36,7 @@ pub(super) async fn send_control_error(
             out_ack_depth,
             "felix_broker_out_ack_depth",
             ack_throttle_tx,
-            Outgoing::Message(Message::Error {
-                message: message.to_string(),
-            }),
+            Outgoing::Message(Message::error(message.to_string())),
         )
         .await,
         ack_timeout_state,

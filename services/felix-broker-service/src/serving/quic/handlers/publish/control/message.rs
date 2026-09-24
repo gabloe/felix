@@ -77,10 +77,7 @@ pub(crate) async fn handle_publish_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::PublishError {
-                        request_id,
-                        message: "server overloaded".to_string(),
-                    }),
+                    Outgoing::Message(Message::publish_error(request_id, "server overloaded")),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -98,9 +95,7 @@ pub(crate) async fn handle_publish_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::Error {
-                        message: "server overloaded".to_string(),
-                    }),
+                    Outgoing::Message(Message::error("server overloaded")),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -138,9 +133,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::Error {
-                    message: "missing request_id for acked publish".to_string(),
-                }),
+                Outgoing::Message(Message::error("missing request_id for acked publish")),
             )
             .await,
             ack_timeout_state,
@@ -210,12 +203,9 @@ pub(crate) async fn handle_publish_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::PublishError {
-                        request_id,
-                        message: format!(
+                    Outgoing::Message(Message::publish_error(request_id, format!(
                             "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
-                        ),
-                    }),
+                        ))),
                 )
                 .await,
                 ack_timeout_state,
@@ -273,10 +263,7 @@ pub(crate) async fn handle_publish_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        Outgoing::Message(Message::PublishError {
-                            request_id,
-                            message: "ingress overloaded".to_string(),
-                        }),
+                        Outgoing::Message(Message::publish_error(request_id, "ingress overloaded")),
                     )
                     .await,
                     ack_timeout_state,
@@ -297,10 +284,7 @@ pub(crate) async fn handle_publish_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        Outgoing::Message(Message::PublishError {
-                            request_id,
-                            message: err.to_string(),
-                        }),
+                        Outgoing::Message(Message::publish_error(request_id, err.to_string())),
                     )
                     .await,
                     ack_timeout_state,
@@ -368,10 +352,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                Outgoing::Message(Message::publish_error(request_id, "server overloaded")),
             )
             .await;
             t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
@@ -401,10 +382,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                Outgoing::Message(Message::publish_error(request_id, "server overloaded")),
             )
             .await;
             return Ok(());
@@ -420,10 +398,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                Outgoing::Message(Message::publish_error(request_id, "server overloaded")),
             )
             .await;
             return Ok(());

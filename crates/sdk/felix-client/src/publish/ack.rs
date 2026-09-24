@@ -91,6 +91,7 @@ pub(crate) async fn wait_for_ack(
         Some(Message::PublishError {
             request_id: ack_id,
             message,
+            ..
         }) if ack_id == request_id => {
             #[cfg(feature = "telemetry")]
             {
@@ -174,10 +175,7 @@ pub(crate) async fn read_ack_message_with_timing(
             None => Message::PublishOk {
                 request_id: ack.request_id,
             },
-            Some(message) => Message::PublishError {
-                request_id: ack.request_id,
-                message,
-            },
+            Some(message) => Message::publish_error(ack.request_id, message),
         }
     } else {
         Message::decode(frame).context("decode message")?

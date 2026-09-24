@@ -121,6 +121,17 @@ pub const FEATURE_IDEMPOTENT_PRODUCER: u32 = 0x0000_0200;
 /// predates it would ignore the field and answer for a stream of the same name.
 pub const FEATURE_CACHE_SHARDS: u32 = 0x0000_0400;
 
+/// The client can read typed error codes: `code`, `retry` and `detail` on
+/// `error` and `publish_error`.
+///
+/// Offered by a *client*, like `FEATURE_REDIRECT`: the fields travel broker to
+/// client, and a broker sends them only when this bit was offered, so every
+/// other client keeps getting byte-identical frames. Serde would ignore the
+/// fields anyway; the bit exists so the frames stay the same, not to avoid a
+/// decode failure. A broker advertises it too, so a client knows whether an
+/// error without a code means "no code applies" or "this broker predates them".
+pub const FEATURE_ERROR_CODES: u32 = 0x0000_0800;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
@@ -132,7 +143,8 @@ pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_CACHE_WATCH_RETAINED
     | FEATURE_COUNTERS
     | FEATURE_IDEMPOTENT_PRODUCER
-    | FEATURE_CACHE_SHARDS;
+    | FEATURE_CACHE_SHARDS
+    | FEATURE_ERROR_CODES;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

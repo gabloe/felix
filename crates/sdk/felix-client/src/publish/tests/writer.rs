@@ -307,9 +307,7 @@ async fn run_publisher_writer_non_publish_message_ok() -> Result<()> {
 
     let (resp_tx, resp_rx) = oneshot::channel();
     tx.send(PublishRequest::Message {
-        message: Message::Error {
-            message: "oops".to_string(),
-        },
+        message: Message::error("oops"),
         ack: AckMode::None,
         request_id: None,
         _permit: test_publish_permit(),

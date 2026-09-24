@@ -53,9 +53,9 @@ pub(super) async fn counter_add(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::Error {
-                    message: format!("cache scope not found: {tenant_id}/{namespace}/{cache}"),
-                }),
+                Outgoing::CacheMessage(Message::error(format!(
+                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                ))),
             )
             .await,
             ack_timeout_state,
@@ -89,9 +89,9 @@ pub(super) async fn counter_add(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::Error {
-                        message: format!("counter add not served: {reason}"),
-                    }),
+                    Outgoing::CacheMessage(Message::error(format!(
+                        "counter add not served: {reason}"
+                    ))),
                 )
                 .await,
                 ack_timeout_state,
@@ -158,9 +158,9 @@ pub(super) async fn counter_get(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::Error {
-                    message: format!("cache scope not found: {tenant_id}/{namespace}/{cache}"),
-                }),
+                Outgoing::CacheMessage(Message::error(format!(
+                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                ))),
             )
             .await,
             ack_timeout_state,
@@ -197,9 +197,9 @@ pub(super) async fn counter_get(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::Error {
-                        message: format!("counter get not served: {reason}"),
-                    }),
+                    Outgoing::CacheMessage(Message::error(format!(
+                        "counter get not served: {reason}"
+                    ))),
                 )
                 .await,
                 ack_timeout_state,

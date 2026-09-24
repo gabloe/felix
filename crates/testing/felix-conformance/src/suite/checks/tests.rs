@@ -14,12 +14,7 @@ fn parse_subscribe_response_variants() {
         .expect("ok"),
         7
     );
-    assert!(
-        parse_subscribe_response(Some(Message::Error {
-            message: "nope".into()
-        }))
-        .is_err()
-    );
+    assert!(parse_subscribe_response(Some(Message::error("nope"))).is_err());
     assert!(parse_subscribe_response(None).is_err());
 }
 
@@ -27,30 +22,14 @@ fn parse_subscribe_response_variants() {
 fn ensure_publish_ok_variants() {
     ensure_publish_ok(Some(Message::PublishOk { request_id: 9 }), 9).expect("ok");
     assert!(ensure_publish_ok(Some(Message::PublishOk { request_id: 8 }), 9).is_err());
-    assert!(
-        ensure_publish_ok(
-            Some(Message::Error {
-                message: "no".into()
-            }),
-            9
-        )
-        .is_err()
-    );
+    assert!(ensure_publish_ok(Some(Message::error("no")), 9).is_err());
     assert!(ensure_publish_ok(None, 9).is_err());
 }
 
 #[test]
 fn ensure_ok_response_variants() {
     ensure_ok_response(Some(Message::Ok), "cache put").expect("ok");
-    assert!(
-        ensure_ok_response(
-            Some(Message::Error {
-                message: "no".into()
-            }),
-            "cache put"
-        )
-        .is_err()
-    );
+    assert!(ensure_ok_response(Some(Message::error("no")), "cache put").is_err());
     assert!(ensure_ok_response(None, "cache put").is_err());
 }
 

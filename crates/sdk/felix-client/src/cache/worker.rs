@@ -264,7 +264,7 @@ async fn cache_round_trip(
             }
             Ok(value)
         }
-        Message::Error { message } => Err(anyhow::anyhow!("cache error: {message}")),
+        Message::Error { message, .. } => Err(anyhow::anyhow!("cache error: {message}")),
         other => Err(anyhow::anyhow!("cache response unexpected: {other:?}")),
     }
 }
@@ -298,7 +298,7 @@ async fn counter_round_trip(
             }
             Ok(value)
         }
-        Message::Error { message } => Err(anyhow::anyhow!("counter error: {message}")),
+        Message::Error { message, .. } => Err(anyhow::anyhow!("counter error: {message}")),
         other => Err(anyhow::anyhow!("counter response unexpected: {other:?}")),
     }
 }

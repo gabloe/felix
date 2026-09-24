@@ -50,7 +50,7 @@ async fn handle_publish_batch_missing_request_id_returns_error() {
 
     let msg = out_rx.recv().await.expect("outgoing");
     match msg {
-        Outgoing::Message(Message::Error { message }) => {
+        Outgoing::Message(Message::Error { message, .. }) => {
             assert!(message.contains("missing request_id"));
         }
         _ => panic!("unexpected outgoing"),
@@ -108,6 +108,7 @@ async fn handle_publish_batch_stream_not_found_sends_error() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 9);
             assert!(message.contains("stream not found"));
@@ -183,6 +184,7 @@ async fn handle_publish_batch_enqueue_full_reports_error() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 11);
             assert!(message.contains("publish queue full"));
@@ -394,6 +396,7 @@ async fn handle_publish_batch_message_enqueue_error_reports_publish_error() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 45);
             assert!(message.contains("publish queue full"));
@@ -527,6 +530,7 @@ async fn handle_publish_batch_message_throttled_with_request_id_sends_error() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 21);
             assert!(message.contains("overloaded"));
@@ -583,7 +587,7 @@ async fn handle_publish_batch_message_throttled_without_request_id_sends_error()
 
     let msg = out_rx.recv().await.expect("outgoing");
     match msg {
-        Outgoing::Message(Message::Error { message }) => {
+        Outgoing::Message(Message::Error { message, .. }) => {
             assert!(message.contains("overloaded"));
         }
         _ => panic!("unexpected outgoing"),
@@ -656,6 +660,7 @@ async fn handle_publish_batch_message_ack_waiters_exhausted() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 22);
             assert!(message.contains("server overloaded"));
@@ -742,6 +747,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_full() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 23);
             assert!(message.contains("server overloaded"));
@@ -817,6 +823,7 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            ..
         }) => {
             assert_eq!(request_id, 24);
             assert!(message.contains("server overloaded"));

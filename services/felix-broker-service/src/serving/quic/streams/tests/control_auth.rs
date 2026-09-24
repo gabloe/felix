@@ -24,7 +24,7 @@ async fn control_loop_rejects_second_auth() -> Result<()> {
     ));
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("auth already established")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("auth already established")
     )));
     Ok(())
 }
@@ -51,7 +51,7 @@ async fn control_loop_rejects_auth_failed() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("auth failed")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("auth failed")
     )));
     Ok(())
 }
@@ -78,7 +78,7 @@ async fn control_loop_rejects_binary_publish_batch_without_auth() -> Result<()> 
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("auth required")
     )));
     Ok(())
 }
@@ -114,7 +114,7 @@ async fn control_loop_rejects_publish_batch_forbidden() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::PublishError { request_id: 9, message }) if message.contains("forbidden")
+        Outgoing::Message(Message::PublishError { request_id: 9, message, .. }) if message.contains("forbidden")
     )));
     Ok(())
 }
@@ -142,7 +142,7 @@ async fn control_loop_publish_without_auth_sends_error() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("auth required")
     )));
     Ok(())
 }
@@ -173,7 +173,7 @@ async fn control_loop_publish_forbidden_without_request_id_sends_error() -> Resu
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("forbidden")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("forbidden")
     )));
     Ok(())
 }
@@ -204,7 +204,7 @@ async fn control_loop_publish_tenant_mismatch_sends_error() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("tenant mismatch")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("tenant mismatch")
     )));
     Ok(())
 }
@@ -234,7 +234,7 @@ async fn control_loop_subscribe_forbidden_sends_error() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("forbidden")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("forbidden")
     )));
     Ok(())
 }
@@ -264,7 +264,7 @@ async fn control_loop_subscribe_tenant_mismatch_sends_error() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("tenant mismatch")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("tenant mismatch")
     )));
     Ok(())
 }
@@ -295,7 +295,7 @@ async fn control_loop_cache_put_forbidden_sends_error() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("forbidden")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("forbidden")
     )));
     Ok(())
 }
@@ -322,7 +322,7 @@ async fn control_loop_rejects_subscribe_without_auth() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("auth required")
     )));
     Ok(())
 }
@@ -348,7 +348,7 @@ async fn control_loop_cache_get_rejects_missing_auth() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("auth required")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("auth required")
     )));
     Ok(())
 }
@@ -379,7 +379,7 @@ async fn control_loop_cache_put_rejects_tenant_mismatch() -> Result<()> {
     assert!(!result);
     assert!(messages.iter().any(|message| matches!(
         message,
-        Outgoing::Message(Message::Error { message }) if message.contains("tenant mismatch")
+        Outgoing::Message(Message::Error { message, .. }) if message.contains("tenant mismatch")
     )));
     Ok(())
 }

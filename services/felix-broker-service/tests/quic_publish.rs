@@ -464,7 +464,7 @@ async fn quic_publish_missing_request_id_returns_error() -> Result<()> {
     )
     .await?;
     match response {
-        Some(Message::Error { message }) => {
+        Some(Message::Error { message, .. }) => {
             assert!(message.contains("missing request_id"));
         }
         other => anyhow::bail!("unexpected response: {other:?}"),
@@ -733,7 +733,7 @@ async fn quic_publish_unknown_flag_bit_is_rejected() -> Result<()> {
     )
     .await?;
     match response {
-        Some(Message::Error { message }) => {
+        Some(Message::Error { message, .. }) => {
             assert!(
                 message.contains("unsupported frame flags"),
                 "unexpected error text: {message}"

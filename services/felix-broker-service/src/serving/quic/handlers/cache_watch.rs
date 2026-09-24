@@ -106,9 +106,9 @@ pub(crate) async fn handle_cache_watch_message(
         (None, Some(prefix)) => CacheWatchFilter::Prefix(prefix.clone()),
         _ => {
             responder
-                .send(Message::Error {
-                    message: "cache_watch takes exactly one of key or prefix".to_string(),
-                })
+                .send(Message::error(
+                    "cache_watch takes exactly one of key or prefix",
+                ))
                 .await?;
             return Ok(true);
         }
@@ -119,12 +119,10 @@ pub(crate) async fn handle_cache_watch_message(
         .await
     {
         responder
-            .send(Message::Error {
-                message: format!(
-                    "cache scope not found: {}/{}/{}",
-                    request.tenant_id, request.namespace, request.cache
-                ),
-            })
+            .send(Message::error(format!(
+                "cache scope not found: {}/{}/{}",
+                request.tenant_id, request.namespace, request.cache
+            )))
             .await?;
         return Ok(true);
     }
@@ -154,13 +152,11 @@ pub(crate) async fn handle_cache_watch_message(
         // hash there and look like a working prefix watch: silently partial.
         (CacheWatchFilter::Prefix(_), None) => {
             responder
-                .send(Message::Error {
-                    message: format!(
-                        "cache {} has {shards} shards and a prefix watch reads one; name the \
+                .send(Message::error(format!(
+                    "cache {} has {shards} shards and a prefix watch reads one; name the \
                          shard, and open one watch per shard to cover the prefix",
-                        request.cache
-                    ),
-                })
+                    request.cache
+                )))
                 .await?;
             return Ok(true);
         }
@@ -170,14 +166,12 @@ pub(crate) async fn handle_cache_watch_message(
     // from a quiet prefix.
     if shard >= shards.max(1) {
         responder
-            .send(Message::Error {
-                message: format!(
-                    "cache {} has {} shard(s); shard {} does not exist",
-                    request.cache,
-                    shards.max(1),
-                    shard
-                ),
-            })
+            .send(Message::error(format!(
+                "cache {} has {} shard(s); shard {} does not exist",
+                request.cache,
+                shards.max(1),
+                shard
+            )))
             .await?;
         return Ok(true);
     }
@@ -203,10 +197,9 @@ pub(crate) async fn handle_cache_watch_message(
         // Reachable only by a client that ignored negotiation: the feature bit
         // is advertised exactly when the hub exists.
         responder
-            .send(Message::Error {
-                message: "this broker's cache is not log-backed, so it cannot serve watches"
-                    .to_string(),
-            })
+            .send(Message::error(
+                "this broker's cache is not log-backed, so it cannot serve watches",
+            ))
             .await?;
         return Ok(true);
     };
@@ -216,9 +209,7 @@ pub(crate) async fn handle_cache_watch_message(
         .try_reserve(config.max_subscriptions_per_conn)
     {
         responder
-            .send(Message::Error {
-                message: "max subscriptions per connection exceeded".to_string(),
-            })
+            .send(Message::error("max subscriptions per connection exceeded"))
             .await?;
         return Ok(true);
     }
@@ -250,9 +241,7 @@ pub(crate) async fn handle_cache_watch_message(
     else {
         subscriptions.release();
         responder
-            .send(Message::Error {
-                message: "the cache shard's log could not be opened".to_string(),
-            })
+            .send(Message::error("the cache shard's log could not be opened"))
             .await?;
         return Ok(true);
     };
@@ -261,9 +250,9 @@ pub(crate) async fn handle_cache_watch_message(
         Err(err) => {
             subscriptions.release();
             responder
-                .send(Message::Error {
-                    message: format!("the cache shard's log could not be read: {err}"),
-                })
+                .send(Message::error(format!(
+                    "the cache shard's log could not be read: {err}"
+                )))
                 .await?;
             return Ok(true);
         }
@@ -289,9 +278,9 @@ pub(crate) async fn handle_cache_watch_message(
             // shortcut, and delivering both would hand over every value twice.
             subscriptions.release();
             responder
-                .send(Message::Error {
-                    message: "cache_watch takes retained or from_offset, not both".to_string(),
-                })
+                .send(Message::error(
+                    "cache_watch takes retained or from_offset, not both",
+                ))
                 .await?;
             return Ok(true);
         }
@@ -328,9 +317,7 @@ pub(crate) async fn handle_cache_watch_message(
                 Err(err) => {
                     subscriptions.release();
                     responder
-                        .send(Message::Error {
-                            message: format!("cache snapshot failed: {err}"),
-                        })
+                        .send(Message::error(format!("cache snapshot failed: {err}")))
                         .await?;
                     return Ok(true);
                 }
@@ -350,11 +337,7 @@ pub(crate) async fn handle_cache_watch_message(
         Ok(send) => send,
         Err(err) => {
             subscriptions.release();
-            responder
-                .send(Message::Error {
-                    message: err.to_string(),
-                })
-                .await?;
+            responder.send(Message::error(err.to_string())).await?;
             return Ok(true);
         }
     };

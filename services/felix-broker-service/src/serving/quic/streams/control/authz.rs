@@ -55,13 +55,8 @@ pub(super) async fn authorize_stream(
         return Ok(true);
     }
     let outgoing = match request_id {
-        Some(request_id) => Outgoing::Message(Message::PublishError {
-            request_id,
-            message: "forbidden".to_string(),
-        }),
-        None => Outgoing::Message(Message::Error {
-            message: "forbidden".to_string(),
-        }),
+        Some(request_id) => Outgoing::Message(Message::publish_error(request_id, "forbidden")),
+        None => Outgoing::Message(Message::error("forbidden")),
     };
     handle_ack_enqueue_result(
         send_outgoing_critical(

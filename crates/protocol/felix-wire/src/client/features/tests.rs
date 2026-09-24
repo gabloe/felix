@@ -207,3 +207,13 @@ fn cache_shards_is_a_new_feature_bit_and_disturbs_nothing() {
     assert!(!crate::supports_feature(older, crate::FEATURE_CACHE_SHARDS));
     assert!(!crate::supports_feature(0, crate::FEATURE_CACHE_SHARDS));
 }
+
+#[test]
+fn error_codes_is_a_new_feature_bit_and_disturbs_nothing() {
+    let others = crate::KNOWN_FEATURES & !crate::FEATURE_ERROR_CODES;
+    assert_eq!(crate::FEATURE_ERROR_CODES & others, 0);
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_ERROR_CODES
+    ));
+}

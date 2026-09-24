@@ -202,7 +202,7 @@ impl Client {
                 .await?;
         let _ = send.finish();
         match answer {
-            Some(Message::Error { message }) => {
+            Some(Message::Error { message, .. }) => {
                 Err(anyhow::anyhow!("group request refused: {message}"))
             }
             // Typed, so a caller can follow it: only the shard's leader holds
