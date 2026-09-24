@@ -50,7 +50,9 @@ impl MoveStep {
 pub enum Blocked {
     /// The successor is a replica but has not reported caught up.
     DestinationCatchingUp { successor: String },
-    /// The assignment is `Draining` and the leader has not reported drained.
+    /// The assignment is `Draining` and the leader has not reported drained:
+    /// writes are still in flight there, or its group state or counters are
+    /// not yet on every replica that could take over.
     LeaderStopping,
     /// A move is wanted, and `MovePolicy::max_concurrent` is reached.
     MoveLimit,
@@ -64,7 +66,10 @@ impl std::fmt::Display for Blocked {
             Self::DestinationCatchingUp { successor } => {
                 write!(f, "waiting for {successor} to catch up")
             }
-            Self::LeaderStopping => write!(f, "waiting for the leader to stop serving"),
+            Self::LeaderStopping => write!(
+                f,
+                "waiting for the leader to stop serving and hand over its logs"
+            ),
             Self::MoveLimit => write!(f, "waiting for a move slot"),
             Self::NoDestination => write!(f, "no live node can take this shard"),
         }
