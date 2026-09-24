@@ -135,9 +135,9 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardCancelStalePlanner.cfg` | the same with the cancel written unconditionally | violate `AtMostOneServing` |
 | `FelixPlacementPacing.cfg` | `FelixPlacementPacing.tla`: moves and follower replacements across four shards, two copies at once, one per node | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (92 states) |
 | `FelixPlacementPacingUncountedReplacement.cfg` | the same with a follower replacement invisible to the count, as it used to be written | violate `CopiesWithinLimit` |
-| `FelixShardIdempotentFailover.cfg` | a write re-sent across a failover, checked against the promoted broker's log | pass every invariant and `NoDuplicate` (1.5M states) |
+| `FelixShardIdempotentFailover.cfg` | a write re-sent across a failover, checked against the promoted broker's log | pass every invariant and `NoDuplicate` (0.28M distinct states) |
 | `FelixShardIdempotentFailoverMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
-| `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (14M states) |
+| `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (2.7M distinct states) |
 | `FelixShardIdempotentHandoffMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
 | `FelixShardCancelResend.cfg` | `FelixShardCancel.cfg` with writes re-sent, checked against the retaken leader's log | pass every invariant and `NoDuplicate` (5.6M states) |
 | `FelixShardCancelResendMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
