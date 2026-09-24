@@ -35,6 +35,7 @@
 mod authz;
 mod discovery;
 mod group;
+mod publish;
 mod responder;
 mod session;
 
@@ -55,16 +56,15 @@ use crate::observability::timings;
 use crate::serving::auth::{AuthContext, BrokerAuth};
 use crate::serving::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::serving::quic::handlers::publish::{
-    AckEncoding, AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
+    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
     handle_ack_enqueue_result, handle_acked_binary_publish_batch_control,
-    handle_binary_publish_batch_control, handle_publish_batch_message, handle_publish_message,
-    send_outgoing_best_effort, send_outgoing_critical,
+    handle_binary_publish_batch_control, send_outgoing_best_effort, send_outgoing_critical,
 };
 use crate::serving::quic::handlers::subscribe::handle_subscribe_message;
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
 use super::frame_source::FrameSource;
-use authz::{authorize_cache, authorize_stream, authorize_stream_simple};
+use authz::{authorize_cache, authorize_stream_simple};
 use group::group_redirect;
 use responder::{Responder, send_control_error};
 
@@ -250,11 +250,17 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             config: &config,
             auth: &auth,
             publish_ctx: &publish_ctx,
+            authz_ctx: &authz_ctx,
             out_ack_tx: &out_ack_tx,
             out_ack_depth: &out_ack_depth,
             ack_throttle_tx: &ack_throttle_tx,
             ack_timeout_state: &ack_timeout_state,
             cancel_tx: &cancel_tx,
+            ack_waiters: &ack_waiters,
+            ack_waiter_tx: &ack_waiter_tx,
+            ack_wait_timeout,
+            throttled,
+            sample,
         };
         // Dispatch by message type. Most handlers are responsible for enqueuing responses into
         // `out_ack_tx` rather than writing directly to the network.
@@ -287,34 +293,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ack,
             } => {
-                if !authorize_stream(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamPublish,
-                    &namespace,
-                    &stream,
-                    request_id,
-                    &authz_ctx,
-                )
-                .await?
-                {
-                    return Ok(false);
-                }
-                handle_publish_message(
-                    &broker,
-                    &publish_ctx,
-                    &mut session.stream_cache,
-                    &mut session.stream_cache_key,
-                    throttled,
-                    config.ack_on_commit,
-                    &out_ack_tx,
-                    &out_ack_depth,
-                    &ack_throttle_tx,
-                    &ack_timeout_state,
-                    &cancel_tx,
-                    &ack_waiters,
-                    &ack_waiter_tx,
-                    ack_wait_timeout,
+                if let Step::Close(graceful) = publish::publish(
+                    &cx,
+                    &mut session,
                     tenant_id,
                     namespace,
                     stream,
@@ -322,13 +303,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     key,
                     request_id,
                     ack,
-                    sample,
-                    session
-                        .auth_ctx
-                        .as_ref()
-                        .map_or_else(String::new, |ctx| ctx.token.clone()),
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(graceful);
+                }
             }
             Message::PublishBatch {
                 tenant_id,
@@ -339,35 +318,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ack,
             } => {
-                if !authorize_stream(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamPublish,
-                    &namespace,
-                    &stream,
-                    request_id,
-                    &authz_ctx,
-                )
-                .await?
-                {
-                    return Ok(false);
-                }
-                handle_publish_batch_message(
-                    session.peer_flags,
-                    &broker,
-                    &publish_ctx,
-                    &mut session.stream_cache,
-                    &mut session.stream_cache_key,
-                    throttled,
-                    config.ack_on_commit,
-                    AckEncoding::Json,
-                    &out_ack_tx,
-                    &out_ack_depth,
-                    &ack_throttle_tx,
-                    &ack_timeout_state,
-                    &cancel_tx,
-                    &ack_waiters,
-                    &ack_waiter_tx,
+                if let Step::Close(graceful) = publish::publish_batch(
+                    &cx,
+                    &mut session,
                     tenant_id,
                     namespace,
                     stream,
@@ -375,14 +328,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     key,
                     request_id,
                     ack,
-                    sample,
-                    session
-                        .auth_ctx
-                        .as_ref()
-                        .map_or_else(String::new, |ctx| ctx.token.clone()),
-                    None,
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(graceful);
+                }
             }
             Message::PublishIdempotent {
                 tenant_id,
@@ -394,86 +344,29 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 producer_id,
                 sequence,
             } => {
-                if !authorize_stream(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamPublish,
-                    &namespace,
-                    &stream,
-                    Some(request_id),
-                    &authz_ctx,
-                )
-                .await?
-                {
-                    return Ok(false);
-                }
-                handle_publish_batch_message(
-                    session.peer_flags,
-                    &broker,
-                    &publish_ctx,
-                    &mut session.stream_cache,
-                    &mut session.stream_cache_key,
-                    throttled,
-                    config.ack_on_commit,
-                    AckEncoding::Idempotent,
-                    &out_ack_tx,
-                    &out_ack_depth,
-                    &ack_throttle_tx,
-                    &ack_timeout_state,
-                    &cancel_tx,
-                    &ack_waiters,
-                    &ack_waiter_tx,
+                if let Step::Close(graceful) = publish::publish_idempotent(
+                    &cx,
+                    &mut session,
                     tenant_id,
                     namespace,
                     stream,
                     payloads,
                     key,
-                    Some(request_id),
-                    // Always acknowledged: a producer that never learns the
-                    // answer cannot know what to send next.
-                    Some(felix_wire::AckMode::PerBatch),
-                    sample,
-                    session
-                        .auth_ctx
-                        .as_ref()
-                        .map_or_else(String::new, |ctx| ctx.token.clone()),
-                    Some((producer_id, sequence)),
+                    request_id,
+                    producer_id,
+                    sequence,
                 )
-                .await?;
+                .await?
+                {
+                    return Ok(graceful);
+                }
             }
             Message::ProducerInit { request_id } => {
-                // Authenticated like everything else on this stream. The id
-                // itself carries no authority: a batch under it is authorised
-                // against the stream it names, like any other.
-                if session.auth_ctx.is_none() {
-                    send_control_error(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        &ack_throttle_tx,
-                        &ack_timeout_state,
-                        &cancel_tx,
-                        "not authenticated",
-                    )
-                    .await?;
-                    return Ok(false);
+                if let Step::Close(graceful) =
+                    publish::producer_init(&cx, &mut session, request_id).await?
+                {
+                    return Ok(graceful);
                 }
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::ProducerInitOk {
-                            request_id,
-                            producer_id: broker.new_producer_id(),
-                        }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::Topology => {
                 if let Step::Close(graceful) = discovery::topology(&cx, &mut session).await? {
@@ -1855,9 +1748,15 @@ struct Ctx<'a> {
     config: &'a BrokerConfig,
     auth: &'a Arc<BrokerAuth>,
     publish_ctx: &'a PublishContext,
+    authz_ctx: &'a Responder<'a>,
     out_ack_tx: &'a mpsc::Sender<Outgoing>,
     out_ack_depth: &'a Arc<AtomicUsize>,
     ack_throttle_tx: &'a watch::Sender<bool>,
     ack_timeout_state: &'a Arc<Mutex<AckTimeoutState>>,
     cancel_tx: &'a watch::Sender<bool>,
+    ack_waiters: &'a Arc<Semaphore>,
+    ack_waiter_tx: &'a mpsc::Sender<AckWaiterMessage>,
+    ack_wait_timeout: Duration,
+    throttled: bool,
+    sample: bool,
 }
