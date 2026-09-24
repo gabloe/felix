@@ -10,10 +10,10 @@ use crate::types::next_shard_event;
 
 /// Every shard of a stream, merged into one iterator.
 ///
-/// Yields `ShardRecord`, and also `ShardLost` / `ShardRecovered` — a shard
-/// going away is surfaced rather than swallowed, because the other shards
-/// carry on and a consumer that ignored it would be reading part of the
-/// stream while believing it read all of it.
+/// Yields `ShardRecord`, and also `ShardLost` / `ShardRecovered` /
+/// `ShardMoved` — a shard going away is surfaced rather than swallowed,
+/// because the other shards carry on and a consumer that ignored it would be
+/// reading part of the stream while believing it read all of it.
 #[pyclass(module = "felix")]
 pub struct ShardedSubscriptionHandle {
     inner: Arc<Mutex<Option<felix_client::ShardedSubscription>>>,

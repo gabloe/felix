@@ -219,11 +219,12 @@ export default function register(ctx) {
         item.event ? "record" : null,
         item.lostError ? "lost" : null,
         item.recovered ? "recovered" : null,
+        item.shardMoved ? "moved" : null,
       ].filter(Boolean);
       assert.equal(
         kinds.length,
         1,
-        `a sharded item must be exactly one of a record, a loss, or a recovery; ` +
+        `a sharded item must be exactly one of a record, a loss, a recovery or a move; ` +
           `got ${kinds.length}`,
       );
     }));

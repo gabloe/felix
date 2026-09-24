@@ -203,6 +203,8 @@ def test_lag_is_a_value_the_application_can_act_on(client, fixture, key):
     a filtered watch's sparse offsets mean loss cannot be inferred.
     """
     assert hasattr(felix.CacheWatchLagged, "resume_from")
+    for field in ("resume_from", "node_id", "addr", "generation"):
+        assert hasattr(felix.CacheWatchShardMoved, field)
 
     # The single-shard cache: a prefix watch reads one shard, so over a
     # multi-shard cache this would watch a shard the key never lands on.
@@ -225,7 +227,9 @@ def test_lag_is_a_value_the_application_can_act_on(client, fixture, key):
     # A healthy watch yields changes; a lagging one yields the lag value. Both
     # come back through the same call, which is what lets an application branch
     # rather than guess.
-    assert isinstance(item, (felix.CacheChange, felix.CacheWatchLagged))
+    assert isinstance(
+        item, (felix.CacheChange, felix.CacheWatchLagged, felix.CacheWatchShardMoved)
+    )
 
 
 @pytest.mark.scenario("watch.retained_delivers_state_before_changes")

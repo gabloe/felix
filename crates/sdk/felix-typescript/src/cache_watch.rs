@@ -6,7 +6,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::sync::{Mutex, watch};
 
-use crate::types::{CacheChange, CacheWatchItem, CacheWatchShardMoved};
+use crate::types::{CacheChange, CacheWatchItem};
 
 /// A live cache watch. Close it when done.
 #[napi]
@@ -94,12 +94,7 @@ impl CacheWatchHandle {
             felix_client::CacheWatchItem::ShardMoved(moved) => CacheWatchItem {
                 change: None,
                 lagged_resume_from: None,
-                shard_moved: Some(CacheWatchShardMoved {
-                    resume_from: moved.resume_from.map(BigInt::from),
-                    node_id: moved.node_id,
-                    addr: moved.addr,
-                    generation: BigInt::from(moved.generation),
-                }),
+                shard_moved: Some(moved.into()),
             },
         }))
     }

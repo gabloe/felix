@@ -98,8 +98,8 @@ impl ShardedSubscriptionHandle {
 }
 
 /// The binding's shape for a sharded item, or `None` for one it has no shape
-/// for. A shard move is one: the shard's records follow it when the new owner
-/// takes the subscription, and a lost shard follows it when that fails.
+/// for: `ShardEvent` is non-exhaustive, so a kind added later is skipped until
+/// it gets one.
 fn shard_event(item: felix_client::ShardEvent) -> Option<ShardEvent> {
     Some(match item {
         felix_client::ShardEvent::Record { shard, event } => ShardEvent {
@@ -113,18 +113,28 @@ fn shard_event(item: felix_client::ShardEvent) -> Option<ShardEvent> {
             }),
             lost_error: None,
             recovered: None,
+            shard_moved: None,
         },
         felix_client::ShardEvent::ShardLost { shard, error } => ShardEvent {
             shard,
             event: None,
             lost_error: Some(error),
             recovered: None,
+            shard_moved: None,
         },
         felix_client::ShardEvent::ShardRecovered { shard } => ShardEvent {
             shard,
             event: None,
             lost_error: None,
             recovered: Some(true),
+            shard_moved: None,
+        },
+        felix_client::ShardEvent::ShardMoved { shard, moved } => ShardEvent {
+            shard,
+            event: None,
+            lost_error: None,
+            recovered: None,
+            shard_moved: Some(moved.into()),
         },
         _ => return None,
     })

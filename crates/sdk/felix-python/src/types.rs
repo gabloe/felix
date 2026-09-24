@@ -186,6 +186,34 @@ impl ShardRecovered {
     }
 }
 
+/// A shard of a multi-shard subscription moved to another broker.
+///
+/// The subscription follows it on its own: the shard's records carry on from
+/// the new owner, or `ShardLost` comes next if it cannot be reached. Surfaced
+/// so a consumer can see a rebalance happen.
+#[pyclass(module = "felix", frozen, get_all)]
+pub struct ShardMoved {
+    pub shard: u32,
+    /// Where the old owner says the shard resumes, when it could say.
+    pub resume_from: Option<u64>,
+    /// The broker taking the shard, when known.
+    pub node_id: Option<String>,
+    /// That broker's client address, when the cluster publishes one.
+    pub addr: Option<String>,
+    /// The assignment generation that moved the shard.
+    pub generation: u64,
+}
+
+#[pymethods]
+impl ShardMoved {
+    fn __repr__(&self) -> String {
+        format!(
+            "ShardMoved(shard={}, resume_from={:?}, node_id={:?}, generation={})",
+            self.shard, self.resume_from, self.node_id, self.generation
+        )
+    }
+}
+
 /// Which key or prefix a cache watch follows.
 ///
 /// A function pair rather than an enum class, because `felix.key("a")` reads
@@ -400,13 +428,14 @@ pub(crate) enum OwnedShardEvent {
     Recovered {
         shard: u32,
     },
+    Moved {
+        shard: u32,
+        moved: felix_client::ShardMoved,
+    },
 }
 
-/// The next sharded event this binding has a shape for.
-///
-/// A shard move is skipped: the shard's records follow it when the new owner
-/// takes the subscription, and `ShardLost` follows it when that fails, which
-/// already say what a caller needs.
+/// The next sharded event this binding has a shape for. `ShardEvent` is
+/// non-exhaustive, so a kind added later is skipped until it gets one.
 pub(crate) async fn next_shard_event(
     subscription: &mut felix_client::ShardedSubscription,
 ) -> Option<OwnedShardEvent> {
@@ -430,6 +459,7 @@ impl OwnedShardEvent {
             },
             felix_client::ShardEvent::ShardLost { shard, error } => Self::Lost { shard, error },
             felix_client::ShardEvent::ShardRecovered { shard } => Self::Recovered { shard },
+            felix_client::ShardEvent::ShardMoved { shard, moved } => Self::Moved { shard, moved },
             _ => return None,
         })
     }
@@ -473,6 +503,17 @@ impl<'py> IntoPyObject<'py> for OwnedShardEvent {
                 Ok(Bound::new(py, ShardLost { shard, error })?.into_any())
             }
             Self::Recovered { shard } => Ok(Bound::new(py, ShardRecovered { shard })?.into_any()),
+            Self::Moved { shard, moved } => Ok(Bound::new(
+                py,
+                ShardMoved {
+                    shard,
+                    resume_from: moved.resume_from,
+                    node_id: moved.node_id,
+                    addr: moved.addr,
+                    generation: moved.generation,
+                },
+            )?
+            .into_any()),
         }
     }
 }

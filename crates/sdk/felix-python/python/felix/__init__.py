@@ -62,6 +62,7 @@ from ._felix import (
     OverloadedError,
     ShardedSubscriptionHandle,
     ShardLost,
+    ShardMoved,
     ShardRecord,
     ShardRecovered,
     ShardUnavailableError,
@@ -83,6 +84,7 @@ __all__ = [
     "ShardRecord",
     "ShardLost",
     "ShardRecovered",
+    "ShardMoved",
     # Queues
     "GroupRecord",
     # Cache watches

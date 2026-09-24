@@ -59,14 +59,15 @@ export interface CacheWatchItem {
    */
   laggedResumeFrom: bigint | null;
   /** Set when the watch's shard moved to another broker, which ended it. */
-  shardMoved: CacheWatchShardMoved | null;
+  shardMoved: ShardMoved | null;
 }
 
 /**
- * Where a cache watch's shard went. Re-watch from `resumeFrom` when it is set,
- * and otherwise from the offset after the last change seen.
+ * Where a shard went when it moved to another broker. A cache watch re-watches
+ * from `resumeFrom` when it is set, and otherwise from the offset after the
+ * last change seen; a sharded subscription follows the shard on its own.
  */
-export interface CacheWatchShardMoved {
+export interface ShardMoved {
   resumeFrom: bigint | null;
   nodeId: string | null;
   addr: string | null;
@@ -76,16 +77,18 @@ export interface CacheWatchShardMoved {
 /**
  * An item from a sharded subscription.
  *
- * Exactly one of `event`, `lostError` and `recovered` is set, and `shard` says
- * which shard it concerns. A lost shard does not affect the others: they keep
- * delivering while that one is re-established, and it resumes from its own
- * last offset so nothing is skipped.
+ * Exactly one of `event`, `lostError`, `recovered` and `shardMoved` is set, and
+ * `shard` says which shard it concerns. A lost shard does not affect the
+ * others: they keep delivering while that one is re-established, and it
+ * resumes from its own last offset so nothing is skipped. A moved shard is
+ * followed: its records carry on from the new owner, or a loss comes next.
  */
 export interface ShardEvent {
   shard: number;
   event: Event | null;
   lostError: string | null;
   recovered: boolean | null;
+  shardMoved: ShardMoved | null;
 }
 
 /** How much the broker must have done before a publish resolves. */

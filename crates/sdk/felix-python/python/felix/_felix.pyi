@@ -105,7 +105,16 @@ class ShardLost:
 class ShardRecovered:
     shard: int
 
-ShardEvent = ShardRecord | ShardLost | ShardRecovered
+class ShardMoved:
+    """A shard moved to another broker; the subscription follows it."""
+
+    shard: int
+    resume_from: int | None
+    node_id: str | None
+    addr: str | None
+    generation: int
+
+ShardEvent = ShardRecord | ShardLost | ShardRecovered | ShardMoved
 
 class CacheWatchHandle:
     resume_offset: int

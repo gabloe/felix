@@ -54,6 +54,7 @@ fn _felix(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<types::ShardRecord>()?;
     module.add_class::<types::ShardLost>()?;
     module.add_class::<types::ShardRecovered>()?;
+    module.add_class::<types::ShardMoved>()?;
 
     errors::register(module)?;
     Ok(())
