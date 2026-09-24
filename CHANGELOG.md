@@ -96,6 +96,23 @@ for what the current release actually guarantees.
   metadata export is `store::export`, and `now_millis` is `clock::now_millis`.
   Two integration tests are renamed: `readiness_pg` is `pg_readiness` and
   `meta_raft` is `raft_state_machine`.
+- `felix-broker-service` modules are grouped by job, so their paths changed:
+  - `quic`/`transport::quic`, `auth` (with `auth_demo` as `auth::demo`) and
+    `core_shards` are under `serving::`, as is forwarding to a shard's owner
+    (`serving::forward`, from `peer::forward` and `peer::handler`).
+  - `credential`, `membership`, `lease`, `node_catalog` and `client_endpoints`
+    are under `cluster::`, and `controlplane` is `cluster::catalog_sync`.
+  - `shard_watch`, `shard_lifecycle` and `shard_routing` are `shards::watch`,
+    `shards::lifecycle` and `shards::routing`.
+  - `peer::replica` is `replication::replica`, `peer::dispatch` is
+    `node::peer_dispatch`, `durable_config` is `config::durable`, and `timings`
+    is `observability::timings`. `peer` is now only the broker-to-broker
+    transport.
+  - Startup moved out of the binary into `node::run_with_shutdown`.
+    `cache_routing` and `group_ops` are no longer public.
+  - Log targets follow module paths, so a `RUST_LOG` filter such as
+    `felix_broker_service::quic=debug` becomes
+    `felix_broker_service::serving::quic=debug`.
 - Only `felix-wire`, `felix-transport` and `felix-client` are published to
   crates.io. The server crates were only there because of the `in-process`
   feature below.
