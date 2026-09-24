@@ -29,6 +29,20 @@ for what the current release actually guarantees.
   TypeScript subscriptions follow too, and surface the move as `ShardMoved` /
   `CacheWatchShardMoved` (Python) and `shardMoved` (Node). See "Shard moves" in
   `docs/protocol.md`.
+- **Publishes are not refused while their shard moves.** A publish that
+  reaches a broker between a move's fence and its cut-over is held, before it
+  is accepted, until the broker's routes show the new owner, and is then sent
+  there. It is refused only if the move takes longer than
+  `FELIX_SHARD_MOVE_HOLD_MS` (default 2000) or `FELIX_SHARD_MOVE_HOLD_MAX`
+  (default 1024) publishes are already waiting, with `shard_unavailable` and
+  the new reason `moving` (retry class `retry`, with a `retry_after_ms` hint).
+  New metrics `felix_broker_shard_move_held_total`,
+  `felix_broker_shard_move_hold_seconds` and
+  `felix_broker_shard_move_hold_refused_total{reason}`.
+- **A move's destination does not count toward the quorum while it copies.**
+  A `Quorum` publish waits for a majority of the replicas the stream asked for,
+  not for the copy, and the copy is shipped in slices so it never holds a
+  replication pass for long.
 
 - **Faster shard move switch-over, control-plane side.**
   `GET /v1/shard-assignments/changes` takes an optional `wait_ms`: with
@@ -237,6 +251,10 @@ for what the current release actually guarantees.
   `felix_broker_acked_publishes_dropped_total{reason}` and logged at warn. The
   docs no longer claim a `Leader` ack means the record is durable under the
   default. (#671)
+
+- A `Quorum` stream placed with one replica refused every publish on a
+  cluster with `leadership_lost`: nothing ships for such a shard, so no quorum
+  mark was ever published. The leader alone is its majority now.
 
 - **An acknowledged write could be lost in a planned shard move.** Admission
   checked that the broker served the shard, but an admitted publish could wait

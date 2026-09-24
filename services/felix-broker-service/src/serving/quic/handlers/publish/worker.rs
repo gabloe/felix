@@ -102,6 +102,7 @@ pub(crate) fn build_publish_context(
                     handle,
                     shard,
                     generation,
+                    ..
                 } = &job.target
                 {
                     let lease_ok = match &lease_for_worker {
@@ -184,6 +185,7 @@ pub(crate) fn build_publish_context(
                         handle,
                         shard,
                         generation,
+                        ..
                     } => {
                         // The commit fence, and the authoritative one. Everything
                         // between admission and here can take arbitrarily long --
@@ -234,6 +236,7 @@ pub(crate) fn build_publish_context(
                         generation,
                         producer_id,
                         sequence,
+                        ..
                     } => match &lease_for_worker {
                         // The same commit fence as a plain publish: see above.
                         Some(lease) if !lease.is_valid_now() => {

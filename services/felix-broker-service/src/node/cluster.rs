@@ -40,10 +40,13 @@ pub(super) fn shard_state(config: &BrokerConfig) -> Option<ShardState> {
         let lifecycle = shard_lifecycle::ShardLifecycle::new(membership.node_id.clone());
         // One fence, shared: the lifecycle opens and closes it, every write
         // path enters it through the ingress router.
-        let ingress = Arc::new(shard_routing::IngressRouter::new(
-            Arc::clone(&router),
-            Arc::clone(lifecycle.fence()),
-        ));
+        let ingress = Arc::new(
+            shard_routing::IngressRouter::new(Arc::clone(&router), Arc::clone(lifecycle.fence()))
+                .with_move_hold(shard_routing::hold::MoveHold::new(
+                    Duration::from_millis(config.shard_move_hold_ms),
+                    config.shard_move_hold_max,
+                )),
+        );
         let lifecycle = Arc::new(tokio::sync::Mutex::new(lifecycle));
         let ownership = Arc::new(tokio::sync::RwLock::new(
             shard_watch::ShardOwnership::default(),

@@ -1666,6 +1666,8 @@ absent; they are listed in that script rather than here.
 | `FELIX_PUBLISH_QUORUM_TIMEOUT_MS` | `5000` | Longest a `Quorum` publish waits for a majority before failing. |
 | `FELIX_REPLICATION_REBUILD_MAX_CONCURRENT` | `1` | Halted followers this broker rebuilds at once, across every shard it leads. `0` rebuilds nothing and leaves every halt to an operator. |
 | `FELIX_REPLICATION_REBUILD_BYTES_PER_SEC` | `0` | Bytes per second a rebuilding follower is shipped at. `0` is unlimited. |
+| `FELIX_SHARD_MOVE_HOLD_MS` | `2000` | How long a publish to a shard that is moving waits for the move to cut over before it is refused with `shard_unavailable` / `moving`. The wait happens before the publish is accepted, so nothing held is acknowledged. `0` refuses at once. |
+| `FELIX_SHARD_MOVE_HOLD_MAX` | `1024` | How many publishes may wait on moving shards at once. Each keeps its payload in memory; beyond this, a publish to a moving shard is refused at once. |
 
 ### Consumer groups
 

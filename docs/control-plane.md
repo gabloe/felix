@@ -591,6 +591,9 @@ not the same event as the shard becoming servable.
 | `felix_broker_shard_open_failures_total` | non-zero means a shard the cluster believes is placed here is not being served |
 | `felix_broker_shard_move_seconds` | histogram, on the destination: from first seeing itself named as a shard's `successor` to serving it — the whole move, copy included |
 | `felix_broker_shard_switchover_seconds` | histogram, on the destination: from seeing the old leader fenced to serving the shard — the window in which nobody serves it, as clients see it |
+| `felix_broker_shard_move_held_total` | publishes that reached this broker while their shard was moving and were held for the cut-over instead of refused |
+| `felix_broker_shard_move_hold_seconds` | histogram: how long each held publish waited, however it ended |
+| `felix_broker_shard_move_hold_refused_total{reason}` | publishes to a moving shard refused as `moving`: `timed_out` when the move did not cut over within `FELIX_SHARD_MOVE_HOLD_MS`, `full` when `FELIX_SHARD_MOVE_HOLD_MAX` were already waiting |
 
 #### Resolving a shard to a node
 
@@ -717,6 +720,9 @@ Broker side:
 | `felix_broker_shard_watch_failures_total` | polls that failed outright |
 | `felix_broker_shard_move_seconds` | histogram: a move toward this broker, from being named its destination to serving the shard |
 | `felix_broker_shard_switchover_seconds` | histogram: a move toward this broker, from the fence to serving the shard |
+| `felix_broker_shard_move_held_total` | publishes held for a move's cut-over instead of refused |
+| `felix_broker_shard_move_hold_seconds` | histogram: how long each held publish waited |
+| `felix_broker_shard_move_hold_refused_total{reason}` | publishes to a moving shard refused: `timed_out` or `full` |
 
 Broker:
 

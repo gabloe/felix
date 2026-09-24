@@ -573,3 +573,302 @@ async fn a_move_switches_over_in_well_under_a_second() {
     assert!(lost.is_empty(), "records lost across the move: {lost:?}");
     cluster.shutdown().await;
 }
+
+/// Publish through `via` on one long-lived connection until `stop` is set, and
+/// say what was acknowledged and what was refused.
+///
+/// One connection rather than one per publish: the switch-over lasts tens of
+/// milliseconds, and a publisher that spends most of its time connecting would
+/// rarely have a publish in flight during it.
+async fn publish_until(
+    cluster: &Cluster,
+    via: &str,
+    prefix: &str,
+    stop: &std::sync::atomic::AtomicBool,
+) -> (Vec<Vec<u8>>, Vec<String>) {
+    let node = cluster.node(via).expect("node");
+    let client =
+        felix_cluster::client::connect(node.client_addr, &cluster.tenant_id, &cluster.client_token)
+            .await
+            .expect("connect");
+    let publisher = client.publisher().await.expect("publisher");
+    let mut acknowledged = Vec::new();
+    let mut refused = Vec::new();
+    let mut i = 0usize;
+    while !stop.load(std::sync::atomic::Ordering::Acquire) {
+        let payload = format!("{prefix}-{i}").into_bytes();
+        i += 1;
+        match publisher
+            .publish(
+                &cluster.tenant_id,
+                &cluster.namespace,
+                STREAM,
+                payload.clone(),
+                felix_wire::AckMode::PerMessage,
+            )
+            .await
+        {
+            Ok(()) => acknowledged.push(payload),
+            Err(err) => refused.push(format!("{err:#}")),
+        }
+        // Paced, so eight publishers stay under what a debug broker's publish
+        // queue takes and every refusal left is about the move.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    (acknowledged, refused)
+}
+
+/// Every record `node_id` holds for the stream, read in offset order.
+///
+/// A replay goes through the subscriber queue, which drops rather than blocks
+/// when the reader falls behind, so a long one can come back with holes that
+/// are not in the log, or stall or end early. Offsets make a drop visible: on
+/// a jump, a stall or an end, the read starts again at the first offset it
+/// missed, and the log has ended when a fresh read delivers nothing.
+async fn read_whole_log(cluster: &Cluster, node_id: &str) -> Vec<Vec<u8>> {
+    let node = cluster.node(node_id).expect("node");
+    let client =
+        felix_cluster::client::connect(node.client_addr, &cluster.tenant_id, &cluster.client_token)
+            .await
+            .expect("connect");
+    let mut records = Vec::new();
+    let mut next = 0u64;
+    let deadline = std::time::Instant::now() + felix_cluster::wait::budget(Duration::from_secs(60));
+    'reads: loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "could not read {node_id}'s log"
+        );
+        let mut subscription = client
+            .subscribe_from(
+                &cluster.tenant_id,
+                &cluster.namespace,
+                STREAM,
+                Some(felix_client::StartPosition::Offset(next)),
+            )
+            .await
+            .expect("subscribe");
+        let mut delivered = false;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), subscription.next_event()).await {
+                Ok(Ok(Some(event))) => {
+                    let offset = event.offset.expect("a durable stream delivers offsets");
+                    if offset != next {
+                        continue 'reads;
+                    }
+                    records.push(event.payload.to_vec());
+                    next += 1;
+                    delivered = true;
+                }
+                // Ended, failed or stalled partway: start again where it
+                // stopped. Only a fresh read that delivers nothing is the end.
+                Ok(Ok(None) | Err(_)) => continue 'reads,
+                Err(_) if delivered => continue 'reads,
+                Err(_) => break 'reads,
+            }
+        }
+    }
+    records
+}
+
+/// Four publishers through `via` at once, so some are always in flight.
+async fn publish_through(
+    cluster: &Cluster,
+    via: &str,
+    stop: &std::sync::atomic::AtomicBool,
+) -> (Vec<Vec<u8>>, Vec<String>) {
+    let prefixes: Vec<String> = (0..4).map(|n| format!("via-{via}-{n}")).collect();
+    let (a, b, c, d) = tokio::join!(
+        publish_until(cluster, via, &prefixes[0], stop),
+        publish_until(cluster, via, &prefixes[1], stop),
+        publish_until(cluster, via, &prefixes[2], stop),
+        publish_until(cluster, via, &prefixes[3], stop),
+    );
+    let mut acknowledged = Vec::new();
+    let mut refused = Vec::new();
+    for (sent, failed) in [a, b, c, d] {
+        acknowledged.extend(sent);
+        refused.extend(failed);
+    }
+    (acknowledged, refused)
+}
+
+/// **No publish is refused during a move.** Publishers keep going through a
+/// whole move, through the old owner and through the destination.
+/// Between the fence and the cut-over nobody serves the shard, and a publish
+/// that lands then is held and sent on to the new owner rather than refused.
+/// Every acknowledged record is on the new owner exactly once.
+#[serial]
+#[tokio::test]
+async fn continuous_publishing_through_a_move_is_never_refused() {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        sync_interval_ms: 2_000,
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    let destination = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &owner)
+        .expect("two brokers");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+
+    let mover = async {
+        // Let both publishers get going before the move starts.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        cluster.run_placement(Duration::from_secs(60));
+        cluster.drain_node(&owner).await.expect("drain");
+        cluster.place_shards().await;
+        let deadline =
+            std::time::Instant::now() + felix_cluster::wait::budget(Duration::from_secs(30));
+        while !cluster
+            .owner(STREAM)
+            .await
+            .is_ok_and(|now| now == destination)
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the shard never moved"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Keep publishing past the cut-over, while the old owner's routes
+        // may still be catching up.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        stop.store(true, std::sync::atomic::Ordering::Release);
+    };
+    let (_, (through_owner, refused_owner), (through_destination, refused_destination)) = tokio::join!(
+        mover,
+        publish_through(&cluster, &owner, &stop),
+        publish_through(&cluster, &destination, &stop),
+    );
+    let refused: Vec<String> = refused_owner
+        .into_iter()
+        .chain(refused_destination)
+        .collect();
+
+    let held = cluster
+        .metric(&owner, "felix_broker_shard_move_held_total")
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0.0)
+        + cluster
+            .metric(&destination, "felix_broker_shard_move_held_total")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0.0);
+    println!(
+        "{} acknowledged through {owner}, {} through {destination}; {held} held across the move",
+        through_owner.len(),
+        through_destination.len(),
+    );
+
+    let acknowledged: Vec<Vec<u8>> = through_owner
+        .into_iter()
+        .chain(through_destination)
+        .collect();
+    let got = read_whole_log(&cluster, &destination).await;
+    let lost = missing(&acknowledged, &got);
+    assert!(
+        lost.is_empty(),
+        "{} acknowledged records lost, first {:?}",
+        lost.len(),
+        lost.iter().take(5).collect::<Vec<_>>(),
+    );
+    let mut seen = std::collections::BTreeMap::<&[u8], usize>::new();
+    for payload in &got {
+        *seen.entry(payload.as_slice()).or_default() += 1;
+    }
+    let duplicated: Vec<String> = seen
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(payload, count)| format!("{} x{count}", String::from_utf8_lossy(payload)))
+        .collect();
+    assert!(
+        duplicated.is_empty(),
+        "records stored twice: {duplicated:?}"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} publishes were refused during the move: {:?}",
+        refused.len(),
+        refused.iter().take(5).collect::<Vec<_>>(),
+    );
+    cluster.shutdown().await;
+}
+
+/// **A `Quorum` publish is not held by the destination's copy.** A stream with
+/// one replica asked for is moving, and its destination has stopped answering
+/// mid-copy. The destination is not part of the replica set the stream asked
+/// for, so publishes keep being acknowledged by the leader, which is that
+/// whole set, rather than waiting on a copy that is not moving.
+#[serial]
+#[tokio::test]
+async fn a_quorum_publish_during_a_copy_is_not_held_by_it() {
+    use felix_controlplane_service::store::ControlPlaneStore;
+
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::quorum(STREAM, 1, 1)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    let destination = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &owner)
+        .expect("two brokers");
+    let mut acknowledged = publish_batch(&cluster, &owner, "before", 5).await;
+
+    // The copy stalls: the destination is suspended before it is staged.
+    cluster.pause_node(&destination).expect("pause");
+    cluster.drain_node(&owner).await.expect("drain");
+    cluster.place_shards().await;
+    let store = &cluster.control_plane.as_ref().expect("control plane").store;
+    let staged = store
+        .list_shard_assignments()
+        .await
+        .expect("assignments")
+        .into_iter()
+        .any(|a| a.key.stream == STREAM && a.successor.as_deref() == Some(destination.as_str()));
+    assert!(staged, "the move was not staged toward {destination}");
+
+    let budget = felix_cluster::wait::budget(Duration::from_secs(4));
+    let mut slowest = Duration::ZERO;
+    for i in 0..20 {
+        let payload = format!("during-{i}").into_bytes();
+        let started = std::time::Instant::now();
+        cluster
+            .publish_via(&owner, STREAM, payload.clone())
+            .await
+            .expect("a Quorum publish during the copy");
+        slowest = slowest.max(started.elapsed());
+        acknowledged.push(payload);
+    }
+    println!("slowest Quorum publish during the stalled copy: {slowest:?}");
+    // The quorum timeout is 5 s. A publish that waited for the copy would
+    // have run it out; one that did not waits at most for a replication pass
+    // held by the first dial to the suspended destination.
+    assert!(
+        slowest < budget,
+        "a Quorum publish took {slowest:?} while the destination was copying",
+    );
+
+    // Suspended this long, the destination has dropped out of the control
+    // plane's view and the move is abandoned; finishing moves is what the
+    // tests above cover. What matters here is that every acknowledged record
+    // is on whoever leads the shard.
+    cluster.resume_node(&destination).expect("resume");
+    let got = replay_shard_from(&cluster, 0).await;
+    let lost = missing(&acknowledged, &got);
+    assert!(lost.is_empty(), "acknowledged records lost: {lost:?}");
+    cluster.shutdown().await;
+}

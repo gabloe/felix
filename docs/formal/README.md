@@ -27,8 +27,9 @@ One shard, three brokers, one control plane, discrete time.
 - **Writes.** Admission checks the broker is serving. The write then waits,
   and claims its place in the log; with `FenceAtClaim` the claim checks the
   handoff fence again. `AckOnAdmit` acknowledges a `Leader` write when it is
-  admitted rather than when it commits, and with `FenceFromAdmit` such a write
-  holds the fence from admission. Commit checks the lease again, or not, which is the
+  admitted rather than when it commits, and with `FenceFromAdmit` a write
+  holds the fence from admission, as the broker's routing now has every local
+  write do. Commit checks the lease again, or not, which is the
   `CheckAtCommit` knob. Anything may happen between admission and the claim,
   and between the claim and the commit: those gaps are a queue and a paused
   process.
@@ -84,6 +85,7 @@ bootstrap of a follower below the leader's base.
 | `AckedOnMajority` | Every acknowledged `Quorum` record is on a majority. |
 | `NoTruncationBelowHwm` | A follower never discards a record below its high-water mark. |
 | `NoStaleCommit` | No broker commits at a generation the control plane has superseded. |
+| `StagedCopyNeverDelaysAck` | A `Quorum` write the stream's own replicas would acknowledge is never held back by a destination's copy. A latency property, checked only where a destination is staged. |
 
 ## The configurations, and what each must do
 
@@ -100,7 +102,7 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardNoCommitCheck.cfg` | commit-time lease check removed | violate `NoStaleCommit` |
 | `FelixShardNoReportOrder.cfg` | the design *before* #268: a `Quorum` ack released before the report describing it lands | violate `AckedSurvive` |
 | `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.0M states) |
-| `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over | pass every invariant (2.7M states) |
+| `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over; writes hold the fence from admission | pass every invariant (2.6M states) |
 | `FelixShardHandoffNoWait.cfg` | the same move cutting over without waiting for the drained report | violate `AtMostOneServing` |
 | `FelixShardStalePlannerCas.cfg` | two instances moving the shard, one acting on a held read; writes conditional on the generation read | pass every invariant (2.6M states) |
 | `FelixShardStalePlanner.cfg` | the same, writing unconditionally | violate `AtMostOneServing` |
@@ -110,6 +112,9 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardHandoffNoClaimFence.cfg` | the same move with the fence checked at admission only | violate `AckedSurvive` |
 | `FelixShardHandoffAdmitAck.cfg` | the same move with the write acknowledged on admission and holding the fence from there | pass every invariant (1.2M states) |
 | `FelixShardHandoffAdmitAckClaimFence.cfg` | acknowledged on admission, fenced at the claim | violate `AckedSurvive` |
+| `FelixShardStagedMove.cfg` | two replicas and a staged destination left out of the quorum while it copies, then the move | pass every invariant (2.3M states) |
+| `FelixShardStagedMoveSingle.cfg` | the same with one replica: the leader alone is the quorum | pass every invariant (0.8M states) |
+| `FelixShardStagedMoveVotes.cfg` | one replica, with the destination counted toward the quorum | violate `StagedCopyNeverDelaysAck` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -266,6 +271,32 @@ it. TLC finds `AckedSurvive` violated.
 as `enqueue_publish` does for a publish nobody waits on: the claim is not
 refused, and the drained report waits until the write is claimed and
 committed. It passes.
+
+### The copy that is not counted
+
+`StageMove` starts the run with a move's destination already added to the
+replica set and holding nothing: `staged`. The leader ships to it like any
+follower, but the quorum is a majority of the rest, the replica set the stream
+asked for (`ReplicaSet`); `AckedOnMajority` holds records to that set. Fence
+and cut-over go to the staged node, and a promotion or cut-over that makes it
+leader makes it an ordinary member.
+
+With it left out, every safety invariant holds (`FelixShardStagedMove`,
+`FelixShardStagedMoveSingle`). The reason is promotion: under
+`leader-report` a failover picks only a replica the last report named caught
+up, and a report holds a destination only once its log equals the leader's, so
+a destination behind an acknowledged record cannot be picked. Under
+`log-order` promotion this would not hold with one replica, since the
+destination is then the longest live log; the implementation promotes from the
+report.
+
+Counting it (`LearnerVotes`) is not unsafe, only slow, so the companion
+configuration checks a latency property instead: `StagedCopyNeverDelaysAck`
+says that whenever the replica set would acknowledge a record, the leader can.
+`FelixShardStagedMoveVotes` finds the leader holding a record that it, the
+stream's only replica, has written and reported, and unable to acknowledge it
+until the destination has copied it, which on a real shard is the whole
+copy.
 
 ### The ordering that is load-bearing
 

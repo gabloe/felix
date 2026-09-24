@@ -18,6 +18,7 @@ use crate::serving::quic::handlers::publish::ack::EnqueuePolicy;
 use crate::serving::quic::handlers::publish::admission::AdmissionPermit;
 use crate::serving::quic::handlers::publish::{PublishContext, PublishJob};
 use crate::serving::quic::telemetry::{t_counter, t_gauge};
+use crate::shards::lifecycle::fence::FenceGuard;
 
 pub(crate) enum PublishTarget {
     Resolved {
@@ -29,6 +30,9 @@ pub(crate) enum PublishTarget {
         /// The generation it was admitted at, which the fence checks at the
         /// claim.
         generation: u64,
+        /// Its place in the fence, when routing entered it. Moved to the job
+        /// when it is queued.
+        fenced: Option<FenceGuard>,
     },
     /// This broker leads the shard and the batch names its producer: appended
     /// once however many times it arrives. Never forwarded, because only the
@@ -37,6 +41,7 @@ pub(crate) enum PublishTarget {
         handle: StreamHandle,
         shard: Option<crate::shards::ShardKey>,
         generation: u64,
+        fenced: Option<FenceGuard>,
         producer_id: u64,
         sequence: u64,
     },
@@ -56,6 +61,16 @@ pub(crate) enum PublishTarget {
         namespace: String,
         stream: String,
     },
+}
+
+impl PublishTarget {
+    /// The fence place routing entered for this write, if it did.
+    fn take_fence(&mut self) -> Option<FenceGuard> {
+        match self {
+            Self::Resolved { fenced, .. } | Self::Idempotent { fenced, .. } => fenced.take(),
+            _ => None,
+        }
+    }
 }
 
 /// Deterministically map (tenant, namespace, stream) to a publish worker index.
@@ -211,10 +226,15 @@ pub(crate) async fn enqueue_publish(
         _conn: conn_permit,
         _global: permit,
     });
+    // A write routed on a cluster member entered the fence when it was
+    // routed, and keeps that place until it is written.
+    if job.fenced.is_none() {
+        job.fenced = job.target.take_fence();
+    }
     // Nobody waits on this job, so its ack goes out before the write and a
     // refusal at the claim would reach no one. It enters the fence now and
     // keeps the guard until it is written; a move then waits for it instead.
-    if job.response.is_none() {
+    if job.response.is_none() && job.fenced.is_none() {
         job.fenced = fence_now(publish_ctx, &job.target)?;
     }
 

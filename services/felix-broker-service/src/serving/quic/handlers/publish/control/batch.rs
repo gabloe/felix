@@ -187,10 +187,15 @@ pub(crate) async fn handle_publish_batch_message(
             &credential,
         ),
         Some((producer_id, sequence)) => match route {
-            PublishRoute::Local { handle, generation } => Ok(PublishTarget::Idempotent {
+            PublishRoute::Local {
+                handle,
+                generation,
+                fenced,
+            } => Ok(PublishTarget::Idempotent {
                 handle,
                 shard: local_shard_key(publish_ctx, &tenant_id, &namespace, &stream, shard),
                 generation,
+                fenced,
                 producer_id,
                 sequence,
             }),

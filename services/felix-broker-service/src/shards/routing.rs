@@ -18,6 +18,8 @@
 /// The wire crate is where both sides already meet.
 pub use felix_wire::routing::shard_for;
 
+pub mod hold;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,7 +27,8 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use felix_router::{Resolution, ShardRouter, Unavailable};
 
-use crate::shards::lifecycle::fence::ShardFence;
+use crate::shards::lifecycle::fence::{FenceGuard, ShardFence};
+use crate::shards::routing::hold::MoveHold;
 use crate::shards::{ShardKey, ShardKind};
 
 /// What ingress should do with a request.
@@ -67,6 +70,8 @@ pub enum Reason {
     NotReady,
     /// This node's routing view is behind the caller's.
     Stale { have: u64, wanted: u64 },
+    /// The shard is moving to another broker and has not cut over yet.
+    Moving,
 }
 
 impl Reason {
@@ -78,6 +83,7 @@ impl Reason {
             Self::OwnerUnavailable(_) => wire::OWNER_UNAVAILABLE,
             Self::NotReady => wire::NOT_READY,
             Self::Stale { .. } => wire::STALE,
+            Self::Moving => wire::MOVING,
         }
     }
 }
@@ -94,6 +100,7 @@ impl std::fmt::Display for Reason {
                     "routing view is behind: have generation {have}, caller has {wanted}"
                 )
             }
+            Self::Moving => write!(f, "shard is moving to another broker"),
         }
     }
 }
@@ -118,6 +125,9 @@ pub struct IngressRouter {
     router: Arc<ShardRouter>,
     view: ArcSwap<View>,
     fence: Arc<ShardFence>,
+    /// Woken on every new view, for writes held while their shard moves.
+    changed: tokio::sync::Notify,
+    hold: MoveHold,
 }
 
 /// Routes and the servable set, published as one value.
@@ -142,13 +152,26 @@ impl IngressRouter {
             router,
             view,
             fence,
+            changed: tokio::sync::Notify::new(),
+            hold: MoveHold::disabled(),
         }
+    }
+
+    /// Hold writes to a moving shard under `hold` rather than refusing them.
+    pub fn with_move_hold(mut self, hold: MoveHold) -> Self {
+        self.hold = hold;
+        self
     }
 
     /// The write fence every local write enters when it claims its place in
     /// the log. Here because every write path already holds this router.
     pub fn fence(&self) -> &Arc<ShardFence> {
         &self.fence
+    }
+
+    /// The limits writes to a moving shard are held under.
+    pub fn move_hold(&self) -> &MoveHold {
+        &self.hold
     }
 
     /// Publish new routes and the shards this broker can serve, together.
@@ -162,16 +185,16 @@ impl IngressRouter {
         servable: ServableShards,
     ) {
         let routes = self.router.publish(table, nodes);
-        self.view.store(Arc::new(View { routes, servable }));
+        self.store(View { routes, servable });
     }
 
     /// Replace the servable set, keeping the routes last published to the
     /// router.
     pub fn publish_servable(&self, servable: ServableShards) {
-        self.view.store(Arc::new(View {
+        self.store(View {
             routes: self.router.routes(),
             servable,
-        }));
+        });
     }
 
     /// The generation this broker currently leads `key` at, if it does.
@@ -184,6 +207,17 @@ impl IngressRouter {
             Dispatch::Local { generation } => Some(generation),
             _ => None,
         }
+    }
+
+    /// Whether `key` has a replica besides its leader. A shard with none has
+    /// its majority in the leader alone, and nothing ships for it.
+    pub fn replicated(&self, key: &ShardKey) -> bool {
+        self.view
+            .load()
+            .routes
+            .table()
+            .get(&to_router_key(key))
+            .is_some_and(|route| !route.replicas.is_empty())
     }
 
     /// How many shards this stream or cache was placed with.
@@ -229,7 +263,103 @@ impl IngressRouter {
     /// trusting only local state would keep serving a shard that has been
     /// reassigned.
     pub fn dispatch(&self, key: &ShardKey) -> Dispatch {
-        let view = self.view.load();
+        self.dispatch_in(&self.view.load(), key)
+    }
+
+    /// [`Self::dispatch`] for a write, waiting out a planned move.
+    ///
+    /// A shard between its fence and its cut-over is held until the routes
+    /// show where it went, then dispatched there; see [`hold`]. A local answer
+    /// comes with the write's place in the fence, entered here so a fence that
+    /// closes before the write claims its offsets still counts it and the move
+    /// waits for it.
+    pub(crate) async fn dispatch_write(&self, key: &ShardKey) -> (Dispatch, Option<FenceGuard>) {
+        let mut held = None;
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            // Registered before the view is read, so a view published in
+            // between still wakes this.
+            changed.as_mut().enable();
+            let view = self.view.load();
+            let dispatch = self.dispatch_in(&view, key);
+            let moving = match &dispatch {
+                Dispatch::Local { generation } => match self.fence.enter(key, *generation) {
+                    Some(fenced) => return (settled(held, dispatch), Some(fenced)),
+                    // The lifecycle closed the fence and the view that says
+                    // why is a moment behind it.
+                    None => true,
+                },
+                Dispatch::Unavailable(Reason::Moving) => true,
+                // The leader named here is fenced and will not take it. A
+                // drain also takes that leader out of the live set, so the
+                // route reads as unavailable rather than as a forward.
+                _ => draining(&view, key),
+            };
+            if !moving {
+                return (settled(held, dispatch), None);
+            }
+            if held.is_none() {
+                match self.hold.begin() {
+                    Ok(hold) => held = Some(hold),
+                    Err(_) => return (gave_up(dispatch), None),
+                }
+            }
+            let deadline = held.as_ref().map(hold::Held::deadline).expect("held");
+            if tokio::time::timeout_at(deadline.into(), changed)
+                .await
+                .is_err()
+            {
+                if let Some(hold) = held.take() {
+                    hold.timed_out();
+                }
+                return (gave_up(dispatch), None);
+            }
+        }
+    }
+
+    /// Wait until `key` is not moving and this broker's routes have reached
+    /// `generation`, or the hold gives up.
+    ///
+    /// For a write forwarded here: the requester may have seen a cut-over this
+    /// broker has not, or may have sent it here in the gap before one. Either
+    /// way the answer after waiting is a definite one, and usually a success.
+    pub(crate) async fn settle(&self, key: &ShardKey, generation: u64) {
+        let mut held = None;
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let unsettled = match self.view.load().routes.table().get(&to_router_key(key)) {
+                Some(route) => route.draining || route.generation < generation,
+                None => generation > 0,
+            };
+            if !unsettled {
+                if let Some(hold) = held {
+                    hold::Held::settled(hold);
+                }
+                return;
+            }
+            if held.is_none() {
+                match self.hold.begin() {
+                    Ok(hold) => held = Some(hold),
+                    Err(_) => return,
+                }
+            }
+            let deadline = held.as_ref().map(hold::Held::deadline).expect("held");
+            if tokio::time::timeout_at(deadline.into(), changed)
+                .await
+                .is_err()
+            {
+                if let Some(hold) = held.take() {
+                    hold.timed_out();
+                }
+                return;
+            }
+        }
+    }
+
+    fn dispatch_in(&self, view: &View, key: &ShardKey) -> Dispatch {
         match self.router.resolve_with(&view.routes, &to_router_key(key)) {
             Resolution::Local { generation } => {
                 // The cluster says ours. Local readiness has the deciding vote,
@@ -237,6 +367,8 @@ impl IngressRouter {
                 // not caught up with a reassignment that already happened.
                 if view.servable.get(key) == Some(&generation) {
                     Dispatch::Local { generation }
+                } else if draining(view, key) {
+                    Dispatch::Unavailable(Reason::Moving)
                 } else {
                     Dispatch::Unavailable(Reason::NotReady)
                 }
@@ -260,6 +392,37 @@ impl IngressRouter {
                 Dispatch::Unavailable(Reason::OwnerUnavailable(other.to_string()))
             }
         }
+    }
+
+    fn store(&self, view: View) {
+        self.view.store(Arc::new(view));
+        self.changed.notify_waiters();
+    }
+}
+
+/// Whether `key`'s leader in `view` has been fenced for a move.
+fn draining(view: &View, key: &ShardKey) -> bool {
+    view.routes
+        .table()
+        .get(&to_router_key(key))
+        .is_some_and(|route| route.draining)
+}
+
+fn settled(held: Option<hold::Held<'_>>, dispatch: Dispatch) -> Dispatch {
+    if let Some(hold) = held {
+        hold.settled();
+    }
+    dispatch
+}
+
+/// What a write is told when the hold gives up on a moving shard. Anything
+/// but a local answer is refused as moving: forwarding to a fenced leader
+/// would only be refused there. A local answer whose fence closed is left for
+/// the claim to refuse, as it always did.
+fn gave_up(dispatch: Dispatch) -> Dispatch {
+    match dispatch {
+        Dispatch::Local { .. } => dispatch,
+        _ => Dispatch::Unavailable(Reason::Moving),
     }
 }
 

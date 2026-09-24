@@ -219,6 +219,12 @@ pub async fn await_quorum(
         .into());
     };
 
+    // Placed with no replica, the leader is the majority and already holds
+    // the batch. Nothing ships for such a shard, so no mark will come.
+    if !ingress.replicated(shard) {
+        return Ok(());
+    }
+
     // `last_offset` is inclusive, and the mark is one past what is held.
     match marks
         .wait_for(shard, generation, last_offset + 1, timeout)
@@ -293,6 +299,9 @@ pub async fn await_cache_quorum(
         }
         .into());
     };
+    if !ingress.replicated(shard) {
+        return Ok(());
+    }
     match marks.wait_for(shard, generation, tail, timeout).await {
         QuorumWait::Reached => Ok(()),
         QuorumWait::TimedOut => {
@@ -342,12 +351,32 @@ pub fn majority_of(replicas: usize) -> usize {
 /// generation it is publishing at, which is what stops an older generation's
 /// acknowledgements satisfying a newer generation's quorum.
 pub fn quorum_offset(leader_tail: u64, followers: &[FollowerCursor]) -> u64 {
-    let needed = majority_of(followers.len());
+    quorum_offset_without(leader_tail, followers, None)
+}
+
+/// [`quorum_offset`] over the replica set without `learner`.
+///
+/// The learner is a move's destination that this leader saw added to the
+/// replica set, still copying the log. It is not counted toward the majority
+/// or toward its size: the set the stream asked for is the one without it, so
+/// a majority of that set is the promise, and counting a node that is still
+/// copying would make every `Quorum` publish wait for the copy. Its copy is
+/// complete before it can lead, because the cut-over waits for it to be level.
+pub fn quorum_offset_without(
+    leader_tail: u64,
+    followers: &[FollowerCursor],
+    learner: Option<&str>,
+) -> u64 {
+    let voters = || {
+        followers
+            .iter()
+            .filter(move |follower| Some(follower.node_id.as_str()) != learner)
+    };
+    let needed = majority_of(voters().count());
     // The leader is one of them, and it holds the most.
     let mut held: Vec<u64> = std::iter::once(leader_tail)
         .chain(
-            followers
-                .iter()
+            voters()
                 .filter(|follower| follower.halted.is_none())
                 .map(|follower| follower.next_offset.min(leader_tail)),
         )

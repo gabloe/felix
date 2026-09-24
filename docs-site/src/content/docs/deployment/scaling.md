@@ -142,6 +142,14 @@ Metrics on the destination broker:
 | `felix_broker_shard_move_seconds` | histogram: from the broker first seeing itself named as the destination to serving the shard |
 | `felix_broker_shard_switchover_seconds` | histogram: from the fence to the destination serving the shard — the window clients see |
 
+Metrics on any broker a publish reaches during the switch-over:
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_broker_shard_move_held_total` | publishes held for the cut-over instead of refused |
+| `felix_broker_shard_move_hold_seconds` | histogram: how long each held publish waited |
+| `felix_broker_shard_move_hold_refused_total{reason}` | publishes refused as `moving`: `timed_out` after `FELIX_SHARD_MOVE_HOLD_MS`, or `full` past `FELIX_SHARD_MOVE_HOLD_MAX` |
+
 Every step is written only if the shard is still at the generation the pass
 planned from, so two control-plane instances running placement at once
 cannot undo each other's steps. A conflict is skipped and re-planned on the
@@ -156,16 +164,26 @@ limit.
 
 ## What clients see
 
-Between the fence and the successor opening the shard, publishes to it are
-**refused**, not accepted somewhere the successor cannot see. The window is
-a few control-plane sync intervals — under a second on a local cluster, a
-few seconds with the default 2 s broker sync interval and 5 s reconcile interval.
+Between the fence and the successor taking over, nobody serves the shard. A
+publish that arrives in that window, at the old leader or at any other broker,
+is **held**, before it is accepted, until the broker's routes show the new
+owner, and is then sent there. The client sees a slower acknowledgement rather
+than an error: the switch-over is tens of milliseconds on a local cluster. A
+publish is refused, as `shard_unavailable` with reason `moving`, only if the
+move has not cut over within `FELIX_SHARD_MOVE_HOLD_MS` (2 s) or more than
+`FELIX_SHARD_MOVE_HOLD_MAX` publishes are already waiting; it was not written,
+and the client retries. Cache writes, counter adds and consumer-group writes
+are not held and are refused for the length of the switch-over.
+
+While the destination is still copying the log, it does not count toward the
+shard's quorum, so a `Quorum` publish waits for a majority of the replicas the
+stream asked for and not for the copy.
 
 Subscriptions and cache watches on the old leader are **ended** when it is
-fenced, and each is told where to resume. A write that has not taken its place
-in the old leader's log by the time the fence arrives is refused, not committed
-after it, and the readers are ended only once the writes already under way have
-landed, so each of them first receives every record the old leader committed.
+fenced, and each is told where to resume. A write routed to the old leader before
+the fence lands there and the move waits for it; a publish arriving after the
+fence is held until the cut-over and then sent to the new owner. The readers
+are ended only once the writes already under way have landed, so each of them first receives every record the old leader committed.
 Its last frame, `shard_moved`, names the broker taking the shard and the offset
 to resume from; a client too old to ask for it sees the stream close instead.
 

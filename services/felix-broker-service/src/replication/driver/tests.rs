@@ -7,6 +7,7 @@
 mod cursors;
 mod drain;
 mod halts;
+mod learner;
 mod quorum;
 mod reports;
 mod shipping;

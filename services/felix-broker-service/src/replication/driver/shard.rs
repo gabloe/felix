@@ -2,6 +2,7 @@
 //! build the report.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use felix_broker::Broker;
 use felix_router::{Route, ShardKey};
@@ -14,7 +15,8 @@ use crate::replication::quorum::QuorumMarks;
 use crate::replication::reporter::Reporter;
 use crate::replication::reporter::{ShardReport, shard_report};
 use crate::replication::{
-    FollowerCursor, Progress, Rebuilds, caught_up, lag_records, metrics, quorum_offset, ship_once,
+    FollowerCursor, Progress, Rebuilds, caught_up, lag_records, metrics, quorum_offset_without,
+    ship_once,
 };
 use crate::shards::lifecycle::fence::ShardFence;
 
@@ -24,12 +26,24 @@ use crate::shards::lifecycle::fence::ShardFence;
 /// batch, not the distance it is behind.
 pub(super) const MAX_BATCH_BYTES: usize = 1024 * 1024;
 
+/// How long one pass ships to a destination that is still copying.
+///
+/// A pass ends when its slowest follower does, and the next quorum mark waits
+/// for the next pass. A copy left to run to the tail would hold every `Quorum`
+/// publish on the shard for the length of the copy; cut into slices, it costs
+/// them at most this much. The driver runs the next pass at once while a copy
+/// is unfinished, so the copy itself is not slowed.
+pub(super) const COPY_SLICE: Duration = Duration::from_millis(50);
+
 /// Cursors for one shard, valid only at `generation`.
 pub struct ShardCursors {
     pub(super) generation: u64,
     /// Where a follower with no cursor yet starts. See [`compare_from`].
     pub(super) base: u64,
     pub(super) followers: Vec<FollowerCursor>,
+    /// A move's destination this broker saw added to the replica set, still
+    /// copying: left out of the quorum. See [`staged_learner`].
+    pub(super) learner: Option<String>,
 }
 
 impl ShardCursors {
@@ -41,6 +55,7 @@ impl ShardCursors {
             generation,
             base: 0,
             followers: Vec::new(),
+            learner: None,
         }
     }
 }
@@ -53,6 +68,9 @@ pub(super) struct ShardPass {
     pub(super) report: Option<ShardReport>,
     pub(super) halted: Vec<HaltedReplica>,
     pub(super) lag: Option<u64>,
+    /// A destination still copying was cut off at [`COPY_SLICE`] with more to
+    /// send.
+    pub(super) copying: bool,
 }
 
 impl ShardPass {
@@ -67,6 +85,7 @@ impl ShardPass {
             report: None,
             halted: Vec::new(),
             lag: None,
+            copying: false,
         }
     }
 }
@@ -177,26 +196,40 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     // that has not answered yet keeps the position it came in with, which is
     // behind where it may already be — so the mark it contributes to is a
     // floor, never a claim beyond what has been established.
+    let learner = entry.learner.clone();
     let mut positions: Vec<FollowerCursor> = entry.followers.clone();
+    let (log_ref, shard_ref) = (&log, &shard);
     let mut in_flight: futures::stream::FuturesUnordered<_> = entry
         .followers
         .drain(..)
-        .map(|mut cursor| async {
-            // Keep going while there is more to send, so a follower catching up
-            // is not limited to one batch per tick. It ends on the first answer
-            // that is not progress, which bounds the work per pass.
-            while let Progress::Stored { .. } = ship_once(
-                requester,
-                &log,
-                &shard,
-                log_kind,
-                &mut cursor,
-                MAX_BATCH_BYTES,
-                rebuilds,
-            )
-            .await
-            {}
-            cursor
+        .map(|mut cursor| {
+            let sliced = learner.as_deref() == Some(cursor.node_id.as_str());
+            async move {
+                // Keep going while there is more to send, so a follower
+                // catching up is not limited to one batch per tick. It ends on
+                // the first answer that is not progress, which bounds the work
+                // per pass -- or, for a destination still copying, at the end
+                // of its slice.
+                let started = tokio::time::Instant::now();
+                let mut cut = false;
+                while let Progress::Stored { .. } = ship_once(
+                    requester,
+                    log_ref,
+                    shard_ref,
+                    log_kind,
+                    &mut cursor,
+                    MAX_BATCH_BYTES,
+                    rebuilds,
+                )
+                .await
+                {
+                    if sliced && started.elapsed() >= COPY_SLICE {
+                        cut = true;
+                        break;
+                    }
+                }
+                (cursor, cut)
+            }
         })
         .collect();
 
@@ -217,11 +250,32 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     // leaves it describing a log that is already shorter than the one on disk,
     // and a follower level with the *old* tail would be counted toward the
     // quorum for a record it does not have.
+    //
+    // Only followers that count toward the quorum are waited for here. With
+    // none, the leader's own copy is the majority.
+    let counts = |node: &str| learner.as_deref() != Some(node);
+    let mut waiting = positions.iter().filter(|c| counts(&c.node_id)).count();
+    let mut copying = false;
     let mut majority = None;
-    while let Some(cursor) = in_flight.next().await {
+    if waiting == 0 {
+        let offset = quorum_offset_without(tail, &positions, learner.as_deref());
+        if offset > 0 {
+            majority = Some((
+                shard_report(key, route.generation, tail, &positions, false),
+                offset,
+            ));
+        }
+    }
+    while waiting > 0
+        && let Some((cursor, cut)) = in_flight.next().await
+    {
+        copying |= cut;
+        if counts(&cursor.node_id) {
+            waiting -= 1;
+        }
         settle(&mut positions, cursor);
         let tail = log.tail_offset().await.unwrap_or(tail);
-        let offset = quorum_offset(tail, &positions);
+        let offset = quorum_offset_without(tail, &positions, learner.as_deref());
         if offset > 0 {
             majority = Some((
                 shard_report(key, route.generation, tail, &positions, false),
@@ -239,8 +293,8 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     let (rest, reported) = futures::future::join(
         async {
             let mut rest = Vec::new();
-            while let Some(cursor) = in_flight.next().await {
-                rest.push(cursor);
+            while let Some(finished) = in_flight.next().await {
+                rest.push(finished);
             }
             rest
         },
@@ -269,7 +323,8 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         },
     )
     .await;
-    for cursor in rest {
+    for (cursor, cut) in rest {
+        copying |= cut;
         settle(&mut positions, cursor);
     }
     let mut report_out = reported;
@@ -323,7 +378,7 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
             key,
             route.generation,
             &settled,
-            quorum_offset(tail, &entry.followers),
+            quorum_offset_without(tail, &entry.followers, learner.as_deref()),
         )
         .await;
         report_out = Some(settled);
@@ -369,6 +424,7 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         report: report_out,
         halted,
         lag,
+        copying,
     }
 }
 
@@ -557,6 +613,33 @@ pub(super) async fn ship_aux_log<R: PeerRequester>(
 /// the first batch appends — or conflicts, which is the answer worth having.
 /// A follower further behind still says so with a `LogGap`, and the leader
 /// rewinds to it in that one exchange.
+/// The destination to leave out of the quorum, if the replica set gained it
+/// for a move.
+///
+/// Known from what this broker shipped to before: a successor that was not
+/// among the followers of the previous generation was added for the move and
+/// is copying. One that was already a replica keeps counting, since the
+/// stream's own replica set is what the quorum promises. With no earlier pass
+/// to compare against -- this broker just started leading -- the successor
+/// counts too: a publish may wait for the copy, but never on fewer replicas
+/// than the stream asked for.
+pub(super) fn staged_learner(previous: Option<&ShardCursors>, route: &Route) -> Option<String> {
+    let successor = route.successor.as_ref()?;
+    if !route.replicas.iter().any(|r| &r.node_id == successor) {
+        return None;
+    }
+    let previous = previous?;
+    if previous.learner.as_ref() == Some(successor) {
+        return Some(successor.clone());
+    }
+    let added = previous.generation < route.generation
+        && !previous
+            .followers
+            .iter()
+            .any(|follower| &follower.node_id == successor);
+    added.then(|| successor.clone())
+}
+
 pub(super) fn reconcile_followers(entry: &mut ShardCursors, route: &Route) {
     entry
         .followers

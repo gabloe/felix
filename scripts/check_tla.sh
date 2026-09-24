@@ -76,6 +76,9 @@ expectations=(
   "FelixShardHandoffNoClaimFence violates AckedSurvive"
   "FelixShardHandoffAdmitAck pass"
   "FelixShardHandoffAdmitAckClaimFence violates AckedSurvive"
+  "FelixShardStagedMove pass"
+  "FelixShardStagedMoveSingle pass"
+  "FelixShardStagedMoveVotes violates StagedCopyNeverDelaysAck"
 )
 
 fetch_tools
