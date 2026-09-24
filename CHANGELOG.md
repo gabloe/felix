@@ -125,6 +125,15 @@ for what the current release actually guarantees.
   the client, and so forced them onto crates.io. Test against a broker over
   QUIC instead; `felix-cluster` starts one.
 
+### Fixed
+
+- A broker shutting down in the middle of a credential refresh could exit after
+  the control plane had rotated its refresh token but before writing the
+  replacement, so the next start presented a spent token and the chain was
+  revoked. Shutdown now waits, within the drain deadline, for a refresh in
+  flight to finish.
+
+
 ## [0.6.0-preview] - 2026-09-20
 
 Development towards 0.6.0. Not a release: published from this line only if and
