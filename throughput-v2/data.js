@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790256877687,
+  "lastUpdate": 1790265644786,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14612,6 +14612,58 @@ window.BENCHMARK_DATA = {
             "range": "11472.68",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1039878.39\nmean: 1040791.96\nstdev: 11472.68\ncv: 1.10%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e0da8e67162ba8bcc2a685cbdb47d2b16e2aeff3",
+          "message": "Safe shard handover: write fence, drained gate and moved readers (#664)\n\n* fix(broker): end the feeds of a shard that moves away\n\nA shard moved off a broker that stays up left its subscriptions and cache\nwatches open and silent. Nothing ended them: releasing a shard only flushed its\nlog, and in practice a move never reached the release path anyway. Every\nassignment write bumps the generation, so the fence arrives as a new, draining\ngeneration and the old leader reopens the shard to hand it off instead of\nreleasing it. A client had no signal to look for the new owner.\n\nThe old leader now ends a shard's readers whenever it stops serving it:\nreleased, or reopened only to ship it to its successor. Each reader gets what\nwas already queued for it, then its stream ends, which a sharded ClusterClient\nsubscription turns into ShardLost and a resubscribe after its last offset.\n\nA write accepted just before the fence and committed after it still reaches\nnone of these readers; the fence at claim time closes that. A reader resuming\nby offset finds it on the new owner.\n\nThe new real-process test, routing::moved_readers, keeps the old leader up\nthrough a join and then a drain. It fails without this change (four readers\nstill open 30s after their shards moved) and passes with it.\n\n* fix(broker): refuse a shard write claimed after the shard stopped serving\n\nAdmission checks that this broker serves a shard, but an admitted write can\nwait in the publish queue for as long as the queue is deep, and the worker\nthen claimed it checking only the lease. A publish queued across a planned\nmove was committed and acknowledged on the old leader after it had reported\ndrained, and the new owner never received it. Cache puts and deletes,\ncounter adds, consumer-group writes and forwarded writes had the same gap\nbetween the ownership check and the write.\n\nA per-shard write fence now sits in the shard lifecycle. It is open only\nwhile the shard is Active, at that generation, and closes in the same step\nthat takes the shard out of Active: a release, or a move arriving as a new\ndraining generation, which reopens the shard only to ship it. That is before\nthe driver acts and before the servable set is republished. Every write\nenters it right before it claims its place in the log, carrying the\ngeneration it was admitted at, and holds it until the write is durable and\nfanned out. A write refused there gets the refusal its path already had.\nEnding a moved shard's readers now waits, bounded, for the writes inside the\nfence, so they receive everything the old leader committed.\n\nThe new tests admit a write while the shard is served, close the fence the\nway a move does, and then let the write reach its claim: a durable, an\nephemeral and an idempotent publish on the worker, a forwarded publish, cache\nand counter writes on both the local and forwarded paths, and a group poll,\nack, nack and dead-letter change. With the check at the claim removed, all\nten fail; with it, they pass.\n\n* fix(replication): report a shard drained only once its write fence is quiet\n\nThe drained report went out after the tail held still for two passes with\nno claimed publish in flight. That was a bet on how long a write can sit\nbetween admission and its claim, and a deep enough publish queue loses it;\nfor a cache shard the tail was the only check.\n\nThe report now waits for the shard's write fence to be closed with nothing\ninside it. The fence counts every write from its claim until it is durable,\nfor streams and caches alike, and refuses any write that reaches its claim\nafter the close, so once it is quiet the log cannot grow and the tail read\nafter that check is final. The settle passes are gone, and so is the\nper-stream count of claimed publishes they read.\n\na_draining_shard_reports_drained_once_its_fence_is_quiet holds a write\ninside the fence across three passes over a still tail -- each of which the\nold rule would have been on its way to reporting drained -- and then shows\nthe report that follows includes that write.\n\n* docs(formal): split admission from the claim, and check the fence at the claim\n\nThe model's Admit put a write straight into `pending`, which the drained\nreport read exactly, so it could not express the write that waits between\nadmission and its claim -- the one the broker's old drained rule missed.\n\nA write is now admitted into `queued`, claimed into `pending`, and\ncommitted. With `FenceAtClaim` the claim is refused once the leader has\nseen the fence; the drained report counts claimed writes only, as the\nbroker's write fence does. Every existing configuration sets it TRUE and\nkeeps its expected outcome.\n\nFelixShardHandoffNoClaimFence.cfg turns it off under Leader\nacknowledgement, and TLC finds an acknowledged record the successor does\nnot hold in eleven steps. FelixShardHandoffLeaderAck.cfg is the same\nconfiguration with the check on, and passes (1.3M distinct states).\nThe README's state counts were stale and are refreshed from this run.\n\n* docs: describe the write fence behind a planned move's drained report\n\nThe handoff section argued that the tail holding still covered the gap\nbetween a write's admission and its claim. It did not, and the fence at the\nclaim replaces that argument. The control-plane move steps, the scaling\npage's troubleshooting line, and its account of what a moved shard's readers\nreceive now say what the broker does: a write that has not claimed its place\nin the log when the fence arrives is refused, and the readers are ended after\nthe writes already under way have landed.\n\nThe status table's TLA+ state count was stale and now matches the model.\nCHANGELOG: the lost-write fix, the ended feeds of a moved shard, and the\nremoval of Broker::in_flight_publishes.\n\n* fix(placement): count a moving shard's leadership once\n\nThe leadership tally credits a fenced shard to its live successor before\nany shard is planned. The cut-over step then moved one count from the old\nleader to the target on top of that, so a destination that had just taken\nanother shard looked over its share and the planner staged that shard\nstraight back. A take-back to the old leader was miscounted the other way.\nOnly a cut-over to somewhere other than the node already credited now\nmoves the count.\n\nSpec-Unaffected: the leadership share is a balancing heuristic; the model does not describe it.\n\n* fix(broker): hold the write fence from admission for a publish acknowledged on enqueue\n\nWith ack_on_commit off, the default, a publish is acknowledged when it is\nqueued. The write fence was entered only at the claim, so a move that closed\nthe fence while such a publish sat in the queue had it refused at its claim\nafter the client had been told it was stored; the drained report went out\nwithout it and the successor never received it.\n\nA job nobody waits on now enters the fence in enqueue_publish and carries\nthe guard to the worker, which uses it instead of entering again. The move\nwaits for it, and it is written and shipped before the shard reports\ndrained. Publishes acknowledged after the write keep the check at the claim,\nand a refusal there still reaches the client. The binary and JSON batch\npaths and the uni-stream paths share enqueue_publish; a forwarded publish is\nanswered only after the owner writes it, under the owner's claim check.\n\nThe model gains AckOnAdmit and FenceFromAdmit. FelixShardHandoffAdmitAck.cfg\nacknowledges on admission and holds the fence from there, and passes (1.2M\ndistinct states); FelixShardHandoffAdmitAckClaimFence.cfg takes the fence at\nthe claim, and TLC finds AckedSurvive violated.\n\n* docs: plan the remaining rebalancing work",
+          "timestamp": "2026-09-24T08:56:19-07:00",
+          "tree_id": "d859e176605a3302f99d3377cc1265930e62a503",
+          "url": "https://github.com/gabloe/felix/commit/e0da8e67162ba8bcc2a685cbdb47d2b16e2aeff3"
+        },
+        "date": 1790265643965,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 381958.27,
+            "range": "11914.07",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 381958.27\nmean: 382963.84\nstdev: 11914.07\ncv: 3.11%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 381958.27,
+            "range": "11914.07",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 381958.27\nmean: 382963.84\nstdev: 11914.07\ncv: 3.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 91403.98,
+            "range": "1094.98",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 91403.98\nmean: 91037.78\nstdev: 1094.98\ncv: 1.20%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 914039.84,
+            "range": "10949.80",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 914039.84\nmean: 910377.76\nstdev: 10949.80\ncv: 1.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
