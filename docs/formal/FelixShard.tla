@@ -37,10 +37,20 @@
 (*                                                                         *)
 (* `AckOnAdmit` acknowledges a write when it is admitted, as the broker    *)
 (* does by default, so a claim refused at the fence is an acknowledged     *)
-(* write that never lands. `FenceFromAdmit` has such a write hold the      *)
-(* fence from admission instead: its claim is not refused, and the drained *)
-(* report waits for it. Without that, TLC finds the old leader refusing an *)
-(* acknowledged write and the successor taking over without it.            *)
+(* write that never lands. `FenceFromAdmit` has a write hold the fence     *)
+(* from admission instead, as the broker's routing does for every local    *)
+(* write: its claim is not refused, and the drained report waits for it.   *)
+(* Without that, TLC finds the old leader refusing an acknowledged write   *)
+(* and the successor taking over without it.                               *)
+(*                                                                         *)
+(* `StageMove` starts the run with a move's destination added to the       *)
+(* replica set and still copying: `staged`, which the leader leaves out of *)
+(* the quorum. `LearnerVotes` counts it anyway, as the broker once did,    *)
+(* and TLC finds a `Quorum` write held on a majority of the stream's own   *)
+(* replicas but not acknowledged, waiting for the copy                     *)
+(* (StagedCopyNeverDelaysAck). Leaving it out is safe because a promotion  *)
+(* only picks a replica the last report names caught up, and the cut-over  *)
+(* waits for the destination to be level.                                  *)
 (*                                                                         *)
 (* Time is discrete. `now` is real time; each broker has its own clock,    *)
 (* within `Drift` of real time, which is the drift-rate assumption of the  *)
@@ -86,13 +96,16 @@ CONSTANTS
     FenceFromAdmit, \* whether a write acknowledged on admission holds the fence from there
     MaxMoves,       \* how many planned moves the run starts; bounds the state space
     Planners,       \* control-plane instances deciding placement, each from its own read
-    CasWrites       \* whether an assignment write lands only at the generation it read
+    CasWrites,      \* whether an assignment write lands only at the generation it read
+    StageMove,      \* whether the run starts with a destination staged and copying
+    LearnerVotes    \* whether that destination counts toward the quorum while it copies
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
 ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN /\ FenceAtClaim \in BOOLEAN
 ASSUME AckOnAdmit \in BOOLEAN /\ FenceFromAdmit \in BOOLEAN
 ASSUME CasWrites \in BOOLEAN
+ASSUME StageMove \in BOOLEAN /\ LearnerVotes \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -120,18 +133,25 @@ VARIABLES
     stopped,    \* each broker has seen the fence and stopped serving
     moves,      \* how many planned moves have been started
     ver,        \* the store's generation for the assignment: bumped by every write
-    cpView      \* the read each planner holds: {} or {view}
+    cpView,     \* the read each planner holds: {} or {view}
+    staged      \* a move's destination added to the replica set and still copying: {} or {f}
 
 vars == << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
            hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit,
-           draining, successor, stopped, moves, ver, cpView >>
+           draining, successor, stopped, moves, ver, cpView, staged >>
 
 \* Placement's state, which only the control plane's decisions change.
-handoffVars == << draining, successor, stopped, moves, ver, cpView >>
+handoffVars == << draining, successor, stopped, moves, ver, cpView, staged >>
 
 NoReport == [holders |-> {}, len |-> 0, drained |-> FALSE, gen |-> 0]
 
-Majority(S) == Cardinality(S) * 2 > Cardinality(Brokers)
+\* The replica set the stream asked for: everyone but a destination still
+\* copying. A quorum is a majority of this set, unless `LearnerVotes`.
+ReplicaSet == Brokers \ staged
+QuorumSet == IF LearnerVotes THEN Brokers ELSE ReplicaSet
+
+MajorityOf(S, of) == Cardinality(S \cap of) * 2 > Cardinality(of)
+Majority(S) == MajorityOf(S, QuorumSet)
 
 \* Brokers are interchangeable, and so are planners, which lets TLC fold
 \* their permutations.
@@ -176,6 +196,7 @@ Init ==
     /\ moves = 0
     /\ ver = 0
     /\ cpView = [p \in Planners |-> {}]
+    /\ staged \in IF StageMove THEN {{f} : f \in Brokers \ {leader}} ELSE {{}}
 
 -----------------------------------------------------------------------------
 (* Time. Real time ticks, and with it each broker's clock moves by zero,   *)
@@ -242,7 +263,7 @@ StepDown(b) ==
     /\ stopped' = [stopped EXCEPT ![b] = FALSE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bexpiry,
                     hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit,
-                    draining, successor, moves, ver, cpView >>
+                    draining, successor, moves, ver, cpView, staged >>
 
 -----------------------------------------------------------------------------
 (* Writes. Admission checks the broker is serving; the write then waits,  *)
@@ -251,9 +272,9 @@ StepDown(b) ==
 (* the claim, and between the claim and the commit: those gaps are a       *)
 (* queue and a paused process.                                             *)
 
-\* A write acknowledged here holds the fence from here, with `FenceFromAdmit`:
-\* the broker's `enqueue_publish` enters it for a publish nobody waits on.
-Held == AckOnAdmit /\ FenceFromAdmit
+\* A write holds the fence from admission, with `FenceFromAdmit`: the broker's
+\* routing enters it for every local write (`IngressRouter::dispatch_write`).
+Held == FenceFromAdmit
 
 Admit(b) ==
     /\ Serving(b)
@@ -343,13 +364,19 @@ Ship(b, f) ==
 \* while the control plane knows nothing about which replica holds it, and a
 \* leader dying in that window is replaced from a report that predates the
 \* acknowledgement.
+\*
+\* The majority is over `of`: the quorum set, or for the check below, the
+\* stream's own replica set.
+AckReadyOver(b, i, of) ==
+    /\ MajorityOf({ m \in Brokers : Len(log[m]) >= i /\ log[m][i] = log[b][i] } \cup {b}, of)
+    /\ ReportBeforeAck => /\ i <= report.len
+                          /\ MajorityOf(report.holders \cup {b}, of)
+
 AckQuorum(b) ==
     /\ Quorum
     /\ LeaseValid(b)
     /\ \E i \in (hwm[b] + 1)..Len(log[b]) :
-        /\ Majority({ m \in Brokers : Len(log[m]) >= i /\ log[m][i] = log[b][i] } \cup {b})
-        /\ ReportBeforeAck => /\ i <= report.len
-                              /\ Majority(report.holders \cup {b})
+        /\ AckReadyOver(b, i, QuorumSet)
         /\ acked' = acked \cup { log[b][j].id : j \in 1..i }
         /\ hwm' = [hwm EXCEPT ![b] = i]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
@@ -442,7 +469,7 @@ Snapshot(p) ==
     /\ cpView' = [cpView EXCEPT ![p] = {Now}]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit,
-                    draining, successor, stopped, moves, ver >>
+                    draining, successor, stopped, moves, ver, staged >>
 
 \* A write decided from read `v` lands only if nothing was written since,
 \* when the store compares generations.
@@ -469,6 +496,8 @@ Promote(v, f, views) ==
     /\ report' = NoReport
     /\ draining' = FALSE
     /\ stopped' = [stopped EXCEPT ![f] = FALSE]
+    \* A promoted destination leads, so it is part of the set from here.
+    /\ staged' = staged \ {f}
     /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
                     staleCommit, successor, moves >>
 
@@ -490,6 +519,7 @@ Fence(v, f, views) ==
     /\ ~v.draining
     /\ f /= v.leader
     /\ f \in v.report.holders /\ f \notin halted
+    /\ staged /= {} => f \in staged
     /\ Cas(v)
     /\ ver' = ver + 1
     /\ cpView' = views
@@ -508,7 +538,7 @@ Fence(v, f, views) ==
     /\ successor' = f
     /\ moves' = moves + 1
     /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
-                    staleCommit >>
+                    staleCommit, staged >>
 
 \* The leader sees the fence. Modelled as the broker noticing; the cut-over
 \* below does not rely on it noticing in time.
@@ -518,7 +548,7 @@ ObserveFence(b) ==
     /\ stopped' = [stopped EXCEPT ![b] = TRUE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit,
-                    draining, successor, moves, ver, cpView >>
+                    draining, successor, moves, ver, cpView, staged >>
 
 CutOver(v, f, views) ==
     /\ v.draining /\ v.successor = f
@@ -537,6 +567,7 @@ CutOver(v, f, views) ==
     /\ report' = NoReport
     /\ draining' = FALSE
     /\ stopped' = [stopped EXCEPT ![f] = FALSE]
+    /\ staged' = staged \ {f}
     /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
                     staleCommit, successor, moves >>
 
@@ -601,11 +632,23 @@ NoStaleCommit == ~staleCommit
 NoTruncationBelowHwm ==
     \A b \in Brokers : Len(log[b]) >= hwm[b]
 
-\* Every acknowledged record is on a majority, so it survives any minority loss.
+\* Every acknowledged record is on a majority of the stream's replica set, so
+\* it survives any minority loss.
 AckedOnMajority ==
     Quorum =>
         \A id \in acked :
-            Majority({ b \in Brokers : \E i \in 1..Len(log[b]) : log[b][i].id = id })
+            MajorityOf({ b \in Brokers : \E i \in 1..Len(log[b]) : log[b][i].id = id },
+                       ReplicaSet)
+
+\* A `Quorum` write is never held back by a destination's copy: whenever the
+\* stream's own replica set would acknowledge it, the leader can. A latency
+\* property, stated as the enabling condition of AckQuorum so TLC can check
+\* it as an invariant.
+StagedCopyNeverDelaysAck ==
+    Quorum =>
+        \A b \in Brokers : LeaseValid(b) =>
+            \A i \in (hwm[b] + 1)..Len(log[b]) :
+                AckReadyOver(b, i, ReplicaSet) => AckReadyOver(b, i, QuorumSet)
 
 TypeOK ==
     /\ now \in 0..MaxTime
@@ -618,5 +661,6 @@ TypeOK ==
     /\ moves \in 0..MaxMoves
     /\ ver \in Nat
     /\ \A p \in Planners : Cardinality(cpView[p]) <= 1
+    /\ staged \subseteq Brokers /\ Cardinality(staged) <= 1
 
 =============================================================================

@@ -81,16 +81,24 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
         let mut group_cursors = HashMap::new();
         let mut dead_letter_cursors = HashMap::new();
         let mut counter_cursors = HashMap::new();
+        let mut copying = false;
         loop {
             // An append during the previous pass left a permit, so this
             // returns at once rather than waiting for the tick — see
             // `Broker::appended`.
             let woken = appended.notified();
-            tokio::select! {
-                _ = shutdown.cancelled() => return,
-                _ = ticker.tick() => {}
-                _ = woken => {}
-                _ = routes_changed.notified() => {}
+            if copying {
+                if shutdown.is_cancelled() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            } else {
+                tokio::select! {
+                    _ = shutdown.cancelled() => return,
+                    _ = ticker.tick() => {}
+                    _ = woken => {}
+                    _ = routes_changed.notified() => {}
+                }
             }
             let pass = replicate_once_with(
                 requester.as_ref(),
@@ -110,6 +118,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
             // listed rather than sending an operator after a replica that is
             // already shipping again.
             published.halted.publish(pass.halted);
+            copying = pass.copying;
         }
     })
 }
@@ -183,6 +192,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
 
     let table = router.snapshot();
     let mut worst_lag: Option<u64> = None;
+    let mut copying = false;
     let mut halted: Vec<HaltedReplica> = Vec::new();
     let mut live_shards = Vec::new();
     let mut reports = Vec::new();
@@ -192,16 +202,23 @@ pub async fn replicate_once_with<R: PeerRequester>(
     // what lets the shards run at the same time below.
     let mut work = Vec::new();
     for (key, route) in table.iter() {
-        if route.leader.node_id != router.local_node_id() || route.replicas.is_empty() {
+        if route.leader.node_id != router.local_node_id() {
             continue;
         }
         live_shards.push(key.clone());
 
-        let mut entry = cursors
-            .remove(key)
-            .unwrap_or_else(|| ShardCursors::at(route.generation));
-        if entry.generation != route.generation {
-            entry = ShardCursors::at(route.generation);
+        let previous = cursors.remove(key);
+        let learner = shard::staged_learner(previous.as_ref(), route);
+        let mut entry = match previous {
+            Some(entry) if entry.generation == route.generation => entry,
+            _ => ShardCursors::at(route.generation),
+        };
+        entry.learner = learner;
+        if route.replicas.is_empty() {
+            // Nothing to ship. Kept anyway, so a destination staged later is
+            // known to be one this shard did not have.
+            cursors.insert(key.clone(), entry);
+            continue;
         }
         let aux = AuxCursors {
             group: group_cursors
@@ -242,6 +259,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
         dead_letter_cursors.insert(pass.key.clone(), pass.aux.dead_letters);
         counter_cursors.insert(pass.key, pass.aux.counters);
         halted.extend(pass.halted);
+        copying |= pass.copying;
         if let Some(lag) = pass.lag {
             worst_lag = Some(worst_lag.map_or(lag, |worst: u64| worst.max(lag)));
         }
@@ -269,6 +287,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
         worst_lag,
         reports,
         halted,
+        copying,
     }
 }
 
@@ -283,6 +302,9 @@ pub struct Pass {
     /// The metric cannot carry a shard without a label per tenant; this is what
     /// an operator reads instead.
     pub halted: Vec<HaltedReplica>,
+    /// A move's destination is still copying and was cut off at the end of
+    /// its slice. The next pass runs at once rather than on the next wake.
+    pub copying: bool,
 }
 
 fn rebuilding_count(maps: &[&HashMap<ShardKey, ShardCursors>]) -> usize {
