@@ -29,6 +29,9 @@ impl RaftHandle {
     /// acknowledged it recently. All answered from local metrics — a
     /// readiness probe must never cost a consensus round trip.
     pub fn readiness(&self) -> Result<(), String> {
+        if !self.may_vote.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("started without raft state; catching up before serving".to_string());
+        }
         let metrics = self.raft.metrics().borrow().clone();
         let Some(leader) = metrics.current_leader else {
             return Err("no raft leader is known to this instance".to_string());

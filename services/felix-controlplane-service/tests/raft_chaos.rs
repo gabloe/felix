@@ -201,24 +201,119 @@ fn signal(child: &std::process::Child, signal: &str) {
     assert!(status.success());
 }
 
-/// Which instance the group currently follows, read from the
-/// `felix_meta_raft_is_leader` gauge each instance publishes.
-fn find_leader(instances: &[Instance]) -> usize {
-    let deadline = Instant::now() + Duration::from_secs(15);
+/// Any instance whose readiness probe answers 200.
+fn find_ready(instances: &[Instance]) -> SocketAddr {
+    let deadline = Instant::now() + Duration::from_secs(15).mul_f64(scale());
     loop {
-        for (index, instance) in instances.iter().enumerate() {
-            if let Some((200, body)) = http_with_timeout(
+        if let Some(instance) = instances.iter().find(|instance| {
+            matches!(
+                http_with_timeout(
+                    instance.api,
+                    "GET",
+                    "/v1/system/ready",
+                    None,
+                    None,
+                    Duration::from_secs(1),
+                ),
+                Some((200, _))
+            )
+        }) {
+            return instance.api;
+        }
+        assert!(Instant::now() < deadline, "no instance is ready");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The tenant list `instance` serves, once it includes `tenant_id`.
+fn wait_until_applied(
+    instance: &Instance,
+    bearer: &str,
+    tenant_id: &str,
+    timeout: Duration,
+) -> String {
+    let timeout = timeout.mul_f64(scale());
+    let deadline = Instant::now() + timeout;
+    let needle = format!("\"{tenant_id}\"");
+    loop {
+        if let Some((200, body)) = http(instance.api, "GET", "/v1/tenants", Some(bearer), None)
+            && body.contains(&needle)
+        {
+            return body;
+        }
+        if Instant::now() >= deadline {
+            let applied = http_with_timeout(
                 instance.metrics,
                 "GET",
                 "/metrics",
                 None,
                 None,
                 Duration::from_secs(1),
-            ) && body
-                .lines()
-                .any(|line| line.starts_with("felix_meta_raft_is_leader") && line.ends_with('1'))
-            {
-                return index;
+            )
+            .and_then(|(_, body)| {
+                body.lines()
+                    .find(|line| line.starts_with("felix_meta_raft_last_applied_index"))
+                    .map(str::to_string)
+            });
+            panic!(
+                "instance {} did not apply {tenant_id} within {timeout:?} ({})",
+                instance.id,
+                applied.as_deref().unwrap_or("applied index unknown")
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// This instance's `(is_leader, term)` gauges, if it answers.
+fn leadership_gauges(instance: &Instance) -> Option<(bool, u64)> {
+    let (_, body) = http_with_timeout(
+        instance.metrics,
+        "GET",
+        "/metrics",
+        None,
+        None,
+        Duration::from_secs(1),
+    )?;
+    let gauge = |name: &str| {
+        body.lines()
+            .find(|line| line.starts_with(name))
+            .and_then(|line| line.split_whitespace().last())
+            .and_then(|value| value.parse::<f64>().ok())
+    };
+    Some((
+        gauge("felix_meta_raft_is_leader")? == 1.0,
+        gauge("felix_meta_raft_term")? as u64,
+    ))
+}
+
+/// Which instance the group currently follows, from the gauges each
+/// instance publishes.
+///
+/// One `is_leader` reading is not enough: a member just thawed from a freeze
+/// still reports the leadership it held before, until it hears the newer
+/// term. So the leader must be the only one claiming it at the highest term
+/// any member reports, and still be so on a second reading after the gauges
+/// have refreshed.
+fn find_leader(instances: &[Instance]) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(15).mul_f64(scale());
+    let sample = || -> Option<usize> {
+        let gauges: Vec<Option<(bool, u64)>> = instances.iter().map(leadership_gauges).collect();
+        let top_term = gauges.iter().flatten().map(|(_, term)| *term).max()?;
+        let mut claimants = gauges
+            .iter()
+            .enumerate()
+            .filter(|(_, gauge)| matches!(gauge, Some((true, term)) if *term == top_term))
+            .map(|(index, _)| index);
+        let leader = claimants.next()?;
+        claimants.next().is_none().then_some(leader)
+    };
+    loop {
+        if let Some(first) = sample() {
+            // The gauges publish once a second.
+            std::thread::sleep(Duration::from_millis(1_100));
+            if sample() == Some(first) {
+                return first;
             }
         }
         assert!(Instant::now() < deadline, "no instance reports leadership");
@@ -401,8 +496,17 @@ fn traffic_loop(
     }
 }
 
-#[test]
-fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
+/// Three members on the raft backend, each on its own volume, seeded with
+/// tenant `t1` and its signing keys through the import path.
+struct Group {
+    instances: Vec<Instance>,
+    peers: String,
+    apis: Vec<SocketAddr>,
+    bearer: String,
+    _dirs: Vec<tempfile::TempDir>,
+}
+
+fn start_group() -> Group {
     // --- Three members, fixed addresses, own volumes ------------------------
     let apis: Vec<SocketAddr> = (0..3).map(|_| reserve()).collect();
     let metrics: Vec<SocketAddr> = (0..3).map(|_| reserve()).collect();
@@ -490,6 +594,25 @@ fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
         Duration::from_secs(3_600),
     )
     .expect("token");
+
+    Group {
+        instances,
+        peers,
+        apis,
+        bearer,
+        _dirs: dirs,
+    }
+}
+
+#[test]
+fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
+    let Group {
+        mut instances,
+        peers,
+        apis,
+        bearer,
+        _dirs,
+    } = start_group();
 
     // The import committed on the leader; this member may be a follower
     // that has not applied it yet. A real broker retries registration with
@@ -643,18 +766,36 @@ fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
 
     // No acknowledged write lost: every 201 is present on every member —
     // including the one rebuilt from a wiped volume.
-    for instance in &mut instances {
-        let (status, body) =
-            http(instance.api, "GET", "/v1/tenants", Some(&bearer), None).expect("list tenants");
-        assert_eq!(status, 200);
+    //
+    // Reads are served from each member's applied state, so a member that is
+    // still catching up (the wiped one, or the thawed ex-leader) can simply
+    // not have applied an acked write yet. A marker write committed after
+    // every acked one fixes that: members apply the log in order, so once a
+    // member serves the marker it has applied everything acked before it,
+    // and a missing write from then on is a loss, not lag.
+    let marker = "t-chaos-marker";
+    let (status, body) = http(
+        find_ready(&instances),
+        "POST",
+        "/v1/tenants",
+        Some(&bearer),
+        Some(format!(r#"{{"tenant_id": "{marker}", "display_name": "Chaos"}}"#).as_bytes()),
+    )
+    .expect("marker write");
+    assert_eq!(status, 201, "marker write: {body}");
+    let mut lost = Vec::new();
+    for instance in &instances {
+        let body = wait_until_applied(instance, &bearer, marker, Duration::from_secs(30));
         for tenant_id in &acked {
-            assert!(
-                body.contains(&format!("\"{tenant_id}\"")),
-                "instance {} lost acknowledged write {tenant_id}",
-                instance.id
-            );
+            if !body.contains(&format!("\"{tenant_id}\"")) {
+                lost.push(format!("instance {} lost {tenant_id}", instance.id));
+            }
         }
     }
+    assert!(
+        lost.is_empty(),
+        "acknowledged writes missing from members that applied a later write: {lost:?}"
+    );
 
     for instance in &instances {
         signal(&instance.child, "-TERM");
@@ -662,4 +803,120 @@ fn the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write() {
     for instance in &mut instances {
         wait_exit(&mut instance.child, Duration::from_secs(30));
     }
+}
+
+/// A member that lost its volume must not vote until it holds the log again.
+///
+/// Raft's safety assumes a voter never forgets its vote or its log. Here the
+/// leader L and follower B hold `t-x`; A missed it. With B frozen, L comes
+/// back empty and A comes back behind: if L's empty log lets it vote, A wins
+/// on A+L and truncates `t-x` from B when B returns, though `t-x` was
+/// acknowledged.
+#[test]
+fn a_wiped_member_does_not_vote_a_lagging_member_into_leadership() {
+    let Group {
+        mut instances,
+        peers,
+        bearer,
+        _dirs,
+        ..
+    } = start_group();
+
+    // Let t1 settle everywhere and the leadership gauges refresh.
+    std::thread::sleep(Duration::from_secs(3));
+    let l = find_leader(&instances);
+    let followers: Vec<usize> = (0..3).filter(|i| *i != l).collect();
+    let (a, b) = (followers[0], followers[1]);
+    eprintln!("leader idx {l}, lagging follower idx {a}, up-to-date follower idx {b}");
+
+    // A is down; t-x commits on L and B.
+    instances[a].child.kill().expect("kill a");
+    instances[a].child.wait().expect("reap a");
+    let (status, body) = http(
+        instances[l].api,
+        "POST",
+        "/v1/tenants",
+        Some(&bearer),
+        Some(br#"{"tenant_id": "t-x", "display_name": "X"}"#),
+    )
+    .expect("write t-x");
+    assert_eq!(status, 201, "{body}");
+
+    // B freezes; L loses its volume and restarts empty; A restarts behind.
+    signal(&instances[b].child, "-STOP");
+    instances[l].child.kill().expect("kill l");
+    instances[l].child.wait().expect("reap l");
+    std::fs::remove_dir_all(&instances[l].data_dir).expect("wipe volume");
+    std::fs::create_dir_all(&instances[l].data_dir).expect("recreate dir");
+    for idx in [l, a] {
+        instances[idx].child = spawn_instance(
+            instances[idx].id,
+            instances[idx].api,
+            instances[idx].metrics,
+            &instances[idx].data_dir,
+            &peers,
+        );
+    }
+    // Several election timeouts with only A and the wiped L running.
+    std::thread::sleep(Duration::from_secs(5));
+    signal(&instances[b].child, "-CONT");
+
+    // Every member must end up holding t-x. Once a stale leader has
+    // truncated it, it never comes back, so a bounded wait is a fair test.
+    let deadline = Instant::now() + Duration::from_secs(30).mul_f64(scale());
+    let missing = loop {
+        let missing: Vec<u64> = instances
+            .iter()
+            .filter(|instance| {
+                !matches!(
+                    http(instance.api, "GET", "/v1/tenants", Some(&bearer), None),
+                    Some((200, body)) if body.contains("\"t-x\"")
+                )
+            })
+            .map(|instance| instance.id)
+            .collect();
+        if missing.is_empty() || Instant::now() >= deadline {
+            break missing;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    // Who led whom, for the failure message.
+    let gauges: Vec<String> = instances
+        .iter()
+        .map(|instance| {
+            let lines = http_with_timeout(
+                instance.metrics,
+                "GET",
+                "/metrics",
+                None,
+                None,
+                Duration::from_secs(1),
+            )
+            .map(|(_, body)| {
+                body.lines()
+                    .filter(|line| {
+                        line.starts_with("felix_meta_raft_is_leader")
+                            || line.starts_with("felix_meta_raft_term")
+                            || line.starts_with("felix_meta_raft_last_log_index")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+            format!("instance {}: {}", instance.id, lines.unwrap_or_default())
+        })
+        .collect();
+    for instance in &instances {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(instance.child.id().to_string())
+            .status();
+    }
+    for instance in &mut instances {
+        let _ = instance.child.wait();
+    }
+    assert!(
+        missing.is_empty(),
+        "acknowledged write t-x missing from instances {missing:?}: {gauges:#?}"
+    );
 }

@@ -1,12 +1,16 @@
 //! The server half of the Raft transport: three POST routes handing each
 //! RPC to the local node and shipping its whole `Result` back as JSON —
-//! the shape [`super::network`] expects on the other side.
+//! the shape [`super::network`] expects on the other side — plus the
+//! proposal route and the two a member uses to enter the group
+//! ([`super::join`]).
 //!
 //! Mounted on the internal listener, deliberately not a new port: the group
 //! is small, elections are rare, and one less listener is one less surface
 //! to secure.
 use axum::extract::State;
-use axum::routing::post;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use openraft::error::{InstallSnapshotError, RaftError};
 use openraft::raft::{
@@ -22,6 +26,8 @@ pub(super) fn router(handle: super::RaftHandle) -> Router {
         .route("/internal/raft/vote", post(vote))
         .route("/internal/raft/install-snapshot", post(install_snapshot))
         .route("/internal/raft/propose", post(propose))
+        .route("/internal/raft/standing", get(standing))
+        .route("/internal/raft/catch-up-target", get(catch_up_target))
         // Axum's default body limit (2MB) is below openraft's default
         // snapshot chunk (3MB); a snapshot install crossing that line would
         // be refused with a 413 the sender reads as a network fault. Sized
@@ -35,18 +41,10 @@ pub(super) fn router(handle: super::RaftHandle) -> Router {
 /// landing on a follower forwards to the leader and a caller may point at
 /// **any** member — the promise the migration tool leans on. 503 only when
 /// the bounded write budget runs out: no leader, or no quorum.
-async fn propose(
-    State(handle): State<super::RaftHandle>,
-    body: axum::body::Bytes,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
+async fn propose(State(handle): State<super::RaftHandle>, body: axum::body::Bytes) -> Response {
     match handle.write(body.to_vec()).await {
-        Ok(bytes) => (axum::http::StatusCode::OK, bytes).into_response(),
-        Err(err) => (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            format!("{err:#}"),
-        )
-            .into_response(),
+        Ok(bytes) => (StatusCode::OK, bytes).into_response(),
+        Err(err) => (StatusCode::SERVICE_UNAVAILABLE, format!("{err:#}")).into_response(),
     }
 }
 
@@ -57,11 +55,33 @@ async fn append_entries(
     Json(handle.raft.append_entries(rpc).await)
 }
 
+/// A member withholding its vote answers like an unreachable one. openraft
+/// would grant from an empty log, which is exactly what must not happen.
 async fn vote(
     State(handle): State<super::RaftHandle>,
     Json(rpc): Json<VoteRequest<u64>>,
-) -> Json<Result<VoteResponse<u64>, RaftError<u64>>> {
-    Json(handle.raft.vote(rpc).await)
+) -> Response {
+    if !handle.may_vote.load(std::sync::atomic::Ordering::SeqCst) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "vote withheld until caught up",
+        )
+            .into_response();
+    }
+    let result: Result<VoteResponse<u64>, RaftError<u64>> = handle.raft.vote(rpc).await;
+    Json(result).into_response()
+}
+
+async fn standing(State(handle): State<super::RaftHandle>) -> Json<super::join::Standing> {
+    Json(handle.standing())
+}
+
+/// 503 from anything but a confirmed leader.
+async fn catch_up_target(State(handle): State<super::RaftHandle>) -> Response {
+    match handle.catch_up_target().await {
+        Some(target) => Json(target).into_response(),
+        None => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 async fn install_snapshot(

@@ -11,6 +11,8 @@
 //! - `handle` — starting a member, forming and changing the group, stopping.
 //! - `proposal` — committing a command from any member, forwarding to the
 //!   leader when this one is not it.
+//! - `join` — entering the group at startup: forming it on first boot, or
+//!   catching up without a vote after starting empty.
 //! - `health` — whether this member is fit to serve, and its gauges.
 //! - `store` — the Raft log, vote, and current snapshot, in one crash-safe
 //!   redb file per instance. Consensus state is the one thing here that must
@@ -23,6 +25,7 @@
 mod handle;
 mod health;
 mod http;
+mod join;
 mod network;
 mod proposal;
 mod store;

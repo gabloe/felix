@@ -25,7 +25,7 @@ pub(super) async fn build_state(
     lifecycle_readiness: Readiness,
     api_shutdown: &CancellationToken,
 ) -> anyhow::Result<(AppState, Option<RaftHandle>)> {
-    let (store, raft_handle) = open_store(&config).await?;
+    let (store, raft_handle) = open_store(&config, api_shutdown).await?;
 
     let readiness = Arc::new(crate::api::readiness::Readiness::with_lifecycle(
         // The same flag the metrics endpoint reads, so a drain is visible on
@@ -71,6 +71,7 @@ pub(super) async fn build_state(
 /// member of the group, which is why the handle comes back alongside.
 async fn open_store(
     config: &ControlPlaneConfig,
+    api_shutdown: &CancellationToken,
 ) -> anyhow::Result<(
     Arc<dyn ControlPlaneAuthStore + Send + Sync>,
     Option<RaftHandle>,
@@ -97,13 +98,10 @@ async fn open_store(
             let handle =
                 RaftHandle::start(settings, Arc::clone(&machine) as Arc<dyn AppStateMachine>)
                     .await?;
-            // Every member initializes with the same configured group, which
-            // openraft documents as safe; a member with prior state, or one
-            // beaten to it by a peer, is told so and simply resumes. A real
-            // failure surfaces as no leader, which readiness reports.
-            if let Err(err) = handle.initialize(raft_cfg.peers.clone()).await {
-                tracing::info!(error = %err, "raft group not initialized here (already formed, or resuming)");
-            }
+            // Before the routes serve: an empty member must not answer a
+            // vote until it knows whether it is forming the group or
+            // rejoining one it forgot.
+            handle.enter_group(raft_cfg.peers.clone(), api_shutdown.child_token())?;
             raft_handle = Some(handle.clone());
             Arc::new(RaftStore::new(handle, machine))
         }
