@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790228022832,
+  "lastUpdate": 1790246478083,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18348,6 +18348,72 @@ window.BENCHMARK_DATA = {
             "range": "243.02",
             "unit": "us",
             "extra": "trials: 5\nmedian: 608.00\nmean: 681.60\nstdev: 243.02\ncv: 35.65%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8295ba883f45d3fe7d25a63c97db4c0bf1208ac5",
+          "message": "Fix the two tests that failed Coverage on main (#659)\n\n* test(controlplane): start the binary on port 0 in main_runtime\n\nThe harness chose a free port, released it, and told the child to bind it.\nAnother test's process could take the port in between; the child then failed\nto bind and exited, and the test went on to poll whichever process now held\nthe port. Under coverage that showed up as a control plane that never\nanswered /ready.\n\nThe control plane now logs its listening addresses after binding, with the\nport the socket actually got, and the harness starts it on port 0 and reads\nthe addresses from those lines. A failed bind no longer logs \"listening\".\n\n* test(broker-service): wait for the refresh loop to exit before checking its file\n\nA refresh that has started runs to the end, including writing the rotated\ntoken, even after shutdown is cancelled. The rotation test read the file right\nafter cancelling, so it could see the stub's newest answer without the file\nwrite that follows it.",
+          "timestamp": "2026-09-24T03:36:41-07:00",
+          "tree_id": "ff72697cb570a8196a68ccc40b70ec08c2efaeea",
+          "url": "https://github.com/gabloe/felix/commit/8295ba883f45d3fe7d25a63c97db4c0bf1208ac5"
+        },
+        "date": 1790246475513,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 169,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 169.20\nstdev: 0.45\ncv: 0.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 207.80\nstdev: 1.64\ncv: 0.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 233,
+            "range": "31.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 233.00\nmean: 247.60\nstdev: 31.82\ncv: 12.85%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 205,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 204.20\nstdev: 1.64\ncv: 0.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 409,
+            "range": "67.94",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 409.00\nmean: 438.60\nstdev: 67.94\ncv: 15.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1301,
+            "range": "901.15",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1301.00\nmean: 1565.60\nstdev: 901.15\ncv: 57.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
