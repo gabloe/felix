@@ -1,17 +1,15 @@
-//! Refresh-token behaviour both backends must satisfy.
+//! Refresh-token behaviour every backend must satisfy.
 //!
-//! One body, two callers, for the same reason as `node_contract` and
-//! `shard_contract`: a rule that holds only in memory is a rule the deployed
-//! system does not have. It matters more here than elsewhere, because these
+//! Parity matters more here than in the other suites, because these
 //! rules are the security properties — single use, replay detection,
 //! revocation — and a backend that implements them *almost* right is
 //! indistinguishable from one that implements them until someone steals a
 //! token.
 use std::sync::Arc;
 
-use super::ControlPlaneStore;
 use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake, hash_secret};
 use crate::model::Tenant;
+use crate::store::ControlPlaneStore;
 
 const TENANT: &str = "refresh-t";
 const PRINCIPAL: &str = "oidc:issuer#user-1";

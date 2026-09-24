@@ -11,11 +11,7 @@ pub mod postgres;
 pub mod raft;
 
 #[cfg(test)]
-pub(crate) mod node_contract;
-#[cfg(test)]
-pub(crate) mod refresh_contract;
-#[cfg(test)]
-pub(crate) mod shard_contract;
+pub(crate) mod contract;
 
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;

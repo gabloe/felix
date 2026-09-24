@@ -2,8 +2,8 @@
 use super::*;
 use crate::config::NodeLivenessConfig;
 use crate::model::NodeLifecycle;
+use crate::store::contract::nodes::node;
 use crate::store::memory::InMemoryStore;
-use crate::store::node_contract::node;
 use crate::store::{ControlPlaneStore, StoreConfig};
 
 const INTERVAL_MS: u64 = 1_000;

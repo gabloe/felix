@@ -1,16 +1,16 @@
-//! Shard assignment behaviour both backends must satisfy.
+//! Shard assignment behaviour every backend must satisfy.
 //!
-//! One body, two callers, for the same reason as `node_contract`: a rule that
-//! holds only in memory is a rule the deployed system does not have.
+//! The replica-report cases live in `replica_reports` but run from here,
+//! since they need this suite's catalog.
 use std::sync::Arc;
 
-use super::{ControlPlaneStore, StoreError};
+use super::nodes::node;
+use super::replica_reports;
 use crate::model::{
-    Cache, CacheKey, ConsistencyLevel, DeliveryGuarantee, Namespace, ReplicaReport,
-    RetentionPolicy, ShardAssignment, ShardKey, ShardKind, ShardState, Stream, StreamKey,
-    StreamKind, Tenant,
+    Cache, CacheKey, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy,
+    ShardAssignment, ShardKey, ShardKind, ShardState, Stream, StreamKey, StreamKind, Tenant,
 };
-use crate::store::node_contract::node;
+use crate::store::{ControlPlaneStore, StoreError};
 
 const TENANT: &str = "shard-t";
 const NAMESPACE: &str = "shard-ns";
@@ -127,123 +127,12 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     a_cache_shard_is_bounded_by_the_cache_not_the_stream(store).await;
     an_unknown_cache_is_rejected(store).await;
     deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(store).await;
-    a_replica_report_is_kept_and_read_back(store).await;
-    a_report_from_a_superseded_leader_is_dropped(store).await;
-    a_report_at_the_same_generation_is_an_update(store).await;
-    a_report_needs_an_assignment_and_goes_with_it(store).await;
+    replica_reports::a_replica_report_is_kept_and_read_back(store).await;
+    replica_reports::a_report_from_a_superseded_leader_is_dropped(store).await;
+    replica_reports::a_report_at_the_same_generation_is_an_update(store).await;
+    replica_reports::a_report_needs_an_assignment_and_goes_with_it(store).await;
     a_move_in_progress_is_persisted(store).await;
-    a_drained_report_is_kept(store).await;
-}
-
-fn report(shard: u32, generation: u64, caught_up: &[&str], at: u64) -> ReplicaReport {
-    ReplicaReport {
-        key: key(shard),
-        generation,
-        caught_up: caught_up.iter().map(|n| n.to_string()).collect(),
-        offsets: caught_up.iter().map(|n| (n.to_string(), 10)).collect(),
-        reported_at_millis: at,
-        drained: false,
-    }
-}
-
-/// The report held for `shard`, with its stamp normalised away.
-///
-/// Under Raft the leader replaces `reported_at_millis` with its own clock as
-/// the command enters the log, so the stamp read back is the leader's and not
-/// the caller's; everything else must come back exactly as recorded.
-async fn report_for(store: &dyn ControlPlaneStore, shard: u32) -> Option<ReplicaReport> {
-    store
-        .list_replica_reports()
-        .await
-        .expect("list reports")
-        .into_iter()
-        .find(|report| report.key == key(shard))
-        .map(|report| ReplicaReport {
-            reported_at_millis: 0,
-            ..report
-        })
-}
-
-fn unstamped(report: ReplicaReport) -> ReplicaReport {
-    ReplicaReport {
-        reported_at_millis: 0,
-        ..report
-    }
-}
-
-/// A report is read back exactly as recorded, by whichever instance asks:
-/// that is the property promotion depends on across several control planes.
-async fn a_replica_report_is_kept_and_read_back(store: &dyn ControlPlaneStore) {
-    let shard = 3;
-    store
-        .put_shard_assignment(assignment(shard, "broker-x"))
-        .await
-        .expect("assign");
-    let recorded = report(shard, 1, &["broker-b"], 5_000);
-    store
-        .record_replica_report(recorded.clone())
-        .await
-        .expect("record");
-
-    assert_eq!(report_for(store, shard).await, Some(unstamped(recorded)));
-}
-
-/// **An older generation's report is dropped**, silently: leadership moved on,
-/// and the old leader's view is about a replica set that may no longer exist.
-async fn a_report_from_a_superseded_leader_is_dropped(store: &dyn ControlPlaneStore) {
-    let shard = 3;
-    let current = report(shard, 5, &[], 6_000);
-    store
-        .record_replica_report(current.clone())
-        .await
-        .expect("record");
-    store
-        .record_replica_report(report(shard, 4, &["broker-b"], 6_100))
-        .await
-        .expect("an old report is dropped, not refused");
-
-    assert_eq!(
-        report_for(store, shard).await,
-        Some(unstamped(current)),
-        "a superseded leader's report overwrote the current one",
-    );
-}
-
-/// A report at the same generation is an update, not a stale duplicate: the
-/// same leader reporting again is exactly the normal case.
-async fn a_report_at_the_same_generation_is_an_update(store: &dyn ControlPlaneStore) {
-    let shard = 3;
-    let later = report(shard, 5, &["broker-b"], 6_200);
-    store
-        .record_replica_report(later.clone())
-        .await
-        .expect("record");
-
-    assert_eq!(report_for(store, shard).await, Some(unstamped(later)));
-}
-
-/// Nobody leads an unassigned shard, so nobody can report on it; and a
-/// deleted assignment takes its report with it, so a shard removed and
-/// recreated does not inherit the old one's promotability.
-async fn a_report_needs_an_assignment_and_goes_with_it(store: &dyn ControlPlaneStore) {
-    let unassigned = 2;
-    let err = store
-        .record_replica_report(report(unassigned, 1, &["broker-b"], 7_000))
-        .await
-        .expect_err("a report on an unassigned shard was kept");
-    assert!(matches!(err, StoreError::NotFound(_)), "{err:?}");
-
-    let shard = 3;
-    assert!(report_for(store, shard).await.is_some());
-    store
-        .delete_shard_assignment(&key(shard))
-        .await
-        .expect("delete");
-    assert_eq!(
-        report_for(store, shard).await,
-        None,
-        "a deleted assignment left its report behind",
-    );
+    replica_reports::a_drained_report_is_kept(store).await;
 }
 
 fn cache_key(shard: u32) -> ShardKey {
@@ -541,22 +430,6 @@ async fn a_move_in_progress_is_persisted(store: &dyn ControlPlaneStore) {
     assert_eq!(written.generation, 3);
 }
 
-/// The drained flag rides the report and is read back with it.
-async fn a_drained_report_is_kept(store: &dyn ControlPlaneStore) {
-    let shard = 2;
-    store
-        .put_shard_assignment(assignment(shard, "broker-x"))
-        .await
-        .expect("assign");
-    let mut drained = report(shard, 1, &["broker-y"], 7_000);
-    drained.drained = true;
-    store
-        .record_replica_report(drained.clone())
-        .await
-        .expect("record");
-    assert_eq!(report_for(store, shard).await, Some(unstamped(drained)));
-}
-
 /// The question placement asks when a node fails or is drained.
 async fn assignments_can_be_listed_by_leader(store: &dyn ControlPlaneStore) {
     clear(store).await;
@@ -718,7 +591,7 @@ async fn a_snapshot_and_the_changes_after_it_lose_nothing(store: &dyn ControlPla
 /// Seeding exposed for the restart test, which needs the catalog in place
 /// across two store handles.
 ///
-/// Gated to match its only caller: `postgres_tests` is `pg-tests`-only, so
+/// Gated to match its only caller: `postgres::tests::database` is `pg-tests`-only, so
 /// without that feature this has no users and is dead code.
 #[cfg(feature = "pg-tests")]
 pub(crate) async fn seed_for_restart(store: &dyn ControlPlaneStore) {

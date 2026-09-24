@@ -42,15 +42,15 @@ async fn single_node_store(dir: &std::path::Path) -> Arc<RaftStore> {
 async fn satisfies_the_node_store_contract() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = single_node_store(dir.path()).await;
-    crate::store::node_contract::run_node_contract(store.clone()).await;
-    crate::store::node_contract::run_node_concurrency_contract(store).await;
+    crate::store::contract::nodes::run_node_contract(store.clone()).await;
+    crate::store::contract::nodes::run_node_concurrency_contract(store).await;
 }
 
 #[tokio::test]
 async fn satisfies_the_shard_store_contract() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = single_node_store(dir.path()).await;
-    crate::store::shard_contract::run_shard_contract(store).await;
+    crate::store::contract::shards::run_shard_contract(store).await;
 }
 
 /// Writes travel the log; reads come from applied state — so a write

@@ -2,7 +2,7 @@
 //!
 //! The reading side only. Which report the store keeps when two arrive --
 //! generations, updates, a deleted assignment -- is the store's contract, in
-//! `store::shard_contract`, and holds on every backend.
+//! `store::contract::replica_reports`, and holds on every backend.
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
@@ -195,10 +195,10 @@ async fn load_reads_the_store_on_the_stores_clock() {
         changes_limit: 100,
         change_retention_max_rows: Some(100),
     });
-    crate::store::shard_contract::seed(&store).await;
-    let key = crate::store::shard_contract::key(0);
+    crate::store::contract::shards::seed(&store).await;
+    let key = crate::store::contract::shards::key(0);
     store
-        .put_shard_assignment(crate::store::shard_contract::assignment(0, "broker-x"))
+        .put_shard_assignment(crate::store::contract::shards::assignment(0, "broker-x"))
         .await
         .expect("assign");
     let now = store.now_millis().await.expect("clock");

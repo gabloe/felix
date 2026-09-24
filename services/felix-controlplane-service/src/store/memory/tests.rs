@@ -9,8 +9,8 @@ use crate::store::StoreError;
 #[tokio::test]
 async fn satisfies_the_node_store_contract() {
     let store = std::sync::Arc::new(store_with_limits(100, 1000));
-    crate::store::node_contract::run_node_contract(store.clone()).await;
-    crate::store::node_contract::run_node_concurrency_contract(store).await;
+    crate::store::contract::nodes::run_node_contract(store.clone()).await;
+    crate::store::contract::nodes::run_node_concurrency_contract(store).await;
 }
 
 /// The same suite Postgres runs. These are the security properties —
@@ -18,15 +18,15 @@ async fn satisfies_the_node_store_contract() {
 #[tokio::test]
 async fn satisfies_the_refresh_token_contract() {
     let store = std::sync::Arc::new(store_with_limits(100, 1000));
-    crate::store::refresh_contract::run_refresh_contract(store).await;
+    crate::store::contract::refresh_tokens::run_refresh_contract(store).await;
 }
 
 /// The same suite Postgres runs.
 #[tokio::test]
 async fn satisfies_the_shard_store_contract() {
     let store = std::sync::Arc::new(store_with_limits(100, 1000));
-    crate::store::shard_contract::run_shard_contract(store.clone()).await;
-    crate::store::shard_contract::run_shard_concurrency_contract(store).await;
+    crate::store::contract::shards::run_shard_contract(store.clone()).await;
+    crate::store::contract::shards::run_shard_concurrency_contract(store).await;
 }
 
 fn store_with_limits(changes_limit: u64, retention: i64) -> InMemoryStore {

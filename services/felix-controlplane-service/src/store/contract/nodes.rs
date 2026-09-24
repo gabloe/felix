@@ -1,10 +1,6 @@
-//! Node store behaviour that both backends must satisfy.
-//!
-//! One body, two callers: the memory store runs it in `memory::tests`, Postgres
-//! in `postgres_tests`. Parity is the point -- a rule that holds only in memory
-//! is a rule the deployed system does not have.
-use super::{ControlPlaneStore, StoreError};
+//! Node store behaviour every backend must satisfy.
 use crate::model::{Node, NodeCapacity, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
+use crate::store::{ControlPlaneStore, StoreError};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

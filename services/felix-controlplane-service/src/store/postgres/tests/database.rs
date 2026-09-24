@@ -250,7 +250,7 @@ async fn a_reconnected_store_still_sees_registered_nodes() -> anyhow::Result<()>
         let store =
             PostgresStore::connect_without_migrations(&pg_cfg, store_config.clone()).await?;
         let node = store
-            .register_node(crate::store::node_contract::node("broker-a", 7001))
+            .register_node(crate::store::contract::nodes::node("broker-a", 7001))
             .await?;
         store
             .record_node_heartbeat("broker-a", 0, 1_800_000_000_000)
@@ -312,8 +312,8 @@ async fn a_reconnected_store_still_sees_shard_assignments() -> anyhow::Result<()
         let store =
             PostgresStore::connect_without_migrations(&pg_cfg, store_config.clone()).await?;
         let store = std::sync::Arc::new(store);
-        crate::store::shard_contract::seed_for_restart(store.as_ref()).await;
-        let assigned = crate::store::shard_contract::assign_for_restart(store.as_ref()).await;
+        crate::store::contract::shards::seed_for_restart(store.as_ref()).await;
+        let assigned = crate::store::contract::shards::assign_for_restart(store.as_ref()).await;
         drop(store);
         assigned
     };
@@ -357,9 +357,9 @@ async fn satisfies_the_shard_store_contract() -> anyhow::Result<()> {
     .await?;
 
     let store = std::sync::Arc::new(store);
-    crate::store::shard_contract::run_shard_contract(store.clone()).await;
-    crate::store::shard_contract::run_shard_concurrency_contract(store.clone()).await;
-    crate::store::refresh_contract::run_refresh_contract(store).await;
+    crate::store::contract::shards::run_shard_contract(store.clone()).await;
+    crate::store::contract::shards::run_shard_concurrency_contract(store.clone()).await;
+    crate::store::contract::refresh_tokens::run_refresh_contract(store).await;
     Ok(())
 }
 
@@ -459,8 +459,8 @@ async fn satisfies_the_node_store_contract() -> anyhow::Result<()> {
     .await?;
 
     let store = std::sync::Arc::new(store);
-    crate::store::node_contract::run_node_contract(store.clone()).await;
-    crate::store::node_contract::run_node_concurrency_contract(store).await;
+    crate::store::contract::nodes::run_node_contract(store.clone()).await;
+    crate::store::contract::nodes::run_node_concurrency_contract(store).await;
     Ok(())
 }
 

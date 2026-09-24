@@ -319,7 +319,7 @@ are rare, and one less listener is one less thing to secure in M8.
   the expensive bug (a clock or a HashMap iteration order leaking into
   apply).
 - **The contract suites run against the Raft backend** exactly as they run
-  against memory and Postgres (`node_contract`, `shard_contract`) — that is
+  against memory and Postgres (`contract::nodes`, `contract::shards`) — that is
   what the trait seam is for.
 - **`rolling_restart.rs`, Raft variant**: three instances, no Postgres,
   same zero-failed-calls assertion, plus a hard kill of the leader
