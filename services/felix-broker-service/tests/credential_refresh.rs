@@ -102,6 +102,7 @@ struct Harness {
     state: StubControlPlane,
     token_file: std::path::PathBuf,
     shutdown: CancellationToken,
+    refresh_loop: tokio::task::JoinHandle<()>,
     _dir: tempfile::TempDir,
     _server: tokio::task::JoinHandle<()>,
 }
@@ -123,7 +124,7 @@ async fn start(ttl_secs: i64, refuse_first: u64) -> Harness {
 
     let credential = NodeCredential::new(access_token(ttl_secs));
     let shutdown = CancellationToken::new();
-    tokio::spawn(refresh::run(
+    let refresh_loop = tokio::spawn(refresh::run(
         refresh::RefreshConfig {
             client: reqwest::Client::new(),
             base_url: format!("http://{addr}"),
@@ -138,8 +139,23 @@ async fn start(ttl_secs: i64, refuse_first: u64) -> Harness {
         state,
         token_file,
         shutdown,
+        refresh_loop,
         _dir: dir,
         _server: server,
+    }
+}
+
+impl Harness {
+    /// Stop the loop and wait for it to exit.
+    ///
+    /// A refresh already under way runs to the end, including writing the
+    /// replacement token, so anything read before the loop exits can see the
+    /// stub's answer without the file that goes with it.
+    async fn stop(&mut self) {
+        self.shutdown.cancel();
+        (&mut self.refresh_loop)
+            .await
+            .expect("refresh loop panicked");
     }
 }
 
@@ -162,7 +178,7 @@ async fn wait_for_refreshes(harness: &Harness, want: usize, timeout: Duration) -
 /// would have been answering 401 for a while.
 #[tokio::test]
 async fn a_broker_stays_authenticated_past_one_token_lifetime() {
-    let harness = start(9, 0).await;
+    let mut harness = start(9, 0).await;
     let first = harness.credential.bearer();
 
     assert!(
@@ -178,15 +194,15 @@ async fn a_broker_stays_authenticated_past_one_token_lifetime() {
         *first,
         "the loop ran but the credential every caller reads was never swapped",
     );
-    harness.shutdown.cancel();
+    harness.stop().await;
 }
 
 /// Each refresh presents the token the previous one handed back.
 #[tokio::test]
 async fn the_stored_refresh_token_rotates() {
-    let harness = start(9, 0).await;
+    let mut harness = start(9, 0).await;
     assert!(wait_for_refreshes(&harness, 3, Duration::from_secs(45)).await);
-    harness.shutdown.cancel();
+    harness.stop().await;
 
     let presented = harness.state.presented.lock().expect("lock").clone();
     assert_eq!(
@@ -220,7 +236,7 @@ async fn the_stored_refresh_token_rotates() {
 async fn a_failed_refresh_is_retried_rather_than_fatal() {
     // Three refusals first: enough to exercise backoff without outliving the
     // token, which is the balance the loop has to strike.
-    let harness = start(12, 3).await;
+    let mut harness = start(12, 3).await;
 
     assert!(
         wait_for_refreshes(&harness, 1, Duration::from_secs(60)).await,
@@ -229,7 +245,7 @@ async fn a_failed_refresh_is_retried_rather_than_fatal() {
     // Still holding a usable credential throughout — a broker must not be taken
     // down by a control plane that is briefly unwell.
     assert!(!harness.credential.bearer().is_empty());
-    harness.shutdown.cancel();
+    harness.stop().await;
 }
 
 /// A credential that is not a Felix token ends the loop, rather than looping
@@ -273,11 +289,12 @@ async fn an_unreadable_credential_stops_the_loop_instead_of_spinning() {
 /// Cancelling the shutdown token ends the loop.
 #[tokio::test]
 async fn shutdown_ends_the_loop() {
-    let harness = start(600, 0).await;
-    harness.shutdown.cancel();
-    // Nothing to assert beyond it not hanging: the loop selects on the token
-    // before every sleep, so a cancelled one returns rather than waiting out
-    // the refresh delay, which at a 600s TTL would be minutes.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mut harness = start(600, 0).await;
+    // The loop selects on the token before every sleep, so a cancelled one
+    // returns at once rather than waiting out the refresh delay, which at a
+    // 600s TTL would be minutes.
+    tokio::time::timeout(Duration::from_secs(5), harness.stop())
+        .await
+        .expect("the loop kept waiting after shutdown was cancelled");
     assert_eq!(harness.state.refreshes.load(Ordering::Acquire), 0);
 }
