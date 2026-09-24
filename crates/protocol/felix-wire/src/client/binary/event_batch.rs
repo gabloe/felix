@@ -264,5 +264,26 @@ pub fn decode_shared_event_batch(frame: &Frame) -> Result<SharedEventBatch> {
     })
 }
 
+/// The offset of an event batch's first record, read without decoding its
+/// payloads. `None` for a frame that is not an event batch or carries no
+/// offsets, or one too short to hold the field.
+pub fn peek_event_batch_base_offset(frame: &Frame) -> Option<u64> {
+    let flags = frame.header.flags;
+    if flags & FLAG_EVENT_BATCH_OFFSETS == 0 {
+        return None;
+    }
+    // A per-subscriber batch leads with its subscription id; a shared one
+    // names no subscription.
+    let at = if flags & FLAG_BINARY_EVENT_BATCH_SHARED != 0 {
+        0
+    } else if flags & FLAG_BINARY_EVENT_BATCH != 0 {
+        8
+    } else {
+        return None;
+    };
+    let field = frame.payload.get(at..at + 8)?;
+    Some(u64::from_be_bytes(field.try_into().ok()?))
+}
+
 #[cfg(test)]
 mod tests;

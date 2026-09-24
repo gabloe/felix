@@ -135,3 +135,29 @@ fn binary_encode_event_batch_large() {
     assert_eq!(decoded.subscription_id, 42);
     assert_eq!(decoded.payloads.len(), 100);
 }
+
+#[test]
+fn peek_base_offset_matches_the_decoded_batch() {
+    let payloads = vec![Bytes::from_static(b"one"), Bytes::from_static(b"two")];
+    let own = Frame::decode(
+        binary::encode_event_batch_bytes_with_offset(7, &payloads, 41).expect("encode"),
+    )
+    .expect("frame");
+    assert_eq!(binary::peek_event_batch_base_offset(&own), Some(41));
+    let shared = Frame::decode(
+        binary::encode_shared_event_batch_bytes_with_offset(&payloads, 42).expect("encode"),
+    )
+    .expect("frame");
+    assert_eq!(binary::peek_event_batch_base_offset(&shared), Some(42));
+
+    // No offsets negotiated, or a short frame: nothing to report.
+    let plain = Frame::decode(binary::encode_event_batch_bytes(7, &payloads).expect("encode"))
+        .expect("frame");
+    assert_eq!(binary::peek_event_batch_base_offset(&plain), None);
+    let short = Frame::new(
+        FLAG_BINARY_EVENT_BATCH | crate::FLAG_EVENT_BATCH_OFFSETS,
+        Bytes::from_static(b"short"),
+    )
+    .expect("frame");
+    assert_eq!(binary::peek_event_batch_base_offset(&short), None);
+}
