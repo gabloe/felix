@@ -618,55 +618,23 @@ async fn publish_until(
     (acknowledged, refused)
 }
 
-/// Every record `node_id` holds for the stream, read in offset order.
+/// Every record `node_id` holds for the stream, replayed from the start.
 ///
-/// A replay goes through the subscriber queue, which drops rather than blocks
-/// when the reader falls behind, so a long one can come back with holes that
-/// are not in the log, or stall or end early. Offsets make a drop visible: on
-/// a jump, a stall or an end, the read starts again at the first offset it
-/// missed, and the log has ended when a fresh read delivers nothing.
+/// The client queues history with backpressure, so one replay reads the
+/// whole log; the offsets are checked so that a hole fails here rather than
+/// showing up as a lost record.
 async fn read_whole_log(cluster: &Cluster, node_id: &str) -> Vec<Vec<u8>> {
-    let node = cluster.node(node_id).expect("node");
-    let client =
-        felix_cluster::client::connect(node.client_addr, &cluster.tenant_id, &cluster.client_token)
-            .await
-            .expect("connect");
+    let (_client, mut subscription) = cluster.replay_on(node_id, STREAM).await.expect("replay");
     let mut records = Vec::new();
-    let mut next = 0u64;
-    let deadline = std::time::Instant::now() + felix_cluster::wait::budget(Duration::from_secs(60));
-    'reads: loop {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "could not read {node_id}'s log"
-        );
-        let mut subscription = client
-            .subscribe_from(
-                &cluster.tenant_id,
-                &cluster.namespace,
-                STREAM,
-                Some(felix_client::StartPosition::Offset(next)),
-            )
-            .await
-            .expect("subscribe");
-        let mut delivered = false;
-        loop {
-            match tokio::time::timeout(Duration::from_secs(2), subscription.next_event()).await {
-                Ok(Ok(Some(event))) => {
-                    let offset = event.offset.expect("a durable stream delivers offsets");
-                    if offset != next {
-                        continue 'reads;
-                    }
-                    records.push(event.payload.to_vec());
-                    next += 1;
-                    delivered = true;
-                }
-                // Ended, failed or stalled partway: start again where it
-                // stopped. Only a fresh read that delivers nothing is the end.
-                Ok(Ok(None) | Err(_)) => continue 'reads,
-                Err(_) if delivered => continue 'reads,
-                Err(_) => break 'reads,
-            }
-        }
+    while let Ok(event) =
+        tokio::time::timeout(Duration::from_secs(2), subscription.next_event()).await
+    {
+        let Some(event) = event.expect("replay") else {
+            panic!("{node_id} ended the replay after {} records", records.len());
+        };
+        let offset = event.offset.expect("a durable stream delivers offsets");
+        assert_eq!(offset, records.len() as u64, "{node_id}'s replay skipped");
+        records.push(event.payload.to_vec());
     }
     records
 }
