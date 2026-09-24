@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790285004080,
+  "lastUpdate": 1790290868605,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19206,6 +19206,72 @@ window.BENCHMARK_DATA = {
             "range": "41.69",
             "unit": "us",
             "extra": "trials: 5\nmedian: 536.00\nmean: 540.20\nstdev: 41.69\ncv: 7.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "63c629f4592b627b6318dd0423c6518f82b3b833",
+          "message": "Operator controls for shard moves (#680)\n\n* feat(placement): let an operator start, cancel and pause shard moves\n\nPlacement gains the decisions behind the operator controls, and the store\nthe state they need, on all three backends (migration 0015_operator_moves):\n\n- A move records why it started (drain, balance, operator, replace), cleared\n  by the step that ends it.\n- Moves can be paused. The switch lives in the store so every instance's\n  placement reads it each pass. Paused, placement starts no move or follower\n  replacement of its own; moves in flight finish, since a fenced leader has\n  already stopped serving and holding it there keeps the shard unavailable.\n  New shards are still placed and failed leaders still replaced.\n- An operator's move is held to the move limits but not to a pause, so the\n  way to move shards by hand is to pause and then move them.\n- A cancel before the fence drops the destination as a timeout does. After\n  the fence, the leader that stopped takes the shard back at a new\n  generation: nobody else has led since, so its log holds every accepted\n  write, and writes still inside its fence land in that same log. After the\n  cut-over there is nothing to cancel. Either way the start time stays, so\n  the shard queues behind others for its next move.\n- Every operator step is written only at the generation it was decided from\n  and decided again on a conflict, so a cancel racing a cut-over finds\n  nothing to cancel instead of handing the shard back to a leader missing\n  writes the new one acknowledged.\n\n* feat(api): shard move and placement endpoints for operators\n\n- GET /v1/shard-moves: moves and follower replacements in progress, with\n  their step, reason, start time, lag and whether the leader has drained,\n  and whether placement is paused.\n- POST /v1/shard-moves: start moving a shard's leadership to a node.\n- DELETE /v1/shard-moves/{tenant_id}/{namespace}/{name}/{shard}[?kind=cache]:\n  cancel a shard's move or replacement.\n- GET /v1/placement/plan: what the next pass would do, without doing it.\n- POST /v1/placement/pause and /resume.\n\nReads take node.view:cluster:*, like the assignment listing; changes take\nnode.manage:cluster:*, the permission that drains a node. AppState carries\nthe move policy so an operator's move is held to placement's own limits.\n\n* spec: model cancelling a fenced move, and test the operator controls on a cluster\n\nFelixShard gains `Cancel`: an operator's cancel of a fenced move is one more\nplanner decision, handing the shard back to the fenced leader at a new\ngeneration while it keeps the writes still inside its fence.\nFelixShardCancel.cfg (acknowledge on admission, a second move after the\ncancel) and FelixShardCancelStalePlannerCas.cfg pass;\nFelixShardCancelStalePlanner.cfg writes the cancel unconditionally and\nserves the shard on two brokers. Dropping the queued writes at the retake\nmakes FelixShardCancel.cfg lose an acknowledged write at once.\n\nThe harness gains start_move, cancel_move, shard_moves and\npause_placement/resume_placement over the operator API, and the routing\nsuite four tests against real brokers: an operator's move completes; a\nmove cancelled while staged leaves the shard where it was; a move\ncancelled while fenced, with a publisher and a following subscriber\nrunning, hands the shard back with every acknowledged record delivered\nonce and in order; and a paused placement leaves a draining node's shard\nalone until resumed.\n\n* feat(controlplane): `felix-controlplane admin` for shard moves\n\nA thin client of the operator API, so it works against every backend and\ngoes through the same authorization as any other caller:\n\n  felix-controlplane admin [--url URL] [--token TOKEN] [--json] <command>\n    moves | plan | move <tenant>/<ns>/<name>/<shard> <node> [--cache]\n    | cancel <tenant>/<ns>/<name>/<shard> [--cache] | pause | resume\n\nPlain tables by default, the API's JSON with --json, and a refusal shown as\nthe API's code and message. The URL and token default to\nFELIX_CONTROLPLANE_URL and FELIX_TOKEN.\n\n* docs: operator controls for shard moves\n\nThe control-plane reference gains the move endpoints and what each cancel\ndoes at each step; docs-site gains \"Moving shards by hand\", with the\n`felix-controlplane admin` commands, and the API page's shard section, which\ndescribed a gRPC RebalanceShards/TransferShardLeadership API that does not\nexist, now points at the HTTP endpoints. The rebalancing plan marks phase 5\ndone and lists the shutdown handoff as left out.\n\n* spec: re-send writes across a cancelled move\n\nA retake keeps the leader's log and the producer sequences in it, so a re-send after a cancel is answered from there. FelixShardCancelResend passes NoDuplicate; its Memory companion, with sequences held only by the leader, stores the write twice.\n\n* docs: give the idempotent configurations' distinct state counts",
+          "timestamp": "2026-09-24T15:58:17-07:00",
+          "tree_id": "0ffcd43349870d712c095be6aac31bda8621abe2",
+          "url": "https://github.com/gabloe/felix/commit/63c629f4592b627b6318dd0423c6518f82b3b833"
+        },
+        "date": 1790290865815,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 168,
+            "range": "1.22",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 168.00\nmean: 168.00\nstdev: 1.22\ncv: 0.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 213,
+            "range": "2.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 213.00\nmean: 212.60\nstdev: 2.61\ncv: 1.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 274,
+            "range": "13.40",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 274.00\nmean: 266.00\nstdev: 13.40\ncv: 5.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 204,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 204.40\nstdev: 0.89\ncv: 0.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 410,
+            "range": "15.80",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 410.00\nmean: 415.00\nstdev: 15.80\ncv: 3.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 585,
+            "range": "256.58",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 585.00\nmean: 710.40\nstdev: 256.58\ncv: 36.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
