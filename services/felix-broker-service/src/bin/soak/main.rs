@@ -1,10 +1,10 @@
 //! Soak and resource-leak harness for the broker.
 //!
-//! Produces the empirical evidence for M0's concurrency and resource-leak exit
-//! criterion (#154). It drives the broker through sustained load, connection
-//! churn, slow-subscriber saturation, and repeated process restarts, sampling
-//! resource counters throughout, then checks that everything returns to a
-//! steady-state envelope once load stops.
+//! Produces the empirical evidence for the broker's concurrency and
+//! resource-leak criterion (#154). It drives the broker through sustained
+//! load, connection churn, slow-subscriber saturation, and repeated process
+//! restarts, sampling resource counters throughout, then checks that
+//! everything returns to a steady-state envelope once load stops.
 //!
 //! # Why a binary rather than a test
 //! A soak is a measurement, not an assertion about a single code path. It needs

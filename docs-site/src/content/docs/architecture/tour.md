@@ -74,7 +74,7 @@ the connection rather than returning an error.
 
 ### 2. The broker decodes and routes it to a handler
 
-`services/felix-broker-service/src/transport/quic/` accepts the connection.
+`services/felix-broker-service/src/serving/quic/` accepts the connection.
 `streams/control.rs` is the control-stream loop: it owns auth state and
 dispatches every `Message` variant. `handlers/publish.rs` and
 `handlers/subscribe.rs` do the per-message work.
@@ -103,7 +103,7 @@ Three outcomes, and no fourth:
   nobody. There is deliberately no "not sure, handle it locally": a broker that
   treats an unknown route as its own is a broker writing a shard it does not own.
 
-> `crates/server/felix-router/src/shard/router.rs`, `services/felix-broker-service/src/shard_routing.rs`.
+> `crates/server/felix-router/src/shard/router.rs`, `services/felix-broker-service/src/shards/routing.rs`.
 
 ### 4. Offsets are taken before durability is waited on
 

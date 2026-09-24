@@ -256,13 +256,21 @@ The `services/` directory contains runnable binaries:
 
 ```
 services/
-├── broker/              # Broker service
+├── felix-broker-service/        # Broker service
 │   ├── src/
-│   │   ├── main.rs      # Broker entrypoint
-│   │   ├── config.rs    # Configuration loading
+│   │   ├── main.rs              # Thin entrypoint: --print-config, then node::run_with_shutdown
+│   │   ├── node.rs, node/       # Startup order, readiness gating, the shutdown drain
+│   │   ├── serving/             # Client-facing QUIC, auth, forwarding to shard owners
+│   │   ├── cluster/             # Membership, lease, credential, catalog sync
+│   │   ├── shards/              # Shard ownership: watch, lifecycle, ingress routing
+│   │   ├── replication.rs, replication/  # Leader-side shipping and follower-side apply
+│   │   ├── peer.rs, peer/       # Broker-to-broker transport
+│   │   ├── config.rs, config/   # Configuration loading and validation
+│   │   ├── observability.rs, observability/  # Tracing, metrics, sampled timings
+│   │   └── bin/soak/            # Resource-leak and lifecycle soak harness
 │   ├── Cargo.toml
-│   └── README.md        # Performance profiles
-└── controlplane/        # Control plane service
+│   └── README.md                # Performance profiles
+└── felix-controlplane-service/  # Control plane service
 
 demos/
 ├── broker/              # Demo binaries for the broker crate
@@ -281,14 +289,17 @@ demos/
 
 **Location**: `services/felix-broker-service/`
 
-**Entrypoint**: `src/main.rs`
+**Entrypoint**: `src/main.rs`, which hands off to `node::run_with_shutdown`
 
-**Responsibilities**:
-- Load configuration from env/YAML
-- Initialize broker runtime
-- Start QUIC listener
-- Expose metrics endpoint
-- Handle graceful shutdown
+**Modules**:
+- `node/`: Runs the process as a broker node. `run_with_shutdown` calls the startup steps in order — `storage.rs` (durable storage, cache, consumer groups, counters), `listeners.rs` (QUIC listeners and accept loops), `sync.rs` (catalog sync and the readiness flip), `membership.rs`, `cluster.rs` (shard state, peer transport, shard and replication tasks) — then `shutdown.rs` waits for the signal and drains
+- `serving/`: Serving clients — `quic/` (connections, streams, publish and subscribe handlers), `auth.rs`, `forward.rs` (forwarding to a shard's owner), `core_shards.rs`, `group_ops.rs`, `cache_routing.rs`
+- `cluster/`: Belonging to a cluster — `membership.rs`, `lease.rs`, `credential.rs`, `catalog_sync.rs`, `node_catalog.rs`, `client_endpoints.rs`
+- `shards/`: Owning shards — `watch.rs` (assignments from the control plane), `lifecycle.rs`, `routing.rs` (ingress dispatch)
+- `replication.rs` / `replication/`: Shipping to followers (`driver.rs`, `ship.rs`, `quorum.rs`, `rebuild.rs`, `reporter.rs`) and applying as one (`replica.rs`)
+- `peer.rs` / `peer/`: The broker-internal transport — connection pool, listener, mTLS
+- `config.rs` / `config/`: `BrokerConfig` from env and YAML, durable storage config, validation
+- `observability.rs` / `observability/`: Tracing, the metrics server, sampled timings
 
 **Demo binaries** (see `demos/broker/`):
 

@@ -20,7 +20,7 @@ Keep these in your head; everything below is these types moving data around.
 |---|---|---|
 | `Publisher` / `PublisherInner` | `crates/sdk/felix-client/src/publish.rs` | Client-side handle; owns a pool of `PublishWorker`s and a byte-budget `PublishAdmission` |
 | `PublishRequest` | `crates/sdk/felix-client/src/publish/writer.rs` | Enum sent over an mpsc channel to a `PublishWorker`'s writer task — carries the encoded message *and* an admission permit |
-| `PublishJob` | `services/felix-broker-service/src/transport/quic/handlers/publish.rs` | Broker-side unit of work — a resolved `PublishTarget`, payloads, optional ack channel, optional admission permit |
+| `PublishJob` | `services/felix-broker-service/src/serving/quic/handlers/publish.rs` | Broker-side unit of work — a resolved `PublishTarget`, payloads, optional ack channel, optional admission permit |
 | `StreamHandle` | `crates/server/felix-broker/src/broker/shards.rs` | A cheap `Arc<StreamState>` clone — the dense, pre-resolved identity of a stream. Resolving this once and reusing it is what removed string hashing from the hot path (see [below](#stream-resolution-why-a-handle-not-a-string)) |
 | `StreamState` | same | The actual per-stream state: subscriber registry, in-memory replay log, queue policy |
 | `DeliveryEnvelope` | same | An `Arc`-wrapped batch of payloads handed to every subscriber of a stream — the same `Arc`, not a copy per subscriber |
@@ -108,10 +108,10 @@ sequenceDiagram
 
 ## Broker side: from QUIC frame to `PublishJob`
 
-**File**: `services/felix-broker-service/src/transport/quic/handlers/publish/` (`control.rs`, `uni.rs`, `ingress.rs`, `admission.rs`, `ack.rs`)
+**File**: `services/felix-broker-service/src/serving/quic/handlers/publish/` (`control.rs`, `uni.rs`, `ingress.rs`, `admission.rs`, `ack.rs`)
 
 The broker's publish workers are a **global, process-wide pool** — not
-per-connection. The comment at `conn.rs:build_publish_context` explains why:
+per-connection. The comment at `handlers/publish/worker.rs:build_publish_context` explains why:
 per-connection pools meant more publisher connections multiplied concurrent
 `Broker::publish_batch` callers and caused lock contention on shared broker
 state. One fixed pool, sharded by stream, avoids that.
@@ -156,7 +156,7 @@ state. One fixed pool, sharded by stream, avoids that.
    the same OS thread, pinned to the same core. See
    [Internals: Backpressure & Core Sharding](/felix/development/internals-concurrency/#core-sharding).
 
-4. **The worker loop** (`conn.rs:build_publish_context`, spawned once per
+4. **The worker loop** (`handlers/publish/worker.rs:build_publish_context`, spawned once per
    worker) does the actual work:
 
    ```rust

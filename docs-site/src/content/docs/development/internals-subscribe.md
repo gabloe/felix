@@ -13,7 +13,7 @@ place.
 | Type | Where | What it is |
 |---|---|---|
 | `SubscriptionReceiver` | `crates/server/felix-broker/src/stream/subscription.rs` | The broker-core side of a subscriber's channel; yields `DeliveryEnvelope`s |
-| `WriterLaneManager` | `services/felix-broker-service/src/transport/quic/handlers/subscribe/lane.rs` | Owns a fixed set of writer lanes and the per-connection writer tasks they feed |
+| `WriterLaneManager` | `services/felix-broker-service/src/serving/quic/handlers/subscribe/lane.rs` | Owns a fixed set of writer lanes and the per-connection writer tasks they feed |
 | `LaneCommand` | same | `Register` / `Delivery` / `Unregister`, sent from a subscription's feeder to its assigned lane |
 | `ConnectionCommand` | same | Same three variants, one hop further — sent from a lane to the connection that owns the subscriber's QUIC stream |
 | `run_lane_feeder` | same | One task per subscription; reads `DeliveryEnvelope`s, encodes (once), dispatches `LaneCommand`s |
@@ -28,7 +28,7 @@ coordination).
 
 ## Subscribe handshake
 
-**File**: `services/felix-broker-service/src/transport/quic/handlers/subscribe.rs`,
+**File**: `services/felix-broker-service/src/serving/quic/handlers/subscribe.rs`,
 `handle_subscribe_message`
 
 1. Client sends `Message::Subscribe` on the control (bi) stream.

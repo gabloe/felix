@@ -97,7 +97,7 @@ client's authority, correctly applied; the token's lifetime and scope bound it.
 The replication path checks more than the forwarding path does:
 
 - **Role.** A broker that is not a replica of the named shard answers
-  `Unauthorized` (`peer/replica.rs`).
+  `Unauthorized` (`replication/replica.rs`).
 - **Generation.** A sender at an older epoch is fenced; one naming a newer
   generation than this broker knows is refused rather than believed.
 - **Content.** A batch is compared byte-for-byte against what the follower

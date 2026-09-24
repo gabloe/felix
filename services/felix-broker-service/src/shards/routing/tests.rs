@@ -96,7 +96,8 @@ async fn an_owned_shard_still_opening_is_not_served() {
     );
 }
 
-/// Remote must be its own outcome, not an error, or M4 has nothing to act on.
+/// Remote must be its own outcome, not an error, or forwarding has nothing to
+/// act on.
 #[tokio::test]
 async fn a_shard_owned_elsewhere_is_forwardable() {
     let ingress = ingress(&[assignment(0, "broker-b", 2)], &[]);

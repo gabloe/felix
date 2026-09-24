@@ -90,13 +90,13 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
-# `TaskTracker` and `CancellationToken` back the graceful drain in `shutdown.rs`.
+# `TaskTracker` and `CancellationToken` back the graceful drain in `node/shutdown.rs`.
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 
-# Linux-only core pinning (`core_shards`) and Unix-wide SIGTERM delivery in the
+# Linux-only core pinning (`serving::core_shards`) and Unix-wide SIGTERM delivery in the
 # soak harness both need libc; the pinning call site stays `target_os = "linux"`
 # gated in code.
 [target.'cfg(unix)'.dependencies]

@@ -111,7 +111,7 @@ test proving the check they remove is really there.
 
 Citations do not catch the change that actually drifted: #268 changed the
 protocol without renaming a cited test. So a pull request that touches the
-code this model describes — `services/felix-broker-service/src/{lease,replication,shard_lifecycle}`
+code this model describes — `services/felix-broker-service/src/{cluster/lease,replication,shards/lifecycle}`
 and `services/felix-controlplane-service/src/cluster/placement`, tests and
 metrics aside — must also touch `docs/formal/`, or carry a line
 
@@ -197,7 +197,7 @@ just older than the last acknowledgement.
 **What closes it is ordering, not freshness**, and the broker does it: the
 leader reports who holds the record, waits for that report to land, and only
 then moves the quorum mark that releases the acknowledgement. That is
-`publish_mark` in `services/felix-broker-service/src/replication/driver.rs`, which moves the
+`publish_mark` in `services/felix-broker-service/src/replication/driver/shard.rs`, which moves the
 mark only `if reported`, and `await_quorum`, which blocks the publish on the
 mark. With `ReportBeforeAck = TRUE` — `FelixShard.cfg`, the implemented design
 — TLC explores 2.4M distinct states and finds no violation.

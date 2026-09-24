@@ -100,7 +100,7 @@ async fn a_seed_list_survives_losing_the_leader() {
     // not retry the publish itself, and that is deliberate rather than missing:
     // a publish whose answer was lost may already be on the owner's disk, so
     // retrying it inside the client would manufacture a duplicate the client is
-    // the only layer able to detect. `services/felix-broker-service/src/peer/forward.rs`
+    // the only layer able to detect. `services/felix-broker-service/src/serving/forward.rs`
     // argues the same rule for the broker's own forwarding. Idempotent
     // producers (#422) are what would make an absorbing retry safe.
     //

@@ -27,9 +27,9 @@ use super::tls;
 
 /// What answers a peer's request.
 ///
-/// Implemented by the broker in M4.3 (#106). Until then the listener answers
-/// every forward with `Unavailable`, which is the honest answer: this broker
-/// can be reached, and cannot yet apply a forwarded write.
+/// The broker implements it with `BrokerPeerHandler` (#106). A listener built
+/// without one answers every forward with `Unavailable`, which is the honest
+/// answer: this broker can be reached, and cannot apply a forwarded write.
 #[async_trait::async_trait]
 pub trait PeerRequestHandler: Send + Sync + 'static {
     /// Answer one request. Must always produce a terminal response — the

@@ -229,7 +229,7 @@ Recorded deliberately, because several are plausible enough to be re-proposed.
    fixing for cleanliness; irrelevant to throughput.
 2. **The read scratch buffer does not realloc per frame.** The
    `clear()`/`resize()`/`split().freeze()` pattern in
-   `transport/quic/codec.rs` looked like it would allocate every frame.
+   `serving/quic/codec.rs` looked like it would allocate every frame.
    Measured: **1 allocation across 10,000 frames** at 4 KiB, 64 KiB and 256 KiB.
    It reuses correctly.
 3. **Replay-ring retention is not the cause.** `latency_demo.rs:679` sizes the
@@ -270,13 +270,13 @@ bytes per packet (2,096 packets for 32 MB at upper 16384); Felix's netstat-deriv
 average is ~1,835 bytes. If real, that is ~8× more syscalls per byte and would
 directly explain a 90%-sys workload running 3.5× slow. Possible reasons, all
 unexamined: small writes reaching the socket before coalescing, per-frame
-`write_all` splitting header from payload (`transport/quic/codec.rs` issues two
+`write_all` splitting header from payload (`serving/quic/codec.rs` issues two
 `write_all` calls), ACK-heavy traffic from many concurrent streams, or MTU
 discovery not completing within a short run.
 
 ## Round 2: the transport is healthy, and the cost is synchronization
 
-Added `FELIX_CONN_STATS_MS` to the broker (`transport/quic/conn.rs`) to log
+Added `FELIX_CONN_STATS_MS` to the broker (`serving/quic/conn.rs`) to log
 `quinn::ConnectionStats` for a *live* connection, and tracing init to the demo so
 it surfaces. Felix's busiest connection under load:
 
@@ -935,7 +935,7 @@ artifacts that remain deliberately:
 - `demos/broker/latency_demo.rs`: `--log-capacity` / `FELIX_DEMO_LOG_CAPACITY`
   (defaults to the previous whole-run behaviour), and tracing init when
   `RUST_LOG` is set so broker/client diagnostics are reachable.
-- `services/felix-broker-service/src/transport/quic/conn.rs` and
+- `services/felix-broker-service/src/serving/quic/conn.rs` and
   `crates/sdk/felix-client/src/client/client.rs`: `FELIX_CONN_STATS_MS` logs live
   `quinn::ConnectionStats` (MTU, cwnd, rtt, loss, blocked-frame counters) on
   both ends. Off unless the variable is set.

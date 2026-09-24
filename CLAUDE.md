@@ -53,7 +53,7 @@ degrades gracefully without `pandas`.
 
 A publish crosses four components in a fixed order, and the order is the design:
 
-1. **`services/felix-broker-service/src/transport/quic/`** decodes the frame. `handlers/publish.rs` and
+1. **`services/felix-broker-service/src/serving/quic/`** decodes the frame. `handlers/publish.rs` and
    `handlers/subscribe.rs` own the per-message work; `streams/control.rs` is the control-stream
    loop that owns auth state and dispatches every `Message` variant.
 2. **`crates/server/felix-broker/src/broker/publish.rs`** takes offsets from storage *before*
@@ -122,7 +122,7 @@ exchange byte-identical frames.
 ### Control plane and startup ordering
 
 `services/felix-controlplane-service/` serves metadata over REST; the broker seeds from it at startup.
-`services/felix-broker-service/src/main.rs` gates readiness and the accept loop on that seeding, so the
+`services/felix-broker-service/src/node.rs` gates readiness and the accept loop on that seeding, so the
 broker does not accept traffic for streams it does not yet know about.
 
 ## Conventions
