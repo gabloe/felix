@@ -105,3 +105,39 @@ fn subscribed_without_join_offsets_is_unchanged() {
     let frame = joined.encode().expect("encode");
     assert_eq!(Message::decode(frame).expect("decode"), joined);
 }
+
+/// `shard_moved` round-trips, and its optional fields stay off the wire when
+/// absent, so a move with no hint is exactly the fields every reader knows.
+#[test]
+fn shard_moved_round_trips_and_omits_absent_hints() {
+    let full = Message::ShardMoved {
+        subscription_id: 7,
+        resume_from: Some(1234),
+        node_id: Some("broker-b".to_string()),
+        addr: Some("10.0.0.5:5000".to_string()),
+        generation: 9,
+    };
+    let frame = full.encode().expect("encode");
+    assert_eq!(frame.header.flags, 0, "a JSON frame carries no flag bits");
+    let json = std::str::from_utf8(&frame.payload).expect("utf8");
+    assert_eq!(
+        json,
+        r#"{"type":"shard_moved","subscription_id":7,"resume_from":1234,"node_id":"broker-b","addr":"10.0.0.5:5000","generation":9}"#
+    );
+    assert_eq!(Message::decode(frame).expect("decode"), full);
+
+    let bare = Message::ShardMoved {
+        subscription_id: 7,
+        resume_from: None,
+        node_id: None,
+        addr: None,
+        generation: 9,
+    };
+    let frame = bare.encode().expect("encode");
+    let json = std::str::from_utf8(&frame.payload).expect("utf8");
+    assert_eq!(
+        json,
+        r#"{"type":"shard_moved","subscription_id":7,"generation":9}"#
+    );
+    assert_eq!(Message::decode(frame).expect("decode"), bare);
+}

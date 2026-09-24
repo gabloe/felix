@@ -50,17 +50,47 @@ pub struct CacheWatchItem {
     /// Set when the watch lagged and the broker ended it. Re-watching with
     /// `start = resumeFrom` is gapless.
     pub lagged_resume_from: Option<BigInt>,
+    /// Set when the watch's shard moved to another broker, which ended it.
+    pub shard_moved: Option<ShardMoved>,
+}
+
+/// Where a shard went when it moved to another broker. A cache watch
+/// re-watches from `resumeFrom` when it is set, and otherwise from the offset
+/// after the last change seen; a sharded subscription follows on its own.
+#[napi(object)]
+pub struct ShardMoved {
+    /// Where the old owner says to resume, when it could say.
+    pub resume_from: Option<BigInt>,
+    /// The broker taking the shard, when known.
+    pub node_id: Option<String>,
+    /// That broker's client address, when the cluster publishes one.
+    pub addr: Option<String>,
+    /// The assignment generation that moved the shard.
+    pub generation: BigInt,
+}
+
+impl From<felix_client::ShardMoved> for ShardMoved {
+    fn from(moved: felix_client::ShardMoved) -> Self {
+        Self {
+            resume_from: moved.resume_from.map(BigInt::from),
+            node_id: moved.node_id,
+            addr: moved.addr,
+            generation: BigInt::from(moved.generation),
+        }
+    }
 }
 
 /// An item from a sharded subscription.
 ///
 /// Exactly one of these is set. A lost shard does not affect the others: they
 /// keep delivering while that one is re-established, and it resumes from its
-/// own last offset so nothing is skipped.
+/// own last offset so nothing is skipped. A moved shard is followed: its
+/// records carry on from the new owner, or a loss comes next.
 #[napi(object)]
 pub struct ShardEvent {
     pub shard: u32,
     pub event: Option<Event>,
     pub lost_error: Option<String>,
     pub recovered: Option<bool>,
+    pub shard_moved: Option<ShardMoved>,
 }

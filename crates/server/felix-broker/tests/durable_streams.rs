@@ -1677,3 +1677,108 @@ async fn an_in_memory_stream_reports_no_join_offsets() {
         .expect("subscribe");
     assert_eq!(resumed.join, None);
 }
+
+fn handoff() -> felix_broker::ShardHandoff {
+    felix_broker::ShardHandoff {
+        node_id: Some("broker-b".to_string()),
+        addr: Some("127.0.0.1:5001".to_string()),
+        generation: 7,
+    }
+}
+
+/// A subscription ended by a move learns where the stream had reached, not
+/// what it happened to receive: a full queue dropped the tail of what was
+/// published, and the resume point is still the first offset it was never
+/// offered.
+#[tokio::test]
+async fn a_moved_subscription_resumes_after_everything_it_was_offered() {
+    let dir = tempdir().expect("dir");
+    let storage =
+        DurableStorage::open(dir.path(), log_config(FsyncMode::OnCommit)).expect("storage");
+    let broker = Broker::new(EphemeralCache::new().into())
+        .with_durable_storage(storage)
+        .with_topic_capacity(2)
+        .expect("capacity");
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "default")
+        .await
+        .expect("namespace");
+    register(&broker, "orders", true).await;
+
+    let (mut receiver, _guard) = broker
+        .subscribe("t1", "default", "orders", 0)
+        .await
+        .expect("subscribe")
+        .into_parts();
+    for i in 0..5 {
+        broker
+            .publish("t1", "default", "orders", payload(&format!("r{i}")))
+            .await
+            .expect("publish");
+    }
+
+    assert_eq!(
+        broker
+            .end_subscriptions("t1", "default", "orders", 0, Some(handoff()))
+            .await,
+        1
+    );
+    let mut offsets = Vec::new();
+    while let Some(envelope) = receiver.recv().await {
+        let base = envelope.base_offset().expect("durable offsets");
+        offsets.extend((0..envelope.len() as u64).map(|i| base + i));
+    }
+    assert_eq!(offsets, vec![0, 1], "the queue holds two; the rest dropped");
+    let moved = receiver.moved().expect("ended by a move");
+    assert_eq!(moved.resume_from, Some(5));
+    assert_eq!(moved.to, handoff());
+
+    // One that joins after the move starts clean.
+    let (receiver, _guard) = broker
+        .subscribe("t1", "default", "orders", 0)
+        .await
+        .expect("subscribe again")
+        .into_parts();
+    assert!(receiver.moved().is_none());
+}
+
+/// Ending without a handoff is the old behaviour: the feed closes and says
+/// nothing about a move. An in-memory stream's handoff carries no offset,
+/// since its sequence means nothing on another broker.
+#[tokio::test]
+async fn only_a_durable_stream_names_an_offset_to_resume_from() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::OnCommit).await;
+    register(&broker, "orders", true).await;
+    register(&broker, "ticks", false).await;
+
+    let (mut plain, _plain_guard) = broker
+        .subscribe("t1", "default", "orders", 0)
+        .await
+        .expect("subscribe")
+        .into_parts();
+    broker
+        .end_subscriptions("t1", "default", "orders", 0, None)
+        .await;
+    assert!(plain.recv().await.is_none());
+    assert!(plain.moved().is_none());
+
+    let (mut ephemeral, _guard) = broker
+        .subscribe("t1", "default", "ticks", 0)
+        .await
+        .expect("subscribe")
+        .into_parts();
+    broker
+        .publish("t1", "default", "ticks", payload("t0"))
+        .await
+        .expect("publish");
+    broker
+        .end_subscriptions("t1", "default", "ticks", 0, Some(handoff()))
+        .await;
+    assert!(ephemeral.recv().await.is_some());
+    assert!(ephemeral.recv().await.is_none());
+    let moved = ephemeral.moved().expect("ended by a move");
+    assert_eq!(moved.resume_from, None);
+    assert_eq!(moved.to, handoff());
+}

@@ -42,6 +42,7 @@ mod broker;
 mod cache;
 mod durable;
 mod error;
+mod handoff;
 mod queue;
 mod stream;
 mod telemetry;
@@ -54,6 +55,7 @@ pub use broker::{
     PublishOutcome, StreamHandle, StreamMetadata,
 };
 pub use error::{BrokerError, Result};
+pub use handoff::{ShardHandoff, ShardMoved};
 
 // Streams.
 pub use broker::{Cursor, HistoryRange, JoinOffsets, ResumedSubscription};

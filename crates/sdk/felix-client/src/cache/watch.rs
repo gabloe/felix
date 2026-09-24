@@ -10,6 +10,7 @@ use quinn::RecvStream;
 use tokio::sync::mpsc;
 
 use crate::frame_io::read_message_with_limit;
+use crate::subscribe::ShardMoved;
 
 /// A live cache watch. Dropping it ends the watch.
 #[derive(Debug)]
@@ -42,8 +43,9 @@ impl CacheWatch {
     }
 
     /// The next item, or `None` once the watch has ended — the connection
-    /// closed, or the broker ended it (a [`CacheWatchItem::Lagged`] is
-    /// delivered first when it ended by falling behind).
+    /// closed, or the broker ended it (a [`CacheWatchItem::Lagged`] or
+    /// [`CacheWatchItem::ShardMoved`] is delivered first when it ended by
+    /// falling behind or because its shard moved).
     pub async fn recv(&mut self) -> Option<CacheWatchItem> {
         self.items.recv().await
     }
@@ -114,6 +116,10 @@ pub enum CacheWatchItem {
     /// The watch fell behind and the broker ended it after this. Re-watching
     /// with `from_offset = resume_from` is gapless.
     Lagged { resume_from: u64 },
+    /// The shard moved to another broker and the old owner ended the watch
+    /// after this. Re-watch on the new owner from `resume_from` when it is
+    /// set, and otherwise from the offset after the last change seen.
+    ShardMoved(ShardMoved),
 }
 
 /// The `key` and `prefix` fields a watch request carries for `filter`.
@@ -155,17 +161,32 @@ async fn run_watch_pump(
                 expires_at_millis,
             }),
             Message::CacheWatchLagged { resume_from } => CacheWatchItem::Lagged { resume_from },
+            Message::ShardMoved {
+                resume_from,
+                node_id,
+                addr,
+                generation,
+                ..
+            } => CacheWatchItem::ShardMoved(ShardMoved {
+                resume_from,
+                node_id,
+                addr,
+                generation,
+            }),
             other => {
                 tracing::debug!(?other, "unexpected message on a cache watch stream");
                 break;
             }
         };
-        let lagged = matches!(item, CacheWatchItem::Lagged { .. });
+        let last = matches!(
+            item,
+            CacheWatchItem::Lagged { .. } | CacheWatchItem::ShardMoved(_)
+        );
         if tx.send(item).await.is_err() {
             break;
         }
-        if lagged {
-            // The broker finishes the stream after the lag signal; nothing
+        if last {
+            // The broker finishes the stream after either signal; nothing
             // after it is worth waiting for.
             break;
         }

@@ -13,6 +13,23 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Subscriptions follow a moved shard.** A broker that stops serving a shard
+  now ends each of its subscriptions and cache watches with a final
+  `shard_moved` frame: the offset to resume from, the broker taking the shard
+  when known, and the generation that moved it. Only a client that offers
+  `FEATURE_SHARD_MOVED` (`0x1000`) gets it; any other sees the stream end byte
+  for byte as before. For a durable stream `resume_from` is exact, so resuming
+  at `max(last delivered + 1, resume_from)` neither repeats nor skips a record.
+  A `ClusterClient` subscription does that itself: it resubscribes on the new
+  owner, retrying until the move has cut over, and an in-memory stream resumes
+  at the new owner's tail. A `Client` subscription ends with
+  `Subscription::shard_moved()` set, and cache watches deliver
+  `CacheWatchItem::ShardMoved`. Sharded subscriptions and watches report
+  `ShardEvent::ShardMoved` and `ShardedCacheWatchItem::ShardMoved`. Python and
+  TypeScript subscriptions follow too, and surface the move as `ShardMoved` /
+  `CacheWatchShardMoved` (Python) and `shardMoved` (Node). See "Shard moves" in
+  `docs/protocol.md`.
+
 - **Faster shard move switch-over, control-plane side.**
   `GET /v1/shard-assignments/changes` takes an optional `wait_ms`: with
   nothing newer than `since`, the request waits up to that long (capped at
@@ -106,6 +123,15 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **Breaking for Rust callers: `ClusterClient::subscribe` and `subscribe_from`
+  take `self: &Arc<Self>` and return a `ClusterSubscription`** instead of a
+  `(client, Subscription)` pair, so the subscription can follow its shard.
+  `ShardEvent` is `#[non_exhaustive]`, and `CacheWatchItem` and
+  `ShardedCacheWatchItem` have a new `ShardMoved` variant, so exhaustive
+  matches need an arm. On the broker, `Broker::end_subscriptions` and
+  `CacheWatchHub::end_shard` take an optional argument saying where the shard
+  went.
+
 - **Breaking for TypeScript callers: `err.code` is now the broker's error
   code.** It used to hold this client's own kind (`FELIX_AUTH`,
   `FELIX_CONNECTION`, …), which moves to `err.kind`. `code` now matches the
@@ -191,6 +217,13 @@ for what the current release actually guarantees.
   instead.
 
 ### Fixed
+
+- **A subscription's last events could be dropped when it ended.** The
+  subscriber's connection writer dropped deliveries queued in the same batch
+  as its unregister, and the feeder forgot the subscriber's connection before
+  deliveries still in its lane queue were routed. Both now deliver them first,
+  so a subscriber ended by a shard move receives everything the broker
+  committed.
 
 - **A `Leader` publish acknowledged on enqueue could be dropped without a
   trace.** With `ack_on_commit` off (the default) the ack goes out when the

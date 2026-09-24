@@ -424,7 +424,15 @@ pub(crate) async fn handle_cache_watch_message(
     // catch-up already wrote — the registration race — and are dropped by
     // offset; everything else is written until the client goes away or the
     // watch laps its queue.
-    tokio::spawn(run_watch_delivery(watch, event_send, tail, subscriptions));
+    let shard_moved = felix_wire::supports_feature(peer_features, felix_wire::FEATURE_SHARD_MOVED)
+        .then_some(subscription_id);
+    tokio::spawn(run_watch_delivery(
+        watch,
+        event_send,
+        tail,
+        subscriptions,
+        shard_moved,
+    ));
     Ok(true)
 }
 
@@ -542,6 +550,8 @@ async fn run_watch_delivery(
     mut event_send: quinn::SendStream,
     resume_offset: u64,
     subscriptions: Arc<super::publish::SubscriptionLimiter>,
+    // The watch's id, when the client offered `FEATURE_SHARD_MOVED`.
+    shard_moved: Option<u64>,
 ) {
     loop {
         match watch.recv().await {
@@ -564,7 +574,19 @@ async fn run_watch_delivery(
                 }
             }
             None => {
-                if let Some(resume_from) = watch.lagged() {
+                if let (Some(subscription_id), Some(moved)) = (shard_moved, watch.moved()) {
+                    let _ = write_message(
+                        &mut event_send,
+                        Message::ShardMoved {
+                            subscription_id,
+                            resume_from: moved.resume_from,
+                            node_id: moved.to.node_id.clone(),
+                            addr: moved.to.addr.clone(),
+                            generation: moved.to.generation,
+                        },
+                    )
+                    .await;
+                } else if let Some(resume_from) = watch.lagged() {
                     // Ended loudly: everything queued was delivered above, and
                     // this names the first change that was not.
                     let _ =

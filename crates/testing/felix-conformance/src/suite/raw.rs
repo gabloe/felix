@@ -58,8 +58,8 @@ pub(crate) async fn run_pubsub(
     let expected_id = parse_subscribe_response(response)?;
     let mut event_recv = connection.accept_uni().await?;
 
-    publish(connection, auth, b"alpha").await?;
-    publish(connection, auth, b"beta").await?;
+    publish(connection, auth, "conformance", b"alpha").await?;
+    publish(connection, auth, "conformance", b"beta").await?;
 
     let mut pending = VecDeque::new();
     if let Some(frame) = read_frame(&mut event_recv).await? {
@@ -135,9 +135,10 @@ pub(crate) async fn run_cache(
     Ok(())
 }
 
-async fn publish(
+pub(crate) async fn publish(
     connection: &felix_transport::QuicConnection,
     auth: &AuthFixture,
+    stream: &str,
     payload: &[u8],
 ) -> Result<()> {
     static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -164,7 +165,7 @@ async fn publish(
         Message::Publish {
             tenant_id: "t1".to_string(),
             namespace: "default".to_string(),
-            stream: "conformance".to_string(),
+            stream: stream.to_string(),
             payload: payload.to_vec(),
             request_id: Some(request_id),
             ack: Some(AckMode::PerMessage),

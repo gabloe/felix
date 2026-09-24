@@ -114,6 +114,33 @@ impl CacheWatchLagged {
     }
 }
 
+/// The watch's shard moved to another broker, which ended the watch.
+///
+/// Like `CacheWatchLagged`, an item rather than an exception. Re-watch from
+/// `resume_from` when it is set, and otherwise from the offset after the last
+/// change seen.
+#[pyclass(module = "felix", frozen, get_all)]
+pub struct CacheWatchShardMoved {
+    /// Where the old owner says to resume, when it could say.
+    pub resume_from: Option<u64>,
+    /// The broker taking the shard, when known.
+    pub node_id: Option<String>,
+    /// That broker's client address, when the cluster publishes one.
+    pub addr: Option<String>,
+    /// The assignment generation that moved the shard.
+    pub generation: u64,
+}
+
+#[pymethods]
+impl CacheWatchShardMoved {
+    fn __repr__(&self) -> String {
+        format!(
+            "CacheWatchShardMoved(resume_from={:?}, node_id={:?}, generation={})",
+            self.resume_from, self.node_id, self.generation
+        )
+    }
+}
+
 /// A record from one shard of a multi-shard subscription.
 #[pyclass(module = "felix", frozen, get_all)]
 pub struct ShardRecord {
@@ -156,6 +183,34 @@ pub struct ShardRecovered {
 impl ShardRecovered {
     fn __repr__(&self) -> String {
         format!("ShardRecovered(shard={})", self.shard)
+    }
+}
+
+/// A shard of a multi-shard subscription moved to another broker.
+///
+/// The subscription follows it on its own: the shard's records carry on from
+/// the new owner, or `ShardLost` comes next if it cannot be reached. Surfaced
+/// so a consumer can see a rebalance happen.
+#[pyclass(module = "felix", frozen, get_all)]
+pub struct ShardMoved {
+    pub shard: u32,
+    /// Where the old owner says the shard resumes, when it could say.
+    pub resume_from: Option<u64>,
+    /// The broker taking the shard, when known.
+    pub node_id: Option<String>,
+    /// That broker's client address, when the cluster publishes one.
+    pub addr: Option<String>,
+    /// The assignment generation that moved the shard.
+    pub generation: u64,
+}
+
+#[pymethods]
+impl ShardMoved {
+    fn __repr__(&self) -> String {
+        format!(
+            "ShardMoved(shard={}, resume_from={:?}, node_id={:?}, generation={})",
+            self.shard, self.resume_from, self.node_id, self.generation
+        )
     }
 }
 
@@ -300,6 +355,7 @@ pub(crate) enum OwnedWatchItem {
     Lagged {
         resume_from: u64,
     },
+    ShardMoved(felix_client::ShardMoved),
 }
 
 impl From<felix_client::CacheWatchItem> for OwnedWatchItem {
@@ -312,6 +368,7 @@ impl From<felix_client::CacheWatchItem> for OwnedWatchItem {
                 expires_at_millis: change.expires_at_millis,
             },
             felix_client::CacheWatchItem::Lagged { resume_from } => Self::Lagged { resume_from },
+            felix_client::CacheWatchItem::ShardMoved(moved) => Self::ShardMoved(moved),
         }
     }
 }
@@ -341,6 +398,16 @@ impl<'py> IntoPyObject<'py> for OwnedWatchItem {
             Self::Lagged { resume_from } => {
                 Ok(Bound::new(py, CacheWatchLagged { resume_from })?.into_any())
             }
+            Self::ShardMoved(moved) => Ok(Bound::new(
+                py,
+                CacheWatchShardMoved {
+                    resume_from: moved.resume_from,
+                    node_id: moved.node_id,
+                    addr: moved.addr,
+                    generation: moved.generation,
+                },
+            )?
+            .into_any()),
         }
     }
 }
@@ -361,11 +428,27 @@ pub(crate) enum OwnedShardEvent {
     Recovered {
         shard: u32,
     },
+    Moved {
+        shard: u32,
+        moved: felix_client::ShardMoved,
+    },
 }
 
-impl From<felix_client::ShardEvent> for OwnedShardEvent {
-    fn from(event: felix_client::ShardEvent) -> Self {
-        match event {
+/// The next sharded event this binding has a shape for. `ShardEvent` is
+/// non-exhaustive, so a kind added later is skipped until it gets one.
+pub(crate) async fn next_shard_event(
+    subscription: &mut felix_client::ShardedSubscription,
+) -> Option<OwnedShardEvent> {
+    loop {
+        if let Some(event) = OwnedShardEvent::from_event(subscription.next().await?) {
+            return Some(event);
+        }
+    }
+}
+
+impl OwnedShardEvent {
+    fn from_event(event: felix_client::ShardEvent) -> Option<Self> {
+        Some(match event {
             felix_client::ShardEvent::Record { shard, event } => Self::Record {
                 shard,
                 tenant_id: event.tenant_id.to_string(),
@@ -376,7 +459,9 @@ impl From<felix_client::ShardEvent> for OwnedShardEvent {
             },
             felix_client::ShardEvent::ShardLost { shard, error } => Self::Lost { shard, error },
             felix_client::ShardEvent::ShardRecovered { shard } => Self::Recovered { shard },
-        }
+            felix_client::ShardEvent::ShardMoved { shard, moved } => Self::Moved { shard, moved },
+            _ => return None,
+        })
     }
 }
 
@@ -418,6 +503,17 @@ impl<'py> IntoPyObject<'py> for OwnedShardEvent {
                 Ok(Bound::new(py, ShardLost { shard, error })?.into_any())
             }
             Self::Recovered { shard } => Ok(Bound::new(py, ShardRecovered { shard })?.into_any()),
+            Self::Moved { shard, moved } => Ok(Bound::new(
+                py,
+                ShardMoved {
+                    shard,
+                    resume_from: moved.resume_from,
+                    node_id: moved.node_id,
+                    addr: moved.addr,
+                    generation: moved.generation,
+                },
+            )?
+            .into_any()),
         }
     }
 }

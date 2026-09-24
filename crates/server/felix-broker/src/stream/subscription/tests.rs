@@ -17,7 +17,7 @@ fn payload(value: &str) -> Bytes {
 fn resuming_at(skip_below: u64) -> (mpsc::Sender<QueuedDelivery>, Subscription) {
     let (tx, rx) = mpsc::channel(16);
     let subscription = Subscription {
-        receiver: SubscriptionReceiver::new(rx),
+        receiver: SubscriptionReceiver::new(rx, Default::default()),
         // No stream to unregister from; the guard's `Weak` simply never
         // upgrades, which is the same thing it does after a stream is dropped.
         guard: SubscriptionGuard {

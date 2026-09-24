@@ -2,13 +2,14 @@
 //! unregisters the subscriber from its stream on drop.
 
 use std::collections::VecDeque;
-use std::sync::Weak;
+use std::sync::{Arc, OnceLock, Weak};
 
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
 use super::delivery::{DeliveryEnvelope, QueuedDelivery};
 use super::state::StreamState;
+use crate::handoff::ShardMoved;
 
 /// Receiver wrapper that keeps the unsubscribe guard alive for the receiver lifetime.
 #[derive(Debug)]
@@ -121,11 +122,23 @@ impl Subscription {
 #[derive(Debug)]
 pub struct SubscriptionReceiver {
     pub(crate) receiver: mpsc::Receiver<QueuedDelivery>,
+    moved: Arc<OnceLock<ShardMoved>>,
 }
 
 impl SubscriptionReceiver {
-    pub(crate) fn new(receiver: mpsc::Receiver<QueuedDelivery>) -> Self {
-        Self { receiver }
+    pub(crate) fn new(
+        receiver: mpsc::Receiver<QueuedDelivery>,
+        moved: Arc<OnceLock<ShardMoved>>,
+    ) -> Self {
+        Self { receiver, moved }
+    }
+
+    /// Why the subscription ended, when it ended because its shard moved.
+    ///
+    /// Set before the queue closes, so once [`Self::recv`] has returned
+    /// `None` this is final.
+    pub fn moved(&self) -> Option<&ShardMoved> {
+        self.moved.get()
     }
 
     /// The next batch, or `None` once the subscription has ended.

@@ -141,7 +141,9 @@ pub(super) async fn run_writer_lane(
                 LaneCommand::Unregister {
                     subscriber_id,
                     connection_id,
+                    last,
                 } => {
+                    let carried = connection_id;
                     // Prefer the id carried on the command; fall back to the map
                     // for any caller that still has an entry. Either way the
                     // per-connection writer must be told and the connection
@@ -157,11 +159,15 @@ pub(super) async fn run_writer_lane(
                         let _ = manager
                             .enqueue_connection(
                                 connection_id,
-                                ConnectionCommand::Unregister { subscriber_id },
+                                ConnectionCommand::Unregister {
+                                    subscriber_id,
+                                    last,
+                                },
                             )
                             .await;
                         connection_subscriber_unregister(Some(connection_id));
                     }
+                    manager.unregister_subscriber(subscriber_id, carried);
                 }
                 LaneCommand::Delivery {
                     subscriber_id,
@@ -221,6 +227,7 @@ pub(super) async fn run_connection_writer(
             .set(rx.len() as f64);
 
         let mut deliveries: HashMap<u64, VecDeque<LaneDelivery>> = HashMap::new();
+        let mut leaving: Vec<u64> = Vec::new();
         for cmd in pending {
             match cmd {
                 ConnectionCommand::Register {
@@ -240,9 +247,35 @@ pub(super) async fn run_connection_writer(
                         },
                     );
                 }
-                ConnectionCommand::Unregister { subscriber_id } => {
-                    subscribers.remove(&subscriber_id);
-                    deliveries.remove(&subscriber_id);
+                ConnectionCommand::Unregister {
+                    subscriber_id,
+                    last,
+                } => {
+                    if let Some(frame) = last {
+                        let now = Instant::now();
+                        deliveries
+                            .entry(subscriber_id)
+                            .or_default()
+                            .push_back(LaneDelivery {
+                                subscriber_id,
+                                frame,
+                                item_count: 0,
+                                first_enqueued_at: now,
+                                enqueue_at: now,
+                            });
+                    }
+                    // Frames queued ahead of this in the same batch are the
+                    // subscription's last, and may say where to resume, so they
+                    // are written before the stream is dropped.
+                    if deliveries
+                        .get(&subscriber_id)
+                        .is_some_and(|queue| !queue.is_empty())
+                    {
+                        leaving.push(subscriber_id);
+                    } else {
+                        subscribers.remove(&subscriber_id);
+                        deliveries.remove(&subscriber_id);
+                    }
                 }
                 ConnectionCommand::Delivery {
                     subscriber_id,
@@ -431,6 +464,9 @@ pub(super) async fn run_connection_writer(
                     );
                 }
             }
+        }
+        for subscriber_id in leaving {
+            subscribers.remove(&subscriber_id);
         }
         if debug_window_start.elapsed() >= Duration::from_secs(1) {
             let avg_bytes_per_write = if debug_writes == 0 {

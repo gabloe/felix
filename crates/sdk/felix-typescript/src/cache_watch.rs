@@ -84,10 +84,17 @@ impl CacheWatchHandle {
                     expires_at_millis: BigInt::from(change.expires_at_millis),
                 }),
                 lagged_resume_from: None,
+                shard_moved: None,
             },
             felix_client::CacheWatchItem::Lagged { resume_from } => CacheWatchItem {
                 change: None,
                 lagged_resume_from: Some(BigInt::from(resume_from)),
+                shard_moved: None,
+            },
+            felix_client::CacheWatchItem::ShardMoved(moved) => CacheWatchItem {
+                change: None,
+                lagged_resume_from: None,
+                shard_moved: Some(moved.into()),
             },
         }))
     }

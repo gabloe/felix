@@ -58,16 +58,15 @@ pub(crate) async fn pubsub(common: &Common, stream: &str, binary: bool) -> Resul
 
     // Subscribers now, each following redirects to the shard's owner, and
     // each at the live tail — so the pre-flight sentinel above is already
-    // behind them. Held for the whole run: dropping the client closes the
-    // delivery stream.
-    let subs_cluster = cluster(common).await?;
+    // behind them.
+    let subs_cluster = Arc::new(cluster(common).await?);
     let mut receivers = Vec::new();
     for _ in 0..common.fanout.max(1) {
-        let (client, subscription) = subs_cluster
+        let subscription = subs_cluster
             .subscribe(&common.tenant, &common.namespace, stream)
             .await
             .context("subscribe")?;
-        receivers.push((client, subscription));
+        receivers.push(subscription);
     }
 
     let expected_per_sub = (common.warmup + common.total) as u64;
@@ -77,7 +76,7 @@ pub(crate) async fn pubsub(common: &Common, stream: &str, binary: bool) -> Resul
     // delivery latency is sampled — is always healthy.
     let fanout = common.fanout.max(1);
     let slow_from = fanout.saturating_sub(common.slow_subscribers);
-    for (index, (client, mut subscription)) in receivers.into_iter().enumerate() {
+    for (index, mut subscription) in receivers.into_iter().enumerate() {
         let delivered = Arc::clone(&delivered);
         let warmup = common.warmup as u64;
         let is_slow = common.slow_subscribers > 0 && index >= slow_from;
@@ -115,7 +114,7 @@ pub(crate) async fn pubsub(common: &Common, stream: &str, binary: bool) -> Resul
                     Err(_) => break,
                 }
             }
-            drop(client);
+            drop(subscription);
             (samples, received, highest_seq, is_slow)
         }));
     }

@@ -217,3 +217,13 @@ fn error_codes_is_a_new_feature_bit_and_disturbs_nothing() {
         crate::FEATURE_ERROR_CODES
     ));
 }
+
+#[test]
+fn shard_moved_is_a_new_feature_bit_and_disturbs_nothing() {
+    let others = crate::KNOWN_FEATURES & !crate::FEATURE_SHARD_MOVED;
+    assert_eq!(crate::FEATURE_SHARD_MOVED & others, 0);
+    assert!(crate::supports_feature(
+        crate::KNOWN_FEATURES,
+        crate::FEATURE_SHARD_MOVED
+    ));
+}

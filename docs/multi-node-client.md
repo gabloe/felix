@@ -109,6 +109,51 @@ resume without a gap.
 
 **A sharded subscription reconnects each shard on its own** — see below.
 
+## When a shard moves
+
+A rebalance or a drain moves a shard from one broker to another while both stay
+up. That is not a failover: the old owner ends the shard's subscriptions and
+cache watches itself, after delivering everything it committed, and its last
+frame on each says where the shard went and where to resume (`shard_moved`, see
+`docs/protocol.md`, "Shard moves").
+
+**A `ClusterClient` subscription follows the shard.** `ClusterClient::subscribe`
+and `subscribe_from` return a `ClusterSubscription`, and its `next_event`
+resubscribes on the new owner by itself, so a move looks like a short pause:
+
+```rust,no_run
+# async fn example(cluster: std::sync::Arc<felix_client::ClusterClient>) -> anyhow::Result<()> {
+let mut subscription = cluster.subscribe("t1", "default", "orders").await?;
+while let Some(event) = subscription.next_event().await? {
+    // Carries on across a move. `subscription.moves()` counts them.
+}
+# Ok(())
+# }
+```
+
+- **On a durable stream the resume is exact.** It resumes at
+  `max(last delivered offset + 1, resume_from)`, so nothing is repeated and
+  nothing is skipped that the subscriber's own queue did not drop.
+- **An in-memory stream resumes at the new owner's tail**, as any resubscribe
+  would. Its offsets mean nothing on another broker.
+- **It asks the broker the old owner named first**, and the entry broker (which
+  redirects) if that one is unreachable. The old owner sends `shard_moved`
+  before the new owner has taken over, so the first attempts may be refused;
+  it retries with the reconnect policy's backoff until its `deadline`, or 30
+  seconds without one, and then returns the error from `next_event`.
+
+`subscribe_sharded` does the same per shard and reports it as
+`ShardEvent::ShardMoved`. A sharded cache watch reports
+`ShardedCacheWatchItem::ShardMoved` and moves that shard's resume offset to
+where the old owner said; re-watch from `resume_offsets()` to pick it up.
+
+**With `Client`, you resume.** The subscription ends: `next_event` returns
+`None` with `Subscription::shard_moved()` set to the `ShardMoved` it received.
+Resubscribe at the larger of `resume_from` and your last offset plus one. A
+cache watch delivers `CacheWatchItem::ShardMoved` last; re-watch from its
+`resume_from` when set, and otherwise from the offset after the last change you
+saw.
+
 ## Consuming a whole multi-shard stream
 
 A subscription reads **one shard**. A stream's shards can have different owners
@@ -130,6 +175,10 @@ while let Some(item) = subscription.next().await {
         // re-established, and the others are still delivering.
         ShardEvent::ShardLost { shard, error } => warn!(shard, %error, "shard down"),
         ShardEvent::ShardRecovered { shard } => info!(shard, "shard back"),
+        // Being followed to its new owner; records carry on from there.
+        ShardEvent::ShardMoved { shard, moved } => info!(shard, ?moved, "shard moved"),
+        // `ShardEvent` is non-exhaustive.
+        _ => {}
     }
 }
 ```
@@ -179,6 +228,7 @@ while let Some(item) = watch.recv().await {
         ShardedCacheWatchItem::Change { shard, change } => { /* apply */ }
         ShardedCacheWatchItem::StateComplete => { /* every shard's state is in */ }
         ShardedCacheWatchItem::Lagged { shard, .. } => { /* that shard ended */ }
+        ShardedCacheWatchItem::ShardMoved { shard, .. } => { /* that shard ended */ }
         ShardedCacheWatchItem::ShardClosed { shard } => { /* that shard ended */ }
     }
 }
@@ -195,8 +245,10 @@ while let Some(item) = watch.recv().await {
 - **Resume per shard.** `resume_offsets()` has one offset per shard; pass it
   back to `watch_cache_sharded`. A shard that hadn't finished its retained
   values resumes at 0.
-- **A shard that ends is reported, not reconnected.** You get `Lagged` or
-  `ShardClosed` for it and the other shards carry on.
+- **A shard that ends is reported, not reconnected.** You get `Lagged`,
+  `ShardMoved` or `ShardClosed` for it and the other shards carry on. After
+  `Lagged` or `ShardMoved`, `resume_offsets()` already says where that shard
+  resumes.
 - **If any shard can't be reached, the call fails**, as with
   `subscribe_sharded`.
 

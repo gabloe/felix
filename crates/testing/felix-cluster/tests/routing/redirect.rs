@@ -7,6 +7,7 @@
 //! owner rather than proxy for it.
 //!
 //! Run with `cargo test -p felix-cluster --test routing redirect::`.
+use std::sync::Arc;
 use std::time::Duration;
 
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
@@ -81,12 +82,13 @@ async fn a_cluster_client_follows_the_redirect_to_the_owner() {
     // Seeded with the non-owner alone, so the subscribe below can only succeed
     // by following the redirect.
     let seed = cluster.node(&non_owner).expect("the non-owner").client_addr;
-    let client =
+    let client = Arc::new(
         felix_cluster::client::connect_cluster(&[seed], &cluster.tenant_id, &cluster.client_token)
             .await
-            .expect("connect");
+            .expect("connect"),
+    );
 
-    let (_held, mut subscription) = client
+    let mut subscription = client
         .subscribe(&cluster.tenant_id, &cluster.namespace, STREAM)
         .await
         .expect("the redirect should have been followed to the owner");

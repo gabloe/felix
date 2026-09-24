@@ -12,7 +12,7 @@ covers using it.
 
 A Felix client does more than encode frames. It reconnects when the broker it
 was using disappears, follows redirects to whichever broker owns the shard it
-wants, decides which failures are worth retrying and which are not, and keeps
+wants, follows a subscription's shard when a rebalance moves it, decides which failures are worth retrying and which are not, and keeps
 track of offsets precisely enough that a resuming subscriber neither skips a
 record nor sees one twice.
 

@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use super::ShardOffsets;
 use crate::cache::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
 use crate::cluster::ClusterClient;
+use crate::subscribe::ShardMoved;
 
 /// A prefix watch over every shard of one cache, merged into a single handle.
 ///
@@ -93,6 +94,12 @@ impl ShardedCacheWatch {
                 progress.observe_lag(resume_from);
                 ShardedCacheWatchItem::Lagged { shard, resume_from }
             }
+            Some(CacheWatchItem::ShardMoved(moved)) => {
+                if let Some(resume_from) = moved.resume_from {
+                    progress.observe_lag(resume_from);
+                }
+                ShardedCacheWatchItem::ShardMoved { shard, moved }
+            }
             None => ShardedCacheWatchItem::ShardClosed { shard },
         })
     }
@@ -124,7 +131,12 @@ pub enum ShardedCacheWatchItem {
     /// are unaffected. [`ShardedCacheWatch::resume_offsets`] already accounts
     /// for it, so resuming from those is gapless.
     Lagged { shard: u32, resume_from: u64 },
-    /// This shard's watch ended without a lag signal, usually because its
+    /// This shard moved to another broker, which ended its watch. The other
+    /// shards are unaffected. [`ShardedCacheWatch::resume_offsets`] accounts
+    /// for the old owner's resume point when it gave one, so re-watching from
+    /// those picks the shard up on its new owner.
+    ShardMoved { shard: u32, moved: ShardMoved },
+    /// This shard's watch ended without a lag or move signal, usually because its
     /// owner went away. The other shards are unaffected.
     ShardClosed { shard: u32 },
 }
@@ -284,15 +296,18 @@ pub(crate) async fn watch_sharded(
 }
 
 /// Pump one shard's watch into the shared channel. `None` says it ended
-/// without a lag signal.
+/// without a lag or move signal.
 async fn forward_shard(
     shard: u32,
     mut watch: CacheWatch,
     tx: mpsc::Sender<(u32, Option<CacheWatchItem>)>,
 ) {
     while let Some(item) = watch.recv().await {
-        let lagged = matches!(item, CacheWatchItem::Lagged { .. });
-        if tx.send((shard, Some(item))).await.is_err() || lagged {
+        let last = matches!(
+            item,
+            CacheWatchItem::Lagged { .. } | CacheWatchItem::ShardMoved(_)
+        );
+        if tx.send((shard, Some(item))).await.is_err() || last {
             return;
         }
     }

@@ -49,10 +49,12 @@ fn _felix(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<types::GroupRecord>()?;
     module.add_class::<types::CacheChange>()?;
     module.add_class::<types::CacheWatchLagged>()?;
+    module.add_class::<types::CacheWatchShardMoved>()?;
     module.add_class::<types::CacheWatchFilter>()?;
     module.add_class::<types::ShardRecord>()?;
     module.add_class::<types::ShardLost>()?;
     module.add_class::<types::ShardRecovered>()?;
+    module.add_class::<types::ShardMoved>()?;
 
     errors::register(module)?;
     Ok(())

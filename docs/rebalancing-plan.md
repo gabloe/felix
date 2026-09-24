@@ -64,7 +64,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | 0 | Correctness: the write fence, waiting for group state and counters, conditional assignment writes, ending readers on a moved shard | in progress |
 | 1 | Fast switch-over: wake the loops instead of polling, long-poll the assignment feed, run placement when a report arrives, warm the destination, publish routes and servable shards together | done |
 | 2 | No refused publishes: hold a publish to a moving shard briefly and forward it, a typed "shard moving" refusal the client retries, the destination not counted toward quorum while it copies | planned |
-| 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | planned |
+| 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | done |
 | 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | planned |
 | 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | planned |
 | 6 | Idempotent producers keep their sequences across a planned move | planned |
@@ -123,6 +123,53 @@ Progress:
   `a_move_switches_over_in_well_under_a_second` measures fence to first
   accepted publish with every broker on the 2 s default interval: about
   90 ms on a local debug build, against 8 s before.
+
+### Phase 3: subscriptions follow the shard
+
+- **The frame.** A broker that stops serving a shard ends its subscriptions
+  and cache watches with `shard_moved {subscription_id, resume_from?,
+  node_id?, addr?, generation}`, after everything it committed has fanned out.
+  Only a client that offered `FEATURE_SHARD_MOVED` (`0x1000`) gets it; any
+  other sees the stream end byte for byte as before.
+- **An exact `resume_from`.** For a durable stream it is the replay ring's next
+  sequence, read under the log lock that each publish captures its fanout list
+  under. So every record below it was offered to the subscriber (delivered, or
+  dropped by its queue) and none at or above it was. It is a stream position,
+  not the subscriber's: a queue that dropped records does not move it. An
+  in-memory stream sends none, since its sequence means nothing elsewhere.
+- **The client resumes at `max(last delivered + 1, resume_from)`.** A record
+  fanned out just before the move can still arrive, putting `last + 1` past
+  `resume_from`; records the queue dropped stay dropped. Nothing is repeated
+  and nothing is skipped that would otherwise have been delivered.
+  `ClusterClient::subscribe` returns a `ClusterSubscription` that does this on
+  its own; an in-memory stream resumes at the new owner's tail.
+- **Where to go.** `node_id` and `addr` are the successor during a move, else
+  the new leader. The frame goes out at the fence, before the cut-over, so the
+  client tries the named broker first, then the entry broker (which redirects),
+  retrying with backoff until the new owner takes the subscription or the
+  reconnect deadline (30 s without one) passes.
+- **Cache watches.** `resume_from` is the shard log's tail once the writes in
+  flight have landed, and absent if they had not; the watcher then resumes
+  after the last change it saw. `CacheWatchItem::ShardMoved` and
+  `ShardedCacheWatchItem::ShardMoved` surface it; a sharded watch moves that
+  shard's resume offset.
+- **Sharded subscriptions** follow each shard and report
+  `ShardEvent::ShardMoved`. The Python and TypeScript bindings wrap
+  `ClusterClient`, so their subscriptions follow too, and they surface the move
+  as `ShardMoved` / `CacheWatchShardMoved` (Python) and `shardMoved` (Node).
+- **Two ways the last frames were lost** in the broker's subscriber writer,
+  both fixed. Deliveries queued in the same batch as the subscriber's
+  unregister were dropped; the writer now writes them first. And the feeder
+  forgot the subscriber's connection before its last deliveries were routed,
+  so one still in the lane queue found no connection; the lane now forgets it
+  after handling the unregister. The final frame rides on the unregister,
+  which is sent with backpressure, so a full lane cannot drop it.
+
+Evidence: `routing::subscriptions_follow`
+(`a_subscription_follows_its_shard_to_the_new_owner`) reads a durable stream
+from its start while a publisher keeps writing and the shard moves, and checks
+every offset arrives once, in order, with every acknowledged record. The
+conformance runner checks the frame on the wire, offered and not.
 
 ## Checking the work
 

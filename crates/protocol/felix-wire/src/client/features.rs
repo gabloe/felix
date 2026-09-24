@@ -132,6 +132,16 @@ pub const FEATURE_CACHE_SHARDS: u32 = 0x0000_0400;
 /// error without a code means "no code applies" or "this broker predates them".
 pub const FEATURE_ERROR_CODES: u32 = 0x0000_0800;
 
+/// The client can read `shard_moved` on an event stream.
+///
+/// Offered by a *client*, like `FEATURE_REDIRECT`: the message travels broker
+/// to client, as the last frame of a subscription or cache watch whose shard
+/// this broker stopped serving, and says where to resume. A client that did
+/// not offer the bit gets what it always got: the stream ends after the last
+/// event, with nothing after it. A broker advertises it too, so a client knows
+/// a stream that ends without one did not end because its shard moved.
+pub const FEATURE_SHARD_MOVED: u32 = 0x0000_1000;
+
 /// Every feature bit this version implements.
 pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_REDIRECT
@@ -144,7 +154,8 @@ pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
     | FEATURE_COUNTERS
     | FEATURE_IDEMPOTENT_PRODUCER
     | FEATURE_CACHE_SHARDS
-    | FEATURE_ERROR_CODES;
+    | FEATURE_ERROR_CODES
+    | FEATURE_SHARD_MOVED;
 
 /// True if `features` advertises `feature`.
 pub fn supports_feature(features: u32, feature: u32) -> bool {

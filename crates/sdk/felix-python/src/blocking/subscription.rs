@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use felix_client::Subscription;
+use felix_client::ClusterSubscription;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use tokio::sync::Mutex;
@@ -14,17 +14,13 @@ use crate::types::Event;
 /// A live subscription. Iterate it, or call `next_event()`.
 #[pyclass(module = "felix")]
 pub struct SubscriptionHandle {
-    inner: Arc<Mutex<Option<Subscription>>>,
-    /// Kept alive because the subscription's event stream belongs to it:
-    /// dropping the client would close the stream underneath the iterator.
-    _client: Arc<felix_client::Client>,
+    inner: Arc<Mutex<Option<ClusterSubscription>>>,
 }
 
 impl SubscriptionHandle {
-    pub(crate) fn new(subscription: Subscription, client: Arc<felix_client::Client>) -> Self {
+    pub(crate) fn new(subscription: ClusterSubscription) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Some(subscription))),
-            _client: client,
         }
     }
 }

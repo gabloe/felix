@@ -2,8 +2,8 @@
 //! and the bounded in-memory log that backs cursor replay.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use arc_swap::ArcSwap;
 use bytes::Bytes;
@@ -17,6 +17,7 @@ use super::producers::ProducerTable;
 use super::subscription::SubscriptionReceiver;
 use crate::ConsistencyLevel;
 use crate::durable::StreamLog;
+use crate::handoff::{ShardHandoff, ShardMoved};
 
 /// One stream shard's live state, shared by every handle to it.
 #[derive(Debug)]
@@ -313,7 +314,7 @@ impl StreamState {
         state.next_id += 1;
         state.senders.insert(id, tx);
         self.rebuild_subscriber_snapshot(&state);
-        (id, SubscriptionReceiver::new(rx))
+        (id, SubscriptionReceiver::new(rx, Arc::clone(&state.moved)))
     }
 
     /// Register a subscriber and capture its backlog atomically.
@@ -428,9 +429,25 @@ impl StreamState {
     ///
     /// The fanout snapshot holds clones of the senders, so it is emptied too;
     /// otherwise the channels would stay open until the next publish.
-    pub(crate) fn end_subscribers(&self) -> usize {
+    ///
+    /// With a `handoff`, each receiver also learns the shard moved and where
+    /// to resume. `resume_from` is read under the log lock, the lock
+    /// `append_batch_at` captures its fanout list under, so every batch below
+    /// it was offered to these subscribers and none at or above it will be.
+    /// That holds per subscriber whatever its queue dropped, which is why it
+    /// is the stream's position and not what the subscriber received.
+    pub(crate) fn end_subscribers(&self, handoff: Option<ShardHandoff>) -> usize {
+        let log = self.log_state.lock();
         let mut state = self.subscribers.lock();
         let ended = state.senders.len();
+        if let Some(to) = handoff {
+            // An in-memory stream's sequence is local to this broker.
+            let resume_from = self.durable.is_some().then_some(log.next_seq);
+            let _ = state.moved.set(ShardMoved { resume_from, to });
+            // A subscriber that registers after this, if the shard comes
+            // back, must not inherit the old move.
+            state.moved = Arc::default();
+        }
         state.senders.clear();
         self.rebuild_subscriber_snapshot(&state);
         ended
@@ -489,6 +506,9 @@ pub(crate) struct SubscriberEntry {
 pub(crate) struct SubscriberRegistry {
     pub(crate) senders: HashMap<u64, mpsc::Sender<QueuedDelivery>>,
     next_id: u64,
+    /// Shared with every receiver registered since the last move; set when
+    /// the shard moves away.
+    moved: Arc<OnceLock<ShardMoved>>,
 }
 
 #[derive(Debug)]

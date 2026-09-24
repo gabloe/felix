@@ -357,6 +357,34 @@ pub enum Message {
     },
     /// First message on the event stream for a subscription.
     EventStreamHello { subscription_id: u64 },
+    /// Last message on the event stream of a subscription or cache watch whose
+    /// shard this broker has stopped serving: the shard moved, and this says
+    /// where to pick it up. The broker finishes the stream after it.
+    ///
+    /// Sent only to a client that offered `FEATURE_SHARD_MOVED`; any other
+    /// client sees the stream end after its last event, as it always has.
+    ShardMoved {
+        subscription_id: u64,
+        /// The first offset this broker did not hand to the subscription:
+        /// every record below it was sent to this subscriber or dropped by its
+        /// queue, and none at or above it was. Resuming at
+        /// `max(last delivered + 1, resume_from)` neither repeats nor skips a
+        /// record. Absent for an in-memory stream, whose offsets mean nothing
+        /// on another broker, and for a watch whose shard was still taking
+        /// writes when it ended; resume after the last offset seen then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume_from: Option<u64>,
+        /// The broker taking the shard, when this one knows. A hint: the shard
+        /// may have moved again by the time the client gets there, and that
+        /// broker then redirects like any other.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node_id: Option<String>,
+        /// That broker's client address, when the cluster publishes one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        addr: Option<String>,
+        /// The assignment generation that moved the shard.
+        generation: u64,
+    },
     /// Single event delivered to a subscriber.
     Event {
         tenant_id: String,

@@ -50,6 +50,7 @@ from ._felix import (
     CacheWatchFilter,
     CacheWatchHandle,
     CacheWatchLagged,
+    CacheWatchShardMoved,
     Client,
     ConnectionError,
     CursorError,
@@ -61,6 +62,7 @@ from ._felix import (
     OverloadedError,
     ShardedSubscriptionHandle,
     ShardLost,
+    ShardMoved,
     ShardRecord,
     ShardRecovered,
     ShardUnavailableError,
@@ -82,6 +84,7 @@ __all__ = [
     "ShardRecord",
     "ShardLost",
     "ShardRecovered",
+    "ShardMoved",
     # Queues
     "GroupRecord",
     # Cache watches
@@ -90,6 +93,7 @@ __all__ = [
     "AsyncCacheWatch",
     "CacheChange",
     "CacheWatchLagged",
+    "CacheWatchShardMoved",
     # Errors
     "FelixError",
     "ConnectionError",

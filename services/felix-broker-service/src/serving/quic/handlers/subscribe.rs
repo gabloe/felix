@@ -93,6 +93,7 @@ pub(crate) async fn handle_subscribe_message(
     start: Option<StartPosition>,
     shard: Option<u32>,
     peer_flags: u16,
+    peer_features: u32,
 ) -> Result<bool> {
     // Which shard of the stream this subscription reads.
     //
@@ -330,6 +331,10 @@ pub(crate) async fn handle_subscribe_message(
         flush_delay,
         single_event_mode: config.fanout_batch_size <= 1,
         offsets_enabled,
+        shard_moved_enabled: felix_wire::supports_feature(
+            peer_features,
+            felix_wire::FEATURE_SHARD_MOVED,
+        ),
         flush_max_items: config.subscriber_flush_max_items.max(1),
         flush_max_delay: Duration::from_micros(config.subscriber_flush_max_delay_us.max(1)),
         max_bytes_per_write: config.subscriber_max_bytes_per_write.max(1),

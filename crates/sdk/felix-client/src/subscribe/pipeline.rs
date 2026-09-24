@@ -5,10 +5,10 @@
 //! since it is woken per slice of arriving data; dispatch stays on the
 //! application's runtime.
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use anyhow::Context;
@@ -18,7 +18,7 @@ use quinn::RecvStream;
 use tokio::sync::mpsc;
 
 use super::queue::enqueue_with_policy;
-use super::{QueuedEvent, Subscription};
+use super::{QueuedEvent, ShardMoved, Subscription};
 use crate::config::ClientSubQueuePolicy;
 use crate::frame_io::read_frame_into_with_limit;
 #[cfg(feature = "telemetry")]
@@ -50,6 +50,7 @@ impl Subscription {
         let capacity = config.queue_capacity.max(1);
         let (frame_tx, frame_rx) = mpsc::channel(capacity);
         let (event_tx, event_rx) = mpsc::channel(capacity);
+        let shard_moved = Arc::new(OnceLock::new());
 
         // The io task is woken per slice of arriving stream data, so it runs
         // colocated with the connection's drivers; dispatch has no
@@ -67,6 +68,7 @@ impl Subscription {
             config.queue_policy,
             capacity,
             config.subscription_id,
+            Arc::clone(&shard_moved),
         ));
 
         Self {
@@ -82,6 +84,7 @@ impl Subscription {
             bench_embed_ts: config.bench_embed_ts,
             start_offset: None,
             live_offset: None,
+            shard_moved,
         }
     }
 }
@@ -122,17 +125,19 @@ async fn run_subscription_io_task(
                     break;
                 }
             };
-        if !enqueue_frame(
-            &frame_tx,
-            QueuedFrame {
-                frame: first,
-                enqueued_at: Instant::now(),
-            },
-            queue_policy,
-            queue_capacity,
-        )
-        .await
-        {
+        let control = first.header.flags == 0;
+        let queued = QueuedFrame {
+            frame: first,
+            enqueued_at: Instant::now(),
+        };
+        // Events come in binary batches; a JSON frame can be `shard_moved`,
+        // and dropping that would lose where to resume, so it waits for room.
+        let sent = if control {
+            frame_tx.send(queued).await.is_ok()
+        } else {
+            enqueue_frame(&frame_tx, queued, queue_policy, queue_capacity).await
+        };
+        if !sent {
             break;
         }
     }
@@ -144,6 +149,7 @@ async fn run_subscription_dispatch_task(
     queue_policy: ClientSubQueuePolicy,
     queue_capacity: usize,
     subscription_id: u64,
+    shard_moved: Arc<OnceLock<ShardMoved>>,
 ) {
     while let Some(queued_frame) = frame_rx.recv().await {
         let queue_wait_ns = queued_frame.enqueued_at.elapsed().as_nanos() as u64;
@@ -303,6 +309,24 @@ async fn run_subscription_dispatch_task(
                                 .fetch_add(payloads.len() as u64, Ordering::Relaxed);
                         }
                         (payloads.into_iter().map(Bytes::from).collect(), base_offset)
+                    }
+                    Message::ShardMoved {
+                        resume_from,
+                        node_id,
+                        addr,
+                        generation,
+                        ..
+                    } => {
+                        // Returning drops the event sender, so the reader sees
+                        // the events queued before this and then `None`, by
+                        // which time the slot is set.
+                        let _ = shard_moved.set(ShardMoved {
+                            resume_from,
+                            node_id,
+                            addr,
+                            generation,
+                        });
+                        return;
                     }
                     _ => {
                         let _ = enqueue_event(

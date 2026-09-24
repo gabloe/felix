@@ -154,6 +154,12 @@ try {
 first record you have not seen**, so a resuming consumer passes the offset it
 last handled *plus one*. Offsets are `bigint`, so the arithmetic is `+ 1n`.
 
+**A subscription follows its shard when a rebalance moves it.** The old owner
+ends it after delivering what it committed and says where to resume; the client
+resubscribes on the new owner and `nextEvent` carries on. On a durable stream
+nothing is repeated or skipped; an in-memory stream resumes at the new owner's
+tail.
+
 :::caution[Do not abandon a `nextEvent` you raced against a timer]
 There is no timeout argument, because a caller who wants one can race the
 promise. But the losing `nextEvent` **stays in flight and will resolve with the
@@ -369,6 +375,10 @@ try {
       // subscriber infers it — this is the only signal.
       return resumeFrom(item.laggedResumeFrom);
     }
+    if (item.shardMoved !== null) {
+      // The shard moved to another broker, which ended the watch.
+      return resumeFrom(item.shardMoved.resumeFrom ?? lastOffset + 1n);
+    }
     if (item.change.value === null) {
       roster.delete(item.change.key);   // a delete is a change with no value
     } else {
@@ -386,7 +396,9 @@ Three things there are load-bearing:
 - **`value === null` means removed**, deliberately distinguishable from an empty
   value. A watcher mirroring a cache has to tell those apart.
 - **`laggedResumeFrom` is a value, not a rejection.** Re-watching from it is
-  gapless.
+  gapless. `shardMoved` is the same kind of value: re-watch from its
+  `resumeFrom` when set, and otherwise from the offset after the last change
+  you saw.
 
 `start` and `retained` are mutually exclusive — a resume already replays the
 state a retained start shortcuts, so asking for both is refused rather than
@@ -413,6 +425,9 @@ for (;;) {
     alert(item.shard, item.lostError);
   } else if (item.recovered) {
     console.log(`shard ${item.shard} back`);
+  } else if (item.shardMoved) {
+    // Followed to its new owner; its records carry on from there.
+    console.log(`shard ${item.shard} moved to ${item.shardMoved.nodeId}`);
   }
 }
 ```

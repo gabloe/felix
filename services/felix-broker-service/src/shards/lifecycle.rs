@@ -120,6 +120,10 @@ pub struct ShardLifecycle {
     /// Moves naming this broker as the destination, until it serves the shard
     /// or stops being named.
     incoming: HashMap<ShardKey, Incoming>,
+    /// Where each shard is headed by the latest assignment: the successor
+    /// while this broker leads it, the new leader once it does not. What a
+    /// reader ended by the move is told.
+    headed: HashMap<ShardKey, felix_broker::ShardHandoff>,
 }
 
 /// A move toward this broker, timed from when this broker first saw each step.
@@ -136,6 +140,7 @@ impl ShardLifecycle {
             shards: HashMap::new(),
             fence: Arc::default(),
             incoming: HashMap::new(),
+            headed: HashMap::new(),
         }
     }
 
@@ -177,6 +182,13 @@ impl ShardLifecycle {
         self.shards.get(key).map(|shard| shard.generation)
     }
 
+    /// Where the latest assignment sends a shard this broker is giving up,
+    /// without the address, which the lifecycle does not know. `None` when the
+    /// shard has no assignment at all.
+    pub fn headed(&self, key: &ShardKey) -> Option<felix_broker::ShardHandoff> {
+        self.headed.get(key).cloned()
+    }
+
     /// Shards this broker is currently serving.
     pub fn active(&self) -> impl Iterator<Item = &ShardKey> {
         self.shards
@@ -200,6 +212,26 @@ impl ShardLifecycle {
             && assignment.is_some_and(|a| a.successor.as_deref() == Some(self.node_id.as_str()));
         if !ours && !incoming {
             self.incoming.remove(key);
+        }
+        match assignment {
+            Some(a) => {
+                let node_id = if ours {
+                    a.successor.clone()
+                } else {
+                    Some(a.leader.clone())
+                };
+                self.headed.insert(
+                    key.clone(),
+                    felix_broker::ShardHandoff {
+                        node_id,
+                        addr: None,
+                        generation: a.generation,
+                    },
+                );
+            }
+            None => {
+                self.headed.remove(key);
+            }
         }
 
         match (ours, current) {
@@ -474,7 +506,17 @@ pub trait ShardStore: Send + Sync {
     /// The broker stays up, so without this a reader's feed simply goes quiet
     /// and the client has no reason to look for the new leader. Each reader
     /// gets what was already queued for it first.
-    async fn end_readers(&self, _key: &ShardKey) {}
+    ///
+    /// `handoff` says where the shard went, when the assignment says; each
+    /// reader is then told where to resume. `quiet` is whether the writes in
+    /// flight when the shard stopped serving had all landed first.
+    async fn end_readers(
+        &self,
+        _key: &ShardKey,
+        _handoff: Option<felix_broker::ShardHandoff>,
+        _quiet: bool,
+    ) {
+    }
     /// Get ready to serve a shard a move is bringing here: open its log and
     /// load what serving it needs, so taking it over is quick.
     ///
@@ -486,11 +528,24 @@ pub trait ShardStore: Send + Sync {
 /// Ends the readers of a released shard, for the stores that serve them.
 pub struct ShardReaders {
     broker: std::sync::Arc<felix_broker::Broker>,
+    endpoints: Option<Arc<crate::cluster::client_endpoints::ClientEndpoints>>,
 }
 
 impl ShardReaders {
     pub fn new(broker: std::sync::Arc<felix_broker::Broker>) -> Self {
-        Self { broker }
+        Self {
+            broker,
+            endpoints: None,
+        }
+    }
+
+    /// Where to look up the next owner's client address for a moved reader.
+    pub fn with_endpoints(
+        mut self,
+        endpoints: Arc<crate::cluster::client_endpoints::ClientEndpoints>,
+    ) -> Self {
+        self.endpoints = Some(endpoints);
+        self
     }
 
     /// Open the shard's log and its in-memory state in the background.
@@ -533,16 +588,49 @@ impl ShardReaders {
         });
     }
 
-    async fn end(&self, key: &ShardKey) {
+    async fn end(&self, key: &ShardKey, handoff: Option<felix_broker::ShardHandoff>, quiet: bool) {
+        let handoff = handoff.map(|mut to| {
+            if to.addr.is_none()
+                && let (Some(node_id), Some(endpoints)) = (&to.node_id, &self.endpoints)
+            {
+                to.addr = endpoints
+                    .snapshot()
+                    .iter()
+                    .find(|endpoint| &endpoint.node_id == node_id)
+                    .map(|endpoint| endpoint.addr.clone());
+            }
+            to
+        });
         let ended = match key.kind {
             ShardKind::Stream => {
                 self.broker
-                    .end_subscriptions(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+                    .end_subscriptions(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        handoff,
+                    )
                     .await
             }
-            ShardKind::Cache => self.broker.cache_watches().map_or(0, |hub| {
-                hub.end_shard(&key.tenant_id, &key.namespace, &key.stream, key.shard)
-            }),
+            ShardKind::Cache => {
+                let moved = match handoff {
+                    Some(to) => Some(felix_broker::ShardMoved {
+                        resume_from: self.cache_tail(key, quiet).await,
+                        to,
+                    }),
+                    None => None,
+                };
+                self.broker.cache_watches().map_or(0, |hub| {
+                    hub.end_shard(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        moved,
+                    )
+                })
+            }
         };
         if ended > 0 {
             tracing::info!(
@@ -553,6 +641,23 @@ impl ShardReaders {
                 "ended readers of a shard this broker no longer serves",
             );
         }
+    }
+
+    /// Where a moved cache watch resumes: the shard log's tail, but only once
+    /// the writes in flight have landed. A change still being applied could
+    /// otherwise sit below the tail and reach no watcher, and resuming from
+    /// the watch's own last offset is gapless anyway.
+    async fn cache_tail(&self, key: &ShardKey, quiet: bool) -> Option<u64> {
+        use felix_storage::log::AppendOnlyLog;
+        if !quiet {
+            return None;
+        }
+        let log = self
+            .broker
+            .cache()
+            .shard_log(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+            .await?;
+        log.tail_offset().await.ok()
     }
 }
 
@@ -641,9 +746,14 @@ impl ShardStore for DurableShardStore {
             .map_err(|err| anyhow::anyhow!("flush shard log: {err}"))
     }
 
-    async fn end_readers(&self, key: &ShardKey) {
+    async fn end_readers(
+        &self,
+        key: &ShardKey,
+        handoff: Option<felix_broker::ShardHandoff>,
+        quiet: bool,
+    ) {
         if let Some(readers) = &self.readers {
-            readers.end(key).await;
+            readers.end(key, handoff, quiet).await;
         }
     }
 
@@ -683,9 +793,14 @@ impl ShardStore for EphemeralShardStore {
         Ok(())
     }
 
-    async fn end_readers(&self, key: &ShardKey) {
+    async fn end_readers(
+        &self,
+        key: &ShardKey,
+        handoff: Option<felix_broker::ShardHandoff>,
+        quiet: bool,
+    ) {
         if let Some(readers) = &self.readers {
-            readers.end(key).await;
+            readers.end(key, handoff, quiet).await;
         }
     }
 }
@@ -783,18 +898,21 @@ async fn end_readers(
     store: &dyn ShardStore,
     key: &ShardKey,
 ) {
-    let fence = Arc::clone(lifecycle.lock().await.fence());
-    if tokio::time::timeout(QUIESCE_BOUND, fence.quiesce(key))
+    let (fence, handoff) = {
+        let lifecycle = lifecycle.lock().await;
+        (Arc::clone(lifecycle.fence()), lifecycle.headed(key))
+    };
+    let quiet = tokio::time::timeout(QUIESCE_BOUND, fence.quiesce(key))
         .await
-        .is_err()
-    {
+        .is_ok();
+    if !quiet {
         tracing::warn!(
             stream = %key.stream,
             shard = key.shard,
             "ending a shard's readers with writes still in flight",
         );
     }
-    store.end_readers(key).await;
+    store.end_readers(key, handoff, quiet).await;
 }
 
 /// Bring local state in line with a full assignment set.

@@ -52,6 +52,7 @@ async fn handle_subscribe_message_sends_event_stream_binary_batch() -> Result<()
             None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
+            0,
         )
         .await?;
         Result::<bool>::Ok(handled)
@@ -154,6 +155,7 @@ async fn handle_subscribe_message_errors_when_stream_missing() -> Result<()> {
             None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
+            0,
         )
         .await
     });
@@ -231,6 +233,7 @@ async fn handle_subscribe_message_batches_by_bytes() -> Result<()> {
             None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
+            0,
         )
         .await
     });
@@ -348,6 +351,7 @@ async fn handle_subscribe_message_hashed_pool_with_generated_id() -> Result<()> 
             None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
+            0,
         )
         .await
     });
@@ -445,6 +449,7 @@ async fn handle_subscribe_message_open_uni_failure_sends_error_ack() -> Result<(
             None,
             None,
             felix_wire::ORIGINAL_V1_FLAGS,
+            0,
         )
         .await
     });
@@ -464,5 +469,143 @@ async fn handle_subscribe_message_open_uni_failure_sends_error_ack() -> Result<(
         _ => panic!("expected error ack"),
     }
     server_task.await.context("server join")??;
+    Ok(())
+}
+
+/// Subscribe with `peer_features`, publish one record, end the shard's
+/// subscriptions as a move does, and return every raw frame after the hello
+/// up to the end of the stream.
+async fn frames_of_a_moved_subscription(peer_features: u32) -> Result<Vec<bytes::Bytes>> {
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            felix_broker::StreamMetadata::default(),
+        )
+        .await?;
+
+    let (server_config, cert) = make_server_config()?;
+    let transport = TransportConfig::default();
+    let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+    let addr = server.local_addr()?;
+    let (out_ack_tx, mut out_ack_rx) = mpsc::channel(4);
+    let out_ack_depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (ack_throttle_tx, _ack_throttle_rx) = tokio::sync::watch::channel(false);
+    let ack_timeout_state = Arc::new(tokio::sync::Mutex::new(AckTimeoutState::new(
+        std::time::Instant::now(),
+    )));
+    let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
+    let broker_for_server = broker.clone();
+    let lane_manager = WriterLaneManager::new(&test_config());
+    let server_lane_manager = Arc::clone(&lane_manager);
+    let server_task = tokio::spawn(async move {
+        let connection = server.accept().await?;
+        // Held by the test, as the connection handler holds it in the broker:
+        // the last reference dropping would close the connection under the
+        // reader.
+        let held = connection.clone();
+        handle_subscribe_message(
+            broker_for_server,
+            connection,
+            test_config(),
+            &Arc::new(SubscriptionLimiter::new()),
+            &server_lane_manager,
+            &out_ack_tx,
+            &out_ack_depth,
+            &ack_throttle_tx,
+            &ack_timeout_state,
+            &cancel_tx,
+            "t1".to_string(),
+            "default".to_string(),
+            "orders".to_string(),
+            Some(7),
+            None,
+            None,
+            felix_wire::ORIGINAL_V1_FLAGS,
+            peer_features,
+        )
+        .await?;
+        Result::<_>::Ok(held)
+    });
+    let client = QuicClient::bind("0.0.0.0:0".parse()?, make_client_config(cert)?, transport)?;
+    let connection = client.connect(addr, "localhost").await?;
+    let _held = server_task.await.context("server join")??;
+    tokio::time::timeout(Duration::from_secs(1), out_ack_rx.recv())
+        .await
+        .context("ack timeout")?
+        .context("ack missing")?;
+    let mut event_recv = tokio::time::timeout(Duration::from_secs(1), connection.accept_uni())
+        .await
+        .context("accept uni timeout")??;
+    let mut scratch = BytesMut::new();
+    crate::serving::quic::codec::read_message_limited(&mut event_recv, 16 * 1024, &mut scratch)
+        .await?
+        .expect("hello");
+
+    broker
+        .publish("t1", "default", "orders", Bytes::from_static(b"last"))
+        .await?;
+    broker
+        .end_subscriptions(
+            "t1",
+            "default",
+            "orders",
+            0,
+            Some(felix_broker::ShardHandoff {
+                node_id: Some("broker-b".to_string()),
+                addr: Some("127.0.0.1:5001".to_string()),
+                generation: 4,
+            }),
+        )
+        .await;
+
+    let mut frames = Vec::new();
+    while let Some(frame) = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::serving::quic::codec::read_frame_limited_into(
+            &mut event_recv,
+            16 * 1024,
+            &mut scratch,
+        ),
+    )
+    .await
+    .context("the stream was not finished")??
+    {
+        frames.push(frame.encode());
+    }
+    let _ = felix_broker::timings::take_samples();
+    Ok(frames)
+}
+
+/// A client that offered `FEATURE_SHARD_MOVED` gets one last frame saying
+/// where the shard went; one that did not gets exactly the bytes it always
+/// got, the last event and the end of the stream.
+#[tokio::test]
+async fn a_moved_subscription_ends_with_shard_moved_only_when_offered() -> Result<()> {
+    let without = frames_of_a_moved_subscription(0).await?;
+    let with = frames_of_a_moved_subscription(felix_wire::FEATURE_SHARD_MOVED).await?;
+
+    assert_eq!(without.len(), 1, "the event, then the end");
+    assert_eq!(with.len(), 2, "the event, shard_moved, then the end");
+    assert_eq!(
+        with[0], without[0],
+        "the event is byte-identical either way"
+    );
+    let moved = Message::decode(felix_wire::Frame::decode(with[1].clone())?)?;
+    assert_eq!(
+        moved,
+        Message::ShardMoved {
+            subscription_id: 7,
+            // An in-memory stream: its sequence means nothing elsewhere.
+            resume_from: None,
+            node_id: Some("broker-b".to_string()),
+            addr: Some("127.0.0.1:5001".to_string()),
+            generation: 4,
+        }
+    );
     Ok(())
 }

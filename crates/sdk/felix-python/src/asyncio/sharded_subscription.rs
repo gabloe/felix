@@ -6,7 +6,7 @@ use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::types::OwnedShardEvent;
+use crate::types::next_shard_event;
 
 /// Every shard of a stream, merged, consumed with `async for`.
 #[pyclass(module = "felix", name = "AsyncShardedSubscription")]
@@ -42,14 +42,14 @@ impl AsyncShardedSubscription {
             let next = match timeout {
                 Some(seconds) => {
                     let duration = std::time::Duration::from_secs_f64(seconds.max(0.0));
-                    match tokio::time::timeout(duration, subscription.next()).await {
+                    match tokio::time::timeout(duration, next_shard_event(subscription)).await {
                         Ok(event) => event,
                         Err(_elapsed) => return Ok(None),
                     }
                 }
-                None => subscription.next().await,
+                None => next_shard_event(subscription).await,
             };
-            Ok(next.map(OwnedShardEvent::from))
+            Ok(next)
         })
     }
 
@@ -84,8 +84,8 @@ impl AsyncShardedSubscription {
             let Some(subscription) = guard.as_mut() else {
                 return Err(PyStopAsyncIteration::new_err("subscription closed"));
             };
-            match subscription.next().await {
-                Some(event) => Ok(OwnedShardEvent::from(event)),
+            match next_shard_event(subscription).await {
+                Some(event) => Ok(event),
                 None => Err(PyStopAsyncIteration::new_err("every shard ended")),
             }
         })

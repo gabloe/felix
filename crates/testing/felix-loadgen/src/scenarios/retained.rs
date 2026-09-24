@@ -66,6 +66,8 @@ pub(crate) async fn retained(common: &Common, cache: &str) -> Result<()> {
         match tokio::time::timeout(Duration::from_secs(60), watch.recv()).await {
             Ok(Some(felix_client::CacheWatchItem::Change(_))) => received += 1,
             Ok(Some(felix_client::CacheWatchItem::Lagged { .. })) => continue,
+            // The watch ended with its shard; the count stays short.
+            Ok(Some(felix_client::CacheWatchItem::ShardMoved(_))) => break,
             Ok(None) | Err(_) => break,
         }
     }

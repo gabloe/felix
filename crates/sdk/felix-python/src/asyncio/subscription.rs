@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use felix_client::Subscription;
+use felix_client::ClusterSubscription;
 use pyo3::exceptions::PyStopAsyncIteration;
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
@@ -13,15 +13,13 @@ use crate::types::OwnedEvent;
 /// A subscription consumed with `async for`.
 #[pyclass(module = "felix", name = "AsyncSubscription")]
 pub struct AsyncSubscription {
-    inner: Arc<Mutex<Option<Subscription>>>,
-    _client: Arc<felix_client::Client>,
+    inner: Arc<Mutex<Option<ClusterSubscription>>>,
 }
 
 impl AsyncSubscription {
-    pub(crate) fn new(subscription: Subscription, client: Arc<felix_client::Client>) -> Self {
+    pub(crate) fn new(subscription: ClusterSubscription) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Some(subscription))),
-            _client: client,
         }
     }
 }

@@ -871,3 +871,35 @@ fn the_old_leader_does_not_treat_its_own_move_as_incoming() {
     ));
     assert!(!own.is_incoming(&key(0)));
 }
+
+/// What a reader ended by a move is told: the successor while this broker
+/// still leads the shard (a fence arrives as a draining generation), the new
+/// leader once it does not, and nothing once the shard has no assignment.
+#[test]
+fn a_moving_shard_names_where_it_is_headed() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+    assert_eq!(
+        own.headed(&key(0)),
+        Some(felix_broker::ShardHandoff {
+            node_id: None,
+            addr: None,
+            generation: 3
+        })
+    );
+
+    let mut fenced = moving_to("broker-b", 4, "draining");
+    fenced.leader = "broker-a".to_string();
+    own.observe(&key(0), Some(&fenced));
+    let headed = own.headed(&key(0)).expect("assigned");
+    assert_eq!(headed.node_id.as_deref(), Some("broker-b"));
+    assert_eq!(headed.generation, 4);
+
+    own.observe(&key(0), Some(&assigned_to("broker-b", 5)));
+    let headed = own.headed(&key(0)).expect("assigned");
+    assert_eq!(headed.node_id.as_deref(), Some("broker-b"));
+    assert_eq!(headed.generation, 5);
+
+    own.observe(&key(0), None);
+    assert_eq!(own.headed(&key(0)), None);
+}

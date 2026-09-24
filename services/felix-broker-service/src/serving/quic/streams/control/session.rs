@@ -139,7 +139,10 @@ pub(super) async fn authenticate(
                             // Codes are sent only to a client that offered
                             // the bit; advertising it tells that client an
                             // error without one is not a gap in this broker.
-                            | felix_wire::FEATURE_ERROR_CODES,
+                            | felix_wire::FEATURE_ERROR_CODES
+                            // Sent only to a client that offered it, when a
+                            // shard it reads moves away.
+                            | felix_wire::FEATURE_SHARD_MOVED,
                     ),
                     // Only when there is more than one. A single
                     // listener is the default, and saying so

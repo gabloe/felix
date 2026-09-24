@@ -6,29 +6,30 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use super::follow::ClusterSubscription;
 use super::sharded::{ShardOffsets, ShardedGroup, ShardedSubscription};
 use super::{ClusterClient, MAX_REDIRECTS};
 use crate::client::Client;
 
 impl ClusterClient {
-    /// Subscribe, following the cluster to whichever broker owns the shard.
+    /// Subscribe, following the cluster to whichever broker owns the shard,
+    /// and following the shard again whenever it moves.
     ///
     /// A broker that does not own it answers `NotLeader` naming the one that
-    /// does; this connects there and asks again. The returned [`Client`] must
-    /// be kept alive for as long as the subscription: dropping it closes the
-    /// connection the events arrive on.
+    /// does; this connects there and asks again. See [`ClusterSubscription`]
+    /// for what happens when the shard later moves.
     ///
     /// The client this wrapper holds is **not** replaced. A redirect is about
     /// one shard, not about which broker is generally worth talking to, and
     /// moving every future publish because one stream lives elsewhere would be
     /// a much larger claim than the answer supports.
     pub async fn subscribe(
-        &self,
+        self: &Arc<Self>,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
-    ) -> Result<(Arc<Client>, crate::Subscription)> {
-        self.subscribe_shard_following_redirects(tenant_id, namespace, stream, 0, None)
+    ) -> Result<ClusterSubscription> {
+        self.subscribe_from(tenant_id, namespace, stream, None)
             .await
     }
 
@@ -38,14 +39,24 @@ impl ClusterClient {
     /// record the caller has *not* seen, so a client resuming after a
     /// disconnect passes the offset it last handled plus one.
     pub async fn subscribe_from(
-        &self,
+        self: &Arc<Self>,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
         start: Option<felix_wire::StartPosition>,
-    ) -> Result<(Arc<Client>, crate::Subscription)> {
-        self.subscribe_shard_following_redirects(tenant_id, namespace, stream, 0, start)
-            .await
+    ) -> Result<ClusterSubscription> {
+        let (client, subscription) = self
+            .subscribe_shard_following_redirects(tenant_id, namespace, stream, 0, start)
+            .await?;
+        Ok(ClusterSubscription::new(
+            Arc::clone(self),
+            tenant_id,
+            namespace,
+            stream,
+            0,
+            client,
+            subscription,
+        ))
     }
 
     /// Subscribe to **every** shard of a stream, merged into one channel.
@@ -134,7 +145,23 @@ impl ClusterClient {
         shard: u32,
         start: Option<felix_wire::StartPosition>,
     ) -> Result<(Arc<Client>, crate::Subscription)> {
-        let mut client = self.client().await;
+        let entry = self.client().await;
+        self.subscribe_shard_via(entry, tenant_id, namespace, stream, shard, start)
+            .await
+    }
+
+    /// [`Self::subscribe_shard_following_redirects`], asking `first` before
+    /// anyone else.
+    pub(crate) async fn subscribe_shard_via(
+        &self,
+        first: Arc<Client>,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        start: Option<felix_wire::StartPosition>,
+    ) -> Result<(Arc<Client>, crate::Subscription)> {
+        let mut client = first;
         // Every broker this attempt has already asked. A cluster mid-rebalance
         // can name an owner that names another, and two brokers that disagree
         // would otherwise bounce a client between them until its deadline.

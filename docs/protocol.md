@@ -191,6 +191,18 @@ with a `start`, on a durable stream, to a client that negotiated
 `offset` is present for durable streams and absent for in-memory ones, which
 have no durable position to checkpoint against.
 
+### ShardMoved (server -> client)
+```
+{ "type": "shard_moved", "subscription_id": <u64>, "resume_from": <u64|absent>, "node_id": "<string|absent>", "addr": "<string|absent>", "generation": <u64> }
+```
+
+The last frame on the event stream of a subscription or cache watch whose shard
+this broker stopped serving, because the shard moved. Everything already queued
+for the reader is delivered first; the broker finishes the stream after this.
+Sent only to a client that offered `FEATURE_SHARD_MOVED`: any other client sees
+the stream end after its last event, byte for byte as before. See
+[Shard moves](#shard-moves).
+
 ### CachePut
 ```
 { "type": "cache_put", "key": "<string>", "value": "<base64>", "ttl_ms": <number|null> }
@@ -862,6 +874,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0200` | `FEATURE_IDEMPOTENT_PRODUCER` | The broker serves `producer_init` and `publish_idempotent`, and answers the latter's refusals as `publish_refused` |
 | `0x0400` | `FEATURE_CACHE_SHARDS` | The broker answers `cache_shards` |
 | `0x0800` | `FEATURE_ERROR_CODES` | The client reads `code`, `retry` and `detail` on `error` and `publish_error` |
+| `0x1000` | `FEATURE_SHARD_MOVED` | The client reads `shard_moved` at the end of an event stream |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -1010,6 +1023,42 @@ hops and refuses to visit the same broker twice within one attempt.
 choices deliberately: `docs/subscribe-routing.md` records the measurements
 behind redirecting subscribes, and `docs/internal-protocol.md` the forwarding
 of publishes. A client should not expect `not_leader` in answer to a publish.
+
+## Shard moves
+
+A broker that stops serving a shard, because a rebalance or a drain moved it,
+ends every subscription and cache watch it was serving on that shard. It waits
+(briefly) for the writes already inside the shard's write fence to land and fan
+out, so each reader first receives everything this broker committed. To a client
+that offered `FEATURE_SHARD_MOVED` it then sends `shard_moved` and finishes the
+stream.
+
+- `resume_from` is the first offset this broker did not offer the reader. For a
+  stream subscription every record below it was sent to the subscriber or dropped
+  by the subscriber's own queue, and none at or above it was. It is the stream's
+  position, not the subscriber's: a queue that dropped records does not move it.
+  Absent for an in-memory stream, whose sequence means nothing on another broker.
+  For a cache watch it is the shard log's tail, and absent if writes were still
+  in flight when the watch ended; resume after the last offset seen then.
+- `node_id` and `addr` name the broker taking the shard, when this one knows:
+  the successor while the move is in progress, the new leader after. They are a
+  hint. The shard may not be served there yet (the frame goes out at the fence,
+  before the cut-over), or may have moved again, and a subscribe there is then
+  answered like any other: `not_leader`, or `shard_unavailable` to retry.
+- `generation` is the assignment generation that moved the shard.
+
+A client resumes a durable subscription at `max(last delivered offset + 1,
+resume_from)`. The `max` matters in both directions. A record fanned out just
+before the move can still reach the subscriber, so the last offset it saw may be
+past `resume_from`; and records its queue dropped stay dropped, exactly as they
+would have without the move. Resumed that way, nothing is repeated and nothing
+is skipped that the subscriber would otherwise have received.
+
+The Rust `ClusterClient` does this on its own: a subscription from
+`ClusterClient::subscribe` follows its shard, and a sharded subscription reports
+`ShardEvent::ShardMoved` and resumes the shard. `Client` surfaces the frame as
+`Subscription::shard_moved` and `CacheWatchItem::ShardMoved` and leaves the
+resume to the caller.
 
 ## Topology
 

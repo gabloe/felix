@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use felix_client::Subscription;
+use felix_client::ClusterSubscription;
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use tokio::sync::{Mutex, watch};
@@ -19,19 +19,15 @@ use crate::types::Event;
 /// the subscription on its way out.
 #[napi]
 pub struct SubscriptionHandle {
-    inner: Arc<Mutex<Option<Subscription>>>,
+    inner: Arc<Mutex<Option<ClusterSubscription>>>,
     closed: watch::Sender<bool>,
-    /// Kept alive because the subscription's event stream belongs to it:
-    /// dropping the client would close the stream underneath the reader.
-    _client: Arc<felix_client::Client>,
 }
 
 impl SubscriptionHandle {
-    pub(crate) fn new(subscription: Subscription, client: Arc<felix_client::Client>) -> Self {
+    pub(crate) fn new(subscription: ClusterSubscription) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Some(subscription))),
             closed: watch::Sender::new(false),
-            _client: client,
         }
     }
 }

@@ -16,12 +16,14 @@
 //! offset. Loss is loud, and the recovery is gapless.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 use bytes::Bytes;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
+
+use crate::handoff::ShardMoved;
 
 /// Sentinel for "not lagged" in [`WatcherState::lagged_at`]. No real offset can
 /// collide with it: a log would have to hold 2^64 records first.
@@ -61,6 +63,7 @@ impl CacheWatchHub {
         let (sender, receiver) = mpsc::channel(queue_capacity.max(1));
         let state = Arc::new(WatcherState {
             lagged_at: AtomicU64::new(NOT_LAGGED),
+            moved: OnceLock::new(),
         });
         let key = (
             tenant_id.to_string(),
@@ -113,17 +116,32 @@ impl CacheWatchHub {
     ///
     /// For a shard that has moved to another broker: call it once writes here
     /// have stopped, so no change is applied after the watchers are gone.
-    pub fn end_shard(&self, tenant_id: &str, namespace: &str, cache: &str, shard: u32) -> usize {
+    ///
+    /// With `moved`, each watch also records that its shard moved and where to
+    /// resume, which [`CacheWatchSubscription::moved`] reports once drained.
+    pub fn end_shard(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        shard: u32,
+        moved: Option<ShardMoved>,
+    ) -> usize {
         let key = (
             tenant_id.to_string(),
             namespace.to_string(),
             cache.to_string(),
             shard,
         );
-        self.shards
-            .lock()
-            .remove(&key)
-            .map_or(0, |watchers| watchers.len())
+        let Some(watchers) = self.shards.lock().remove(&key) else {
+            return 0;
+        };
+        if let Some(moved) = moved {
+            for watcher in &watchers {
+                let _ = watcher.state.moved.set(moved.clone());
+            }
+        }
+        watchers.len()
     }
 
     fn remove(&self, key: &WatchShardKey, id: u64) {
@@ -204,6 +222,9 @@ struct WatcherState {
     /// Offset of the first change the queue could not hold, or [`NOT_LAGGED`].
     /// Written once, by the fanout that overflowed the queue.
     lagged_at: AtomicU64,
+    /// Set when the watch ended because its shard moved, before its queue
+    /// closes.
+    moved: OnceLock<ShardMoved>,
 }
 
 /// Which changes one watcher wants.
@@ -252,6 +273,12 @@ impl CacheWatchSubscription {
     pub fn lagged(&self) -> Option<u64> {
         let at = self.state.lagged_at.load(Ordering::Acquire);
         (at != NOT_LAGGED).then_some(at)
+    }
+
+    /// Why the watch ended, when it ended because its shard moved. Final once
+    /// [`Self::recv`] has returned `None`.
+    pub fn moved(&self) -> Option<&ShardMoved> {
+        self.state.moved.get()
     }
 }
 

@@ -46,39 +46,21 @@ impl ShardedSubscriptionHandle {
         let Some(sub) = guard.as_mut() else {
             return Ok(None);
         };
-        let item = tokio::select! {
-            item = sub.next() => item,
-            _ = closed.wait_for(|closed| *closed) => {
-                guard.take();
+        loop {
+            let item = tokio::select! {
+                item = sub.next() => item,
+                _ = closed.wait_for(|closed| *closed) => {
+                    guard.take();
+                    return Ok(None);
+                }
+            };
+            let Some(item) = item else {
                 return Ok(None);
+            };
+            if let Some(event) = shard_event(item) {
+                return Ok(Some(event));
             }
-        };
-        Ok(item.map(|item| match item {
-            felix_client::ShardEvent::Record { shard, event } => ShardEvent {
-                shard,
-                event: Some(Event {
-                    tenant_id: event.tenant_id.to_string(),
-                    namespace: event.namespace.to_string(),
-                    stream: event.stream.to_string(),
-                    payload: event.payload.to_vec().into(),
-                    offset: event.offset.map(BigInt::from),
-                }),
-                lost_error: None,
-                recovered: None,
-            },
-            felix_client::ShardEvent::ShardLost { shard, error } => ShardEvent {
-                shard,
-                event: None,
-                lost_error: Some(error),
-                recovered: None,
-            },
-            felix_client::ShardEvent::ShardRecovered { shard } => ShardEvent {
-                shard,
-                event: None,
-                lost_error: None,
-                recovered: Some(true),
-            },
-        }))
+        }
     }
 
     /// The last offset seen from each shard, for resuming.
@@ -113,4 +95,47 @@ impl ShardedSubscriptionHandle {
     pub fn closed(&self) -> bool {
         *self.closed.borrow()
     }
+}
+
+/// The binding's shape for a sharded item, or `None` for one it has no shape
+/// for: `ShardEvent` is non-exhaustive, so a kind added later is skipped until
+/// it gets one.
+fn shard_event(item: felix_client::ShardEvent) -> Option<ShardEvent> {
+    Some(match item {
+        felix_client::ShardEvent::Record { shard, event } => ShardEvent {
+            shard,
+            event: Some(Event {
+                tenant_id: event.tenant_id.to_string(),
+                namespace: event.namespace.to_string(),
+                stream: event.stream.to_string(),
+                payload: event.payload.to_vec().into(),
+                offset: event.offset.map(BigInt::from),
+            }),
+            lost_error: None,
+            recovered: None,
+            shard_moved: None,
+        },
+        felix_client::ShardEvent::ShardLost { shard, error } => ShardEvent {
+            shard,
+            event: None,
+            lost_error: Some(error),
+            recovered: None,
+            shard_moved: None,
+        },
+        felix_client::ShardEvent::ShardRecovered { shard } => ShardEvent {
+            shard,
+            event: None,
+            lost_error: None,
+            recovered: Some(true),
+            shard_moved: None,
+        },
+        felix_client::ShardEvent::ShardMoved { shard, moved } => ShardEvent {
+            shard,
+            event: None,
+            lost_error: None,
+            recovered: None,
+            shard_moved: Some(moved.into()),
+        },
+        _ => return None,
+    })
 }

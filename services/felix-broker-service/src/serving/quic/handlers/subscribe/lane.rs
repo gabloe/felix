@@ -43,6 +43,9 @@ pub(super) enum ConnectionCommand {
     },
     Unregister {
         subscriber_id: u64,
+        /// A frame to write after everything queued and before letting the
+        /// stream go: `shard_moved`, for a subscription whose shard moved.
+        last: Option<Bytes>,
     },
 }
 
@@ -70,6 +73,10 @@ pub(crate) enum LaneCommand {
         // lane worker dequeues, the lookup would already miss and the cleanup
         // would be skipped entirely.
         connection_id: Option<u64>,
+        /// The subscription's last frame, if it has one. Carried here rather
+        /// than as a delivery so it is never dropped: control commands are
+        /// sent with backpressure, deliveries are not.
+        last: Option<Bytes>,
     },
 }
 
