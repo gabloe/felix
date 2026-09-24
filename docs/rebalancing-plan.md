@@ -1,8 +1,10 @@
 # Rebalancing: from partial to done
 
-The status table lists online rebalancing as partial. This is the plan for
+The status table listed online rebalancing as partial. This was the plan for
 finishing it: what was wrong with moves beyond the known gaps, and the order the
-work lands in. Each phase is one pull request and is useful on its own.
+work landed in. Each phase was one pull request and useful on its own. All of
+it has landed; the status row now reads done, with the edges listed under
+[What is left](#what-is-left).
 
 ## How a move works
 
@@ -10,8 +12,9 @@ The control plane moves a shard in steps (`cluster/placement/moves.rs`):
 
 1. **Stage.** The destination is added to the shard's replicas and the leader
    starts shipping it the log.
-2. **Fence.** Once the destination has caught up, the assignment goes
-   `draining`. The old leader stops serving the shard but keeps shipping.
+2. **Fence.** Once the destination is within the lag bound (phase 4), the
+   assignment goes `draining`. The old leader stops serving the shard but
+   keeps shipping.
 3. **Drained.** The old leader reports that the shard's log has stopped growing.
 4. **Cut over.** The control plane names the destination leader at a new
    generation.
@@ -68,7 +71,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | done |
 | 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | done |
 | 6 | Idempotent producers keep their sequences across a planned move | done |
-| 7 | Docs and the status row | planned |
+| 7 | Docs and the status row | done |
 
 Load-aware placement (moving shards by load rather than by count) is separate
 work with its own status row.
@@ -81,7 +84,8 @@ work with its own status row.
   show the race without the check.
 - **Readers end when their shard moves** (merged, #664). A broker ends a shard's subscriptions
   and cache watches whenever it stops serving it, after what was already queued
-  for them.
+  for them. Phase 3 builds on this: the last frame says where to resume, and
+  the client follows.
 - **The write fence** (merged, #664). Every write enters a per-shard fence right before it
   claims its place in the log and stays counted until it is durable. The fence
   closes when the broker stops serving the shard, and a write reaching it after
@@ -329,6 +333,28 @@ release build; `producer_state_open`), and about 100 ms when the snapshot is
 missing and the sealed segments are read instead. Durable publish throughput,
 plain and idempotent, is unchanged within run-to-run noise
 (`idempotent_throughput`).
+
+### Phase 7: docs and the status row
+
+The status row moved to done, citing the tests above. Pages written by
+separate phases were read against each other and against the code: the
+control-plane record, the scaling page, the semantics pages and the README
+still described publishes refused and readers ended rather than followed, and
+now do not. The scaling page gained a sequence diagram of a move.
+
+## What is left
+
+- **Cache, counter and group writes are not held.** They are refused,
+  retryably, for the length of the switch-over. Holding them needs the same
+  treatment publishes got on each of their paths.
+- **The move limits hold per planner.** Every write is conditional on its own
+  shard's generation, not on the count, so two Postgres-backed instances
+  placing at the same instant can each start a move. Raft has one planner.
+- **No handoff on shutdown.** Stopping a broker fails its shards over; drain
+  it first. Phase 5 says why it was left out.
+- **A cache watch does not follow on its own.** It ends with `shard_moved` and
+  the caller reopens it; a sharded watch moves that shard's resume offset.
+- **Load-aware placement** is separate work with its own status row.
 
 ## Checking the work
 

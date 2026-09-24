@@ -614,15 +614,15 @@ In a clustered deployment:
 - **Shard leadership**: Only one leader per shard, and it serves only while it
   holds a lease. A broker that has been superseded stops acknowledging rather
   than discovering the fact later
-- **Metadata consistency**: strongly consistent, because it lives in one Postgres that every control-plane instance reads and writes
+- **Metadata consistency**: strongly consistent, because it lives in one Postgres that every control-plane instance reads and writes, or in an embedded Raft group. A Raft member that comes back with a wiped volume withholds its vote until it has caught up, so it cannot help elect a leader missing an acknowledged write (see [Raft metadata](/felix/architecture/metadata-raft/))
 - **Cross-shard ordering**: Not guaranteed. Ordering is per key, because a key
   always resolves to the same shard and a shard is one log on one leader
 - **Cache consistency**: One owner per key, not eventual. A key hashes to a
   shard, that shard has one owner, and a broker receiving an operation for a key
   it does not own forwards it there — so a value written through any broker is
   readable through every other, and two brokers cannot hold divergent values for
-  the same key. A cache write is acknowledged by its leader; a cache cannot
-  declare `Quorum`
+  the same key. A cache declares `Leader` or `Quorum` like a stream; counter
+  adds are acknowledged by the leader alone whatever it declares
 
 ## Failure Scenarios and Behavior
 
@@ -661,6 +661,26 @@ In a clustered deployment:
 - Durable streams can replay from last checkpoint
 - Subscribers can resume from last acknowledged offset
 - Cache state can be rebuilt from log
+
+### Shard Moves
+
+A drain or a rebalance moves a shard off a live broker. It is not a failure,
+and clients see less of it than of one:
+
+- **Publishes are held, not refused.** Between the fence and the cut-over
+  nobody serves the shard; a publish arriving then waits and is forwarded to
+  the new owner. Only a switch-over longer than `FELIX_SHARD_MOVE_HOLD_MS`
+  (2 s) refuses one, as `shard_unavailable` with reason `moving`, unwritten.
+- **Cache writes, counter adds and consumer-group writes are refused** for the
+  length of the switch-over, retryably.
+- **Subscriptions follow.** The old leader delivers what it committed, then
+  ends each subscription with `shard_moved`. A `ClusterClient` subscription
+  resumes on the new owner with nothing repeated or skipped. A cache watch
+  gets the same frame and is reopened by the caller.
+- **Nothing acknowledged is lost.** Group positions, dead letters, counters
+  and idempotent producers' sequences move with the shard.
+
+See [Adding, draining and removing brokers](/felix/deployment/scaling/#what-clients-see).
 
 ### Slow Subscriber Behavior
 

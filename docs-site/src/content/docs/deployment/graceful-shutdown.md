@@ -48,6 +48,12 @@ the control plane would revoke the whole chain.
 failing liveness would make Kubernetes restart a pod that is shutting down exactly
 as intended.
 
+Shutting a broker down does not hand its shards to another broker. The shards
+it leads fail over to caught-up replicas, and one with no replica waits for it
+to come back. To move them without a failover, drain the broker first and stop
+it once it leads nothing (see
+[Adding, draining and removing brokers](/felix/deployment/scaling/#draining-a-broker)).
+
 Metrics are torn down **last**, after everything else has drained, so `/metrics`
 and `/ready` remain scrapeable for the whole shutdown window. That window is the
 only chance an operator has to see what the process was doing while it stopped.

@@ -147,9 +147,10 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   rest on an external database
 - Online rebalancing: a shard with a live leader is moved by staging the
   destination as a replica, fencing the leader and cutting over once the copy
-  is level. Draining a broker and adding one both work this way. Publishes to a
-  moving shard are refused for a few sync intervals around the cut-over, and
-  subscriptions on the old leader end rather than migrate
+  is level. Draining a broker and adding one both work this way, and an
+  operator can start, cancel and pause moves. The switch-over takes tens of
+  milliseconds; publishes arriving during it are held and forwarded rather
+  than refused, and subscriptions follow the shard to its new owner
 - Mutually authenticated broker-to-broker QUIC, with each certificate's name
   checked against the node id in both directions
   (`FELIX_INTERNAL_TLS_CERT` / `_KEY` / `_CA`). Left unset, the peer link is

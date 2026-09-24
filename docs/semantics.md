@@ -123,6 +123,43 @@ The lease depends on bounded process suspension, not on synchronised clocks:
 each broker measures elapsed time on its own monotonic clock and gives up a
 quarter of the lease as margin. See "Where the guarantees stop" below.
 
+## Moves
+
+A shard whose leader is alive is moved rather than failed over: the
+destination copies the log, the leader is fenced and reports that its log has
+stopped growing, and only then does the destination lead.
+`docs/replication-design.md` ("Planned handoff") has the mechanism; this is
+what a client sees.
+
+- **Nothing acknowledged is lost, and nothing is stored twice.** Every write
+  the old leader accepted lands in its log before it reports drained, and the
+  new owner holds it before it leads. A write that finds the fence closed is
+  held or refused, never written late.
+- **A publish is held, not refused.** One that arrives between the fence and
+  the cut-over waits until the broker's routes show the new owner, then goes
+  there. It is refused as `shard_unavailable` / `moving`, not written, only
+  past `FELIX_SHARD_MOVE_HOLD_MS` or `FELIX_SHARD_MOVE_HOLD_MAX`. Cache writes,
+  counter adds and consumer-group writes are not held; they are refused
+  retryably for the length of the switch-over.
+- **Subscriptions follow.** The old leader ends each after the writes in
+  flight have fanned out, and sends `shard_moved` with the offset to resume
+  from. A `ClusterClient` subscription resumes on the new owner at
+  `max(last delivered + 1, resume_from)`, so on a durable stream nothing is
+  repeated or skipped; an in-memory stream resumes at the tail. A cache watch
+  gets the same frame and is reopened by the caller.
+- **Group state, counters and producer sequences move with the shard.** The
+  drained report waits for the successor to hold the group cursors, dead
+  letters and counters, and producer sequences are in the log's records.
+
+> `continuous_publishing_through_a_move_is_never_refused`,
+> `a_subscription_follows_its_shard_to_the_new_owner`,
+> `a_moved_shard_keeps_its_group_state_and_counters`,
+> `a_producer_keeps_its_sequence_across_a_planned_move`,
+> `a_durable_publish_claimed_after_the_fence_is_refused`.
+
+Stopping a broker is not a move: the shards it leads fail over. Drain it
+first (`POST /v1/nodes/{id}/drain`) to hand them off.
+
 ## Routing
 
 A publish and a subscribe make opposite choices, deliberately.
@@ -433,6 +470,13 @@ Stated because a guarantee without its failure model is a slogan.
   > three ways; `racing_re_sends_append_once` in `crates/server/felix-broker` for the
   > two re-sends that arrive at once.
 - **No cross-region ordering or routing guarantees.**
+- **Cluster metadata is as durable as its store.** Over Postgres it is what
+  the database keeps. Over the embedded Raft group, a member that comes back
+  with a wiped volume withholds its vote until it has caught up, so it cannot
+  help elect a leader that lacks an acknowledged write
+  (`docs/metadata-raft-design.md`, "Rejoining after a lost volume").
+
+  > `the_group_survives_restart_kill_freeze_and_wipe_without_losing_a_write`.
 - **A group is bound to the shard the caller names.** Consuming a whole
   multi-shard stream through a group means polling each shard's group
   separately, for the same reason a subscription reads one shard.

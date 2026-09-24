@@ -13,9 +13,9 @@ Two things, and an operator (see
 
 - **A broker over its share.** Placement counts the shards each live broker
   leads. A broker leading more than `ceil(shards / live brokers)` hands shards,
-  one at a time, to a broker under its share, until no broker is over. A new
-  broker registering is the usual cause: it starts with nothing and takes
-  shards from whoever has the most.
+  one move at a time by default, to a broker under its share, until no broker
+  is over. A new broker registering is the usual cause: it starts with nothing
+  and takes shards from whoever has the most.
 - **A draining broker.** `POST /v1/nodes/{id}/drain` marks a broker as
   leaving. Placement moves every shard it leads to brokers that are staying,
   and replaces it as a follower wherever it holds a copy for someone else.
@@ -27,11 +27,35 @@ broker that has not seen the log would serve it empty. It is **moved**:
 
 1. **Stage.** The destination joins the shard's replica set and the leader
    ships it the log.
-2. **Fence.** Once the destination is caught up, the leader is told to stop
-   serving the shard. It lets what it already accepted land, ships the last
-   records, and reports that its log has stopped growing.
+2. **Fence.** Once the destination is within
+   `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS` of the leader, the leader is told
+   to stop serving the shard. It lets what it already accepted land, ships the
+   last records, and reports that its log has stopped growing.
 3. **Cut over.** The destination is named leader at a new generation and
    opens the shard.
+
+```mermaid
+sequenceDiagram
+    participant CP as Control plane
+    participant L as Old leader
+    participant D as Destination
+    participant C as Client
+    CP->>L: stage: destination joins the replicas
+    L->>D: ship the log
+    L->>CP: report: destination within the lag bound
+    CP->>L: fence: assignment goes draining
+    Note over L: publishes arriving now are held
+    L->>C: shard_moved (new owner, resume offset)
+    L->>D: ship the remainder
+    L->>CP: report: drained, destination level
+    CP->>D: cut over: destination leads at a new generation
+    C->>D: resubscribe at the resume offset
+    Note over C,D: held publishes are forwarded here
+```
+
+Nobody serves the shard between the fence and the cut-over. A publish sent
+then is held and forwarded rather than refused; see
+[What clients see](#what-clients-see).
 
 Every step is written to the control plane's store, so a control-plane restart
 or leader change resumes the move where it was. A destination that dies before
@@ -136,8 +160,9 @@ shard with neither in progress, it marks one that timed out.
 stateDiagram-v2
     [*] --> Staged: stage, takes a move slot
     Staged --> Fenced: destination within the lag bound
-    Staged --> [*]: timed_out or abandon, frees the slot
+    Staged --> [*]: timed_out, abandon or cancel, frees the slot
     Fenced --> [*]: drained and cut over, frees the slot
+    Fenced --> [*]: cancel, the old leader serves again
 ```
 
 Metrics on the control plane:
@@ -165,6 +190,7 @@ Metrics on any broker a publish reaches during the switch-over:
 | `felix_broker_shard_move_held_total` | publishes held for the cut-over instead of refused |
 | `felix_broker_shard_move_hold_seconds` | histogram: how long each held publish waited |
 | `felix_broker_shard_move_hold_refused_total{reason}` | publishes refused as `moving`: `timed_out` after `FELIX_SHARD_MOVE_HOLD_MS`, or `full` past `FELIX_SHARD_MOVE_HOLD_MAX` |
+
 On the broker a shard is moving off:
 
 | Metric | Meaning |
@@ -213,15 +239,17 @@ owner at the larger of that offset and the last one it delivered, so on a
 durable stream nothing is repeated or skipped. An in-memory stream resumes at
 the new owner's tail. A sharded subscription does the same per shard and
 reports `ShardMoved`; a sharded cache watch reports `ShardMoved` and moves that
-shard's resume offset. A `Client` subscription ends with the same information
-and leaves the resubscribe to the caller. Subscriptions are not migrated: the
-new owner serves the shard only once it has opened it, and a resubscribe before
-then is refused and retried.
+shard's resume offset. A `Client` subscription, and a single cache watch, end
+with the same information and leave reopening to the caller. The subscription
+on the new owner is a new one, started at that offset: the frame goes out at
+the fence, before the new owner serves the shard, so the first attempts may be
+refused and are retried.
 
 Every publish acknowledged before or during a move is on the new owner. The
 tests behind these claims are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`,
-`crates/testing/felix-cluster/tests/routing/moved_readers.rs` and
-`crates/testing/felix-cluster/tests/routing/subscriptions_follow.rs`; the write
+`crates/testing/felix-cluster/tests/routing/moved_readers.rs`,
+`crates/testing/felix-cluster/tests/routing/subscriptions_follow.rs` and
+`crates/testing/felix-cluster/tests/routing/operator_moves.rs`; the write
 fence and its tests are in `services/felix-broker-service/src/shards/lifecycle/fence.rs`.
 
 ## Tuning
