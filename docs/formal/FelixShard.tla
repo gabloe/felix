@@ -67,6 +67,15 @@
 (* it received. `Promotion = "log-order"` promotes the live replica with   *)
 (* the highest (last generation, length), Raft's election restriction.     *)
 (*                                                                         *)
+(* `Resends` lets a client send a write it has no answer for again, as an  *)
+(* idempotent producer does after a lost acknowledgement or a leader       *)
+(* change. The serving broker appends it unless it already knows the       *)
+(* write. `SequencesInLog` is where it looks: the records in its log, which *)
+(* is what the broker does, or only what it wrote itself since it took     *)
+(* over, which is a leader keeping sequences in memory. TLC finds the      *)
+(* latter appending a write a second time after a failover or a move       *)
+(* (NoDuplicate).                                                          *)
+(*                                                                         *)
 (* The control plane decides from a read. A decision may read and write in *)
 (* one step, or come from a read one of `Planners` took earlier (`cpView`,  *)
 (* by Snapshot) and still holds. Every assignment write bumps `ver`, the   *)
@@ -98,7 +107,9 @@ CONSTANTS
     Planners,       \* control-plane instances deciding placement, each from its own read
     CasWrites,      \* whether an assignment write lands only at the generation it read
     StageMove,      \* whether the run starts with a destination staged and copying
-    LearnerVotes    \* whether that destination counts toward the quorum while it copies
+    LearnerVotes,   \* whether that destination counts toward the quorum while it copies
+    Resends,        \* whether a client may send an unanswered write again
+    SequencesInLog  \* whether a re-send is checked against the log, or the leader's own writes
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
@@ -106,6 +117,7 @@ ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN /\ FenceAtClaim \in BOO
 ASSUME AckOnAdmit \in BOOLEAN /\ FenceFromAdmit \in BOOLEAN
 ASSUME CasWrites \in BOOLEAN
 ASSUME StageMove \in BOOLEAN /\ LearnerVotes \in BOOLEAN
+ASSUME Resends \in BOOLEAN /\ SequencesInLog \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -317,6 +329,33 @@ Commit(b) ==
     /\ staleCommit' = (staleCommit \/ bgen[b] < gen)
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, hwm, halted, queued, writes >>
+    /\ UNCHANGED handoffVars
+
+\* The writes a broker would answer a re-send of without appending. With
+\* `SequencesInLog`, every write its log holds: the broker's producer state is
+\* derived from the records (`disk_log/producers.rs`), so a replica promoted or
+\* moved to knows what it was shipped. Without it, only what the broker wrote
+\* itself under the generation it now leads -- a leader's memory, which a new
+\* leader starts without.
+Known(b) ==
+    IF SequencesInLog
+    THEN { log[b][i].id : i \in 1..Len(log[b]) }
+    ELSE { log[b][i].id : i \in { j \in 1..Len(log[b]) : log[b][j].g = bgen[b] } }
+
+\* A write sent again. The producer's batches are serialised, so nothing of
+\* its own is waiting at the broker; the re-send is then either answered
+\* from what the broker knows or admitted like any write. A client re-sends
+\* whether or not its first send was acknowledged: the answer may have been
+\* lost.
+Resend(b) ==
+    /\ Resends
+    /\ Serving(b)
+    /\ queued[b] = 0 /\ pending[b] = 0
+    /\ \E w \in 1..writes :
+        /\ w \notin Known(b)
+        /\ queued' = [queued EXCEPT ![b] = w]
+    /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
+                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
@@ -591,6 +630,7 @@ Next ==
         \/ LoseHeartbeat(b)
         \/ StepDown(b)
         \/ Admit(b)
+        \/ Resend(b)
         \/ Claim(b)
         \/ Commit(b)
         \/ AckQuorum(b)
@@ -621,12 +661,22 @@ AckedSurvive ==
             \/ AckOnAdmit /\ id \in {queued[b], pending[b]}
 
 \* Two brokers never hold different acknowledged records at one offset.
+\* Compared by write rather than by (generation, write): a re-sent write
+\* stored by a new leader where a deposed one still has its first copy is the
+\* same record, and the deposed copy is truncated when it rejoins. Without
+\* re-sends a write is stored once, at one generation, and the two agree.
 AckedAgree ==
     \A a, c \in Brokers : \A i \in 1..Len(log[a]) :
         /\ i <= Len(log[c])
         /\ log[a][i].id \in acked
         /\ log[c][i].id \in acked
-        => log[a][i] = log[c][i]
+        => log[a][i].id = log[c][i].id
+
+\* No log holds one write twice: a re-send of a write the shard already has
+\* is answered, not appended.
+NoDuplicate ==
+    \A b \in Brokers : \A i, j \in 1..Len(log[b]) :
+        i /= j => log[b][i].id /= log[b][j].id
 
 \* No broker commits a write at a generation the control plane has superseded:
 \* once the next leader is named, the old one's lease has run out by its own

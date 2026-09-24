@@ -60,6 +60,15 @@ One shard, three brokers, one control plane, discrete time.
   fence, the drained report waits for them to be on the successor, and a
   follower without them is left out of the report's candidates, so a write to
   any of them is modelled as a write to the one log.
+- **Re-sends**, under `Resends`. A client may send a write it has no answer
+  for again, as an idempotent producer does after a lost acknowledgement or a
+  leader change. The serving broker appends it unless it already knows the
+  write, and `SequencesInLog` says where it looks: its log, as the broker does
+  (sequences are stored with the records and derived from them), or only what
+  it wrote itself under the generation it leads, which is sequences kept in a
+  leader's memory. Acknowledgement is per write, so these configurations run
+  one write: with two, a deposed leader's stale first copy reads as a second
+  acknowledged record at its offset until it is truncated.
 - **Planners.** The control plane decides from a read of the store, not from
   its live state. A decision (promote, fence, cut over) either reads and writes
   in one step, or comes from a read one of `Planners` took earlier (`cpView`:
@@ -86,6 +95,7 @@ bootstrap of a follower below the leader's base.
 | `NoTruncationBelowHwm` | A follower never discards a record below its high-water mark. |
 | `NoStaleCommit` | No broker commits at a generation the control plane has superseded. |
 | `StagedCopyNeverDelaysAck` | A `Quorum` write the stream's own replicas would acknowledge is never held back by a destination's copy. A latency property, checked only where a destination is staged. |
+| `NoDuplicate` | No log holds one write twice. Checked where writes are re-sent. |
 
 ## The configurations, and what each must do
 
@@ -117,6 +127,10 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardStagedMoveVotes.cfg` | one replica, with the destination counted toward the quorum | violate `StagedCopyNeverDelaysAck` |
 | `FelixPlacementPacing.cfg` | `FelixPlacementPacing.tla`: moves and follower replacements across four shards, two copies at once, one per node | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (92 states) |
 | `FelixPlacementPacingUncountedReplacement.cfg` | the same with a follower replacement invisible to the count, as it used to be written | violate `CopiesWithinLimit` |
+| `FelixShardIdempotentFailover.cfg` | a write re-sent across a failover, checked against the promoted broker's log | pass every invariant and `NoDuplicate` (1.5M states) |
+| `FelixShardIdempotentFailoverMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
+| `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (14M states) |
+| `FelixShardIdempotentHandoffMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
