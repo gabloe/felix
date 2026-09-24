@@ -86,6 +86,10 @@ expectations=(
   "FelixShardStagedMoveVotes violates StagedCopyNeverDelaysAck"
   "FelixPlacementPacing pass"
   "FelixPlacementPacingUncountedReplacement violates CopiesWithinLimit"
+  "FelixShardIdempotentFailover pass"
+  "FelixShardIdempotentFailoverMemory violates NoDuplicate"
+  "FelixShardIdempotentHandoff pass"
+  "FelixShardIdempotentHandoffMemory violates NoDuplicate"
 )
 
 fetch_tools

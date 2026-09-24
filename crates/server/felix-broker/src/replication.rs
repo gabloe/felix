@@ -33,6 +33,8 @@
 //! survived a failure it would not have survived — and under
 //! `ConsistencyLevel::Quorum` that belief is the guarantee.
 use bytes::Bytes;
+use felix_storage::log::{ProducerBatch, RecordMark};
+use felix_wire::internal::ProducerMark;
 
 use crate::durable::StreamLog;
 use crate::error::{BrokerError, Result};
@@ -79,19 +81,22 @@ impl Divergence {
 
 /// Store a batch the leader shipped, at the leader's offsets.
 ///
-/// `first_offset` is where `payloads[0]` belongs. Returns once the batch is
-/// durable.
+/// `first_offset` is where `payloads[0]` belongs, and `marks` are the
+/// records' producer marks (empty when none is marked), stored with them so
+/// this follower knows each idempotent producer's place as the leader does.
+/// Returns once the batch is durable.
 pub async fn apply(
     log: &StreamLog,
     first_offset: u64,
     checksum: u64,
     payloads: &[Bytes],
+    marks: &[ProducerMark],
 ) -> Result<std::result::Result<Applied, Divergence>> {
     let tail = log.tail_offset().await?;
 
     // Checked before the tail is consulted for anything else: a batch that did
     // not survive the trip says nothing reliable about position either.
-    let computed = felix_wire::internal::batch_checksum(payloads);
+    let computed = felix_wire::internal::batch_checksum(payloads, marks);
     if computed != checksum {
         return Ok(Err(Divergence::Corrupt {
             leader: checksum,
@@ -118,9 +123,19 @@ pub async fn apply(
     // The batch reaches back into what is already stored. That is a retry, so
     // the overlap is verified rather than trusted, and only the suffix past the
     // tail is new.
+    let marks: Vec<RecordMark> = (0..payloads.len())
+        .map(|index| mark_from_wire(marks.get(index).copied().unwrap_or_default()))
+        .collect();
     let overlap = (tail - first_offset).min(payloads.len() as u64) as usize;
     if overlap > 0
-        && let Some(divergence) = conflict_in(log, first_offset, &payloads[..overlap], tail).await?
+        && let Some(divergence) = conflict_in(
+            log,
+            first_offset,
+            &payloads[..overlap],
+            &marks[..overlap],
+            tail,
+        )
+        .await?
     {
         return Ok(Err(divergence));
     }
@@ -139,7 +154,7 @@ pub async fn apply(
         }));
     }
 
-    let pending = log.begin_append(fresh).await?;
+    let pending = log.begin_append_marked(fresh, &marks[overlap..]).await?;
     log.commit(&pending).await?;
 
     Ok(Ok(Applied {
@@ -156,6 +171,7 @@ async fn conflict_in(
     log: &StreamLog,
     first_offset: u64,
     overlapping: &[Bytes],
+    marks: &[RecordMark],
     tail: u64,
 ) -> Result<Option<Divergence>> {
     let wanted: usize = overlapping.iter().map(|payload| payload.len() + 32).sum();
@@ -176,7 +192,10 @@ async fn conflict_in(
             // made for the rest of this batch.
             break;
         };
-        if record.payload != *payload {
+        // A mark that differs is a different record even with the same
+        // bytes: it would leave this replica and the leader disagreeing about
+        // where a producer stands.
+        if record.payload != *payload || record.mark != marks[index] {
             return Ok(Some(Divergence::Conflict {
                 offset,
                 expected: tail,
@@ -184,6 +203,36 @@ async fn conflict_in(
         }
     }
     Ok(None)
+}
+
+/// A record's mark as it travels between brokers.
+pub fn mark_to_wire(mark: RecordMark) -> ProducerMark {
+    match mark {
+        RecordMark::None => ProducerMark::None,
+        RecordMark::Opens(batch) => ProducerMark::Opens {
+            producer_id: batch.producer_id,
+            sequence: batch.sequence,
+            len: batch.len,
+        },
+        RecordMark::Continues => ProducerMark::Continues,
+    }
+}
+
+/// A shipped mark as the log stores it.
+pub fn mark_from_wire(mark: ProducerMark) -> RecordMark {
+    match mark {
+        ProducerMark::None => RecordMark::None,
+        ProducerMark::Opens {
+            producer_id,
+            sequence,
+            len,
+        } => RecordMark::Opens(ProducerBatch {
+            producer_id,
+            sequence,
+            len,
+        }),
+        ProducerMark::Continues => RecordMark::Continues,
+    }
 }
 
 #[cfg(test)]

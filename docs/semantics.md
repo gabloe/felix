@@ -249,7 +249,8 @@ how-to; this is the contract.
   at once. `outcome_unknown` is returned by `publish` and never re-sent;
   `publish_at_least_once` and the idempotent producer send it again, the first
   because that is what it promises and the second because its sequence makes
-  the re-send land once. `retry` and `redirect` from a cached owner drop that
+  the re-send land once — on a durable stream, whichever broker leads the
+  shard by then. `retry` and `redirect` from a cached owner drop that
   owner and go straight to the entry broker, since a fenced or draining owner
   will not start serving the shard again; from the entry broker they back off.
   `retry_after` backs off for at least as long as the broker asked.
@@ -415,11 +416,14 @@ Stated because a guarantee without its failure model is a slogan.
 - **Idempotent producers, not exactly-once delivery.** A producer that takes an
   id from the broker and numbers its batches can re-send a batch whose
   acknowledgement never arrived and have it land once: the shard's leader
-  answers a sequence it already holds from memory rather than appending it.
-  That closes the ambiguous-outcome gap on the publish side, while the leader
-  that took the first copy is the one answering; a new leader knows no
-  producers and says so, so a batch in flight across a failover is reported
-  rather than silently landed or dropped. The consumer side is unchanged: a
+  answers a sequence it already holds rather than appending it. On a durable
+  stream the sequences are in the log — each record carries its producer and
+  sequence, and is replicated with them — so this holds across a failover, a
+  planned move and a restart: whichever broker leads next answers from the
+  records it holds. A producer whose batches retention has removed entirely is
+  forgotten and told so (`unknown_producer`), which the client reports rather
+  than guess. On an in-memory stream the sequences live in the leader's memory
+  and last as long as it does. The consumer side is unchanged: a
   subscriber can still see a record twice on redelivery, and there are no
   transactions. See [`docs/protocol.md`](protocol.md), "Idempotent producers".
 

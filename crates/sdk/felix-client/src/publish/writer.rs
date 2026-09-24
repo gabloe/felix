@@ -99,8 +99,8 @@ pub(crate) async fn run_publisher_writer_with_limit(
     let mut pending: VecDeque<PendingAck> = VecDeque::new();
 
     // Resolve every outstanding ack, in the order the requests were written.
-    // Any failure is fatal for this worker, exactly as the inline wait was:
-    // the caller sees it, so does everything queued behind it.
+    // A broken or out-of-order ack stream is fatal for this worker: the caller
+    // sees it, so does everything queued behind it.
     macro_rules! resolve_pending {
         () => {{
             while let Some(entry) = pending.pop_front() {
@@ -112,19 +112,31 @@ pub(crate) async fn run_publisher_writer_with_limit(
                 )
                 .await
                 {
-                    Ok(forwarded_to) => {
+                    Ok(answer) => {
                         #[cfg(feature = "telemetry")]
                         {
                             let counters = frame_counters();
-                            counters.pub_frames_out_ok.fetch_add(1, Ordering::Relaxed);
-                            counters
-                                .pub_batches_out_ok
-                                .fetch_add(entry.batch_count, Ordering::Relaxed);
-                            counters
-                                .pub_items_out_ok
-                                .fetch_add(entry.item_count, Ordering::Relaxed);
+                            let (frames, batches, items) = if answer.is_ok() {
+                                (
+                                    &counters.pub_frames_out_ok,
+                                    &counters.pub_batches_out_ok,
+                                    &counters.pub_items_out_ok,
+                                )
+                            } else {
+                                (
+                                    &counters.pub_frames_out_err,
+                                    &counters.pub_batches_out_err,
+                                    &counters.pub_items_out_err,
+                                )
+                            };
+                            frames.fetch_add(1, Ordering::Relaxed);
+                            batches.fetch_add(entry.batch_count, Ordering::Relaxed);
+                            items.fetch_add(entry.item_count, Ordering::Relaxed);
                         }
-                        let _ = entry.response.send(Ok(forwarded_to));
+                        // A refusal answers this request only; the broker keeps
+                        // serving the stream, so the requests behind it still
+                        // get their own answers.
+                        let _ = entry.response.send(answer);
                     }
                     Err(err) => {
                         #[cfg(feature = "telemetry")]
@@ -137,15 +149,6 @@ pub(crate) async fn run_publisher_writer_with_limit(
                             counters
                                 .pub_items_out_err
                                 .fetch_add(entry.item_count, Ordering::Relaxed);
-                        }
-                        // A typed refusal is the broker's answer to one
-                        // request on a stream it keeps serving, so the
-                        // requests behind it are still going to be answered
-                        // in order. Failing the worker here would hand a
-                        // producer's next batch a copy of this refusal.
-                        if err.downcast_ref::<crate::PublishRefused>().is_some() {
-                            let _ = entry.response.send(Err(err));
-                            continue;
                         }
                         let message = err.to_string();
                         let _ = entry.response.send(Err(err));

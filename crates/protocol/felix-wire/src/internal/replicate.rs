@@ -22,10 +22,33 @@ pub struct ReplicateRecords {
     pub shard: ShardRef,
     /// Offset of `payloads[0]`. Payload `i` belongs at `first_offset + i`.
     pub first_offset: u64,
-    /// Over the payload bytes, in order. Checked before anything is written, so
-    /// a batch corrupted in transit is refused rather than stored.
+    /// Over the payload bytes and the marks, in order. Checked before anything
+    /// is written, so a batch corrupted in transit is refused rather than
+    /// stored. See [`batch_checksum`].
     pub checksum: u64,
     pub payloads: Vec<Bytes>,
+    /// One per payload, or empty when no record in the batch is marked. Only a
+    /// stream shard's records carry marks, and a batch with any travels as
+    /// `ReplicateMarkedRecords`.
+    pub marks: Vec<ProducerMark>,
+}
+
+/// Which idempotent producer's batch a replicated record belongs to.
+///
+/// Shipped with the record so a follower stores it exactly as the leader did:
+/// the marks are what let a promoted replica answer a producer's re-send.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProducerMark {
+    #[default]
+    None,
+    /// The first record of a producer's batch of `len` records.
+    Opens {
+        producer_id: u64,
+        sequence: u64,
+        len: u32,
+    },
+    /// A later record of the batch the record before it belongs to.
+    Continues,
 }
 
 /// The follower stored the batch.
@@ -135,11 +158,69 @@ impl ReplicaLog {
 /// length is what stops `["ab", "c"]` and `["a", "bc"]` hashing alike: they are
 /// different records, and a follower storing one where the leader has the other
 /// is exactly the divergence this is here to catch.
-pub fn batch_checksum(payloads: &[Bytes]) -> u64 {
+///
+/// Marks are covered after the payloads, and only when present, so an
+/// unmarked batch checksums exactly as it always has.
+pub fn batch_checksum(payloads: &[Bytes], marks: &[ProducerMark]) -> u64 {
     let mut hasher = crc32fast::Hasher::new();
     for payload in payloads {
         hasher.update(&(payload.len() as u32).to_be_bytes());
         hasher.update(payload);
     }
+    if !marks.is_empty() {
+        let mut encoded = bytes::BytesMut::new();
+        put_marks(&mut encoded, marks);
+        hasher.update(&encoded);
+    }
     u64::from(hasher.finalize())
+}
+
+/// Marks as they travel: one byte per record (0 none, 1 opens, 2 continues),
+/// an opening record's byte followed by its producer id, sequence and length.
+pub(super) fn put_marks(out: &mut bytes::BytesMut, marks: &[ProducerMark]) {
+    use bytes::BufMut;
+    for mark in marks {
+        match mark {
+            ProducerMark::None => out.put_u8(0),
+            ProducerMark::Opens {
+                producer_id,
+                sequence,
+                len,
+            } => {
+                out.put_u8(1);
+                out.put_u64(*producer_id);
+                out.put_u64(*sequence);
+                out.put_u32(*len);
+            }
+            ProducerMark::Continues => out.put_u8(2),
+        }
+    }
+}
+
+/// Read `count` marks written by [`put_marks`].
+pub(super) fn take_marks(body: &mut Bytes, count: usize) -> Result<Vec<ProducerMark>> {
+    use bytes::Buf;
+    let mut marks = Vec::with_capacity(count.min(body.remaining()));
+    for _ in 0..count {
+        if !body.has_remaining() {
+            return Err(Error::Incomplete);
+        }
+        let mark = match body.get_u8() {
+            0 => ProducerMark::None,
+            1 => {
+                if body.remaining() < 20 {
+                    return Err(Error::Incomplete);
+                }
+                ProducerMark::Opens {
+                    producer_id: body.get_u64(),
+                    sequence: body.get_u64(),
+                    len: body.get_u32(),
+                }
+            }
+            2 => ProducerMark::Continues,
+            other => return Err(Error::UnknownInternalProducerMark(other)),
+        };
+        marks.push(mark);
+    }
+    Ok(marks)
 }

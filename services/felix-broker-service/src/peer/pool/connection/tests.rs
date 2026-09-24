@@ -25,7 +25,8 @@ mod correlation {
             | InternalMessage::ReplicateCacheRecords(m)
             | InternalMessage::ReplicateGroupRecords(m)
             | InternalMessage::ReplicateDeadLetterRecords(m)
-            | InternalMessage::ReplicateCounterRecords(m) => m.correlation_id,
+            | InternalMessage::ReplicateCounterRecords(m)
+            | InternalMessage::ReplicateMarkedRecords(m) => m.correlation_id,
             InternalMessage::ReplicateOk(m) => m.correlation_id,
             InternalMessage::ReplicateError(m) => m.correlation_id,
             InternalMessage::ReplicateBootstrap(m)
@@ -87,6 +88,7 @@ mod correlation {
                 first_offset: 12,
                 checksum: 0xabcd,
                 payloads: vec![Bytes::from_static(b"hello")],
+                marks: Vec::new(),
             }),
             InternalMessage::ReplicateOk(ReplicateOk {
                 correlation_id: 7,
@@ -108,6 +110,14 @@ mod correlation {
                 shard: shard(),
                 log: ReplicaLog::Stream,
                 base_offset: 5_000,
+            }),
+            InternalMessage::ReplicateMarkedRecords(ReplicateRecords {
+                correlation_id: 7,
+                shard: shard(),
+                first_offset: 12,
+                checksum: 0xabcd,
+                payloads: vec![Bytes::from_static(b"hello")],
+                marks: vec![felix_wire::internal::ProducerMark::Continues],
             }),
         ]
     }

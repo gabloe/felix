@@ -528,8 +528,8 @@ A publish whose acknowledgement never arrived is ambiguous: the record may be
 on the broker, and re-sending it would land it twice. `publish_idempotent`
 removes the ambiguity. A producer takes an id from the broker
 (`producer_init`), numbers its batches on each shard from zero, and sends the
-number with each batch. The shard's leader keeps, per producer, the next
-sequence it expects and the outcome of the last 64 it appended:
+number with each batch. The shard's leader knows, per producer, the next
+sequence it expects and where the last 64 it appended landed:
 
 | The batch's sequence is | The leader |
 | --- | --- |
@@ -537,7 +537,8 @@ sequence it expects and the outcome of the last 64 it appended:
 | one it remembers | answers `publish_ok` and appends nothing — the same answer the first send got, including the `Quorum` wait on the same offsets |
 | past the next expected | refuses with `sequence_gap` naming the expected one; what was skipped is not here, and continuing would leave a hole the producer believes is filled |
 | older than it remembers | refuses with `sequence_expired`; whether it was appended cannot be told |
-| from a producer it has never seen, and not zero | refuses with `unknown_producer`; there is nothing to check against, and the producer must start again under a new id |
+| from a producer it does not know, and not zero | refuses with `unknown_producer`; there is nothing to check against, and the producer must start again under a new id |
+| the rest of a batch it holds only the start of | appends the records it is missing, and answers with the whole batch's offsets |
 
 So a producer re-sends a batch it got no answer for under the *same* sequence,
 advances only on `publish_ok`, and stops on any refusal but `not_leader`.
@@ -548,18 +549,27 @@ and where clients reach it, rather than forwarded: forwarded, one batch could
 reach the leader from two ingress brokers with nothing to tell the second
 from the first. A client sends it to the broker named.
 
-**The sequences live in the leader's memory.** They survive everything but the
-leader: a new leader knows no producers, answers `unknown_producer`, and the
-producer starts again under a new id. A batch that was in flight across a
-failover is therefore reported as a refusal rather than either landed or
-dropped silently — the re-send is safe while the leader that took the first
-copy is the one answering, which is the common case, and honest about the
-one it is not. Persisting sequences through replication is the follow-up that
-would close that case.
+**On a durable stream the sequences are in the log.** Each record of a
+producer's batch is stored with the producer id and sequence, and replicated
+with them, and a broker derives every producer's place from its own log. So a
+leader promoted after a failover, the destination of a planned move, and a
+leader that restarted all answer a re-send the way the leader that took it
+would have, and the producer carries on. A batch whose leader stopped partway
+through it is finished by the re-send rather than written twice.
+
+A producer is known while any of its batches is in the log. One whose batches
+retention has removed entirely is forgotten, as is the one whose newest batch
+is oldest once a shard has more than 4096, and either answers
+`unknown_producer`. After a leader change that now means the producer's history
+is gone, not that the leader changed; whether the batch in flight landed cannot
+be told, so the client reports it rather than starting again by itself.
+
+**On an in-memory stream the sequences live in the leader's memory**, and a
+new leader answers `unknown_producer`: such a stream loses its records with its
+leader too.
 
 The id is 64 random bits, chosen by the broker, so producers from different
-brokers and across a restart cannot collide with each other's sequences. A
-producer is forgotten once it is the coldest of 4096 on a shard.
+brokers and across a restart cannot collide with each other's sequences.
 
 ## Protocol Flows (v1)
 

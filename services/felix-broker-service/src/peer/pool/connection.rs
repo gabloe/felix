@@ -388,6 +388,12 @@ pub(super) fn with_correlation(message: InternalMessage, correlation_id: u64) ->
                 ..m
             })
         }
+        InternalMessage::ReplicateMarkedRecords(m) => {
+            InternalMessage::ReplicateMarkedRecords(ReplicateRecords {
+                correlation_id,
+                ..m
+            })
+        }
         InternalMessage::ReplicateOk(m) => InternalMessage::ReplicateOk(ReplicateOk {
             correlation_id,
             ..m

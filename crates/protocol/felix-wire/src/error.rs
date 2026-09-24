@@ -30,4 +30,6 @@ pub enum Error {
     UnknownInternalCacheOp(u8),
     #[error("unknown internal replica log {0}")]
     UnknownInternalReplicaLog(u8),
+    #[error("unknown producer mark {0}")]
+    UnknownInternalProducerMark(u8),
 }

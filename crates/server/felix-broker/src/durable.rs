@@ -25,9 +25,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use felix_storage::DiskLogProvider;
-use felix_storage::disk_log::{DiskLog, PendingAppend};
+use felix_storage::disk_log::{DiskLog, PendingAppend, ProducerSequence};
 use felix_storage::log::{
-    AppendOnlyLog, AppendRecord, AppendResult, LogConfig, LogRecord, Offset, ReadRange, ShardKey,
+    AppendOnlyLog, AppendRecord, AppendResult, LogConfig, LogRecord, Offset, ReadRange, RecordMark,
+    ShardKey,
 };
 
 use crate::error::{BrokerError, Result};
@@ -140,23 +141,50 @@ impl StreamLog {
     /// disk holding those offsets, and every later publish queues behind them
     /// whether this one goes on to succeed, fail, or be cancelled.
     pub async fn begin_append(&self, payloads: &[Bytes]) -> Result<PendingAppend> {
-        if payloads.is_empty() {
-            return Err(BrokerError::Storage(
-                "cannot append an empty publish batch".to_string(),
-            ));
-        }
-        let timestamp_micros = now_micros();
-        let records: Vec<AppendRecord> = payloads
-            .iter()
-            .map(|payload| AppendRecord {
-                payload: payload.clone(),
-                timestamp_micros,
-            })
-            .collect();
+        self.begin_append_marked(payloads, &[]).await
+    }
+
+    /// [`StreamLog::begin_append`] with a producer mark per record, or none
+    /// when `marks` is empty.
+    pub async fn begin_append_marked(
+        &self,
+        payloads: &[Bytes],
+        marks: &[RecordMark],
+    ) -> Result<PendingAppend> {
+        let records = records(payloads, marks)?;
         self.log
             .append_pending(&records)
             .await
             .map_err(storage_error)
+    }
+
+    /// Write the rest of a producer batch the log holds only the start of,
+    /// without waiting for durability. `None`, and nothing written, when the
+    /// batch is no longer the last thing in the log. See
+    /// `DiskLog::continue_pending`.
+    pub async fn continue_batch(
+        &self,
+        producer_id: u64,
+        sequence: u64,
+        payloads: &[Bytes],
+    ) -> Result<Option<PendingAppend>> {
+        let marks = vec![RecordMark::Continues; payloads.len()];
+        let records = records(payloads, &marks)?;
+        self.log
+            .continue_pending(producer_id, sequence, &records)
+            .await
+            .map_err(storage_error)
+    }
+
+    /// Where an idempotent producer's batch stands in this log.
+    pub fn producer_sequence(&self, producer_id: u64, sequence: u64) -> ProducerSequence {
+        self.log.producer_sequence(producer_id, sequence)
+    }
+
+    /// Wait until every record below `offset` is as durable as a commit would
+    /// have made it.
+    pub async fn wait_durable(&self, offset: Offset) -> Result<()> {
+        self.log.wait_durable(offset).await.map_err(storage_error)
     }
 
     /// Wait until a batch from [`StreamLog::begin_append`] satisfies the
@@ -170,21 +198,7 @@ impl StreamLog {
     /// Returns only once the configured durability policy is satisfied: under
     /// `FsyncMode::OnCommit` the bytes are on the device before this resolves.
     pub async fn append(&self, payloads: &[Bytes]) -> Result<AppendResult> {
-        if payloads.is_empty() {
-            return Err(BrokerError::Storage(
-                "cannot append an empty publish batch".to_string(),
-            ));
-        }
-        // One timestamp for the batch: the records were published together, and
-        // reading the clock per record costs more than the precision is worth.
-        let timestamp_micros = now_micros();
-        let records: Vec<AppendRecord> = payloads
-            .iter()
-            .map(|payload| AppendRecord {
-                payload: payload.clone(),
-                timestamp_micros,
-            })
-            .collect();
+        let records = records(payloads, &[])?;
         self.log.append(&records).await.map_err(storage_error)
     }
 
@@ -278,6 +292,30 @@ impl StreamLog {
     pub async fn sync(&self) -> Result<()> {
         self.log.sync().await.map_err(storage_error)
     }
+}
+
+/// One timestamp for the batch: the records were published together, and
+/// reading the clock per record costs more than the precision is worth.
+fn records(payloads: &[Bytes], marks: &[RecordMark]) -> Result<Vec<AppendRecord>> {
+    if payloads.is_empty() {
+        return Err(BrokerError::Storage(
+            "cannot append an empty publish batch".to_string(),
+        ));
+    }
+    let timestamp_micros = now_micros();
+    let marks = marks
+        .iter()
+        .copied()
+        .chain(std::iter::repeat(RecordMark::None));
+    Ok(payloads
+        .iter()
+        .zip(marks)
+        .map(|(payload, mark)| AppendRecord {
+            payload: payload.clone(),
+            timestamp_micros,
+            mark,
+        })
+        .collect())
 }
 
 fn storage_error(err: felix_storage::StorageError) -> BrokerError {

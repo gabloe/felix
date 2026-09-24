@@ -71,6 +71,16 @@ impl SegmentSet {
         self.active.next_offset()
     }
 
+    /// The first offset a producer mark can be at: the base of the oldest v3
+    /// segment. Everything below it was written by a build without marks.
+    pub(super) fn first_markable_offset(&self) -> Offset {
+        self.sealed
+            .iter()
+            .find(|entry| entry.holds_marks)
+            .map(|entry| entry.descriptor.base_offset)
+            .unwrap_or_else(|| self.active.base_offset())
+    }
+
     /// Oldest offset still readable. Rises only when segments are deleted.
     pub(super) fn base_offset(&self) -> Offset {
         self.sealed
@@ -279,6 +289,9 @@ pub(super) struct SealedEntry {
     pub descriptor: SegmentDescriptor,
     pub index: SparseIndex,
     pub reader: SegmentReader,
+    /// A v3 segment, which may hold producer marks. A v2 one cannot, so a
+    /// rebuild of producer state never has to read it.
+    pub holds_marks: bool,
 }
 
 impl SealedEntry {

@@ -83,7 +83,13 @@ fn build_segment(rng: &mut Rng, count: usize, max_payload: usize) -> Vec<u8> {
     let mut bytes = SegmentHeader::new(0, 1).encode().to_vec();
     for offset in 0..count {
         let payload = rng.bytes_below(max_payload);
-        encode_record(&mut bytes, offset as u64, offset as u64 * 7, &payload);
+        encode_record(
+            &mut bytes,
+            offset as u64,
+            offset as u64 * 7,
+            &payload,
+            &Default::default(),
+        );
     }
     bytes
 }
@@ -131,11 +137,15 @@ fn a_corrupt_length_field_is_rejected_before_allocation() {
         let header_crc = crc32_of(&bytes[0..20]);
         bytes[20..24].copy_from_slice(&header_crc.to_be_bytes());
 
+        // With both producer-mark bits set the word is refused as impossible
+        // flags instead, which is just as early.
         let err = decode_record(&bytes).expect_err("oversized length");
         assert!(
             matches!(
                 err.kind,
-                CorruptionKind::RecordTooLarge { .. } | CorruptionKind::Truncated { .. }
+                CorruptionKind::RecordTooLarge { .. }
+                    | CorruptionKind::Truncated { .. }
+                    | CorruptionKind::RecordFlags { .. }
             ),
             "unexpected error for claimed length {claimed}: {err}"
         );
@@ -151,7 +161,7 @@ fn every_encoded_record_round_trips() {
         let timestamp = rng.next_u64();
 
         let mut bytes = Vec::new();
-        let written = encode_record(&mut bytes, offset, timestamp, &payload);
+        let written = encode_record(&mut bytes, offset, timestamp, &payload, &Default::default());
         let (decoded, consumed) =
             decode_record(&bytes).unwrap_or_else(|err| panic!("iteration {iteration}: {err}"));
 
@@ -169,7 +179,13 @@ fn a_single_flipped_bit_is_always_detected() {
         let payload_len = 1 + rng.below(64);
         let payload = rng.bytes(payload_len);
         let mut bytes = Vec::new();
-        encode_record(&mut bytes, rng.next_u64(), rng.next_u64(), &payload);
+        encode_record(
+            &mut bytes,
+            rng.next_u64(),
+            rng.next_u64(),
+            &payload,
+            &Default::default(),
+        );
 
         let position = rng.below(bytes.len());
         let bit = 1u8 << rng.below(8);

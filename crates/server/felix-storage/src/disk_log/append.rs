@@ -23,10 +23,15 @@ const MAX_ROLL_ATTEMPTS: usize = 8;
 
 impl DiskLog {
     /// Roll if needed, then assign offsets and write the batch.
+    ///
+    /// With `continuing`, the batch is the rest of that producer batch, and is
+    /// written only if the batch is still open at the tail; `None` otherwise.
+    /// Checked under the lock the write takes, so nothing can land in between.
     pub(super) async fn write_batch(
         inner: Arc<LogInner>,
         records: Vec<AppendRecord>,
-    ) -> Result<PendingAppend> {
+        continuing: Option<(u64, u64)>,
+    ) -> Result<Option<PendingAppend>> {
         if records.is_empty() {
             return Err(StorageError::InvalidRange);
         }
@@ -71,6 +76,11 @@ impl DiskLog {
                     if segments.would_roll_within(&batch, roller.roll_pending()) {
                         roller.before_inline_roll();
                         segments.roll()?;
+                        // `roll` sealed the retired segment, so the snapshot
+                        // describes only records already on the device.
+                        let snapshot = roller.producer_snapshot(&segments);
+                        drop(segments);
+                        roller.store_producer_snapshot(snapshot);
                     }
                     Ok::<(), StorageError>(())
                 })
@@ -91,7 +101,13 @@ impl DiskLog {
                 debug_assert!(attempt + 1 < MAX_ROLL_ATTEMPTS, "rollover retry starved");
                 continue;
             }
+            if let Some((producer_id, sequence)) = continuing
+                && !inner.batch_open_at_tail(&segments, producer_id, sequence)
+            {
+                return Ok(None);
+            }
             let (first_offset, last_offset) = segments.append(&records)?;
+            inner.observe_marks(first_offset, &records);
             let durable_target = segments.tail_offset();
             let prepare_roll = segments.should_prepare_roll();
             drop(segments);
@@ -143,13 +159,13 @@ impl DiskLog {
                 *inner.roll_task.lock() = Some(handle);
             }
 
-            return Ok(PendingAppend {
+            return Ok(Some(PendingAppend {
                 result: AppendResult {
                     first_offset,
                     last_offset,
                 },
                 durable_target,
-            });
+            }));
         }
 
         Err(StorageError::Unsupported(
@@ -178,7 +194,7 @@ impl LogInner {
             let plan = { inner.segments.read().roll_plan() };
             let prepared = plan.build()?;
 
-            let retired = {
+            let (retired, snapshot) = {
                 let mut segments = inner.segments.write();
                 match segments.commit_roll(prepared)? {
                     RollOutcome::Installed(retired) => {
@@ -186,7 +202,9 @@ impl LogInner {
                         // observe the new active segment without also seeing the
                         // retired one it has to cover.
                         *inner.pending_seal.lock() = Some(retired.sync_handle());
-                        retired
+                        // As of the new segment's base: everything it covers
+                        // is in segments that are sealed once this roll is.
+                        (retired, inner.producer_snapshot(&segments))
                     }
                     // The tail moved past the offset this segment was built
                     // for. Delete it here — leaving it for recovery to clean up
@@ -211,6 +229,9 @@ impl LogInner {
                     // Only now: these records are on the device, so a flush no
                     // longer has to cover them.
                     *inner.pending_seal.lock() = None;
+                    // Saved only once they are, so the snapshot never vouches
+                    // for a batch a crash could still take away.
+                    inner.store_producer_snapshot(snapshot);
                     Ok::<(), StorageError>(())
                 }
                 Err(err) => {

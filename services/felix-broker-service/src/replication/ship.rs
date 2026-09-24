@@ -2,8 +2,10 @@
 
 use bytes::Bytes;
 use felix_broker::StreamLog;
+use felix_storage::log::RecordMark;
 use felix_wire::internal::{
-    ErrorCode, InternalMessage, ReplicaLog, ReplicateRecords, ShardRef, batch_checksum,
+    ErrorCode, InternalMessage, ProducerMark, ReplicaLog, ReplicateRecords, ShardRef,
+    batch_checksum,
 };
 
 use super::follower::{FollowerCursor, Halt};
@@ -113,6 +115,16 @@ pub async fn ship_once<R: PeerRequester>(
     }
 
     let first_offset = records[0].offset;
+    // Marks go only when there are any: an unmarked batch is byte for byte
+    // what a follower that predates them reads.
+    let marks: Vec<ProducerMark> = if records.iter().any(|r| r.mark != RecordMark::None) {
+        records
+            .iter()
+            .map(|record| felix_broker::replication::mark_to_wire(record.mark))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let payloads: Vec<Bytes> = records.into_iter().map(|record| record.payload).collect();
     let batch_end = first_offset + payloads.len() as u64;
     let batch_bytes: usize = payloads.iter().map(Bytes::len).sum();
@@ -121,8 +133,9 @@ pub async fn ship_once<R: PeerRequester>(
         correlation_id: 0,
         shard: shard.clone(),
         first_offset,
-        checksum: batch_checksum(&payloads),
+        checksum: batch_checksum(&payloads, &marks),
         payloads,
+        marks,
     };
     // Which log this is belongs in the message kind, not in the shard
     // reference: the bodies are identical, and a follower that guessed wrong
@@ -134,6 +147,9 @@ pub async fn ship_once<R: PeerRequester>(
             InternalMessage::ReplicateDeadLetterRecords(batch)
         }
         felix_broker::LogKind::Counters => InternalMessage::ReplicateCounterRecords(batch),
+        felix_broker::LogKind::Stream if !batch.marks.is_empty() => {
+            InternalMessage::ReplicateMarkedRecords(batch)
+        }
         felix_broker::LogKind::Stream => InternalMessage::ReplicateRecords(batch),
     };
 

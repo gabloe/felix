@@ -5,6 +5,7 @@
 mod append_and_read;
 mod durability;
 mod placed_at_a_base_offset;
+mod producers;
 mod provider;
 mod retention;
 mod rollover;
@@ -22,6 +23,7 @@ fn record(payload: &str) -> AppendRecord {
     AppendRecord {
         payload: Bytes::copy_from_slice(payload.as_bytes()),
         timestamp_micros: 1_700_000_000,
+        mark: Default::default(),
     }
 }
 

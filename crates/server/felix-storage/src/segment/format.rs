@@ -10,7 +10,7 @@
 
 use bytes::Bytes;
 
-use crate::log::Offset;
+use crate::log::{Offset, ProducerBatch, RecordMark};
 use crate::{Corruption, CorruptionKind};
 
 /// `"FLSG"` — **F**e**L**ix **S**e**g**ment. Identifies a segment data file.
@@ -29,12 +29,21 @@ pub const INDEX_MAGIC: u32 = 0x464C_5349;
 /// only ever written by unreleased builds, so the migration path is to discard
 /// the data directory rather than to carry a second decoder. Failing loudly is
 /// the point: a v1 record read as v2 would misparse every field.
-pub const FORMAT_VERSION: u16 = 2;
+///
+/// v3 lets a record carry a producer mark (see [`RecordHeader`]). A v2 segment
+/// reads the same under v3, so both are accepted; a v2 build refuses a v3
+/// segment instead of reading a mark's flag bits as an impossible length.
+pub const FORMAT_VERSION: u16 = 3;
+
+/// The oldest segment and index version this build reads.
+pub const OLDEST_READABLE_VERSION: u16 = 2;
 
 /// Bytes occupied by a segment file header.
 pub const SEGMENT_HEADER_LEN: u64 = 32;
 /// Bytes occupied by a record header, excluding its payload.
 pub const RECORD_HEADER_LEN: u64 = 28;
+/// Bytes a record opening a producer batch carries after its header.
+pub const PRODUCER_TAG_LEN: u64 = 20;
 /// Bytes occupied by an index file header.
 pub const INDEX_HEADER_LEN: u64 = 24;
 /// Bytes occupied by a single sparse index entry.
@@ -65,6 +74,9 @@ pub struct SegmentHeader {
     pub base_offset: Offset,
     pub created_at_micros: u64,
     pub flags: u16,
+    /// The layout version the segment was written with. Only a v3 segment
+    /// may hold producer marks.
+    pub version: u16,
 }
 
 impl SegmentHeader {
@@ -73,13 +85,19 @@ impl SegmentHeader {
             base_offset,
             created_at_micros,
             flags: 0,
+            version: FORMAT_VERSION,
         }
+    }
+
+    /// Whether records with producer marks may be written to this segment.
+    pub fn holds_marks(&self) -> bool {
+        self.version >= 3
     }
 
     pub fn encode(&self) -> [u8; SEGMENT_HEADER_LEN as usize] {
         let mut buf = [0u8; SEGMENT_HEADER_LEN as usize];
         buf[0..4].copy_from_slice(&SEGMENT_MAGIC.to_be_bytes());
-        buf[4..6].copy_from_slice(&FORMAT_VERSION.to_be_bytes());
+        buf[4..6].copy_from_slice(&self.version.to_be_bytes());
         buf[6..8].copy_from_slice(&self.flags.to_be_bytes());
         buf[8..16].copy_from_slice(&self.base_offset.to_be_bytes());
         buf[16..24].copy_from_slice(&self.created_at_micros.to_be_bytes());
@@ -99,7 +117,7 @@ impl SegmentHeader {
             }));
         }
         let version = read_u16(buf, 4);
-        if version != FORMAT_VERSION {
+        if !(OLDEST_READABLE_VERSION..=FORMAT_VERSION).contains(&version) {
             return Err(Corruption::new(CorruptionKind::SegmentVersion {
                 found: version,
             }));
@@ -122,6 +140,7 @@ impl SegmentHeader {
             base_offset: read_u64(buf, 8),
             created_at_micros: read_u64(buf, 16),
             flags,
+            version,
         })
     }
 }
@@ -129,16 +148,21 @@ impl SegmentHeader {
 /// The fixed-size prefix of a record.
 ///
 /// ```text
-///  0   4  payload_len        u32
+///  0   4  len_and_flags      u32  payload length, and two flags in the top bits
 ///  4   8  offset             u64  logical offset of this record
 /// 12   8  timestamp_micros   u64
-/// 20   4  checksum           u32  crc32 over bytes 0..20 followed by the payload
-/// 24   n  payload
+/// 20   4  header_crc         u32  crc32 over bytes 0..20
+/// 24   4  checksum           u32  crc32 over bytes 0..24, the tag, and the payload
+/// 28  20  producer tag            only when the record opens a producer batch:
+///                                 producer_id u64, sequence u64, len u32
+///     n   payload
 /// ```
 ///
-/// `payload_len` sits first and is covered by the checksum, so a reader can walk
-/// to the next record with `position + RECORD_HEADER_LEN + payload_len` without
-/// looking at payload bytes at all.
+/// Bit 31 of `len_and_flags` says the record opens an idempotent producer's
+/// batch and the tag follows; bit 30 says it continues the batch the record
+/// before it belongs to. Payloads are capped well below 2^30, so the length
+/// never reaches them. The length word is covered by the header checksum, so
+/// a reader can walk to the next record from the header alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordHeader {
     pub payload_len: u32,
@@ -149,12 +173,39 @@ pub struct RecordHeader {
     /// rotted length field.
     pub header_crc: u32,
     pub checksum: u32,
+    /// The record opens a producer batch; the tag follows the header.
+    pub opens_batch: bool,
+    /// The record continues the producer batch before it.
+    pub continues_batch: bool,
+}
+
+const FLAG_OPENS_BATCH: u32 = 1 << 31;
+const FLAG_CONTINUES_BATCH: u32 = 1 << 30;
+const FLAG_MASK: u32 = FLAG_OPENS_BATCH | FLAG_CONTINUES_BATCH;
+
+/// Bytes a record with this payload and mark takes on disk.
+pub fn record_len(payload_len: usize, mark: &RecordMark) -> u64 {
+    let tag = match mark {
+        RecordMark::Opens(_) => PRODUCER_TAG_LEN,
+        RecordMark::None | RecordMark::Continues => 0,
+    };
+    RECORD_HEADER_LEN + tag + payload_len as u64
 }
 
 impl RecordHeader {
     /// Total bytes this record occupies on disk, header included.
     pub fn encoded_len(&self) -> u64 {
-        RECORD_HEADER_LEN + u64::from(self.payload_len)
+        let tag = if self.opens_batch {
+            PRODUCER_TAG_LEN
+        } else {
+            0
+        };
+        RECORD_HEADER_LEN + tag + u64::from(self.payload_len)
+    }
+
+    /// Where the payload starts, relative to the record.
+    fn payload_start(&self) -> usize {
+        (self.encoded_len() - u64::from(self.payload_len)) as usize
     }
 
     pub fn decode(buf: &[u8]) -> DecodeResult<Self> {
@@ -173,7 +224,14 @@ impl RecordHeader {
                 found,
             }));
         }
-        let payload_len = read_u32(buf, 0);
+        let len_and_flags = read_u32(buf, 0);
+        let flags = len_and_flags & FLAG_MASK;
+        if flags == FLAG_MASK {
+            return Err(Corruption::new(CorruptionKind::RecordFlags {
+                found: len_and_flags,
+            }));
+        }
+        let payload_len = len_and_flags & !FLAG_MASK;
         if payload_len > MAX_PAYLOAD_BYTES {
             return Err(Corruption::new(CorruptionKind::RecordTooLarge {
                 payload_len,
@@ -186,6 +244,8 @@ impl RecordHeader {
             timestamp_micros: read_u64(buf, 12),
             header_crc,
             checksum: read_u32(buf, 24),
+            opens_batch: flags == FLAG_OPENS_BATCH,
+            continues_batch: flags == FLAG_CONTINUES_BATCH,
         })
     }
 }
@@ -199,18 +259,35 @@ pub fn encode_record(
     offset: Offset,
     timestamp_micros: u64,
     payload: &[u8],
+    mark: &RecordMark,
 ) -> u64 {
     debug_assert!(payload.len() <= MAX_PAYLOAD_BYTES as usize);
     let start = out.len();
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    let flags = match mark {
+        RecordMark::None => 0,
+        RecordMark::Opens(_) => FLAG_OPENS_BATCH,
+        RecordMark::Continues => FLAG_CONTINUES_BATCH,
+    };
+    out.extend_from_slice(&(payload.len() as u32 | flags).to_be_bytes());
     out.extend_from_slice(&offset.to_be_bytes());
     out.extend_from_slice(&timestamp_micros.to_be_bytes());
     // Header checksum first, so a reader can trust `payload_len` without having
     // read the payload it describes.
     let header_crc = crc32(&[&out[start..start + 20]]);
     out.extend_from_slice(&header_crc.to_be_bytes());
-    let checksum = crc32(&[&out[start..start + 24], payload]);
+    let mut tag = [0u8; PRODUCER_TAG_LEN as usize];
+    let tag: &[u8] = match mark {
+        RecordMark::Opens(batch) => {
+            tag[0..8].copy_from_slice(&batch.producer_id.to_be_bytes());
+            tag[8..16].copy_from_slice(&batch.sequence.to_be_bytes());
+            tag[16..20].copy_from_slice(&batch.len.to_be_bytes());
+            &tag
+        }
+        RecordMark::None | RecordMark::Continues => &[],
+    };
+    let checksum = crc32(&[&out[start..start + 24], tag, payload]);
     out.extend_from_slice(&checksum.to_be_bytes());
+    out.extend_from_slice(tag);
     out.extend_from_slice(payload);
     (out.len() - start) as u64
 }
@@ -220,6 +297,7 @@ pub fn encode_record(
 pub struct DecodedRecord {
     pub header: RecordHeader,
     pub payload: Bytes,
+    pub mark: RecordMark,
 }
 
 /// Decode the record at the front of `buf`, verifying its checksum.
@@ -233,18 +311,32 @@ pub fn decode_record(buf: &[u8]) -> DecodeResult<(DecodedRecord, u64)> {
     if (buf.len() as u64) < total {
         return Err(truncated(total, buf.len() as u64));
     }
-    let payload = &buf[RECORD_HEADER_LEN as usize..total as usize];
-    let found = crc32(&[&buf[0..24], payload]);
+    let payload_start = header.payload_start();
+    let tag = &buf[RECORD_HEADER_LEN as usize..payload_start];
+    let payload = &buf[payload_start..total as usize];
+    let found = crc32(&[&buf[0..24], tag, payload]);
     if found != header.checksum {
         return Err(Corruption::new(CorruptionKind::RecordChecksum {
             expected: header.checksum,
             found,
         }));
     }
+    let mark = if header.opens_batch {
+        RecordMark::Opens(ProducerBatch {
+            producer_id: read_u64(tag, 0),
+            sequence: read_u64(tag, 8),
+            len: read_u32(tag, 16),
+        })
+    } else if header.continues_batch {
+        RecordMark::Continues
+    } else {
+        RecordMark::None
+    };
     Ok((
         DecodedRecord {
             header,
             payload: Bytes::copy_from_slice(payload),
+            mark,
         },
         total,
     ))
@@ -285,8 +377,9 @@ impl IndexHeader {
         if magic != INDEX_MAGIC {
             return Err(Corruption::new(CorruptionKind::IndexMagic { found: magic }));
         }
+        // The index layout did not change in v3, so a v2 index stays usable.
         let version = read_u16(buf, 4);
-        if version != FORMAT_VERSION {
+        if !(OLDEST_READABLE_VERSION..=FORMAT_VERSION).contains(&version) {
             return Err(Corruption::new(CorruptionKind::IndexVersion {
                 found: version,
             }));

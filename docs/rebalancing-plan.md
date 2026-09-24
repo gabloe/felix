@@ -67,7 +67,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | done |
 | 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | done |
 | 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | planned |
-| 6 | Idempotent producers keep their sequences across a planned move | planned |
+| 6 | Idempotent producers keep their sequences across a planned move | done |
 | 7 | Docs and the status row | planned |
 
 Load-aware placement (moving shards by load rather than by count) is separate
@@ -234,6 +234,48 @@ conformance runner checks the frame on the wire, offered and not.
   the quorum does not need and never to the remainder after the fence.
 - `max_shards` is compared against roles, not leaders, when choosing a
   destination.
+
+### Phase 6: idempotent producers keep their sequences
+
+A move's destination, like a promoted replica, used to know no producers: the
+sequences were in the old leader's memory, so the first batch a producer sent
+after the move was refused as `unknown_producer`, and a re-send of the batch in
+flight could not be told from a new one.
+
+The sequences are now in the log. Each record of a producer's batch is stored
+with a mark naming the producer and sequence (storage format v3), the marks
+are shipped with the records, and every broker derives each producer's place
+from its own log: on each append, and on open from a snapshot saved at each
+rollover plus the active segment recovery scans anyway. So the destination
+answers the re-send from the records it was copied, before it takes its first
+write, and a failover and a restart get the same answer by the same means.
+There is no separate channel, and nothing for the drained report to wait on:
+the marks are in the records the move already waits for. This also closes
+#608, the same gap on a failover.
+
+A batch the old leader stopped partway through is finished by the re-send
+rather than written again. A producer is remembered while any of its batches
+is in the log, so retention decides when one is forgotten, on every replica
+alike.
+
+Evidence: `clients::idempotent` in `felix-cluster` —
+`a_producer_keeps_its_sequence_across_a_planned_move` and
+`a_producer_keeps_its_sequence_when_its_leader_dies` re-send the last batch to
+the new leader after a drain and after a kill, see it answered without a
+second copy, and carry on, and
+`a_producer_publishing_through_its_leaders_death_loses_and_repeats_nothing`
+kills the leader while a producer is mid-stream and finds every record once,
+in order. All three failed before, with `unknown_producer`. The
+TLA+ configurations `FelixShardIdempotentHandoff` and
+`FelixShardIdempotentFailover` pass `NoDuplicate`; their `Memory` companions,
+with the sequences in the leader's memory, violate it.
+
+Cost: opening a 244 MiB shard in 17 segments with 1000 producers takes the
+same time with the snapshot as an unmarked shard (about 20 ms on a local
+release build; `producer_state_open`), and about 100 ms when the snapshot is
+missing and the sealed segments are read instead. Durable publish throughput,
+plain and idempotent, is unchanged within run-to-run noise
+(`idempotent_throughput`).
 
 ## Checking the work
 

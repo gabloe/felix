@@ -79,3 +79,6 @@ pub const RECOVERY_TRUNCATED_BYTES: &str = "felix_storage_recovery_truncated_byt
 pub const RECOVERY_ABANDONED_ROLLS_TOTAL: &str = "felix_storage_recovery_abandoned_rolls_total";
 /// Indexes rebuilt because they were missing or stale.
 pub const RECOVERY_INDEX_REBUILDS_TOTAL: &str = "felix_storage_recovery_index_rebuilds_total";
+/// Opens (or truncations) that rebuilt producer state by reading sealed
+/// segments, because the producer snapshot was missing or out of date.
+pub const PRODUCER_STATE_REBUILT_TOTAL: &str = "felix_storage_producer_state_rebuilt_total";

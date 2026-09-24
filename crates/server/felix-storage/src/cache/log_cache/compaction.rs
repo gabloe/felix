@@ -123,6 +123,7 @@ impl CacheShard {
                 .append(&[AppendRecord {
                     payload,
                     timestamp_micros: now * 1000,
+                    mark: Default::default(),
                 }])
                 .await?;
             index.entries.insert(

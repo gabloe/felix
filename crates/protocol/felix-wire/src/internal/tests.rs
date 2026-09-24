@@ -143,6 +143,7 @@ fn every_message() -> Vec<InternalMessage> {
             first_offset: 100,
             checksum: 0x0102_0304,
             payloads: vec![Bytes::from_static(b"a"), Bytes::from_static(b"bb")],
+            marks: Vec::new(),
         }),
         InternalMessage::ReplicateCacheBootstrap(ReplicateBootstrap {
             correlation_id: 42,
@@ -155,6 +156,7 @@ fn every_message() -> Vec<InternalMessage> {
             first_offset: 100,
             checksum: 0x0102_0304,
             payloads: vec![Bytes::from_static(b"cursor")],
+            marks: Vec::new(),
         }),
         InternalMessage::ReplicateGroupBootstrap(ReplicateBootstrap {
             correlation_id: 42,
@@ -167,6 +169,7 @@ fn every_message() -> Vec<InternalMessage> {
             first_offset: 100,
             checksum: 0x0102_0304,
             payloads: vec![Bytes::from_static(b"dead letter")],
+            marks: Vec::new(),
         }),
         InternalMessage::ReplicateDeadLetterBootstrap(ReplicateBootstrap {
             correlation_id: 42,
@@ -179,11 +182,32 @@ fn every_message() -> Vec<InternalMessage> {
             first_offset: 100,
             checksum: 0x0102_0304,
             payloads: vec![Bytes::from_static(b"delta")],
+            marks: Vec::new(),
         }),
         InternalMessage::ReplicateCounterBootstrap(ReplicateBootstrap {
             correlation_id: 42,
             shard: shard(),
             base_offset: 5_000,
+        }),
+        InternalMessage::ReplicateMarkedRecords(ReplicateRecords {
+            correlation_id: 42,
+            shard: shard(),
+            first_offset: 100,
+            checksum: 0x0102_0304,
+            payloads: vec![
+                Bytes::from_static(b"plain"),
+                Bytes::from_static(b"first"),
+                Bytes::from_static(b"second"),
+            ],
+            marks: vec![
+                ProducerMark::None,
+                ProducerMark::Opens {
+                    producer_id: u64::MAX,
+                    sequence: 9,
+                    len: 2,
+                },
+                ProducerMark::Continues,
+            ],
         }),
     ]
 }
@@ -196,5 +220,6 @@ fn replicate() -> InternalMessage {
         first_offset: 100,
         checksum: 0x0102_0304,
         payloads,
+        marks: Vec::new(),
     })
 }

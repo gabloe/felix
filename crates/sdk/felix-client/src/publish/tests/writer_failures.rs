@@ -385,3 +385,96 @@ async fn run_publisher_writer_publish_batch_error_drains_queue() -> Result<()> {
     server_task.await.context("server join")??;
     Ok(())
 }
+
+/// A refusal answers one request; the publishes after it on the same stream
+/// must still get their own answers, not a copy of the refusal. Checked with
+/// and without a code, since a broker that predates codes sends plain text.
+#[tokio::test]
+async fn a_refused_publish_leaves_the_stream_serving_later_ones() -> Result<()> {
+    let coded = |request_id| Message::PublishError {
+        request_id,
+        message: "stream not found: absent".to_string(),
+        code: Some(felix_wire::ErrorCode::NotFound),
+        retry: None,
+        detail: None,
+    };
+    let uncoded = |request_id| Message::publish_error(request_id, "stream not found: absent");
+    for refusal in [coded as fn(u64) -> Message, uncoded] {
+        let (server_config, cert) = build_server_config()?;
+        let transport = TransportConfig::default();
+        let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+        let addr = server.local_addr()?;
+
+        let server_task = tokio::spawn(async move {
+            let connection = server.accept().await?;
+            let (mut send, mut recv) = connection.accept_bi().await?;
+            let mut scratch = BytesMut::new();
+            while let Some(frame) =
+                crate::frame_io::read_frame_into(&mut recv, &mut scratch, false).await?
+            {
+                let (stream, request_id) = match Message::decode(frame).context("decode")? {
+                    Message::Publish {
+                        stream, request_id, ..
+                    } => (stream, request_id.context("missing request_id")?),
+                    other => return Err(anyhow::anyhow!("unexpected message: {other:?}")),
+                };
+                let ack = if stream == "absent" {
+                    refusal(request_id)
+                } else {
+                    Message::PublishOk { request_id }
+                };
+                let frame = ack.encode().context("encode ack")?;
+                send.write_all(&frame.encode()).await.context("write ack")?;
+            }
+            send.finish().context("finish ack")?;
+            let _ = send.stopped().await;
+            Ok::<(), anyhow::Error>(())
+        });
+
+        let client = QuicClient::bind("0.0.0.0:0".parse()?, quinn_client_config(cert)?, transport)?;
+        let connection = client.connect(addr, "localhost").await?;
+        let (send, recv) = connection.open_bi().await?;
+        let (tx, rx) = mpsc::channel(4);
+        let writer_task = tokio::spawn(run_publisher_writer(send, recv, rx, 1024));
+
+        let publish = |stream: &str, request_id| {
+            let (response, answer) = oneshot::channel();
+            let request = PublishRequest::Message {
+                message: Message::Publish {
+                    tenant_id: "t1".to_string(),
+                    namespace: "ns".to_string(),
+                    stream: stream.to_string(),
+                    payload: b"x".to_vec(),
+                    key: None,
+                    request_id: Some(request_id),
+                    ack: Some(AckMode::PerMessage),
+                },
+                ack: AckMode::PerMessage,
+                request_id: Some(request_id),
+                _permit: test_publish_permit(),
+                response,
+            };
+            (request, answer)
+        };
+
+        let (request, answer) = publish("absent", 1);
+        tx.send(request).await.context("send refused publish")?;
+        let err = answer
+            .await
+            .context("refusal dropped")?
+            .expect_err("refused");
+        assert!(err.to_string().contains("absent"), "{err:#}");
+
+        let (request, answer) = publish("present", 2);
+        tx.send(request).await.context("send later publish")?;
+        answer
+            .await
+            .context("later answer dropped")?
+            .expect("a publish to another stream was answered with the refusal");
+
+        drop(tx);
+        writer_task.await.context("writer join")??;
+        server_task.await.context("server join")??;
+    }
+    Ok(())
+}

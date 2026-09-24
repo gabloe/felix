@@ -251,6 +251,54 @@ would have a hole nothing downstream could detect, and it is halted. The leader
 then rebuilds it under the policy below, or leaves it to an operator when the
 policy says so.
 
+### Idempotent producers across a leader change
+
+An idempotent producer's sequence has to be wherever the shard's leader is, or
+a re-send after a failover or a move lands a second time, or is refused as
+`unknown_producer` with the producer left not knowing whether its batch
+landed. It is not state beside the log: each record of a producer's batch is
+stored with a mark naming the producer and the sequence (see
+`docs/storage-format.md`, "Producer marks"), and the marks are shipped with
+the records (`ReplicateMarkedRecords` in `docs/internal-protocol.md`). A
+broker's producer state is derived from its own log, on every append and on
+every open, so it is the same on any replica that holds the same records:
+
+- **A promoted replica or a move's destination** knows every batch it was
+  shipped. A re-send of one is answered with where it landed; the next
+  sequence is appended. Nothing is sent at promotion, because there is nothing
+  to send.
+- **A restarted broker** rebuilds the state as it opens the shard, before the
+  shard takes a write, from a snapshot saved at each rollover plus the active
+  segment that recovery scans anyway.
+- **A batch cut short** — its leader died while writing or shipping it, so the
+  replica holds only its first records — is finished by the re-send: the
+  missing records are appended, and the batch is not written twice. If
+  anything else was appended after it first, it can never be finished, and the
+  re-send is appended whole.
+- **A replica that disagrees with the leader** about a record's mark has
+  diverged, and is repaired or halted like one that disagrees about its bytes.
+- **Truncation** takes the batches it removes out of the state with them.
+
+What is remembered is a function of the log. A producer is known while any of
+its batches is in the log; once retention removes the last of them it is
+forgotten on every replica, and its next batch is refused as
+`unknown_producer`. So is one evicted as the least recently written of more
+than 4096 on a shard, and one whose batches all precede the base a follower
+was bootstrapped or rebuilt at. `unknown_producer` after a leader change now
+means the history is genuinely gone, not that the leader changed. The client
+ends the producer on that stream and reports it rather than starting again
+under a new id, because whether the batch in flight landed is exactly what
+nobody can say any more.
+
+An in-memory stream has no log and keeps sequences in its leader's memory, so
+they last as long as the leader.
+
+`FelixShardIdempotentFailover.cfg` and `FelixShardIdempotentHandoff.cfg` check
+that a re-send never stores a write twice across a failover or a move;
+`FelixShardIdempotentFailoverMemory.cfg` and
+`FelixShardIdempotentHandoffMemory.cfg`, with the sequences in the leader's
+memory, find the promoted broker storing it again.
+
 ### The `Leader` loss window, precisely
 
 For `ConsistencyLevel::Leader`, a record is acknowledged once it is durable on

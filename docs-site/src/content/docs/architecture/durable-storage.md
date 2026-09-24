@@ -227,6 +227,14 @@ every record it returns, so bit rot in cold data is still caught — when it is
 read rather than at boot. Set `FELIX_DURABLE_VERIFY_ALL_ON_OPEN=true` to trade
 startup time for eager detection.
 
+Idempotent producers' sequences are part of what an open rebuilds. Each record
+a producer writes carries its producer id and sequence, and a broker derives
+every producer's place from its own log before the shard takes a write: from
+the snapshot saved at the last rollover, plus the active segment the scan above
+already read. That is also why a promoted replica or a move's destination
+answers a producer's re-send — it derives the same state from the records it
+was shipped.
+
 ## What durability costs
 
 Measured on an Apple Mac Studio (M4 Max, 16 CPUs), APFS on internal NVMe,
@@ -310,6 +318,7 @@ FELIX_DURABLE_FSYNC_MODE=on_commit \
 | `felix_storage_unsynced_bytes` | data a crash would lose right now |
 | `felix_storage_sync_failures_total` | non-zero means acknowledged durability is in doubt |
 | `felix_storage_recovery_truncated_bytes` | bytes discarded from a torn tail |
+| `felix_storage_producer_state_rebuilt_total` | opens or truncations that read sealed segments to rebuild idempotent producers' state, because the snapshot was missing or out of date |
 
 The first two together answer the question that actually comes up: *is durability
 the bottleneck?* If sync dominates append, the fsync policy is the cost.

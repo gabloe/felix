@@ -349,3 +349,207 @@ async fn a_cancelled_publish_stops_the_producer_rather_than_reusing_its_sequence
     cluster.shutdown().await;
     Ok(())
 }
+
+/// Publish `record-0..count` through `producer`, one batch each.
+async fn publish_records(
+    cluster: &Cluster,
+    producer: &felix_client::IdempotentProducer<'_>,
+    range: std::ops::Range<u32>,
+) -> Result<()> {
+    for i in range {
+        producer
+            .publish(
+                &cluster.tenant_id,
+                &cluster.namespace,
+                STREAM,
+                format!("record-{i}").into_bytes(),
+            )
+            .await
+            .with_context(|| format!("publish record-{i}"))?;
+    }
+    Ok(())
+}
+
+/// Re-send `record-{sequence}` under `sequence`, straight to `node_id`: what a
+/// producer does when the acknowledgement for its last batch never arrived
+/// and the leader changed meanwhile.
+async fn re_send(cluster: &Cluster, node_id: &str, producer_id: u64, sequence: u64) -> Result<()> {
+    let node = cluster.node(node_id).context("node")?;
+    let direct =
+        client::connect(node.client_addr, &cluster.tenant_id, &cluster.client_token).await?;
+    direct
+        .publisher()
+        .await?
+        .publish_idempotent_batch(
+            &cluster.tenant_id,
+            &cluster.namespace,
+            STREAM,
+            vec![format!("record-{sequence}").into_bytes()],
+            producer_id,
+            sequence,
+        )
+        .await
+        .context("the new leader must answer the re-send as a duplicate")
+}
+
+/// **A producer's sequence moves with its shard.** The owner drains, the
+/// shard moves, and the new owner answers a re-send of the last batch from
+/// the log it received rather than appending it again. The producer then
+/// carries on where it was instead of being told it is unknown.
+#[tokio::test]
+#[serial]
+async fn a_producer_keeps_its_sequence_across_a_planned_move() -> Result<()> {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        ..Default::default()
+    })
+    .await?;
+    let owner = cluster.owner(STREAM).await?;
+    let cluster_client = client::connect_cluster(
+        &cluster.broker_addrs(),
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await?;
+    let producer = cluster_client.idempotent_producer().await?;
+    publish_records(&cluster, &producer, 0..5).await?;
+
+    cluster.drain_node(&owner).await?;
+    cluster
+        .drain_until_empty(&owner, 1, Duration::from_secs(60))
+        .await?;
+    let new_owner = cluster.owner(STREAM).await?;
+    assert_ne!(new_owner, owner);
+
+    re_send(&cluster, &new_owner, producer.producer_id(), 4).await?;
+    publish_records(&cluster, &producer, 5..7).await?;
+
+    let records = replay(&cluster, &new_owner, 7).await?;
+    let expected: Vec<Vec<u8>> = (0..7).map(|i| format!("record-{i}").into_bytes()).collect();
+    assert_eq!(records, expected, "a batch landed twice, or out of order");
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// **A producer's sequence survives its leader.** The leader is killed after
+/// a majority holds the producer's batches; the promoted replica answers a
+/// re-send of the last one without appending it, and the producer carries on.
+#[tokio::test]
+#[serial]
+async fn a_producer_keeps_its_sequence_when_its_leader_dies() -> Result<()> {
+    let mut cluster = Cluster::start(config()).await?;
+    let owner = cluster.owner(STREAM).await?;
+    let survivors: Vec<std::net::SocketAddr> = cluster
+        .nodes
+        .iter()
+        .filter(|node| node.node_id != owner)
+        .map(|node| node.client_addr)
+        .collect();
+    let cluster_client =
+        client::connect_cluster(&survivors, &cluster.tenant_id, &cluster.client_token).await?;
+    let producer = cluster_client.idempotent_producer().await?;
+    // Acknowledged only once a majority holds each batch.
+    publish_records(&cluster, &producer, 0..5).await?;
+
+    cluster.kill_node(&owner)?;
+    let new_owner =
+        felix_cluster::wait::until_some(Duration::from_secs(30), "a new leader", || async {
+            cluster.place_shards().await;
+            cluster
+                .owner(STREAM)
+                .await
+                .ok()
+                .filter(|leader| leader != &owner)
+        })
+        .await?;
+
+    // The promoted broker learns of its promotion through its watch, so the
+    // re-send is retried until it is the leader.
+    felix_cluster::wait::until(
+        Duration::from_secs(30),
+        "the promoted leader to take the re-send",
+        || async {
+            re_send(&cluster, &new_owner, producer.producer_id(), 4)
+                .await
+                .is_ok()
+        },
+    )
+    .await?;
+    publish_records(&cluster, &producer, 5..7).await?;
+
+    let records = replay(&cluster, &new_owner, 7).await?;
+    let expected: Vec<Vec<u8>> = (0..7).map(|i| format!("record-{i}").into_bytes()).collect();
+    assert_eq!(records, expected, "a batch landed twice, or out of order");
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// **A producer publishing through its leader's death loses and repeats
+/// nothing.** The leader is killed while the producer is mid-stream; the
+/// batch in flight is re-sent by the producer itself until the promoted
+/// leader answers it, and every record is on the stream exactly once, in
+/// order.
+#[tokio::test]
+#[serial]
+async fn a_producer_publishing_through_its_leaders_death_loses_and_repeats_nothing() -> Result<()> {
+    const RECORDS: u32 = 40;
+    let mut cluster = Cluster::start(config()).await?;
+    let owner = cluster.owner(STREAM).await?;
+    let cluster_client = client::connect_cluster(
+        &cluster.broker_addrs(),
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await?;
+    let producer = cluster_client.idempotent_producer().await?;
+    let tenant = cluster.tenant_id.clone();
+    let namespace = cluster.namespace.clone();
+    let acked = std::sync::atomic::AtomicU32::new(0);
+
+    let publishing = async {
+        for i in 0..RECORDS {
+            producer
+                .publish(
+                    &tenant,
+                    &namespace,
+                    STREAM,
+                    format!("record-{i}").into_bytes(),
+                )
+                .await
+                .with_context(|| format!("publish record-{i}"))?;
+            acked.store(i + 1, std::sync::atomic::Ordering::Release);
+        }
+        anyhow::Ok(())
+    };
+    let failing_over = async {
+        felix_cluster::wait::until(Duration::from_secs(30), "some records acked", || async {
+            acked.load(std::sync::atomic::Ordering::Acquire) >= 10
+        })
+        .await?;
+        cluster.kill_node(&owner)?;
+        felix_cluster::wait::until_some(Duration::from_secs(30), "a new leader", || async {
+            cluster.place_shards().await;
+            cluster
+                .owner(STREAM)
+                .await
+                .ok()
+                .filter(|leader| leader != &owner)
+        })
+        .await
+    };
+    let (published, new_owner) = tokio::join!(publishing, failing_over);
+    published?;
+    let new_owner = new_owner?;
+
+    let records = replay(&cluster, &new_owner, RECORDS as usize).await?;
+    let expected: Vec<Vec<u8>> = (0..RECORDS)
+        .map(|i| format!("record-{i}").into_bytes())
+        .collect();
+    assert_eq!(
+        records, expected,
+        "a record was lost, repeated, or reordered"
+    );
+    cluster.shutdown().await;
+    Ok(())
+}

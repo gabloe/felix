@@ -6,8 +6,8 @@ use super::*;
 /// checksum exists to catch.
 #[test]
 fn the_batch_checksum_separates_a_different_split_of_the_same_bytes() {
-    let one = batch_checksum(&[Bytes::from_static(b"ab"), Bytes::from_static(b"c")]);
-    let other = batch_checksum(&[Bytes::from_static(b"a"), Bytes::from_static(b"bc")]);
+    let one = batch_checksum(&[Bytes::from_static(b"ab"), Bytes::from_static(b"c")], &[]);
+    let other = batch_checksum(&[Bytes::from_static(b"a"), Bytes::from_static(b"bc")], &[]);
 
     assert_ne!(one, other);
 }
@@ -17,9 +17,9 @@ fn the_batch_checksum_is_stable_and_order_sensitive() {
     let batch = [Bytes::from_static(b"a"), Bytes::from_static(b"bb")];
     let reversed = [Bytes::from_static(b"bb"), Bytes::from_static(b"a")];
 
-    assert_eq!(batch_checksum(&batch), batch_checksum(&batch));
-    assert_ne!(batch_checksum(&batch), batch_checksum(&reversed));
-    assert_eq!(batch_checksum(&[]), batch_checksum(&[]));
+    assert_eq!(batch_checksum(&batch, &[]), batch_checksum(&batch, &[]));
+    assert_ne!(batch_checksum(&batch, &[]), batch_checksum(&reversed, &[]));
+    assert_eq!(batch_checksum(&[], &[]), batch_checksum(&[], &[]));
 }
 
 /// The cache variants share a body with the stream ones and must still be told
@@ -33,6 +33,7 @@ fn a_cache_replication_batch_is_not_a_stream_one() {
         first_offset: 100,
         checksum: 0x0102_0304,
         payloads: vec![Bytes::from_static(b"a")],
+        marks: Vec::new(),
     };
     let stream = InternalMessage::ReplicateRecords(body.clone());
     let cache = InternalMessage::ReplicateCacheRecords(body);
@@ -60,6 +61,7 @@ fn the_four_replication_kinds_are_distinguishable() {
         first_offset: 1,
         checksum: 7,
         payloads: vec![Bytes::from_static(b"x")],
+        marks: Vec::new(),
     };
     let encoded: Vec<_> = [
         InternalMessage::ReplicateRecords(body.clone()),
@@ -79,4 +81,21 @@ fn the_four_replication_kinds_are_distinguishable() {
     }
     let distinct: std::collections::HashSet<_> = encoded.iter().map(|(_, b)| b).collect();
     assert_eq!(distinct.len(), 4, "two kinds encode identically");
+}
+
+#[test]
+fn marks_are_covered_by_the_checksum_and_absent_marks_change_nothing() {
+    use super::super::ProducerMark;
+    let batch = vec![Bytes::from_static(b"a"), Bytes::from_static(b"b")];
+    let opens = ProducerMark::Opens {
+        producer_id: 1,
+        sequence: 2,
+        len: 2,
+    };
+    let marked = [opens, ProducerMark::Continues];
+    assert_ne!(batch_checksum(&batch, &marked), batch_checksum(&batch, &[]));
+    assert_ne!(
+        batch_checksum(&batch, &marked),
+        batch_checksum(&batch, &[opens, ProducerMark::None])
+    );
 }

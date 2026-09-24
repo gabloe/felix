@@ -280,8 +280,14 @@ impl ReplicaHandler {
         let generation_start = batch.first_offset;
         let previous_generation = log.generations().last().copied();
 
-        let mut outcome =
-            replication::apply(&log, batch.first_offset, batch.checksum, &batch.payloads).await;
+        let mut outcome = replication::apply(
+            &log,
+            batch.first_offset,
+            batch.checksum,
+            &batch.payloads,
+            &batch.marks,
+        )
+        .await;
 
         // A divergent suffix left by a leader that is gone is droppable: no
         // majority acknowledged it, and dropping it lets this follower rejoin
@@ -322,6 +328,7 @@ impl ReplicaHandler {
                             batch.first_offset,
                             batch.checksum,
                             &batch.payloads,
+                            &batch.marks,
                         )
                         .await;
                     }

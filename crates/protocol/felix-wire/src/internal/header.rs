@@ -108,6 +108,11 @@ pub enum Kind {
     /// The leader tells a halted follower to discard its copy of a shard's log
     /// and start again from the leader's oldest record.
     ReplicateRebuild = 24,
+    /// `ReplicateRecords` whose records carry idempotent producers' marks.
+    /// A separate kind so an unmarked batch stays byte for byte what an older
+    /// follower reads, and a marked one is refused by it rather than stored
+    /// without the marks.
+    ReplicateMarkedRecords = 25,
 }
 
 impl Kind {
@@ -139,6 +144,7 @@ impl Kind {
             22 => Ok(Kind::AuthorizedForwardPublish),
             23 => Ok(Kind::AuthorizedForwardCacheOp),
             24 => Ok(Kind::ReplicateRebuild),
+            25 => Ok(Kind::ReplicateMarkedRecords),
             other => Err(Error::UnsupportedInternalKind(other)),
         }
     }

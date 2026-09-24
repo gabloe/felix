@@ -167,6 +167,7 @@ async fn the_index_catches_up_with_records_appended_behind_it() {
     log.append(&[AppendRecord {
         payload,
         timestamp_micros: 0,
+        mark: Default::default(),
     }])
     .await
     .expect("append");

@@ -1,5 +1,5 @@
 ---
-title: "Felix Durable Segment Format (v1)"
+title: "Felix Durable Segment Format (v3)"
 description: "The versioned on-disk byte layout for Felix durable stream segments and indexes."
 ---
 
@@ -68,6 +68,8 @@ a segment — should be rejected on its first four bytes rather than misparsed.
     00000000000000000000.index               ← sparse offset index
     00000000000000000001.log
     00000000000000000001.index
+    epochs                                   ← where each generation began
+    producers                                ← producer snapshot, when any producer wrote here
 ```
 
 The directory name is a readable rendering of the `ShardKey` plus an FNV-1a hash
@@ -79,6 +81,14 @@ component like `..` is not merely escaped but unrepresentable.
 File names are zero-padded to 20 digits so lexicographic and numeric order agree.
 Recovery still parses the number and sorts on it rather than trusting directory
 iteration order, which is filesystem-defined.
+
+A file name is a **segment id**, not an offset. The two coincide for the common
+log — segment 0 begins at offset 0 — but they are independent, and a shard's
+first segment may begin anywhere. That is what lets a replica be given a shard
+whose early history is already gone everywhere: its log *begins* at the oldest
+surviving offset, and the offset is read back from the segment's own header
+rather than inferred from its name. A read below that offset is `Trimmed`,
+exactly as it is on a leader whose retention removed the same records.
 
 ## Segment file
 
@@ -98,7 +108,7 @@ file:
 | Offset | Size | Field | Value |
 | --- | --- | --- | --- |
 | 0 | 4 | `magic` | `0x464C5347` (`"FLSG"`) |
-| 4 | 2 | `version` | `1` |
+| 4 | 2 | `version` | `3` when written; `2` is still read |
 | 6 | 2 | `flags` | `0`; any other value is rejected |
 | 8 | 8 | `base_offset` | logical offset of this segment's first record |
 | 16 | 8 | `created_at_micros` | wall clock at creation, informational |
@@ -116,19 +126,53 @@ segment, so damage here is never a torn write — it is always an error.
 
 | Offset | Size | Field | Notes |
 | --- | --- | --- | --- |
-| 0 | 4 | `payload_len` | ≤ `MAX_PAYLOAD_BYTES` (64 MiB) |
+| 0 | 4 | `payload_len` | low 30 bits: ≤ `MAX_PAYLOAD_BYTES` (64 MiB); top two bits: the producer mark, below |
 | 4 | 8 | `offset` | logical offset; ascends by exactly 1 within a segment |
 | 12 | 8 | `timestamp_micros` | publish time |
-| 20 | 4 | `checksum` | CRC-32 over bytes `0..20` **followed by** the payload |
-| 24 | n | `payload` | opaque bytes |
+| 20 | 4 | `header_crc` | CRC-32 over bytes `0..20` |
+| 24 | 4 | `checksum` | CRC-32 over bytes `0..24`, **followed by** the tag and the payload |
+| 28 | 20 | `tag` | only when bit 31 is set: `producer_id u64`, `sequence u64`, `len u32` |
+| 28 or 48 | n | `payload` | opaque bytes |
 
-`payload_len` comes first and is covered by the checksum, so a reader can step to
-the next record with `position + 24 + payload_len` without touching payload
+The diagram shows a record without a tag, which is every record not written by
+an idempotent producer.
+
+`header_crc` is what makes recovery decidable. It is verified *before* any other
+field is used, so `payload_len` is only ever acted on once it is known to be
+intact. Without it, a bit flip in the length field produced exactly the same
+symptom as an unfinished write — a record claiming more bytes than the file
+holds — and recovery had to guess. Guessing wrong meant silently truncating a
+record that had been fsynced and acknowledged.
+
+`payload_len` comes first and is covered by both checksums, so a reader can step
+to the next record with `position + 28 + payload_len` without touching payload
 bytes. That property is what makes the index rebuild and the recovery scan cost
 proportional to record *count* rather than to bytes decoded.
 
 The checksum covers the header prefix as well as the payload, so a corrupted
 offset or timestamp is caught by the same check as a corrupted payload.
+
+### Producer marks
+
+An idempotent producer's batch is stored with its producer and sequence, so
+every copy of the log says whose it is:
+
+- **Bit 31** of `payload_len`: the record opens a batch. The 20-byte tag names
+  the producer, the batch's sequence, and how many records the batch has.
+- **Bit 30**: the record continues the batch the record before it belongs to.
+- Both set is `RecordFlags`, and neither is an ordinary record.
+
+Marking every record rather than only the first is what lets a log tell a
+batch it holds all of from one whose leader stopped partway: a batch is held
+once its last record is, and one whose next record does not continue it was
+abandoned. The step to the next record is `28 + (20 if bit 31) + payload_len`,
+still from the header alone.
+
+Only a v3 segment may hold marks. A v2 build reading a mark's bits would see a
+length past the limit, and recovery could take that for a torn tail and cut it
+off; a v3 header makes the v2 build refuse the segment instead. So a v3 build
+that reopens a v2 active segment rolls it before writing the first marked
+record, and leaves unmarked records in it as before.
 
 ## Index file
 
@@ -146,7 +190,7 @@ its segment. Consequently they carry no checksums.
 | Offset | Size | Field | Value |
 | --- | --- | --- | --- |
 | 0 | 4 | `magic` | `0x464C5349` (`"FLSI"`) |
-| 4 | 2 | `version` | `1` |
+| 4 | 2 | `version` | `3` when written; `2` is still read, the layout is the same |
 | 6 | 2 | `flags` | `0` |
 | 8 | 8 | `base_offset` | must equal the segment's `base_offset` |
 | 16 | 8 | `reserved` | `0` |
@@ -178,7 +222,9 @@ the file is read up to the last whole entry.
 | Non-zero `flags` | Reject: `SegmentFlags`. Unknown bits may change the layout behind them, so they are not masked off |
 | Bad header CRC | Reject: `SegmentHeaderChecksum` |
 | Short read | `Truncated { needed, available }` — the one shape recovery may repair |
+| Bad record header CRC | `RecordHeaderChecksum` — the length cannot be trusted |
 | Bad record CRC | `RecordChecksum` |
+| Both producer mark bits set | `RecordFlags` |
 | `payload_len` over the limit | `RecordTooLarge`, raised *before* any allocation |
 | Offset gap within a segment | `OffsetOutOfOrder` |
 
@@ -190,14 +236,25 @@ position, because "corruption detected" is not enough to act on at 3am.
 Recovery truncates **only** damage confined to the end of the newest segment,
 because only there can a record have been mid-write when the process died:
 
-- A `Truncated` failure is always repairable.
-- A `RecordChecksum` or `OffsetOutOfOrder` failure is repairable only when the
-  record's claimed extent reaches end of file — that is, when nothing follows it.
-  If committed bytes exist beyond the damage, dropping it would open a gap, so it
-  is an error instead.
-- A `RecordTooLarge` failure is repairable only when the record it claims could
-  not fit in the file, which is the signature of a half-written header.
+- A `Truncated` failure is always repairable. The header verified, so
+  `payload_len` is the length the writer intended, and a file ending short of it
+  is *provably* an unfinished write — nothing can have acknowledged a record that
+  was never finished. This is the ordinary crash case and needs no operator
+  involvement.
+- A `RecordHeaderChecksum` failure is **not** repairable by default. The header
+  cannot be trusted, so this may equally be an unfinished write or a complete,
+  acknowledged record whose header rotted. `repair_checksum_tail` opts in.
+- A `RecordChecksum` or `OffsetOutOfOrder` failure is likewise opt-in: the header
+  verified, so the record is complete on disk and the damage is rot rather than a
+  torn write.
+- A `RecordTooLarge` failure is opt-in for the same reason — the writer rejects
+  oversized records, so a verified header carrying an impossible length is damage
+  the checksums did not catch.
 - Segment-header damage is never repairable.
+
+The dividing line is whether the length is trustworthy. When it is, recovery can
+prove the write was unfinished; when it is not, recovery refuses to choose
+between "unfinished" and "rotted" and fails loudly instead.
 
 The full rules live in `is_repairable_tail` in
 [`segment/scan.rs`](https://github.com/gabloe/felix/blob/main/crates/server/felix-storage/src/segment/scan.rs).
@@ -210,19 +267,34 @@ migration path.
 
 ```text
 SegmentHeader::new(base_offset = 1, created_at_micros = 2):
-  46 4C 53 47  00 01  00 00
+  46 4C 53 47  00 03  00 00
   00 00 00 00 00 00 00 01
   00 00 00 00 00 00 00 02
-  D9 5F 63 18
+  AD EB 65 E9
   00 00 00 00
 
 encode_record(offset = 7, timestamp = 9, payload = "hi"):
   00 00 00 02
   00 00 00 00 00 00 00 07
   00 00 00 00 00 00 00 09
-  63 3D A1 4E
+  C6 54 DE 27
+  24 02 15 2C
   68 69
 ```
+
+## Version history
+
+| Version | Change |
+| --- | --- |
+| 1 | Initial format. Unreleased. |
+| 2 | Added `header_crc` to the record header (24 → 28 bytes), making a corrupted length field detectable without reading the payload. |
+| 3 | Producer marks: two flag bits in `payload_len` and an optional 20-byte tag. A v2 segment is read unchanged; an unmarked record is byte for byte a v2 record. |
+
+A v1 segment is rejected on open with `CorruptionKind::SegmentVersion`, naming
+the version found. v1 was only ever written by unreleased builds, so the
+migration path is to discard the data directory rather than carry a second
+decoder — and rejecting is the safe failure, because a v1 record read as v2
+would misparse every field after the length.
 
 ## Versioning policy
 
@@ -243,3 +315,72 @@ encode_record(offset = 7, timestamp = 9, payload = "hi"):
 | `MAX_PAYLOAD_BYTES` | 64 MiB | Bounds the allocation a corrupt length field can request |
 | Max records per segment | `u64` offsets, so effectively unbounded | Rollover is driven by size, not count |
 | Oversized records | A record larger than `segment_size_bytes` is written to an otherwise-empty segment of its own | Splitting a record across segments would break the "offsets are contiguous within a segment" invariant that recovery depends on |
+
+## `epochs` — the generation history
+
+A shard directory may hold an `epochs` file beside its segments. It records
+where each leadership generation began, as `(generation, start offset)` pairs —
+one entry per leadership change, not per record.
+
+```text
+ 0   4  magic        u32  "FLEP"
+ 4   2  version      u16
+ 6   2  count        u16  entries following
+ 8   4  body_crc     u32  crc32 over the entries
+12   …  entries           count × { generation u64, start_offset u64 }
+```
+
+Written through a temporary and a rename, so a crash leaves either the old file
+or the new one. A half-written history is worse than none, because it would be
+read back as a confident answer about where a generation began — and that
+answer becomes a truncation point.
+
+**Unlike the segments, this file is not authoritative and its loss is not
+fatal.** Absent, short, or failing its checksum, it reads as empty: every shard
+written before the file existed has none, and refusing to open those would
+trade an outage for a convenience. What is lost is the ability to repair a
+divergence automatically, never a record.
+
+The entries are bounded, because every open reads the whole file and a
+generation older than the oldest retained record cannot be one two brokers
+diverge within.
+
+See `docs/replication-design.md`, "Divergence and truncation", for what it is
+for.
+
+## `producers` — the producer snapshot
+
+Each idempotent producer's place in the log is derived from the marks: for
+every producer, the newest sequence held and where its recent batches landed,
+plus a batch still waiting for records. Replaying the whole log on every open
+would make opening a large shard slow, so the state is saved at each rollover,
+as of the new segment's base offset, once the retired segment is sealed.
+
+```text
+ 0   4  magic        u32  "FLPS"
+ 4   2  version      u16
+ 6   2  reserved     u16
+ 8   8  as_of        u64  the state covers every record below this offset
+16   4  producers    u32
+20   4  body_crc     u32  crc32 over what follows
+24   1  open              1 when a batch is waiting for records, then:
+                          producer_id u64, sequence u64, len u32, first u64, held u32
+     …  producers × { id u64, last_sequence u64, batches u16,
+                      batches × { first u64, len u32 } }
+```
+
+An open reads it and replays only the marks after `as_of`. Those are normally
+all in the active segment, which recovery scans in full anyway, so a current
+snapshot costs no read at all. A snapshot that is missing, damaged, below the
+oldest retained record or past the tail is ignored and the state is rebuilt from
+the oldest record. A truncation removes it, durably, before anything is written
+past the cut, since it would describe records that were replaced.
+
+It is derived, like the index, so it is written through a temporary and a
+rename but not flushed: one lost to a crash costs a longer open.
+
+What is remembered is a function of the log. A producer is known while one of
+its batches is in the log; retention that removes the last of them forgets it,
+on every replica alike. Each producer keeps its last 64 batches, and past 4096
+producers the one whose newest batch is oldest is forgotten.
+
