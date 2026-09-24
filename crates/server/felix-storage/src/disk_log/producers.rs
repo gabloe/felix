@@ -118,11 +118,6 @@ impl ProducerState {
         }
     }
 
-    /// No producer known and no batch open.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.producers.is_empty() && self.open.is_none()
-    }
-
     /// Whether a batch is waiting for more of its records. While one is, an
     /// unmarked append has to be observed too, since it ends the batch.
     pub(crate) fn is_open(&self) -> bool {
@@ -371,7 +366,12 @@ pub(super) fn rebuild(
     let tail = segments.tail_offset();
     let (mut state, from) = match load(dir) {
         Some((state, as_of)) if base <= as_of && as_of <= tail => (state, as_of),
-        _ => (ProducerState::default(), base),
+        // Nothing before the first v3 segment can carry a mark, so a log
+        // written before marks existed costs nothing to open.
+        _ => (
+            ProducerState::default(),
+            segments.first_markable_offset().max(base),
+        ),
     };
     state.prune(base);
 

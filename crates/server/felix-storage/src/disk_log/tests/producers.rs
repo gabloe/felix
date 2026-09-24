@@ -313,3 +313,48 @@ async fn the_rest_of_a_batch_is_written_only_while_it_is_open_at_the_tail() {
     assert_eq!(log.tail_offset().await.expect("tail"), 3);
     assert_eq!(log.producer_sequence(4, 0), ProducerSequence::Unknown);
 }
+
+/// A log written before marks existed has no snapshot and cannot hold a mark,
+/// so opening it reads nothing more than recovery always did: a damaged
+/// sealed record goes unnoticed, as it did before.
+#[tokio::test]
+async fn a_log_written_before_marks_is_not_read_to_rebuild_producer_state() {
+    let dir = tempdir().expect("dir");
+    {
+        let log = open(&dir, FsyncMode::OnCommit);
+        for i in 0..20 {
+            log.append(&records(&[&format!("value-{i:02}")]))
+                .await
+                .expect("append");
+        }
+        assert!(log.segments().len() > 3, "expected rollovers");
+        log.shutdown().await.expect("shutdown");
+    }
+    std::fs::remove_file(snapshot_path(&dir)).expect("remove snapshot");
+    // Every segment as a v2 build wrote it, and a damaged record in the oldest.
+    let mut ids: Vec<u64> = std::fs::read_dir(dir.path())
+        .expect("list")
+        .filter_map(|entry| {
+            let name = entry.expect("entry").file_name();
+            name.to_str()?.strip_suffix(".log")?.parse().ok()
+        })
+        .collect();
+    ids.sort_unstable();
+    for id in &ids {
+        let path = dir.path().join(crate::segment::segment_file_name(*id));
+        let mut bytes = std::fs::read(&path).expect("read");
+        let mut header = crate::segment::SegmentHeader::decode(&bytes).expect("header");
+        header.version = 2;
+        bytes[..crate::segment::SEGMENT_HEADER_LEN as usize].copy_from_slice(&header.encode());
+        if *id == ids[0] {
+            let payload_at =
+                (crate::segment::SEGMENT_HEADER_LEN + crate::segment::RECORD_HEADER_LEN) as usize;
+            bytes[payload_at] ^= 0xff;
+        }
+        std::fs::write(&path, &bytes).expect("write");
+    }
+
+    let log = open(&dir, FsyncMode::OnCommit);
+    assert_eq!(log.producer_sequence(1, 0), ProducerSequence::Unknown);
+    assert_eq!(log.tail_offset().await.expect("tail"), 20);
+}

@@ -305,3 +305,37 @@ async fn an_orphan_at_a_reused_offset_is_reported_as_a_conflict() {
         "expected a conflict at the reused offset, got {divergence:?}",
     );
 }
+
+/// Marks are stored as shipped, and a record whose mark disagrees with the
+/// leader's is a divergence even when its bytes agree: kept, it would leave
+/// this follower and the leader disagreeing about where a producer stands.
+#[tokio::test]
+async fn marks_are_stored_as_shipped_and_a_different_mark_is_a_conflict() {
+    use felix_storage::disk_log::ProducerSequence;
+
+    let (log, _dir) = follower().await;
+    let payloads = batch(&["a", "b"]);
+    let opens = ProducerMark::Opens {
+        producer_id: 9,
+        sequence: 0,
+        len: 2,
+    };
+    let marks = [opens, ProducerMark::Continues];
+    let checksum = felix_wire::internal::batch_checksum(&payloads, &marks);
+    apply(&log, 0, checksum, &payloads, &marks)
+        .await
+        .expect("apply")
+        .expect("in order");
+    assert_eq!(
+        log.producer_sequence(9, 0),
+        ProducerSequence::Held { first: 0, last: 1 }
+    );
+
+    // The same bytes, unmarked, at the same offsets.
+    let checksum = felix_wire::internal::batch_checksum(&payloads, &[]);
+    let refused = apply(&log, 0, checksum, &payloads, &[])
+        .await
+        .expect("apply")
+        .expect_err("a record with a different mark was taken as the same");
+    assert!(matches!(refused, Divergence::Conflict { offset: 0, .. }));
+}

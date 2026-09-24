@@ -151,6 +151,7 @@ impl SegmentSet {
             descriptor,
             index: retired.index().clone(),
             reader: SegmentReader::open(retired.path(), retired.id(), retired.base_offset())?,
+            holds_marks: retired.holds_marks(),
         });
 
         metrics::counter!(metrics_names::SEGMENT_ROLL_TOTAL).increment(1);
@@ -191,6 +192,7 @@ impl SegmentSet {
                 descriptor,
                 index: retired.index().clone(),
                 reader: SegmentReader::open(retired.path(), retired.id(), retired.base_offset())?,
+                holds_marks: retired.holds_marks(),
             });
         } else {
             let path = retired.path().to_path_buf();

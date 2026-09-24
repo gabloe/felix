@@ -104,7 +104,7 @@ fn a_record_that_does_not_continue_an_open_batch_abandons_it() {
 fn a_continuation_without_its_opening_record_is_ignored() {
     let mut state = ProducerState::default();
     state.observe(4, RecordMark::Continues);
-    assert!(state.is_empty());
+    assert_eq!(state, ProducerState::default());
 }
 
 /// Retention decides how long a producer is remembered: once every batch it

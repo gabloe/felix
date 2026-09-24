@@ -137,11 +137,15 @@ fn a_corrupt_length_field_is_rejected_before_allocation() {
         let header_crc = crc32_of(&bytes[0..20]);
         bytes[20..24].copy_from_slice(&header_crc.to_be_bytes());
 
+        // With both producer-mark bits set the word is refused as impossible
+        // flags instead, which is just as early.
         let err = decode_record(&bytes).expect_err("oversized length");
         assert!(
             matches!(
                 err.kind,
-                CorruptionKind::RecordTooLarge { .. } | CorruptionKind::Truncated { .. }
+                CorruptionKind::RecordTooLarge { .. }
+                    | CorruptionKind::Truncated { .. }
+                    | CorruptionKind::RecordFlags { .. }
             ),
             "unexpected error for claimed length {claimed}: {err}"
         );

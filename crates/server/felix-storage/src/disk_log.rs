@@ -669,19 +669,19 @@ impl LogInner {
     }
 
     /// The producer state as of the tail, for the snapshot taken at a
-    /// rollover. Called holding the `segments` write lock. `None` when no
-    /// producer has written here, which is almost every log.
-    fn producer_snapshot(&self, segments: &SegmentSet) -> Option<(Offset, ProducerState)> {
-        let producers = self.producers.lock();
-        (!producers.is_empty()).then(|| (segments.tail_offset(), producers.clone()))
+    /// rollover. Called holding the `segments` write lock.
+    ///
+    /// Taken even when empty, which is almost every log: without a snapshot
+    /// an open has to read every v3 sealed segment to learn there is nothing
+    /// in them.
+    fn producer_snapshot(&self, segments: &SegmentSet) -> (Offset, ProducerState) {
+        (segments.tail_offset(), self.producers.lock().clone())
     }
 
     /// Save a snapshot taken by [`Self::producer_snapshot`]. Failing costs a
     /// longer open later, so it is logged rather than returned.
-    fn store_producer_snapshot(&self, snapshot: Option<(Offset, ProducerState)>) {
-        if let Some((as_of, state)) = snapshot
-            && let Err(err) = producers::store(&self.dir, &state, as_of)
-        {
+    fn store_producer_snapshot(&self, (as_of, state): (Offset, ProducerState)) {
+        if let Err(err) = producers::store(&self.dir, &state, as_of) {
             tracing::warn!(
                 shard = %self.label,
                 error = %err,

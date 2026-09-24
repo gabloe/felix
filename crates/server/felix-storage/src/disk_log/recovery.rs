@@ -390,7 +390,8 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
 
     // The header alone establishes the base offset every other check is
     // relative to, and proves the file is ours before anything else is trusted.
-    let base_offset = read_segment_header(&path, id, label)?.base_offset;
+    let header = read_segment_header(&path, id, label)?;
+    let base_offset = header.base_offset;
 
     let loaded = SparseIndex::load(&dir.join(index_file_name(id)), base_offset);
     let mut rebuilt_index = false;
@@ -463,6 +464,7 @@ fn open_sealed(dir: &Path, label: &str, config: &LogConfig, id: SegmentId) -> Re
             descriptor,
             index,
             reader: SegmentReader::open(&path, id, base_offset)?,
+            holds_marks: header.holds_marks(),
         },
         rebuilt_index,
     })
