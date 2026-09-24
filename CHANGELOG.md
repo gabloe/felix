@@ -37,6 +37,20 @@ for what the current release actually guarantees.
   client offers it and exposes the code on `felix_client::BrokerError`. See
   "Error codes" in `docs/protocol.md`.
 
+- **Python and TypeScript errors carry the broker's error code.** Both have
+  `code`, `retry` and `detail`. The class is chosen from the code when
+  the broker sent one, and from the message only when it did not. New classes:
+  `ShardUnavailableError` (`shard_unavailable`, `not_leader`; retryable),
+  `OverloadedError`, and `OutcomeUnknownError` (`quorum_timeout`,
+  `leadership_lost`, `unacknowledged`, or anything sent as `outcome_unknown`);
+  a draining broker is a `ConnectionError`. In TypeScript, `retryable` follows
+  the broker's retry class when there is one, so a `NotFoundError` sent as
+  `retry_after` is now retryable. Two conformance scenarios,
+  `error.shard_unavailable_is_retryable` and
+  `error.quorum_timeout_is_outcome_unknown`, hold both bindings and the Rust
+  client to this, against faults `felix-cluster client-fixture` now serves on
+  a localhost control endpoint (`POST /fence`, `/partition`, `/heal`).
+
 - **Online shard rebalancing** (#130). A shard whose leader is alive is now
   moved rather than reassigned. The control plane stages the destination as a
   replica and lets the leader catch it up, fences the leader once the copy is
@@ -75,6 +89,14 @@ for what the current release actually guarantees.
   `drain_node`, `undrain_node` and `drain_until_empty`.
 
 ### Changed
+
+- **Breaking for TypeScript callers: `err.code` is now the broker's error
+  code.** It used to hold this client's own kind (`FELIX_AUTH`,
+  `FELIX_CONNECTION`, …), which moves to `err.kind`. `code` now matches the
+  Python exceptions and the protocol (`forbidden`, `shard_unavailable`, …) and
+  is `undefined` when the broker sent no code, as are `retry` and `detail`;
+  `kind` is always set. Code that switched on `err.code === "FELIX_AUTH"`
+  should switch on `err.kind`, or on the class.
 
 - Fresh placement bounds leaders as well as roles. With a replication factor
   equal to the node count every node holds a role for every shard, so the

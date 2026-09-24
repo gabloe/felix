@@ -8,13 +8,13 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 
-import { scenario, take, unique, withClient } from "../harness.mjs";
+import { scenario, sleep, startFixture, take, unique, withClient } from "../harness.mjs";
 
 export default function register(ctx) {
   it("publishing to an unknown stream fails distinguishably", () =>
     scenario("error.unknown_stream_is_typed", async () => {
       const { client, fixture } = ctx;
-      const { FelixError, ConnectionError } = ctx.felix;
+      const { FelixError, ConnectionError, NotFoundError } = ctx.felix;
 
       const caught = await client
         .publish(
@@ -36,7 +36,10 @@ export default function register(ctx) {
         "an unknown stream was reported as a connection failure, which tells " +
           "an application to retry something that cannot succeed",
       );
-      assert.equal(caught.retryable, false);
+      // Typed either way. A broker with no assignment for the shard cannot
+      // tell an unregistered stream from one not placed yet, and says the latter.
+      assert.ok(["not_found", "shard_unavailable"].includes(caught.code), caught.message);
+      if (caught.code === "not_found") assert.ok(caught instanceof NotFoundError);
     }));
 
   it("an unauthorized publish is typed, and is not retried", () =>
@@ -70,6 +73,8 @@ export default function register(ctx) {
               "an application cannot tell it from a retryable fault",
           );
           assert.equal(caught.retryable, false);
+          assert.equal(caught.code, "forbidden");
+          assert.equal(caught.retry, "fatal");
           assert.ok(
             elapsed < 5.0,
             `the refusal took ${elapsed.toFixed(2)}s — it was retried, and no ` +
@@ -78,6 +83,91 @@ export default function register(ctx) {
         });
       },
     ));
+
+  it("a publish refused during a move is retryable", { timeout: 300_000 }, () =>
+    scenario("error.shard_unavailable_is_retryable", async () => {
+      // Its own cluster: fencing drains a broker, which would move shards out
+      // from under every test after this one.
+      const { ShardUnavailableError } = ctx.felix;
+      const own = await startFixture();
+      try {
+        const { fixture } = own;
+        const owner = await control(fixture, "/fence");
+        const stream = fixture.movable_stream;
+
+        // Straight to the fenced owner: through another broker the answer
+        // would be about the forward rather than the shard.
+        const caught = await withClient(fixture, { addrs: [owner.addr] }, (client) =>
+          client
+            .publish(fixture.tenant_id, fixture.namespace, stream, Buffer.from("mid-move"))
+            .then(
+              () => null,
+              (err) => err,
+            ),
+        );
+        assert.ok(
+          caught instanceof ShardUnavailableError,
+          `a refusal during a move surfaced as ${caught?.constructor?.name} ` +
+            `(${caught?.code}/${caught?.retry}): ${caught?.message}`,
+        );
+        assert.ok(["shard_unavailable", "not_leader"].includes(caught.code));
+        assert.ok(["retry", "redirect"].includes(caught.retry));
+        assert.equal(caught.retryable, true);
+
+        // Retryable means the same publish lands once the move finishes.
+        await control(fixture, "/heal");
+        const deadline = Date.now() + 60_000;
+        await withClient(fixture, { addrs: [owner.addr] }, async (client) => {
+          for (;;) {
+            try {
+              await client.publish(fixture.tenant_id, fixture.namespace, stream, Buffer.from("mid-move"));
+              return;
+            } catch (err) {
+              if (Date.now() > deadline) {
+                throw new Error(`the move never finished; last refusal: ${err.message}`);
+              }
+              await sleep(250);
+            }
+          }
+        });
+      } finally {
+        await own.stop();
+      }
+    }));
+
+  it("a write no majority confirmed is outcome-unknown", { timeout: 300_000 }, () =>
+    scenario("error.quorum_timeout_is_outcome_unknown", async () => {
+      const { OutcomeUnknownError } = ctx.felix;
+      const own = await startFixture();
+      try {
+        const { fixture } = own;
+        const leader = await control(fixture, "/partition");
+
+        const caught = await withClient(fixture, { addrs: [leader.addr] }, (client) =>
+          client
+            .publish(
+              fixture.tenant_id,
+              fixture.namespace,
+              fixture.quorum_stream,
+              Buffer.from("no majority"),
+            )
+            .then(
+              () => null,
+              (err) => err,
+            ),
+        );
+        assert.ok(
+          caught instanceof OutcomeUnknownError,
+          `a write no majority confirmed surfaced as ${caught?.constructor?.name} ` +
+            `(${caught?.code}/${caught?.retry}): ${caught?.message}`,
+        );
+        assert.equal(caught.code, "quorum_timeout");
+        assert.equal(caught.retry, "outcome_unknown");
+        assert.equal(caught.retryable, false);
+      } finally {
+        await own.stop();
+      }
+    }));
 
   it("closing a client or a subscription twice is safe", () =>
     scenario("client.close_is_idempotent", async () => {
@@ -191,4 +281,18 @@ export default function register(ctx) {
         InvalidArgumentError,
       );
     }));
+}
+
+/**
+ * Ask the fixture for a fault, resolving to the broker to publish through. A
+ * fixture that cannot produce it fails the scenario rather than passing it.
+ */
+async function control(fixture, path) {
+  if (!fixture.control_url) {
+    throw new Error("this fixture has no control endpoint, so the scenario cannot run");
+  }
+  const response = await fetch(fixture.control_url + path, { method: "POST" });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`${path}: ${response.status}: ${body}`);
+  return JSON.parse(body);
 }

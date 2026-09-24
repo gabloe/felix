@@ -229,30 +229,60 @@ async function run(client, checkpoint) {
 ## Errors you can act on
 
 ```ts
-import { ConnectionError, AuthError, NotFoundError, CursorError } from "felix-client";
+import {
+  AuthError,
+  ConnectionError,
+  NotFoundError,
+  OutcomeUnknownError,
+  ShardUnavailableError,
+} from "felix-client";
 
 try {
   await client.publish("t1", "default", "orders", payload);
 } catch (err) {
-  if (err instanceof ConnectionError) retry();          // err.retryable === true
+  if (err instanceof OutcomeUnknownError) reconcile();  // it may have been written
+  else if (err.retryable) retry();                      // nothing was written
   else if (err instanceof AuthError) giveUp();          // retrying grants no permission
   else if (err instanceof NotFoundError) createStream();
   else throw err;
 }
 ```
 
-| Class | What it means | `retryable` |
+| Class | What it means | `retryable` without a broker code |
 | --- | --- | --- |
-| `ConnectionError` | broker unreachable, or the connection died mid-call | `true` |
-| `AuthError` | token rejected, or missing the permission | `false` |
-| `NotFoundError` | no such tenant, namespace, stream or cache | `false` |
+| `ConnectionError` | broker unreachable, the connection died mid-call, or the broker is shutting down (`draining`) | `true` |
+| `ShardUnavailableError` | nobody can serve the shard right now, usually because it is moving (`shard_unavailable`), or another broker owns it (`not_leader`); nothing was written | `true` |
+| `OverloadedError` | the broker is shedding load (`overloaded`); nothing was written | `true` |
+| `OutcomeUnknownError` | the write may or may not have happened (`quorum_timeout`, `leadership_lost`, `unacknowledged`, or any error sent as `outcome_unknown`) | `false` |
+| `AuthError` | token rejected, or missing the permission (`unauthenticated`, `forbidden`) | `false` |
+| `NotFoundError` | no such tenant, namespace, stream or cache (`not_found`) | `false` |
 | `CursorError` | the start offset is gone; retention discarded it | `false` |
 | `InvalidArgumentError` | a bad argument to this client | `false` |
-| `FelixError` | the base, and anything unclassified | `false` |
+| `FelixError` | the base, and anything else (`invalid_request`, `limit_exceeded`, a code this client does not know) | `false` |
 
-Each also carries a stable `err.code` (`FELIX_CONNECTION`, `FELIX_AUTH`, …) for
-code that would rather switch than test `instanceof`. Never match on the
-message — it is prose and will be reworded.
+Every error carries what the broker said about it:
+
+- `code`: the broker's [error code](https://github.com/gabloe/felix/blob/main/docs/protocol.md#error-codes),
+  such as `"shard_unavailable"` or `"quorum_timeout"`.
+- `retry`: what you may do about it: `"retry"`, `"retry_after"`,
+  `"redirect"`, `"outcome_unknown"` or `"fatal"`.
+- `detail`: extra facts, such as `{ reason: "fenced" }` for an unavailable
+  shard or `retry_after_ms`.
+
+`retryable` follows `retry` when the broker sent one: `true` for `retry`,
+`retry_after` and `redirect`, `false` otherwise. So a `NotFoundError` can be
+retryable. The broker sends `not_found` as `retry_after`, because a broker
+promoted a moment ago may not know the stream yet. The class is picked from the
+code, except that an `outcome_unknown` retry class always makes an
+`OutcomeUnknownError`.
+
+All three are `undefined` when the broker predates error codes, or when the failure
+happened in the client. Then the class is chosen from the message, the way
+older versions of this client always did.
+
+`err.kind` is this client's own name for the class (`FELIX_CONNECTION`,
+`FELIX_SHARD_UNAVAILABLE`, …), set whether or not the broker sent a code, for
+code that would rather switch than test `instanceof`. Never match on the message — it is prose and will be reworded.
 
 ## Queues
 

@@ -348,6 +348,33 @@ receive an identifiable error, because the recovery is specific: restart from
 `earliest` and accept the gap.
 """
 
+[[scenario]]
+id = "error.shard_unavailable_is_retryable"
+required = true
+title = "A shard refusing during a move is reported as retryable"
+detail = """
+While a shard moves, its old owner is fenced and nobody serves it for a moment.
+A publish refused then was not applied, and the error must say so: typed as an
+unavailable shard (`shard_unavailable` or `not_leader`) with a retry class that
+allows sending it again. Reporting it as fatal makes an application drop a
+write it could have made; reporting it as outcome-unknown makes a careful one
+treat a clean refusal as a possible duplicate. The fixture's control endpoint
+holds a shard fenced with `POST /fence`.
+"""
+
+[[scenario]]
+id = "error.quorum_timeout_is_outcome_unknown"
+required = true
+title = "A write no majority confirmed is reported as outcome unknown"
+detail = """
+A leader that wrote a batch and could not get a majority to confirm it in time
+does not know whether the write will survive. The error must say that
+(`quorum_timeout`, retry class `outcome_unknown`) and must not look like a
+refusal: an application that resends a non-idempotent publish after it may
+write the record twice. The fixture's control endpoint cuts a quorum stream's
+leader off from its followers with `POST /partition`.
+"""
+
 # ---------------------------------------------------------------------------
 # Concurrency and lifecycle
 # ---------------------------------------------------------------------------

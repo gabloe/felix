@@ -84,19 +84,52 @@ export type StartPosition = "latest" | "earliest" | bigint;
 /** Per-shard offsets, keyed by shard number. */
 export type ShardPositions = Record<string, bigint>;
 
+/**
+ * What the broker says a caller may do after an error. `retry`, `retry_after`
+ * and `redirect` mean nothing was applied; `outcome_unknown` means it may have
+ * been, so only an idempotent request is safe to send again.
+ */
+export type RetryClass = "retry" | "retry_after" | "redirect" | "outcome_unknown" | "fatal";
+
+/** Extra facts the broker sent with an error. Every field is optional. */
+export interface ErrorDetail {
+  /**
+   * For `shard_unavailable`: `not_assigned`, `owner_unavailable`, `not_ready`,
+   * `stale` or `fenced`.
+   */
+  reason?: string;
+  /** For `retry_after`: how long the broker suggests waiting. */
+  retry_after_ms?: number;
+}
+
 /** Base class for every error this client raises. */
 export declare class FelixError extends Error {
   /**
-   * A stable identifier for *why* this failed. Branch on this, or on the
-   * class, rather than on the message — the message is prose and will be
-   * reworded.
+   * Which kind of failure this is (`FELIX_AUTH`, `FELIX_SHARD_UNAVAILABLE`,
+   * ...), the same thing the class says. Always set.
    */
-  readonly code: string;
-  /** Whether retrying could plausibly succeed. Only `ConnectionError` says yes. */
+  readonly kind: string;
+  /**
+   * The broker's error code, such as `shard_unavailable` or `quorum_timeout`.
+   * `undefined` when the broker predates error codes or the failure was local.
+   */
+  readonly code: string | undefined;
+  /** The broker's retry class, or `undefined` when it sent no code. */
+  readonly retry: RetryClass | undefined;
+  /** Extra facts from the broker, or `undefined`. */
+  readonly detail: ErrorDetail | undefined;
+  /**
+   * Whether sending the same request again could succeed without applying it
+   * twice. Decided by `retry` when the broker sent one, and otherwise by the
+   * class: `ConnectionError`, `ShardUnavailableError` and `OverloadedError`.
+   */
   readonly retryable: boolean;
 }
 
-/** The broker could not be reached, or the connection was lost mid-call. */
+/**
+ * The broker could not be reached, the connection was lost mid-call, or the
+ * broker is shutting down (`draining`).
+ */
 export declare class ConnectionError extends FelixError {}
 /** The token was rejected, or lacks the permission this call needs. */
 export declare class AuthError extends FelixError {}
@@ -106,6 +139,20 @@ export declare class NotFoundError extends FelixError {}
 export declare class CursorError extends FelixError {}
 /** A bad argument to this client, rather than a failure of the call. */
 export declare class InvalidArgumentError extends FelixError {}
+/**
+ * Nobody can serve the shard right now, typically while it moves
+ * (`shard_unavailable`), or another broker owns it (`not_leader`). Nothing was
+ * applied; retrying is safe.
+ */
+export declare class ShardUnavailableError extends FelixError {}
+/** The broker is shedding load (`overloaded`). Nothing was applied. */
+export declare class OverloadedError extends FelixError {}
+/**
+ * The write may or may not have been applied: `quorum_timeout`,
+ * `leadership_lost`, `unacknowledged`, or any error whose retry class is
+ * `outcome_unknown`. Only an idempotent request is safe to send again.
+ */
+export declare class OutcomeUnknownError extends FelixError {}
 
 /** A live subscription. Read it with `nextEvent`, and `close` it when done. */
 export declare class SubscriptionHandle {

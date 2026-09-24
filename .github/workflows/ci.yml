@@ -324,6 +324,9 @@ jobs:
         working-directory: crates/sdk/felix-typescript
         run: cargo build --locked
 
+      - name: Error mapping
+        run: cd crates/sdk/felix-typescript && node --test test/errors.test.mjs
+
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/ts-conformance.json

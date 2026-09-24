@@ -272,6 +272,7 @@ dependencies = [
  "quinn",
  "rustls",
  "rustls-pemfile",
+ "serde_json",
  "tokio",
 ]
 

@@ -202,6 +202,40 @@ impl Cluster {
             .collect())
     }
 
+    /// Whether a stream's shard is fenced mid-move: its assignment is
+    /// `draining`, so the leader has stopped serving and no successor leads yet.
+    pub async fn shard_fenced(&self, stream: &str, shard: u32) -> Result<bool> {
+        #[derive(serde::Deserialize)]
+        struct Response {
+            items: Vec<Row>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Row {
+            tenant_id: String,
+            namespace: String,
+            stream: String,
+            shard: u32,
+            #[serde(default)]
+            kind: Option<String>,
+            #[serde(default)]
+            state: Option<String>,
+        }
+        let response: Response = self
+            .get(&format!(
+                "{}/v1/shard-assignments",
+                self.control_plane_url()
+            ))
+            .await?;
+        Ok(response.items.iter().any(|row| {
+            row.kind.as_deref().unwrap_or("stream") == "stream"
+                && row.tenant_id == self.tenant_id
+                && row.namespace == self.namespace
+                && row.stream == stream
+                && row.shard == shard
+                && row.state.as_deref() == Some("draining")
+        }))
+    }
+
     /// Node ids the control plane currently considers placeable.
     pub async fn placeable_nodes(&self) -> Result<Vec<String>> {
         #[derive(serde::Deserialize)]

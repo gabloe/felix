@@ -22,7 +22,7 @@ REGISTRY = REPO / "crates/server/felix-common/src/env_registry.rs"
 
 # Not variables at all. The detector matches any quoted FELIX_* literal in Rust,
 # and these are the TypeScript binding's error codes (`crates/sdk/felix-typescript`),
-# which ride on an error message and reach JavaScript as `err.code`. They are
+# which ride on an error message and reach JavaScript as `err.kind`. They are
 # public API, documented in that package's `index.d.ts` and README, so they are
 # named here rather than renamed to dodge a heuristic. Kept in step with the
 # same set in `check_env_reference.py`.
@@ -33,6 +33,9 @@ NOT_VARIABLES = {
     "FELIX_ERROR",
     "FELIX_INVALID",
     "FELIX_NOT_FOUND",
+    "FELIX_OUTCOME_UNKNOWN",
+    "FELIX_OVERLOADED",
+    "FELIX_SHARD_UNAVAILABLE",
 }
 
 

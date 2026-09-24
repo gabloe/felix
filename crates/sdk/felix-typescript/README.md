@@ -130,16 +130,21 @@ resolved.
 try {
   await client.publish("t1", "default", "events", payload);
 } catch (err) {
-  if (err instanceof ConnectionError) retry();   // err.retryable === true
-  else if (err instanceof AuthError) giveUp();   // no amount of retrying grants a permission
+  if (err instanceof OutcomeUnknownError) reconcile(); // it may have been written
+  else if (err.retryable) retry();                     // nothing was written
+  else if (err instanceof AuthError) giveUp();         // no amount of retrying grants a permission
 }
 ```
 
-`FelixError` is the base; `ConnectionError`, `AuthError`, `NotFoundError`,
+`FelixError` is the base; `ConnectionError`, `ShardUnavailableError`,
+`OverloadedError`, `OutcomeUnknownError`, `AuthError`, `NotFoundError`,
 `CursorError` and `InvalidArgumentError` are the branches, mirroring the Python
-binding's exceptions. Each carries a stable `code` as well, for code that would
-rather switch than test `instanceof`. Never match on the message — it is prose,
-and it will be reworded.
+binding's exceptions. A broker that sends error codes picks the class, and the
+error carries its `code`, `retry` class and `detail`, as the Python exceptions
+do; from an older broker they are `undefined` and the class comes from the
+message. Each also carries a stable `kind` (`FELIX_AUTH`, …) for code that
+would rather switch than test `instanceof`. Never match on the message — it is prose, and it will be
+reworded.
 
 ## What is not wrapped
 

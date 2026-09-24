@@ -9,6 +9,10 @@ assert on exception identity, never on wording.
 from __future__ import annotations
 
 import concurrent.futures
+import json
+import time
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -31,6 +35,11 @@ def test_publishing_to_an_unknown_stream_is_distinguishable(client, fixture):
         "an unknown stream was reported as a connection failure, which tells "
         "an application to retry something that cannot succeed"
     )
+    # Typed either way. A broker with no assignment for the shard cannot tell
+    # an unregistered stream from one not placed yet, and says the latter.
+    assert caught.value.code in ("not_found", "shard_unavailable")
+    if caught.value.code == "not_found":
+        assert isinstance(caught.value, felix.NotFoundError)
 
 
 @pytest.mark.scenario(
@@ -66,9 +75,100 @@ def test_an_unauthorized_publish_is_distinguishable_and_not_retried(fixture):
         f"an authorization failure surfaced as {type(caught.value).__name__}; "
         "an application cannot tell it from a retryable fault"
     )
+    assert caught.value.code == "forbidden"
+    assert caught.value.retry == "fatal"
     assert elapsed < 5.0, (
         f"the refusal took {elapsed:.2f}s — it was retried, and no amount of "
         "retrying grants a permission"
+    )
+
+
+@pytest.mark.scenario("error.shard_unavailable_is_retryable")
+def test_a_publish_refused_during_a_move_is_retryable(disposable_fixture):
+    """A fenced shard refuses, and says the refusal is safe to retry.
+
+    Published straight to the fenced owner: through another broker the answer
+    would be about the forward rather than the shard.
+    """
+    fixture = disposable_fixture
+    owner = _control(fixture, "/fence")
+    stream = fixture["movable_stream"]
+
+    with _client_on(fixture, owner["addr"]) as client:
+        with pytest.raises(felix.FelixError) as caught:
+            client.publish(
+                fixture["tenant_id"], fixture["namespace"], stream, b"mid-move"
+            )
+    error = caught.value
+    assert isinstance(error, felix.ShardUnavailableError), (
+        f"a refusal during a move surfaced as {type(error).__name__} "
+        f"({error.code}/{error.retry}): {error}"
+    )
+    assert error.code in ("shard_unavailable", "not_leader")
+    assert error.retry in ("retry", "redirect")
+
+    # Retryable means the same publish lands once the move finishes.
+    _control(fixture, "/heal")
+    deadline = time.monotonic() + 60
+    with _client_on(fixture, owner["addr"]) as client:
+        while True:
+            try:
+                client.publish(
+                    fixture["tenant_id"], fixture["namespace"], stream, b"mid-move"
+                )
+                break
+            except felix.FelixError as later:
+                if time.monotonic() > deadline:
+                    raise AssertionError(
+                        f"the move never finished; last refusal: {later}"
+                    ) from later
+                time.sleep(0.25)
+
+
+@pytest.mark.scenario("error.quorum_timeout_is_outcome_unknown")
+def test_a_write_no_majority_confirmed_is_outcome_unknown(disposable_fixture):
+    """The leader wrote it and cannot say whether it will survive."""
+    fixture = disposable_fixture
+    leader = _control(fixture, "/partition")
+
+    with _client_on(fixture, leader["addr"]) as client:
+        with pytest.raises(felix.FelixError) as caught:
+            client.publish(
+                fixture["tenant_id"],
+                fixture["namespace"],
+                fixture["quorum_stream"],
+                b"no majority",
+            )
+    error = caught.value
+    assert isinstance(error, felix.OutcomeUnknownError), (
+        f"a write no majority confirmed surfaced as {type(error).__name__} "
+        f"({error.code}/{error.retry}): {error}"
+    )
+    assert error.code == "quorum_timeout"
+    assert error.retry == "outcome_unknown"
+
+
+def _control(fixture, path):
+    """Ask the fixture for a fault, or skip if it cannot produce one."""
+    url = fixture.get("control_url")
+    if not url:
+        pytest.skip("this fixture has no control endpoint")
+    request = urllib.request.Request(url + path, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as refused:
+        if refused.code == 409:
+            pytest.skip(refused.read().decode())
+        raise
+
+
+def _client_on(fixture, addr):
+    return felix.Client(
+        addr,
+        tenant_id=fixture["tenant_id"],
+        token=fixture["token"],
+        ca_file=fixture["ca_file"],
     )
 
 
