@@ -24,6 +24,7 @@ fn assignment(shard: u32, leader: &str, generation: u64) -> ShardAssignment {
         replicas: Vec::new(),
         generation,
         state: "active".to_string(),
+        successor: None,
     }
 }
 

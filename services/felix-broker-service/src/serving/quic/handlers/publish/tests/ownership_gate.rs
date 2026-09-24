@@ -51,6 +51,7 @@ fn ingress_for(leader: &str, servable: bool) -> IngressRouter {
         replicas: Vec::new(),
         generation: 1,
         state: "active".to_string(),
+        successor: None,
     };
     let assignments: HashMap<WatchKey, ShardAssignment> =
         [(watch_key(), assignment)].into_iter().collect();

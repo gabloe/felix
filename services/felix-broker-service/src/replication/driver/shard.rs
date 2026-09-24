@@ -14,7 +14,7 @@ use crate::replication::quorum::QuorumMarks;
 use crate::replication::reporter::Reporter;
 use crate::replication::reporter::{ShardReport, shard_report};
 use crate::replication::{
-    FollowerCursor, Progress, Rebuilds, lag_records, metrics, quorum_offset, ship_once,
+    FollowerCursor, Progress, Rebuilds, caught_up, lag_records, metrics, quorum_offset, ship_once,
 };
 use crate::shards::lifecycle::fence::ShardFence;
 
@@ -293,9 +293,25 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     // final and the control plane hands the shard on against exactly it.
     // Checked before the read: the other way round, a write finishing in
     // between would be quiesced but not in the tail.
-    let drained = route.draining && fence.quiesced(&watch_key(key));
+    let quiesced = route.draining && fence.quiesced(&watch_key(key));
+    // The control plane cuts over on the drained report, so the logs that ride
+    // the shard have to be on the destination by then too: a dead letter or a
+    // counter add left behind is lost at the cut-over. Once quiesced they
+    // cannot grow either, so they are shipped first and their level is final.
+    let aux_behind = if quiesced {
+        ship_aux_logs(requester, broker, key, route, &mut aux, rebuilds).await
+    } else {
+        Vec::new()
+    };
     let tail = log.tail_offset().await.unwrap_or(tail);
-    let settled = shard_report(key, route.generation, tail, &entry.followers, drained);
+    let drained =
+        quiesced && drain_ready(key, route, &caught_up(tail, &entry.followers), &aux_behind);
+    let mut settled = shard_report(key, route.generation, tail, &entry.followers, drained);
+    // A follower missing some of that state would lose it if it led, so it is
+    // not offered as a candidate.
+    settled
+        .caught_up
+        .retain(|node| !aux_behind.iter().any(|(_, behind)| behind == node));
     if report_out.as_ref() != Some(&settled) {
         // And the mark with it. Usually a no-op — the mark is monotonic and the
         // majority already moved it — but with five replicas a second follower
@@ -313,51 +329,11 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         report_out = Some(settled);
     }
 
-    // A stream shard has two logs beside it: the positions its consumer
-    // groups have reached, and the offsets those groups gave up on. Both
-    // ride the same replica set and the same generation, so they are
-    // shipped here rather than placed separately — group state has to be
-    // wherever the shard's leader is, and move when the shard moves.
-    //
-    // Deliberately after the report and the quorum mark, and never gating
-    // either: no publish waits on group state, and group state lagging
-    // must not hold up the records it describes.
-    if key.kind == felix_router::ShardKind::Stream {
-        ship_aux_log(
-            requester,
-            broker,
-            key,
-            route,
-            felix_broker::LogKind::GroupCursors,
-            &mut aux.group,
-            rebuilds,
-        )
-        .await;
-        ship_aux_log(
-            requester,
-            broker,
-            key,
-            route,
-            felix_broker::LogKind::GroupDeadLetters,
-            &mut aux.dead_letters,
-            rebuilds,
-        )
-        .await;
-    }
-    // A cache shard's counterpart: the counter log rides the cache's
-    // replica set the way group state rides the stream's, and gates
-    // nothing for the same reason.
-    if key.kind == felix_router::ShardKind::Cache {
-        ship_aux_log(
-            requester,
-            broker,
-            key,
-            route,
-            felix_broker::LogKind::Counters,
-            &mut aux.counters,
-            rebuilds,
-        )
-        .await;
+    // Otherwise after the report and the quorum mark, and never gating
+    // either: no publish waits on group state or counters, and those lagging
+    // must not hold up the records they describe.
+    if !quiesced {
+        ship_aux_logs(requester, broker, key, route, &mut aux, rebuilds).await;
     }
 
     // Named, not counted. The metric cannot carry the shard without a label
@@ -396,14 +372,112 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     }
 }
 
-/// Ship one of a stream shard's group-state logs — cursors or dead letters —
-/// to the same replicas.
+/// Ship the logs that ride a shard's replica set, and say which followers
+/// they left behind.
+///
+/// A stream shard has two: the positions its consumer groups have reached,
+/// and the offsets those groups gave up on. A cache shard has its counters.
+/// They ride the shard's replica set and generation rather than being placed
+/// separately, because that state has to be wherever the shard's leader is,
+/// and move when the shard moves.
+pub(super) async fn ship_aux_logs<R: PeerRequester>(
+    requester: &R,
+    broker: &Arc<Broker>,
+    key: &ShardKey,
+    route: &Route,
+    aux: &mut AuxCursors,
+    rebuilds: &Rebuilds,
+) -> Vec<(felix_broker::LogKind, String)> {
+    let logs: Vec<(felix_broker::LogKind, &mut ShardCursors)> = match key.kind {
+        felix_router::ShardKind::Stream => vec![
+            (felix_broker::LogKind::GroupCursors, &mut aux.group),
+            (
+                felix_broker::LogKind::GroupDeadLetters,
+                &mut aux.dead_letters,
+            ),
+        ],
+        felix_router::ShardKind::Cache => {
+            vec![(felix_broker::LogKind::Counters, &mut aux.counters)]
+        }
+    };
+    let mut behind = Vec::new();
+    for (log_kind, entry) in logs {
+        for node in ship_aux_log(requester, broker, key, route, log_kind, entry, rebuilds).await {
+            behind.push((log_kind, node));
+        }
+    }
+    behind
+}
+
+/// Whether a quiesced draining shard can say it is drained: the follower the
+/// control plane will cut over to holds the shard's log and every log that
+/// rides it.
+///
+/// With a named successor only it gates the report; another follower lagging
+/// on an auxiliary log is left out of `caught_up` instead of holding the move.
+/// Without one — the move lost its destination and the control plane will
+/// promote whoever is level — every follower level on the shard's log must be
+/// level on the rest too, since any of them may be chosen.
+fn drain_ready(
+    key: &ShardKey,
+    route: &Route,
+    level: &[String],
+    behind: &[(felix_broker::LogKind, String)],
+) -> bool {
+    let successor = route
+        .successor
+        .as_deref()
+        .filter(|successor| route.replicas.iter().any(|r| r.node_id == *successor));
+    match successor {
+        Some(successor) => {
+            level.iter().any(|node| node == successor)
+                && !withheld(key, behind, |node| node == successor)
+        }
+        None => !withheld(key, behind, |node| level.iter().any(|l| l == node)),
+    }
+}
+
+/// Log and count each follower `gates` picks out that is still behind on an
+/// auxiliary log; true if there was one.
+fn withheld(
+    key: &ShardKey,
+    behind: &[(felix_broker::LogKind, String)],
+    gates: impl Fn(&str) -> bool,
+) -> bool {
+    let mut held = false;
+    for (log_kind, node) in behind.iter().filter(|(_, node)| gates(node)) {
+        held = true;
+        let log = aux_log_label(*log_kind);
+        metrics::record_drain_withheld(log);
+        tracing::warn!(
+            kind = ?key.kind,
+            stream = %key.stream,
+            shard = key.shard,
+            follower = %node,
+            log,
+            "holding the drained report: the follower has the shard's log but \
+             not all of its {log} yet, and a cut-over now would lose them",
+        );
+    }
+    held
+}
+
+fn aux_log_label(log_kind: felix_broker::LogKind) -> &'static str {
+    match log_kind {
+        felix_broker::LogKind::GroupCursors => metrics::LOG_GROUP_CURSORS,
+        felix_broker::LogKind::GroupDeadLetters => metrics::LOG_DEAD_LETTERS,
+        felix_broker::LogKind::Counters => metrics::LOG_COUNTERS,
+        felix_broker::LogKind::Stream | felix_broker::LogKind::Cache => "shard",
+    }
+}
+
+/// Ship one auxiliary log to the shard's replicas, and name the followers
+/// still behind its tail afterwards.
 ///
 /// Separate from the shard's own shipping because it must not affect it: no
-/// report is sent for it, no quorum mark is published, and a failure here is
-/// logged rather than allowed to stall the records. Both logs are small and
-/// written only when group state actually changes, so this is usually a no-op
-/// pass.
+/// report is sent for it, no quorum mark is published, and a failure only
+/// leaves the follower behind. These logs are small and written only when the
+/// state actually changes, so this is usually a no-op pass.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn ship_aux_log<R: PeerRequester>(
     requester: &R,
@@ -413,7 +487,7 @@ pub(super) async fn ship_aux_log<R: PeerRequester>(
     log_kind: felix_broker::LogKind,
     entry: &mut ShardCursors,
     rebuilds: &Rebuilds,
-) {
+) -> Vec<String> {
     let Some(log) = broker
         .shard_log(
             log_kind,
@@ -425,7 +499,7 @@ pub(super) async fn ship_aux_log<R: PeerRequester>(
         .await
     else {
         // No such state on this broker, so there is nothing to ship.
-        return;
+        return Vec::new();
     };
 
     if entry.generation != route.generation {
@@ -457,6 +531,22 @@ pub(super) async fn ship_aux_log<R: PeerRequester>(
         {}
     });
     futures::future::join_all(shipping).await;
+
+    // Read after shipping. A tail that cannot be read says nothing about who
+    // is level, so everyone counts as behind.
+    let level = match log.tail_offset().await {
+        Ok(tail) => caught_up(tail, &entry.followers),
+        Err(err) => {
+            tracing::warn!(stream = %key.stream, error = %err, "could not read an auxiliary log's tail");
+            Vec::new()
+        }
+    };
+    entry
+        .followers
+        .iter()
+        .filter(|cursor| !level.contains(&cursor.node_id))
+        .map(|cursor| cursor.node_id.clone())
+        .collect()
 }
 
 /// Add cursors for new replicas and drop those no longer in the set.

@@ -277,6 +277,7 @@ pub fn routing_table_from(
             replicas: assignment.replicas.clone(),
             generation: assignment.generation,
             draining: assignment.is_draining(),
+            successor: assignment.successor.clone(),
         }),
         nodes,
     )

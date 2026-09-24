@@ -182,5 +182,6 @@ fn assignment(key: &ShardKey, state: &str) -> ShardAssignment {
         replicas: Vec::new(),
         generation: GENERATION,
         state: state.to_string(),
+        successor: None,
     }
 }

@@ -197,6 +197,7 @@ impl Owner {
                 replicas: Vec::new(),
                 generation,
                 state: "active".to_string(),
+                successor: None,
             },
         )]
         .into_iter()

@@ -198,6 +198,19 @@ for what the current release actually guarantees.
 - **A shard moved off a broker that stays up left its subscriptions and cache
   watches open and silent.** The old leader now ends them, after delivering
   what was queued, whenever it stops serving a shard.
+- **A planned shard move could lose a dead letter or a counter add.** The old
+  leader reported `drained` on the shard's own log and shipped its consumer
+  groups' cursors and dead letters, and its cache's counters, only afterwards,
+  logging a failure and moving on. A dead letter the new owner lacked was a
+  record its group silently skipped, and a counter add it lacked was an
+  acknowledged add gone from the sum. The drained pass now ships those logs
+  first and reports `drained` only once the move's successor holds them; any
+  other replica still missing them is left out of the report's caught-up
+  list rather than holding the move. A move that lost its successor waits for
+  every replica level on the shard's log. A move held on them stays
+  `Draining`, and `felix_broker_replication_drain_withheld_total{log}` and a
+  warning naming the shard and follower say why. Brokers now read the
+  assignment's `successor`.
 
 ### Fixed
 

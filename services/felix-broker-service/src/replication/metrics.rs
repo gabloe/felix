@@ -60,6 +60,18 @@ pub const REBUILDING: &str = "felix_broker_replication_rebuilding";
 /// nothing else in the broker looks unwell — the replication itself succeeded.
 pub const MARKS_WITHHELD: &str = "felix_broker_quorum_marks_withheld_total";
 
+/// Drained reports held back because a follower level on the shard's log was
+/// still behind on a log that rides it, by `log`.
+///
+/// A planned move waits on this. Rising steadily means a move is stuck on
+/// shipping group state or counters to its destination; the log line names
+/// the shard and the follower.
+pub const DRAIN_WITHHELD: &str = "felix_broker_replication_drain_withheld_total";
+
+pub const LOG_GROUP_CURSORS: &str = "group_cursors";
+pub const LOG_DEAD_LETTERS: &str = "dead_letters";
+pub const LOG_COUNTERS: &str = "counters";
+
 /// How many shards' reports shared one control-plane request.
 ///
 /// One means the batching found nothing to batch, which is correct for a
@@ -101,6 +113,10 @@ pub fn record_halted(count: usize) {
 
 pub fn record_mark_withheld() {
     metrics::counter!(MARKS_WITHHELD).increment(1);
+}
+
+pub fn record_drain_withheld(log: &'static str) {
+    metrics::counter!(DRAIN_WITHHELD, "log" => log).increment(1);
 }
 
 pub fn record_quorum(reason: &'static str) {
