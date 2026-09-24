@@ -33,6 +33,7 @@
 //! - `stream_cache`: the per-connection cache of resolved stream handles.
 //! - `control`: acked publish handlers on the bi-directional control stream.
 //! - `uni`: fire-and-forget publish handlers on uni-directional streams.
+//! - `worker`: the process-wide publish worker pool.
 //!
 //! The connection and stream layers address these through the re-exports below,
 //! so `handlers::publish::<name>` stays the stable path for the whole transport.
@@ -44,6 +45,7 @@ mod ingress;
 mod route;
 mod stream_cache;
 mod uni;
+mod worker;
 
 pub(crate) use ack::{
     AckEncoding, AckTimeoutState, AckWaiterMessage, AckWaiterResult, Outgoing,
@@ -59,6 +61,7 @@ pub(crate) use stream_cache::StreamHandleCache;
 pub(crate) use uni::{
     handle_binary_publish_batch_uni, handle_publish_batch_message_uni, handle_publish_message_uni,
 };
+pub(crate) use worker::build_publish_context;
 
 use anyhow::Result;
 use bytes::Bytes;
