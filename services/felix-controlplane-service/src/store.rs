@@ -13,8 +13,6 @@ pub mod raft;
 #[cfg(test)]
 pub(crate) mod node_contract;
 #[cfg(test)]
-mod postgres_tests;
-#[cfg(test)]
 pub(crate) mod refresh_contract;
 #[cfg(test)]
 pub(crate) mod shard_contract;

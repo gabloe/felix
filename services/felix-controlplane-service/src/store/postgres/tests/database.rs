@@ -19,8 +19,6 @@
 //! `postgres.rs` implementation without inflating that file's line counts.
 #![cfg(feature = "pg-tests")]
 
-use super::postgres::PostgresStore;
-use super::{AuthStore, ControlPlaneStore, StoreConfig};
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::keys::generate_signing_keys;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -29,6 +27,8 @@ use crate::model::{
     Cache, CacheKey, CachePatchRequest, ConsistencyLevel, DeliveryGuarantee, Namespace,
     NamespaceKey, RetentionPolicy, Stream, StreamKey, StreamKind, StreamPatchRequest, Tenant,
 };
+use crate::store::postgres::PostgresStore;
+use crate::store::{AuthStore, ControlPlaneStore, StoreConfig};
 use serial_test::serial;
 use sqlx::AssertSqlSafe;
 use sqlx::Connection;
