@@ -199,6 +199,7 @@ async fn seed(store: &(dyn ControlPlaneAuthStore + Send + Sync)) {
             successor: None,
             joining: None,
             move_started_at_millis: None,
+            move_reason: None,
         })
         .await
         .expect("assignment");

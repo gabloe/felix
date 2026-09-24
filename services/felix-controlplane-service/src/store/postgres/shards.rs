@@ -4,8 +4,8 @@ use sqlx::FromRow;
 
 use super::{PostgresStore, begin_consistent_read};
 use crate::model::{
-    ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
-    ShardKind, ShardState, ShardValidationError,
+    MoveReason, ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp,
+    ShardKey, ShardKind, ShardState, ShardValidationError,
 };
 use crate::store::{AssignmentWrite, ChangeSet, Snapshot, StoreError, StoreResult};
 
@@ -23,6 +23,7 @@ struct DbShardAssignment {
     successor: Option<String>,
     joining: Option<String>,
     move_started_at_millis: Option<i64>,
+    move_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -120,7 +121,7 @@ async fn write_shard_assignment(
     // reading the row this transaction is about to replace.
     let existing = sqlx::query_as::<_, DbShardAssignment>(
         r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
-                      joining, move_started_at_millis
+                      joining, move_started_at_millis, move_reason
                FROM shard_assignments
                WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5
                FOR UPDATE"#,
@@ -170,12 +171,12 @@ async fn write_shard_assignment(
     // A write that expects no assignment must not replace one another writer
     // inserted since the read above.
     let insert = if expected == Some(None) {
-        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor, joining, move_started_at_millis)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor, joining, move_started_at_millis, move_reason)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO NOTHING"#
     } else {
-        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor, joining, move_started_at_millis)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor, joining, move_started_at_millis, move_reason)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE SET
                  leader = EXCLUDED.leader,
                  replicas = EXCLUDED.replicas,
@@ -184,6 +185,7 @@ async fn write_shard_assignment(
                  successor = EXCLUDED.successor,
                  joining = EXCLUDED.joining,
                  move_started_at_millis = EXCLUDED.move_started_at_millis,
+                 move_reason = EXCLUDED.move_reason,
                  updated_at = now()"#
     };
     let written = sqlx::query(insert)
@@ -199,6 +201,7 @@ async fn write_shard_assignment(
         .bind(&stored.successor)
         .bind(&stored.joining)
         .bind(stored.move_started_at_millis.map(|millis| millis as i64))
+        .bind(stored.move_reason.map(MoveReason::as_str))
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -227,7 +230,7 @@ pub(super) async fn get_shard_assignment(
 ) -> StoreResult<ShardAssignment> {
     sqlx::query_as::<_, DbShardAssignment>(
         r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
-                      joining, move_started_at_millis
+                      joining, move_started_at_millis, move_reason
                FROM shard_assignments
                WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5"#,
     )
@@ -248,7 +251,7 @@ pub(super) async fn list_shard_assignments(
 ) -> StoreResult<Vec<ShardAssignment>> {
     let rows = sqlx::query_as::<_, DbShardAssignment>(
         r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
-                      joining, move_started_at_millis
+                      joining, move_started_at_millis, move_reason
                FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
     )
     .fetch_all(&store.pool)
@@ -262,7 +265,7 @@ pub(super) async fn list_shard_assignments_for_node(
 ) -> StoreResult<Vec<ShardAssignment>> {
     let rows = sqlx::query_as::<_, DbShardAssignment>(
         r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
-                      joining, move_started_at_millis
+                      joining, move_started_at_millis, move_reason
                FROM shard_assignments WHERE leader = $1
                ORDER BY tenant_id, namespace, stream, shard, kind"#,
     )
@@ -308,7 +311,7 @@ pub(super) async fn shard_assignment_snapshot(
     begin_consistent_read(&mut tx).await?;
     let rows = sqlx::query_as::<_, DbShardAssignment>(
         r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
-                      joining, move_started_at_millis
+                      joining, move_started_at_millis, move_reason
                FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
     )
     .fetch_all(&mut *tx)
@@ -435,6 +438,15 @@ fn shard_from_db(row: DbShardAssignment) -> StoreResult<ShardAssignment> {
         successor: row.successor,
         joining: row.joining,
         move_started_at_millis: row.move_started_at_millis.map(|millis| millis as u64),
+        move_reason: row
+            .move_reason
+            .as_deref()
+            .map(|reason| {
+                MoveReason::parse(reason).ok_or_else(|| {
+                    StoreError::Unexpected(anyhow!("unknown move reason {reason:?}"))
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -549,4 +561,25 @@ fn parse_shard_op(value: &str) -> StoreResult<ShardAssignmentChangeOp> {
 
 fn invalid_shard(err: ShardValidationError) -> StoreError {
     StoreError::Conflict(err.to_string())
+}
+
+/// A missing row reads as not paused: the migration inserts it, and a
+/// database restored without it should place as it always did.
+pub(super) async fn moves_paused(store: &PostgresStore) -> StoreResult<bool> {
+    let paused: Option<bool> =
+        sqlx::query_scalar("SELECT moves_paused FROM placement_settings WHERE id = 1")
+            .fetch_optional(&store.pool)
+            .await?;
+    Ok(paused.unwrap_or(false))
+}
+
+pub(super) async fn set_moves_paused(store: &PostgresStore, paused: bool) -> StoreResult<()> {
+    sqlx::query(
+        r#"INSERT INTO placement_settings (id, moves_paused) VALUES (1, $1)
+           ON CONFLICT (id) DO UPDATE SET moves_paused = EXCLUDED.moves_paused, updated_at = now()"#,
+    )
+    .bind(paused)
+    .execute(&store.pool)
+    .await?;
+    Ok(())
 }

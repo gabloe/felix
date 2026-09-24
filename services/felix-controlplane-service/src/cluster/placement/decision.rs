@@ -42,6 +42,13 @@ pub enum MoveStep {
     Reseat { from: String, to: String },
     /// The replacement has caught up, and the follower it replaces leaves.
     Seat { from: String, to: String },
+    /// An operator cancelled a move or replacement before the fence: its
+    /// destination is dropped, as for `TimedOut`.
+    Cancel { successor: String },
+    /// An operator cancelled a fenced move: the leader that was stopped
+    /// serves again, at a new generation. `successor` is the destination
+    /// dropped, if the move still had one.
+    Retake { successor: Option<String> },
 }
 
 impl MoveStep {
@@ -54,6 +61,8 @@ impl MoveStep {
             Self::TimedOut { .. } => "timed_out",
             Self::Reseat { .. } => "reseat",
             Self::Seat { .. } => "seat",
+            Self::Cancel { .. } => "cancel",
+            Self::Retake { .. } => "retake",
         }
     }
 }
@@ -75,6 +84,8 @@ pub enum Blocked {
     NodeMoveLimit { node: String },
     /// The leader is draining and no live node can take the shard.
     NoDestination,
+    /// A move is wanted, and placement is paused.
+    Paused,
 }
 
 impl std::fmt::Display for Blocked {
@@ -90,6 +101,7 @@ impl std::fmt::Display for Blocked {
             Self::MoveLimit => write!(f, "waiting for a move slot"),
             Self::NodeMoveLimit { node } => write!(f, "waiting for a move slot on {node}"),
             Self::NoDestination => write!(f, "no live node can take this shard"),
+            Self::Paused => write!(f, "placement is paused"),
         }
     }
 }

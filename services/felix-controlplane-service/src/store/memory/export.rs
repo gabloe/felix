@@ -105,6 +105,7 @@ impl InMemoryStore {
             rbac_policies: sorted_by_string_key(&*self.rbac_policies.read().await),
             rbac_groupings: sorted_by_string_key(&*self.rbac_groupings.read().await),
             auth_bootstrapped: sorted_by_string_key(&*self.auth_bootstrapped.read().await),
+            moves_paused: *self.moves_paused.read().await,
         }
     }
 
@@ -145,6 +146,7 @@ impl InMemoryStore {
         *self.rbac_policies.write().await = state.rbac_policies.into_iter().collect();
         *self.rbac_groupings.write().await = state.rbac_groupings.into_iter().collect();
         *self.auth_bootstrapped.write().await = state.auth_bootstrapped.into_iter().collect();
+        *self.moves_paused.write().await = state.moves_paused;
         // The derived-key cache may hold keys the imported state replaced —
         // an --overwrite restore in a live process would otherwise keep
         // verifying tokens against a world that no longer exists.

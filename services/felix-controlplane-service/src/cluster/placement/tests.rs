@@ -3,6 +3,7 @@
 mod caches;
 mod failover;
 mod moves;
+mod operator;
 mod pacing;
 mod reconciler;
 mod rendezvous;
@@ -98,6 +99,7 @@ fn pinned(stream: &str, shard: u32, leader: &str) -> ShardAssignment {
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     }
 }
 
@@ -117,5 +119,6 @@ fn assigned(stream: &str, leader: &str, replicas: &[&str]) -> ShardAssignment {
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     }
 }

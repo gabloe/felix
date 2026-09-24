@@ -97,33 +97,89 @@ pub async fn reconcile_once(
     }
 }
 
+/// Everything placement decides from, read once.
+pub struct PlacementRead {
+    pub streams: Vec<Stream>,
+    pub caches: Vec<Cache>,
+    pub nodes: Vec<Node>,
+    pub existing: Vec<ShardAssignment>,
+    pub positions: ReplicaPositions,
+    /// Whether placement's own moves are paused.
+    pub paused: bool,
+}
+
+impl PlacementRead {
+    /// Read the catalog, the reports and the pause switch.
+    pub async fn load(
+        store: &dyn crate::store::ControlPlaneStore,
+        liveness: &crate::config::NodeLivenessConfig,
+    ) -> crate::store::StoreResult<Self> {
+        let (streams, caches, nodes, existing) = load(store).await?;
+        // Read once, as of the store's clock: one instant for the whole pass,
+        // so a report cannot be fresh for one shard and stale for the next
+        // within the same plan, and the same clock the reports were stamped
+        // with.
+        let positions = ReplicaPositions::load(store, liveness).await?;
+        let paused = store.moves_paused().await?;
+        Ok(Self {
+            streams,
+            caches,
+            nodes,
+            existing,
+            positions,
+            paused,
+        })
+    }
+
+    /// `policy`, paused if placement is.
+    pub fn policy(&self, policy: MovePolicy) -> MovePolicy {
+        MovePolicy {
+            paused: self.paused,
+            ..policy
+        }
+    }
+
+    /// What a pass over this read decides.
+    pub fn plan(&self, policy: MovePolicy) -> Plan {
+        plan_with(
+            &self.streams,
+            &self.caches,
+            &self.nodes,
+            &self.existing,
+            &self.positions,
+            self.policy(policy),
+        )
+    }
+
+    /// This read, for deciding an operator's request.
+    pub fn catalog(&self, policy: MovePolicy) -> super::Catalog<'_> {
+        super::Catalog {
+            streams: &self.streams,
+            caches: &self.caches,
+            nodes: &self.nodes,
+            existing: &self.existing,
+            caught_up: &self.positions,
+            policy: self.policy(policy),
+        }
+    }
+}
+
 /// Read the catalog and plan against it. `None` when it could not be read.
 pub(super) async fn plan_pass(
     store: &dyn crate::store::ControlPlaneStore,
     liveness: &crate::config::NodeLivenessConfig,
     policy: MovePolicy,
 ) -> Option<PlannedPass> {
-    let (streams, caches, nodes, existing) = match load(store).await {
-        Ok(loaded) => loaded,
+    let read = match PlacementRead::load(store, liveness).await {
+        Ok(read) => read,
         Err(err) => {
             tracing::error!(error = %err, "could not read the catalog to place shards");
             metrics::counter!(RECONCILE_FAILURES_TOTAL).increment(1);
             return None;
         }
     };
-
-    // Read once, as of the store's clock: one instant for the whole pass, so a
-    // report cannot be fresh for one shard and stale for the next within the
-    // same plan, and the same clock the reports were stamped with.
-    let caught_up = match ReplicaPositions::load(store, liveness).await {
-        Ok(positions) => positions,
-        Err(err) => {
-            tracing::error!(error = %err, "could not read replica reports to place shards");
-            metrics::counter!(RECONCILE_FAILURES_TOTAL).increment(1);
-            return None;
-        }
-    };
-    let plan = plan_with(&streams, &caches, &nodes, &existing, &caught_up, policy);
+    let plan = read.plan(policy);
+    let existing = read.existing;
     let read = existing
         .iter()
         .map(|assignment| (assignment.key.clone(), assignment.generation))

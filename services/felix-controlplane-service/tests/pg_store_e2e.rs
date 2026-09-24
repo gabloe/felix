@@ -2102,6 +2102,7 @@ async fn pg_assignment_long_polls_do_not_hold_connections() -> Result<()> {
             successor: None,
             joining: None,
             move_started_at_millis: None,
+            move_reason: None,
         })
         .await?;
     let written = started.elapsed();

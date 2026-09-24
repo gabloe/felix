@@ -318,6 +318,7 @@ pub fn assignment_for(key: &ShardKey, leader: &str, replicas: Vec<String>) -> Sh
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     }
 }
 

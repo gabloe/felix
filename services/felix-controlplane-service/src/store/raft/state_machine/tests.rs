@@ -123,6 +123,7 @@ fn shard_assignment(
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     }
 }
 

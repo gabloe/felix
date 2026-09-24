@@ -105,7 +105,10 @@ impl MoveClock {
                     fenced: now.saturating_duration_since(held.fenced?),
                 })
             }
-            MoveStep::Abandon { .. } | MoveStep::TimedOut { .. } => {
+            MoveStep::Abandon { .. }
+            | MoveStep::TimedOut { .. }
+            | MoveStep::Cancel { .. }
+            | MoveStep::Retake { .. } => {
                 self.moves.remove(key);
                 None
             }

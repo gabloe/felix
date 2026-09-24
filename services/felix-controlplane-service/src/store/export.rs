@@ -45,6 +45,11 @@ pub struct ExportedState {
     pub(super) rbac_policies: Vec<(String, Vec<PolicyRule>)>,
     pub(super) rbac_groupings: Vec<(String, Vec<GroupingRule>)>,
     pub(super) auth_bootstrapped: Vec<(String, bool)>,
+    /// Absent from a state exported before moves could be paused, and left
+    /// out while they are not, so such a snapshot is byte for byte what it
+    /// was.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) moves_paused: bool,
 }
 
 impl ExportedState {
@@ -246,5 +251,6 @@ pub async fn export_state_from(
         rbac_policies,
         rbac_groupings,
         auth_bootstrapped,
+        moves_paused: store.moves_paused().await?,
     })
 }

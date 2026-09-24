@@ -407,6 +407,7 @@ async fn seed_shard(store: &InMemoryStore, leader: &str, generation: u64) {
                 successor: None,
                 joining: None,
                 move_started_at_millis: None,
+                move_reason: None,
             })
             .await
             .expect("assign");

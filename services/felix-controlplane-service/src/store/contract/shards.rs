@@ -7,7 +7,7 @@ use std::sync::Arc;
 use super::nodes::node;
 use super::replica_reports;
 use crate::model::{
-    Cache, CacheKey, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy,
+    Cache, CacheKey, ConsistencyLevel, DeliveryGuarantee, MoveReason, Namespace, RetentionPolicy,
     ShardAssignment, ShardKey, ShardKind, ShardState, Stream, StreamKey, StreamKind, Tenant,
 };
 use crate::store::{AssignmentWrite, ControlPlaneStore, StoreError};
@@ -47,6 +47,7 @@ pub(crate) fn assignment(shard: u32, leader: &str) -> ShardAssignment {
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     }
 }
 
@@ -139,6 +140,8 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     replica_reports::the_leader_offset_is_kept(store).await;
     a_conditional_write_lands_only_at_the_expected_generation(store).await;
     a_fence_planned_before_a_cut_over_is_refused_after_it(store).await;
+    why_a_move_started_is_persisted(store).await;
+    pausing_moves_is_persisted(store).await;
 }
 
 fn cache_key(shard: u32) -> ShardKey {
@@ -161,6 +164,7 @@ fn cache_assignment(shard: u32, leader: &str) -> ShardAssignment {
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     }
 }
 
@@ -505,6 +509,50 @@ async fn a_replacement_in_progress_is_persisted(store: &dyn ControlPlaneStore) {
     let written = store.put_shard_assignment(seated).await.expect("seat");
     assert_eq!(written.joining, None);
     assert_eq!(written.move_started_at_millis, None);
+}
+
+/// Why a move started survives a round trip, and clearing it does too.
+async fn why_a_move_started_is_persisted(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .put_shard_assignment(assignment(0, "broker-x"))
+        .await
+        .expect("assigning");
+    for reason in [
+        MoveReason::Drain,
+        MoveReason::Balance,
+        MoveReason::Operator,
+        MoveReason::Replace,
+    ] {
+        let mut staged = assignment(0, "broker-x");
+        staged.replicas = vec!["broker-y".to_string()];
+        staged.successor = Some("broker-y".to_string());
+        staged.move_reason = Some(reason);
+        let written = store.put_shard_assignment(staged).await.expect("stage");
+        assert_eq!(written.move_reason, Some(reason));
+        let read = store.get_shard_assignment(&key(0)).await.expect("get");
+        assert_eq!(read.move_reason, Some(reason));
+    }
+    let undone = assignment(0, "broker-x");
+    let written = store.put_shard_assignment(undone).await.expect("undo");
+    assert_eq!(written.move_reason, None);
+    let read = store.get_shard_assignment(&key(0)).await.expect("get");
+    assert_eq!(read.move_reason, None);
+}
+
+/// Moves start unpaused, and pausing and resuming are read back by the next
+/// reader, repeated or not.
+async fn pausing_moves_is_persisted(store: &dyn ControlPlaneStore) {
+    assert!(
+        !store.moves_paused().await.expect("read"),
+        "starts unpaused"
+    );
+    store.set_moves_paused(true).await.expect("pause");
+    assert!(store.moves_paused().await.expect("read"));
+    store.set_moves_paused(true).await.expect("pause again");
+    assert!(store.moves_paused().await.expect("read"));
+    store.set_moves_paused(false).await.expect("resume");
+    assert!(!store.moves_paused().await.expect("read"));
 }
 
 /// A conditional write lands only over the generation it names, or where
@@ -898,6 +946,7 @@ async fn deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(
         successor: None,
         joining: None,
         move_started_at_millis: None,
+        move_reason: None,
     };
     for shard in 0..2 {
         store

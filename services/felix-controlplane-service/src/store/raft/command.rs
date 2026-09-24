@@ -132,6 +132,9 @@ pub enum MetaCommand {
     RecordReplicaReport {
         report: ReplicaReport,
     },
+    SetMovesPaused {
+        paused: bool,
+    },
     UpsertIdpIssuer {
         tenant_id: String,
         issuer: IdpIssuerConfig,
