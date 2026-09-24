@@ -162,20 +162,27 @@ a few control-plane sync intervals — under a second on a local cluster, a
 few seconds with the default 2 s broker sync interval and 5 s reconcile interval.
 
 Subscriptions and cache watches on the old leader are **ended** when it is
-fenced. Each reader first receives everything already queued for it, then its
-stream closes; the old leader stays up, so the close is the only signal a client
-gets. A write that has not taken its place in the old leader's log by the time
-the fence arrives is refused, not committed after it, and the readers are ended
-only once the writes already under way have landed, so each of them receives
-every record the old leader committed. A sharded
-`ClusterClient` subscription reports `ShardLost` for that shard and resubscribes
-from the last offset it delivered; a sharded cache watch reports `ShardClosed`.
-Subscriptions are not migrated: the new owner serves the shard only once it has
-opened it, and a resubscribe before then is refused and retried.
+fenced, and each is told where to resume. A write that has not taken its place
+in the old leader's log by the time the fence arrives is refused, not committed
+after it, and the readers are ended only once the writes already under way have
+landed, so each of them first receives every record the old leader committed.
+Its last frame, `shard_moved`, names the broker taking the shard and the offset
+to resume from; a client too old to ask for it sees the stream close instead.
+
+A `ClusterClient` subscription follows the shard: it resubscribes on the new
+owner at the larger of that offset and the last one it delivered, so on a
+durable stream nothing is repeated or skipped. An in-memory stream resumes at
+the new owner's tail. A sharded subscription does the same per shard and
+reports `ShardMoved`; a sharded cache watch reports `ShardMoved` and moves that
+shard's resume offset. A `Client` subscription ends with the same information
+and leaves the resubscribe to the caller. Subscriptions are not migrated: the
+new owner serves the shard only once it has opened it, and a resubscribe before
+then is refused and retried.
 
 Every publish acknowledged before or during a move is on the new owner. The
-tests behind these claims are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`
-and `crates/testing/felix-cluster/tests/routing/moved_readers.rs`; the write
+tests behind these claims are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`,
+`crates/testing/felix-cluster/tests/routing/moved_readers.rs` and
+`crates/testing/felix-cluster/tests/routing/subscriptions_follow.rs`; the write
 fence and its tests are in `services/felix-broker-service/src/shards/lifecycle/fence.rs`.
 
 ## Tuning

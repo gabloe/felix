@@ -265,6 +265,11 @@ while let Some(item) = watch.recv().await {
             // `resume_from` replays everything missed — gapless.
             break;
         }
+        CacheWatchItem::ShardMoved(moved) => {
+            // The shard moved to another broker, which ended the watch.
+            // Re-watch from `moved.resume_from`, or after the last offset seen.
+            break;
+        }
     }
 }
 ```
@@ -536,7 +541,9 @@ async fn watch_cache(
 
 **Returns**: a `CacheWatch` whose `recv()` yields `CacheWatchItem::Change`
 (key, optional value, offset, expiry) and, if the watch falls behind,
-`CacheWatchItem::Lagged { resume_from }` before ending. `resnapshot()` reports
+`CacheWatchItem::Lagged { resume_from }` before ending, or
+`CacheWatchItem::ShardMoved` if its shard moved to another broker.
+`resnapshot()` reports
 whether a resume began from current values because compaction collapsed the
 requested history. Fails without sending anything when the broker did not
 advertise `FEATURE_CACHE_WATCH`.

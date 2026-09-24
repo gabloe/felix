@@ -42,6 +42,9 @@ while let Some(event) = events.next_event().await? {
   from the rest when one fails.
 - **Shard redirects.** A publish for a shard the broker does not own is
   forwarded and acknowledged by the owner; the ack says so and names the owner.
+- **Shard moves.** A `ClusterClient` subscription follows its shard when a
+  rebalance moves it to another broker, resuming exactly where it left off on a
+  durable stream.
 - **Retry classification.** A failure is typed by whether retrying it could
   plausibly succeed, so a caller is not guessing from a message.
 - **Idempotent publishes.** `publish_at_least_once` resends; the idempotent

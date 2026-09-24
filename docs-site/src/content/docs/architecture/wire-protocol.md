@@ -441,6 +441,34 @@ The watch fell behind; the broker ends the stream after this.
 - Everything already queued was delivered first
 - Re-watching with `from_offset = resume_from` is gapless
 
+#### ShardMoved
+
+The last frame on the event stream of a subscription or cache watch whose shard
+moved to another broker; the broker ends the stream after it.
+
+```json
+{
+  "type": "shard_moved",
+  "subscription_id": "number",
+  "resume_from": "number | absent",
+  "node_id": "string | absent",
+  "addr": "string | absent",
+  "generation": "number"
+}
+```
+
+**Semantics**:
+- Sent only to a client that offered `FEATURE_SHARD_MOVED`. Any other client sees
+  the stream end after its last event, exactly as before the frame existed
+- Everything this broker committed to the shard was delivered first
+- `resume_from` is the first offset the reader was not offered. Resume a durable
+  subscription at `max(last delivered offset + 1, resume_from)`. Absent on an
+  in-memory stream, and on a cache watch whose shard was still taking writes
+- `node_id` and `addr` name the shard's next owner when the broker knows it. It
+  is a hint: that broker may answer `not_leader` or `shard_unavailable` until the
+  move completes
+- See [Shard moves](#shard-moves)
+
 #### CounterValue
 
 ```json
@@ -666,6 +694,34 @@ it would make clients assume support that older brokers lack.
 The broker sends `auth_ok` only in reply to an `auth` that offered `client_flags`, so
 a client too old to know the variant can never receive it.
 
+### Feature bits
+
+Flags say how a payload is laid out; feature bits say a message exists. They are
+exchanged in the same handshake, as `client_features` on `auth` and
+`server_features` on `auth_ok`, and an absent set means none. A broker sends a
+message the client must decode (`not_leader`, `shard_moved`, error codes) only to
+a client that offered its bit, and a client sends a request only to a broker that
+advertised its bit.
+
+| Bit | Name | Meaning |
+| --- | --- | --- |
+| `0x0001` | `FEATURE_TOPOLOGY` | The broker answers `topology` |
+| `0x0002` | `FEATURE_REDIRECT` | The peer understands `not_leader` |
+| `0x0004` | `FEATURE_CACHE_DELETE` | The broker accepts `cache_delete` |
+| `0x0008` | `FEATURE_CONSUMER_GROUP` | The broker serves `group_poll`, `group_ack`, `group_nack` |
+| `0x0010` | `FEATURE_GROUP_DEAD_LETTERS` | The broker serves `group_dead_letters`, `group_discard`, `group_redrive` |
+| `0x0020` | `FEATURE_STREAM_SHARDS` | The broker answers `stream_shards` |
+| `0x0040` | `FEATURE_CACHE_WATCH` | The broker accepts `cache_watch` |
+| `0x0080` | `FEATURE_CACHE_WATCH_RETAINED` | The broker serves `retained` delivery on a `cache_watch` |
+| `0x0100` | `FEATURE_COUNTERS` | The broker serves `counter_add` and `counter_get` |
+| `0x0200` | `FEATURE_IDEMPOTENT_PRODUCER` | The broker serves `producer_init` and `publish_idempotent` |
+| `0x0400` | `FEATURE_CACHE_SHARDS` | The broker answers `cache_shards` |
+| `0x0800` | `FEATURE_ERROR_CODES` | The client reads `code`, `retry` and `detail` on errors |
+| `0x1000` | `FEATURE_SHARD_MOVED` | The client reads `shard_moved` at the end of an event stream |
+
+The full list, with what each depends on, is in
+[`docs/protocol.md`](https://github.com/gabloe/felix/blob/main/docs/protocol.md).
+
 ## Shared Binary EventBatch Encoding
 
 Subscriber event delivery is always binary in practice. When `flags & 0x0004
@@ -795,6 +851,38 @@ sequenceDiagram
     end
 ```
 
+### Shard moves
+
+A rebalance or a drain can move a shard to another broker. The old owner ends
+every subscription and cache watch it served on that shard, after delivering
+everything it committed, and tells a client that offered `FEATURE_SHARD_MOVED`
+where to pick the shard up.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as Old owner
+    participant B as New owner
+    A->>C: event (last offset n)
+    A->>C: shard_moved (resume_from, node_id, addr, generation)
+    Note over A: finishes the event stream
+    C->>B: subscribe (start = max(n + 1, resume_from))
+    alt move not cut over yet
+        B->>C: shard_unavailable or not_leader
+        Note over C: retry, following the redirect
+    else
+        B->>C: subscribed
+        B->>C: events from the resume offset
+    end
+```
+
+`resume_from` is a position in the stream, not in the subscriber's queue: every
+record below it was offered to the subscriber (and delivered or dropped by its
+queue), none at or above it was. Resuming at the larger of the two neither
+repeats nor skips a record the subscriber would otherwise have received. On an
+in-memory stream it is absent, since the sequence means nothing on another
+broker, and the client resumes at the new owner's tail.
+
 ## Stream Types and Lifecycle
 
 Felix uses different QUIC stream patterns for different workload characteristics:
@@ -822,7 +910,8 @@ Felix uses different QUIC stream patterns for different workload characteristics
 1. Server opens unidirectional stream after subscribe
 2. Server sends `event_stream_hello`
 3. Server sends stream of events
-4. Server closes stream when subscription ends
+4. Server closes stream when subscription ends; if its shard moved, a client
+   that offered `FEATURE_SHARD_MOVED` gets `shard_moved` as the last frame
 
 **Characteristics**:
 - One stream per subscription
@@ -897,6 +986,8 @@ cargo run -p felix-conformance
 ```
 
 **What it tests**:
+- A subscription whose shard moves ends with `shard_moved` only when the client
+  offered `FEATURE_SHARD_MOVED`, and byte for byte as before otherwise
 - Frame header encoding/decoding
 - Binary batch encoding/decoding
 - Error handling for malformed inputs

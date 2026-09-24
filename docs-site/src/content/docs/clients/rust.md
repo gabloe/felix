@@ -492,7 +492,7 @@ loop {
                     start = StartPosition::Offset(offset + 1);
                 }
             }
-            Ok(None) => break,                     // the broker ended it; resubscribe
+            Ok(None) => break,                     // ended, not moved; resubscribe
             Err(err) => {
                 if let Some(cursor) = err.downcast_ref::<SubscribeCursorError>() {
                     // Retention discarded it. `available` is the nearest offset
@@ -535,6 +535,33 @@ let live = sub.live_offset();   // the tail when you subscribed
 Events below `live_offset()` are catch-up; events from it on are new, and none
 are skipped between the two. From `Latest` the two offsets are equal. Both are
 `None` for a plain tail subscribe, an in-memory stream, or an older broker.
+
+### When a shard moves
+
+A rebalance or a drain can move a stream's shard to another broker. The old
+owner delivers everything it committed, then ends the subscription with a
+`shard_moved` frame saying where the shard went and where to resume.
+
+`ClusterClient::subscribe` and `subscribe_from` return a `ClusterSubscription`
+that follows the shard on its own: `next_event` resubscribes on the new owner
+and carries on. On a durable stream it resumes at
+`max(last delivered offset + 1, resume_from)`, so nothing is repeated or
+skipped; an in-memory stream resumes at the new owner's tail. `moves()` counts
+how often it followed, and `client()` is the connection it is on now.
+
+A `Client` subscription ends instead, and says why:
+
+```rust
+while let Some(event) = subscription.next_event().await? {
+    handle(&event);
+}
+if let Some(moved) = subscription.shard_moved() {
+    // Resubscribe at the larger of `moved.resume_from` and your last offset
+    // + 1, on `moved.addr` if it is set, or via any broker, which redirects.
+}
+```
+
+See [Multi-node client](https://github.com/gabloe/felix/blob/main/docs/multi-node-client.md#when-a-shard-moves).
 
 ### Multiple Subscriptions
 
@@ -708,6 +735,12 @@ while let Some(item) = watch.recv().await {
             checkpoint = resume_from;
             break;
         }
+        CacheWatchItem::ShardMoved(moved) => {
+            // The shard moved to another broker, which ended the watch.
+            // Re-watch there; without a `resume_from`, `checkpoint` is right.
+            checkpoint = moved.resume_from.unwrap_or(checkpoint);
+            break;
+        }
     }
 }
 ```
@@ -879,6 +912,9 @@ while let Some(item) = subscription.next().await {
         ShardEvent::Record { shard, event } => handle(shard, event),
         ShardEvent::ShardLost { shard, error } => warn!(shard, %error, "shard down"),
         ShardEvent::ShardRecovered { shard } => info!(shard, "shard back"),
+        // Followed to its new owner; records carry on from there.
+        ShardEvent::ShardMoved { shard, .. } => info!(shard, "shard moved"),
+        _ => {}                            // `ShardEvent` is non-exhaustive
     }
 }
 ```
@@ -895,7 +931,8 @@ for the full contract.
 Prefix watches on a multi-shard cache work the same way. `watch_cache_sharded`
 opens one watch per shard and merges them. The retained version sends
 `ShardedCacheWatchItem::StateComplete` once every shard's current values have
-arrived. Needs `FEATURE_CACHE_SHARDS`.
+arrived. A shard that moves ends with `ShardedCacheWatchItem::ShardMoved`, and
+`resume_offsets()` then says where it resumes. Needs `FEATURE_CACHE_SHARDS`.
 
 ## Connection Management
 

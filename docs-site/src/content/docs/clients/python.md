@@ -139,6 +139,12 @@ with client.subscribe("t1", "default", "events") as events:
 first record you have not seen**, so a resuming consumer passes the offset it
 last handled *plus one*.
 
+**A subscription follows its shard when a rebalance moves it.** The old owner
+ends it after delivering what it committed and says where to resume; the client
+resubscribes on the new owner and iteration carries on. On a durable stream
+nothing is repeated or skipped; an in-memory stream resumes at the new owner's
+tail.
+
 ### Offsets are how you notice a drop
 
 Subscriber queues shed under the default policy rather than blocking the
@@ -316,6 +322,11 @@ with client.watch_cache(
             # stream subscriber infers it — this is the only signal.
             watch = client.watch_cache(..., start=item.resume_from)
             continue
+        if isinstance(item, felix.CacheWatchShardMoved):
+            # The shard moved to another broker, which ended the watch.
+            start = item.resume_from if item.resume_from is not None else last + 1
+            watch = client.watch_cache(..., start=start)
+            continue
         if item.value is None:
             roster.pop(item.key, None)     # a delete is a change with no value
         else:
@@ -329,7 +340,9 @@ Three things in that example are load-bearing:
 - **`value is None` means removed**, and is deliberately distinguishable from
   an empty value. A watcher mirroring a cache has to tell those apart.
 - **`CacheWatchLagged` is a value, not an exception.** Re-watching from
-  `resume_from` is gapless.
+  `resume_from` is gapless. `CacheWatchShardMoved` is the same kind of value:
+  re-watch from its `resume_from` when set, and otherwise from the offset after
+  the last change you saw.
 
 A prefix watch reads **one shard**, so a prefix spanning a multi-shard cache
 needs one watch per shard. On a multi-shard cache the broker refuses a prefix
@@ -353,6 +366,9 @@ with client.subscribe_sharded("t1", "default", "orders") as stream:
             alert(item.shard, item.error)
         elif isinstance(item, felix.ShardRecovered):
             log.info("shard %d back", item.shard)
+        elif isinstance(item, felix.ShardMoved):
+            # Followed to its new owner; its records carry on from there.
+            log.info("shard %d moved to %s", item.shard, item.node_id)
 ```
 
 Resuming is a **map**, not a number, because offsets are per shard:
