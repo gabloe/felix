@@ -356,3 +356,30 @@ async fn a_lagging_replica_other_than_the_successor_is_left_out_not_waited_for()
         .unwrap_or_else(|| panic!("the successor holds everything: {reports:?}"));
     assert_eq!(report.caught_up, vec!["broker-b".to_string()]);
 }
+
+/// A move that lost its only destination leaves a draining shard with no
+/// replicas. It still reports drained once quiet, or the cut-over that hands
+/// it back would wait forever.
+#[tokio::test]
+async fn a_draining_shard_with_no_replicas_reports_drained() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = draining_router(LOCAL, &[], 4);
+    let follower = AcceptingFollower::default();
+    let mut cursors = HashMap::new();
+
+    let pass = drain_pass(
+        &follower,
+        &broker,
+        &router,
+        &ShardFence::default(),
+        &mut cursors,
+    )
+    .await;
+    let report = pass
+        .reports
+        .into_iter()
+        .find(|report| report.drained)
+        .expect("a quiet shard with no replicas should report drained");
+    assert!(report.caught_up.is_empty());
+    assert!(follower.batches().is_empty(), "nothing to ship to");
+}

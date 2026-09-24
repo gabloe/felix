@@ -219,7 +219,9 @@ pub async fn replicate_once_with<R: PeerRequester>(
             _ => ShardCursors::at(route.generation),
         };
         entry.learner = learner;
-        if route.replicas.is_empty() {
+        // A draining shard reports even with nobody to ship to: its move lost
+        // its destination, and the cut-over waits on the drained report.
+        if route.replicas.is_empty() && !route.draining {
             // Nothing to ship. Kept anyway, so a destination staged later is
             // known to be one this shard did not have.
             cursors.insert(key.clone(), entry);

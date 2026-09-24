@@ -756,7 +756,11 @@ broker on the default 2 s interval the switch-over is tens of milliseconds;
 the destination records it as `felix_broker_shard_switchover_seconds`.
 
 A destination that dies before it leads is passed over: another caught-up
-replica, or the old leader itself, takes the shard at a new generation. A
+replica, or the old leader itself, takes the shard at a new generation. If it
+dies after the fence but before it is level, the drained report would wait
+for it forever, so the control plane first drops it at a new generation that
+is still fenced; the leader then reports drained against the followers it
+has, and reports even when that is none. A
 leader that dies mid-move is a failover, and the successor is a candidate
 there like any other replica. Neither path can name a broker holding less
 than the report said, because the report is the only input either reads.

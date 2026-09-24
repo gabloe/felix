@@ -512,7 +512,11 @@ bandwidth limit below.
 A move that has been fenced is not timed out. The leader has stopped
 serving; going back means a new generation and every client following the
 shard twice, while going on waits for at most the lag bound's worth of copy.
-A destination that stops being live after the fence is handled as before.
+A destination that dies after the fence, while it is still copying the
+remainder, would hold the drained report forever; it is dropped at a new,
+still fenced generation, the leader reports drained against the followers it
+has, and the cut-over picks one of them or hands the shard back to the
+leader.
 
 The copy's bandwidth is limited on the broker that ships it: see
 `FELIX_SHARD_MOVE_BYTES_PER_SEC` in the broker configuration. It applies

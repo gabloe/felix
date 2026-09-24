@@ -171,6 +171,26 @@ pub(super) fn move_step<'a>(
         // back is a new generation and every client following the shard
         // twice; going on waits for at most the lag bound's worth of copy.
         if !caught_up.is_drained(key, existing.generation) {
+            // The fence may land while the destination is still copying, and
+            // the leader will not report drained until it is level. One that
+            // died first never will be: drop it, still fenced, and the leader
+            // reports drained against the followers it has. The cut-over then
+            // picks one of them, or hands the shard back to the leader.
+            if let Some(successor) = existing.successor.as_deref().filter(|s| !is_live(s)) {
+                let mut replicas = existing.replicas.clone();
+                replicas.retain(|replica| replica != successor);
+                return Decision::Move(
+                    MoveStep::Abandon {
+                        successor: successor.to_string(),
+                    },
+                    ShardAssignment {
+                        successor: None,
+                        replicas,
+                        generation: 0,
+                        ..existing.clone()
+                    },
+                );
+            }
             return Decision::Waiting(Blocked::LeaderStopping);
         }
         // Whoever leads next must hold everything the leader held.

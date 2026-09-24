@@ -526,3 +526,39 @@ fn a_destination_full_of_follower_roles_is_skipped() {
         other => panic!("expected a stage, got {other:?}"),
     }
 }
+
+/// Fenced within the lag bound, the destination may still be copying when it
+/// dies, and the leader's drained report waits for the destination to be
+/// level, so it would never come. The dead destination is dropped at a new,
+/// still fenced generation; the leader then reports drained against the
+/// followers it has, and the cut-over picks one of them or the leader.
+#[test]
+fn a_destination_lost_after_the_fence_is_dropped_before_it_is_level() {
+    let streams = vec![stream("orders", 1)];
+    let nodes = vec![
+        node("broker-a", NodeLifecycle::Draining, None),
+        node("broker-b", NodeLifecycle::Down, None),
+        node("broker-c", NodeLifecycle::Live, None),
+    ];
+    let mut fenced = staged("orders", "broker-a", "broker-b", NOW);
+    fenced.state = ShardState::Draining;
+
+    let plan = plan_with(
+        &streams,
+        &[],
+        &nodes,
+        &[fenced],
+        &Positions::behind("broker-b", 5),
+        policy(1),
+    );
+    match decision_for(&plan, "orders", 0) {
+        Decision::Move(MoveStep::Abandon { successor }, next) => {
+            assert_eq!(successor, "broker-b");
+            assert_eq!(next.leader, "broker-a");
+            assert_eq!(next.state, ShardState::Draining, "still fenced");
+            assert_eq!(next.successor, None);
+            assert!(next.replicas.is_empty());
+        }
+        other => panic!("expected the dead destination to be dropped, got {other:?}"),
+    }
+}
