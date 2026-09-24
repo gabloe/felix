@@ -142,6 +142,8 @@ spec:
             - name: FELIX_BROKER_CONFIG
               value: /etc/felix/config/broker.yml
             {{- end }}
+            - name: FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS
+              value: {{ $b.shutdown.handoffTimeoutMs | quote }}
             - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
               value: {{ $b.shutdown.drainTimeoutMs | quote }}
             - name: RUST_LOG

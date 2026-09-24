@@ -263,6 +263,41 @@ fn a_drain_is_moved_before_a_rebalance() {
     assert_eq!(plan.moves().count(), 1);
 }
 
+/// A draining node's leaderships move before its follower copies are
+/// replaced. Clients feel the leader, not a missing follower, and a broker
+/// stopping for a restart waits only for its leaders: a replacement holding
+/// the one slot would leave them to fail over.
+#[test]
+fn a_draining_leader_is_moved_before_its_follower_is_replaced() {
+    // "audit" sorts first and only has a follower on the draining node.
+    let streams = vec![replicated_stream("audit", 1, 2), stream("zebra", 1)];
+    let existing = vec![
+        shard("audit", 0, "broker-b", &["broker-a"]),
+        pinned("zebra", 0, "broker-a"),
+    ];
+
+    let plan = plan_with(
+        &streams,
+        &[],
+        &draining_a(),
+        &existing,
+        &Positions::default(),
+        policy(1),
+    );
+
+    assert!(
+        matches!(
+            decision_for(&plan, "zebra", 0),
+            Decision::Move(MoveStep::Stage { .. }, _)
+        ),
+        "{plan:?}"
+    );
+    assert_eq!(
+        decision_for(&plan, "audit", 0),
+        &Decision::Waiting(Blocked::MoveLimit)
+    );
+}
+
 /// Under steady writes the destination is never exactly level. Within the
 /// lag bound the leader is fenced, and the drained report then waits for
 /// the rest, so nothing is lost by not waiting for exactly level first.

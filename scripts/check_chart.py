@@ -104,13 +104,18 @@ def check_broker(docs: list[dict], label: str) -> None:
     if not advertise.startswith("$(POD_IP):"):
         fail(f"{label}: FELIX_NODE_ADVERTISE_ADDR is {advertise!r}, not the pod IP")
 
-    # The drain fits inside the grace period, with the preStop sleep before it.
+    # The handoff and the drain fit inside the grace period, with the preStop
+    # sleep before them.
     pre_stop = spec["containers"][0]["lifecycle"]["preStop"]["exec"]["command"][-1]
     sleep = int(pre_stop.split()[-1])
+    handoff_ms = int(env["FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS"]["value"])
     drain_ms = int(env["FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS"]["value"])
     grace = int(spec["terminationGracePeriodSeconds"])
-    if grace < sleep + drain_ms // 1000:
-        fail(f"{label}: grace {grace}s < preStop {sleep}s + drain {drain_ms}ms")
+    if grace < sleep + (handoff_ms + drain_ms) // 1000:
+        fail(
+            f"{label}: grace {grace}s < preStop {sleep}s + handoff {handoff_ms}ms"
+            f" + drain {drain_ms}ms"
+        )
 
     # The credential is a Secret reference, never a value.
     for entry in broker.get("env", []):

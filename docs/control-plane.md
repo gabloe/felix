@@ -499,7 +499,10 @@ drain waits and an imbalance stays, both visibly. `max_shard_moves_per_node`
 bounds the copies going into or out of any one broker, counting the leader
 that ships and the node that receives; unset, only the cluster-wide limit
 applies. Slots go to drains before rebalancing, since a draining broker is
-waiting to leave while an imbalance only costs evenness.
+waiting to leave while an imbalance only costs evenness, and within a drain
+to the broker's leaderships before its follower copies: clients feel a
+leader, and a broker stopping for a restart waits only until it leads
+nothing.
 
 The limits are enforced by one planner. Each write is conditional on its own
 shard's generation, not on the count, so with several Postgres instances

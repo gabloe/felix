@@ -13,4 +13,5 @@ mod rebalance;
 mod redirect;
 mod sharded_subscribe;
 mod sharding;
+mod shutdown_handoff;
 mod subscriptions_follow;

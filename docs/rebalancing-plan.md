@@ -72,6 +72,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | done |
 | 6 | Idempotent producers keep their sequences across a planned move | done |
 | 7 | Docs and the status row | done |
+| 8 | A broker hands its shards off before it stops (`FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`) | done |
 
 Load-aware placement (moving shards by load rather than by count) is separate
 work with its own status row.
@@ -218,7 +219,8 @@ conformance runner checks the frame on the wire, offered and not.
 - **A per-node limit**, `FELIX_SHARD_MOVES_MAX_PER_NODE`, on copies into or
   out of one broker, counting both ends.
 - **Drains go first.** Slots go to drains, then to rebalancing, then to
-  shards whose last move timed out.
+  shards whose last move timed out. Within a drain, the draining broker's
+  leaderships go before its follower copies are replaced.
 - **The fence starts within a lag bound.** The replica report carries the
   leader's tail, and a move fences once its destination is within
   `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS`. The write fence and the drained
@@ -286,12 +288,6 @@ hands the shard back with every acknowledged record delivered once and in
 order; and a paused placement leaves a draining broker's shard alone until
 resumed.
 
-Left out: `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`, a graceful shutdown that
-drains a broker's shards before it stops. The broker's shutdown turns
-readiness off and closes its listener first, while a handoff needs it to
-keep serving and forwarding until each move cuts over, so it needs its own
-ordering and a test that stops a broker under load.
-
 ### Phase 6: idempotent producers keep their sequences
 
 A move's destination, like a promoted replica, used to know no producers: the
@@ -342,6 +338,32 @@ control-plane record, the scaling page, the semantics pages and the README
 still described publishes refused and readers ended rather than followed, and
 now do not. The scaling page gained a sequence diagram of a move.
 
+### Phase 8: handoff on shutdown
+
+A clustered broker told to stop now drains itself before it closes its
+listener (`node/handoff.rs`). Readiness goes off first, so no new client is
+sent to it; it asks the control plane for the drain with its own credential,
+keeps accepting and serving while placement moves its shards, and carries on
+with the old shutdown once it leads nothing or
+`FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` (30 s) has passed. It skips the handoff
+when it leads nothing, when no other broker is eligible, and when the control
+plane does not answer within 5 s, and a second signal ends the wait, so the
+handoff can delay a shutdown but never hang one. The drain ends with the
+process: registering again makes the broker live, as it always did.
+
+It waits for leaderships only. A broker being restarted is coming back to its
+follower copies, and replacing them would copy every shard once per restart.
+For the same reason a drain's leaderships now get move slots before its
+follower replacements; with one slot, a replacement's copy used to be able to
+hold it while the leaders waited (`a_draining_leader_is_moved_before_its_follower_is_replaced`).
+
+`routing::shutdown_handoff` sends SIGTERM to the leader of a replicated shard
+under a publisher and a subscriber: placement writes move steps and no
+placement, no publish is refused, the subscriber sees every acknowledged
+record once and in order, and the broker exits cleanly. Before the change the
+same test saw a failover and refused publishes. It also restarts a broker that
+handed off and sees it lead again, and stops a lone broker without waiting.
+
 ## What is left
 
 - **Cache, counter and group writes are not held.** They are refused,
@@ -350,8 +372,10 @@ now do not. The scaling page gained a sequence diagram of a move.
 - **The move limits hold per planner.** Every write is conditional on its own
   shard's generation, not on the count, so two Postgres-backed instances
   placing at the same instant can each start a move. Raft has one planner.
-- **No handoff on shutdown.** Stopping a broker fails its shards over; drain
-  it first. Phase 5 says why it was left out.
+- **A shutdown handoff is bounded.** A broker stopping hands its shards off
+  for up to `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`; what it still leads then
+  fails over. Moves are paced like any other, so a broker leading many
+  unreplicated shards needs a longer timeout (and grace period).
 - **A cache watch does not follow on its own.** It ends with `shard_moved` and
   the caller reopens it; a sharded watch moves that shard's resume offset.
 - **Load-aware placement** is separate work with its own status row.

@@ -54,6 +54,10 @@ pub(super) const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS: u64 = 25_000;
 // sleep covers that; a hold-off here would stack on top of it. Set it for a load
 // balancer that learns about draining only by polling `/ready`.
 pub(super) const DEFAULT_SHUTDOWN_PREDRAIN_MS: u64 = 0;
+// A move to a caught-up follower copies nothing, but moves run one at a time by
+// default (`FELIX_SHARD_MOVES_MAX_CONCURRENT`). Spent before the drain deadline,
+// so the grace period has to cover both; see deployment/graceful-shutdown.md.
+pub(super) const DEFAULT_SHUTDOWN_HANDOFF_TIMEOUT_MS: u64 = 30_000;
 pub(super) const DEFAULT_PUB_WORKERS_PER_CONN: usize = 4;
 // Enough to keep a device flush busy with company without letting a burst put
 // unbounded concurrent callers into shared broker state. `sync_batch_appends`

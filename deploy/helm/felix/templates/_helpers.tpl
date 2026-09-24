@@ -117,11 +117,11 @@ Grace periods. The drain has to finish before SIGKILL, so the period is
 derived from the drain unless the operator sets one that still fits.
 */}}
 {{- define "felix.broker.terminationGracePeriodSeconds" -}}
-{{- $needed := add (int .Values.broker.shutdown.preStopSeconds) (div (int .Values.broker.shutdown.drainTimeoutMs) 1000) 5 -}}
+{{- $needed := add (int .Values.broker.shutdown.preStopSeconds) (div (add (int .Values.broker.shutdown.handoffTimeoutMs) (int .Values.broker.shutdown.drainTimeoutMs)) 1000) 5 -}}
 {{- if .Values.broker.shutdown.terminationGracePeriodSeconds -}}
 {{- $set := int .Values.broker.shutdown.terminationGracePeriodSeconds -}}
 {{- if lt $set $needed -}}
-{{- fail (printf "broker.shutdown.terminationGracePeriodSeconds (%d) is shorter than the preStop sleep plus the drain budget (%d): SIGKILL would arrive mid-drain" $set $needed) -}}
+{{- fail (printf "broker.shutdown.terminationGracePeriodSeconds (%d) is shorter than the preStop sleep plus the handoff and drain budgets (%d): SIGKILL would arrive mid-drain" $set $needed) -}}
 {{- end -}}
 {{- $set -}}
 {{- else -}}

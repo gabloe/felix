@@ -326,9 +326,11 @@ pub fn assignment_for(key: &ShardKey, leader: &str, replicas: Vec<String>) -> Sh
 /// start a move; one already moving holds its slot whatever its class.
 ///
 /// A draining node is waiting to leave, where an imbalance only costs
-/// evenness, so drains go before rebalancing. A shard whose last move timed
-/// out goes behind both, or the one move that keeps failing takes the slot
-/// every time.
+/// evenness, so drains go before rebalancing. Within a drain the leaders go
+/// first: clients feel a leader, not a missing follower, and a broker
+/// stopping for a restart waits only until it leads nothing. A shard whose
+/// last move timed out goes behind all of these, or the one move that keeps
+/// failing takes the slot every time.
 fn start_order(
     existing: &ShardAssignment,
     is_live: &dyn Fn(&str) -> bool,
@@ -340,11 +342,15 @@ fn start_order(
     if moving {
         return 0;
     }
-    let draining =
-        !is_live(&existing.leader) || existing.replicas.iter().any(|replica| is_draining(replica));
-    let class = if draining { 0 } else { 1 };
+    let class = if !is_live(&existing.leader) {
+        0
+    } else if existing.replicas.iter().any(|replica| is_draining(replica)) {
+        1
+    } else {
+        2
+    };
     if existing.move_started_at_millis.is_some() {
-        class + 2
+        class + 3
     } else {
         class
     }

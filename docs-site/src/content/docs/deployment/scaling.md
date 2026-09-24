@@ -90,9 +90,13 @@ curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" \
 # {"items":[]} when it is done
 ```
 
-Stopping the process before that point is a failover, not a drain: the
-shards it still leads fail over to caught-up replicas, and a shard with no
-replica waits for the broker to come back.
+A broker also drains itself when it is told to stop: on SIGTERM it asks for
+this drain and keeps serving until it leads nothing, for up to
+`FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` (see
+[Handing shards off](/felix/deployment/graceful-shutdown/#handing-shards-off)).
+That is what makes a rolling restart a series of moves. Whatever it still
+leads when that runs out fails over to caught-up replicas, and a shard with
+no replica waits for the broker to come back.
 
 Cancel a drain by putting the broker back into placement:
 
@@ -107,7 +111,9 @@ broker may then take shards back if it is under its share.
 
 A broker registers every time it starts, and registering makes it `live`, so
 **any restart of a draining broker also cancels its drain**. A rolling restart
-in the middle of a drain has to be followed by draining it again.
+in the middle of a drain has to be followed by draining it again. The same
+rule is why a broker that drained itself on the way down takes shards again
+once it is back.
 
 ## Removing a broker
 
@@ -115,7 +121,10 @@ Drain it, then wait until no assignment names it at all — not as leader, and
 not as a follower either. Leading nothing is not enough: the drain also
 replaces the broker wherever it holds a copy for another leader, and that
 only happens while it is `draining`. Once it has left, a follower slot still
-naming it stays as it is, and that shard runs one replica short.
+naming it stays as it is, and that shard runs one replica short. The handoff a
+broker does on SIGTERM waits only for its leaderships, since a broker being
+restarted is coming back to its copies, so removing one still starts with a
+drain by hand.
 
 ```bash
 curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" \

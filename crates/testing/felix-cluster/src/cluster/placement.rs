@@ -137,39 +137,7 @@ impl Cluster {
         .with_context(|| format!("start broker {index}"))?;
         let node_id = node.node_id.clone();
         self.nodes.push(node);
-
-        let deadline = Instant::now() + wait::budget(READY_TIMEOUT);
-        loop {
-            let url = format!("http://{}/ready", self.nodes[index].metrics_addr);
-            if let Some(status) = self.nodes[index].exited() {
-                let reason = self.nodes[index].failure_reason();
-                bail!("{node_id} exited before becoming ready ({status}){reason}");
-            }
-            let ok = matches!(
-                self.http.get(&url).send().await,
-                Ok(response) if response.status().is_success()
-            );
-            if ok {
-                break;
-            }
-            if Instant::now() >= deadline {
-                bail!("timed out waiting for {node_id} to be ready");
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        let this = &*self;
-        let expected = node_id.clone();
-        wait::until(
-            READY_TIMEOUT,
-            &format!("{expected} to be placeable"),
-            || {
-                let expected = expected.clone();
-                async move {
-                    matches!(this.placeable_nodes().await, Ok(live) if live.contains(&expected))
-                }
-            },
-        )
-        .await?;
+        self.await_placeable(index).await?;
         Ok(node_id)
     }
 
