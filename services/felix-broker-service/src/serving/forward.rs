@@ -263,32 +263,6 @@ pub async fn forward_publish(
     })
 }
 
-/// A short pause between attempts, so a shard mid-reassignment is not retried
-/// before anything can have changed. Deliberately small: the client is waiting,
-/// and the attempt budget is the real bound.
-fn retry_delay(attempt: u32) -> Duration {
-    Duration::from_millis(5 << attempt.min(4))
-}
-
-/// What is left of the budget, or `None` once it is spent.
-fn remaining(deadline: Instant) -> Option<Duration> {
-    let left = deadline.saturating_duration_since(Instant::now());
-    (!left.is_zero()).then_some(left)
-}
-
-/// Pause between attempts without sleeping past the deadline — the next attempt
-/// checks what is left, and a sleep that overshot would make that check the
-/// thing that fails rather than the request it was waiting to retry.
-async fn sleep_within(delay: Duration, deadline: Instant) {
-    tokio::time::sleep(delay.min(deadline.saturating_duration_since(Instant::now()))).await;
-}
-
-fn budget_spent(node_id: &str, budget: Duration, attempts: u32, last: &str) -> String {
-    format!(
-        "owner {node_id} did not accept the batch within {budget:?} ({attempts} attempts): {last}"
-    )
-}
-
 /// What a cache operation asks the owner to do.
 ///
 /// A separate type from the wire's `CacheOpKind` so callers do not have to
@@ -476,6 +450,32 @@ pub async fn forward_cache_op(
         stream: key.stream.clone(),
         detail: last,
     })
+}
+
+/// A short pause between attempts, so a shard mid-reassignment is not retried
+/// before anything can have changed. Deliberately small: the client is waiting,
+/// and the attempt budget is the real bound.
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(5 << attempt.min(4))
+}
+
+/// What is left of the budget, or `None` once it is spent.
+fn remaining(deadline: Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    (!left.is_zero()).then_some(left)
+}
+
+/// Pause between attempts without sleeping past the deadline — the next attempt
+/// checks what is left, and a sleep that overshot would make that check the
+/// thing that fails rather than the request it was waiting to retry.
+async fn sleep_within(delay: Duration, deadline: Instant) {
+    tokio::time::sleep(delay.min(deadline.saturating_duration_since(Instant::now()))).await;
+}
+
+fn budget_spent(node_id: &str, budget: Duration, attempts: u32, last: &str) -> String {
+    format!(
+        "owner {node_id} did not accept the batch within {budget:?} ({attempts} attempts): {last}"
+    )
 }
 
 #[cfg(test)]

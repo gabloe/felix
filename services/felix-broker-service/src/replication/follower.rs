@@ -3,6 +3,18 @@
 
 use std::net::SocketAddr;
 
+/// How far a follower may be behind and still be fit to lead.
+///
+/// Zero: a follower is caught up when it holds every record the leader does.
+///
+/// A bound above zero is a bound on how much a promotion may silently lose, and
+/// there is no honest value for it that is not a policy decision. Zero needs no
+/// such decision, and a follower reaches it constantly on a healthy shard — the
+/// leader only has to be momentarily idle. Loosening it is a change to make
+/// deliberately, with a measurement behind it, rather than a default nobody
+/// chose.
+pub const CATCH_UP_BOUND: u64 = 0;
+
 /// How far a follower has got, as this leader understands it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FollowerCursor {
@@ -62,18 +74,6 @@ impl Halt {
         matches!(self, Halt::Diverged | Halt::NeedsBootstrap)
     }
 }
-
-/// How far a follower may be behind and still be fit to lead.
-///
-/// Zero: a follower is caught up when it holds every record the leader does.
-///
-/// A bound above zero is a bound on how much a promotion may silently lose, and
-/// there is no honest value for it that is not a policy decision. Zero needs no
-/// such decision, and a follower reaches it constantly on a healthy shard — the
-/// leader only has to be momentarily idle. Loosening it is a change to make
-/// deliberately, with a measurement behind it, rather than a default nobody
-/// chose.
-pub const CATCH_UP_BOUND: u64 = 0;
 
 /// Which followers hold enough of the log to lead it.
 ///

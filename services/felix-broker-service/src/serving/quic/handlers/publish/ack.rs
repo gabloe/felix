@@ -135,20 +135,6 @@ impl AckEncoding {
     }
 }
 
-/// The typed reason behind a worker's refusal of an idempotent publish, when
-/// it has one.
-fn refusal_reason(err: &anyhow::Error) -> Option<felix_wire::PublishRefusalReason> {
-    use felix_wire::PublishRefusalReason as Reason;
-    match err.downcast_ref::<felix_broker::BrokerError>()? {
-        felix_broker::BrokerError::SequenceGap { expected } => Some(Reason::SequenceGap {
-            expected: *expected,
-        }),
-        felix_broker::BrokerError::UnknownProducer { .. } => Some(Reason::UnknownProducer),
-        felix_broker::BrokerError::SequenceExpired { .. } => Some(Reason::SequenceExpired),
-        _ => None,
-    }
-}
-
 /// Admission policy when the ingress publish queue is full.
 ///
 /// - `Drop`: shed load silently (best for fire-and-forget / non-acked traffic).
@@ -372,5 +358,19 @@ pub(crate) async fn handle_ack_enqueue_result(
             let _ = cancel_tx.send(true);
             Err(anyhow!("closing control stream: ack_queue_closed"))
         }
+    }
+}
+
+/// The typed reason behind a worker's refusal of an idempotent publish, when
+/// it has one.
+fn refusal_reason(err: &anyhow::Error) -> Option<felix_wire::PublishRefusalReason> {
+    use felix_wire::PublishRefusalReason as Reason;
+    match err.downcast_ref::<felix_broker::BrokerError>()? {
+        felix_broker::BrokerError::SequenceGap { expected } => Some(Reason::SequenceGap {
+            expected: *expected,
+        }),
+        felix_broker::BrokerError::UnknownProducer { .. } => Some(Reason::UnknownProducer),
+        felix_broker::BrokerError::SequenceExpired { .. } => Some(Reason::SequenceExpired),
+        _ => None,
     }
 }

@@ -82,6 +82,209 @@ impl ForwardingHandler {
         }
     }
 
+    pub(crate) async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
+        let correlation_id = publish.correlation_id;
+        let key = ShardKey {
+            tenant_id: publish.shard.tenant_id.clone(),
+            namespace: publish.shard.namespace.clone(),
+            stream: publish.shard.stream.clone(),
+            shard: publish.shard.shard,
+            kind: ShardKind::Stream,
+        };
+
+        if let Some(denial) = self.check_ownership(correlation_id, &key, publish.shard.generation) {
+            return denial.into_publish_answer(correlation_id);
+        }
+
+        let resource = stream_resource(
+            &TenantId::new(&key.tenant_id),
+            &Namespace::new(&key.namespace),
+            &StreamName::new(&key.stream),
+        );
+        if let Err(detail) = self
+            .authorize(
+                &publish.credential,
+                &key.tenant_id,
+                Action::StreamPublish,
+                &resource,
+            )
+            .await
+        {
+            metrics::record_served(metrics::OUTCOME_UNAUTHORIZED);
+            return error(correlation_id, ErrorCode::Unauthorized, detail);
+        }
+
+        let handle = match self
+            .broker
+            .resolve_stream_handle(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+            .await
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                metrics::record_served(metrics::OUTCOME_REFUSED);
+                return error(correlation_id, ErrorCode::Unavailable, err.to_string());
+            }
+        };
+
+        match self
+            .broker
+            .publish_batch_with_outcome(&handle, &publish.payloads)
+            .await
+        {
+            Ok(outcome) => {
+                // The same wait the direct publish path makes. A forwarded
+                // publish is still a publish to this stream, and the client on
+                // the other end of the forward asked for the stream's guarantee,
+                // not for whichever one this path happened to provide.
+                if let Err(err) = crate::replication::quorum::await_quorum(
+                    &handle,
+                    Some(&key),
+                    &outcome,
+                    self.marks.as_deref(),
+                    Some(self.ingress.as_ref()),
+                    self.quorum_timeout,
+                )
+                .await
+                {
+                    metrics::record_served(metrics::OUTCOME_ERROR);
+                    return error(correlation_id, ErrorCode::StorageFailed, err.to_string());
+                }
+                metrics::record_served(metrics::OUTCOME_OK);
+                // An ephemeral stream has no log, so there are no offsets to
+                // report. Zero is not a lie here: the requester only relays an
+                // acknowledgement, and the client protocol carries no offset on
+                // a publish ack at all.
+                let (first, last) = outcome.offsets.unwrap_or((0, 0));
+                InternalMessage::ForwardPublishOk(ForwardPublishOk {
+                    correlation_id,
+                    first_offset: first,
+                    last_offset: last,
+                })
+            }
+            Err(err) => {
+                // The owner accepted the request and the write failed. Distinct
+                // from a refusal: the requester must not retry, because this
+                // broker did try.
+                metrics::record_served(metrics::OUTCOME_ERROR);
+                error(correlation_id, ErrorCode::StorageFailed, err.to_string())
+            }
+        }
+    }
+
+    /// Serve a cache operation forwarded here because this broker owns the
+    /// key's shard.
+    ///
+    /// The same ownership gates as a forwarded publish, for the same reason: a
+    /// broker that served a cache key it no longer owns is the divergence this
+    /// whole path exists to prevent.
+    pub(crate) async fn apply_cache_op(&self, op: ForwardCacheOp) -> InternalMessage {
+        let correlation_id = op.correlation_id;
+        let key = ShardKey {
+            tenant_id: op.shard.tenant_id.clone(),
+            namespace: op.shard.namespace.clone(),
+            stream: op.shard.stream.clone(),
+            shard: op.shard.shard,
+            kind: ShardKind::Cache,
+        };
+
+        if let Some(denial) = self.check_ownership(correlation_id, &key, op.shard.generation) {
+            return denial.into_cache_answer(correlation_id);
+        }
+
+        let action = match op.op {
+            CacheOpKind::Get | CacheOpKind::CounterGet => Action::CacheRead,
+            CacheOpKind::Put | CacheOpKind::Delete | CacheOpKind::CounterAdd => Action::CacheWrite,
+        };
+        let resource = cache_resource(
+            &TenantId::new(&key.tenant_id),
+            &Namespace::new(&key.namespace),
+            &CacheScope::new(&key.stream),
+        );
+        if let Err(detail) = self
+            .authorize(&op.credential, &key.tenant_id, action, &resource)
+            .await
+        {
+            metrics::record_served(metrics::OUTCOME_UNAUTHORIZED);
+            return InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                code: ErrorCode::Unauthorized,
+                detail,
+            });
+        }
+
+        let cache = self.broker.cache();
+        let writes = matches!(op.op, CacheOpKind::Put | CacheOpKind::Delete);
+        let value = match op.op {
+            CacheOpKind::Put => {
+                let ttl = (op.ttl_ms > 0).then(|| std::time::Duration::from_millis(op.ttl_ms));
+                cache
+                    .put(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                        op.value,
+                        ttl,
+                    )
+                    .await;
+                None
+            }
+            CacheOpKind::Get => {
+                cache
+                    .get(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                    )
+                    .await
+            }
+            CacheOpKind::Delete => {
+                cache
+                    .delete(
+                        &key.tenant_id,
+                        &key.namespace,
+                        &key.stream,
+                        key.shard,
+                        &op.key,
+                    )
+                    .await
+            }
+            CacheOpKind::CounterAdd | CacheOpKind::CounterGet => {
+                return self.apply_counter_op(op, &key).await;
+            }
+        };
+
+        // The same wait the requester's own path makes for a local write: the
+        // client asked for the cache's guarantee, wherever the key happens to
+        // live.
+        if writes
+            && let Err(err) = crate::replication::quorum::await_cache_quorum(
+                &self.broker,
+                &key,
+                self.marks.as_deref(),
+                Some(self.ingress.as_ref()),
+                self.quorum_timeout,
+            )
+            .await
+        {
+            metrics::record_served(metrics::OUTCOME_ERROR);
+            return InternalMessage::ForwardCacheError(ForwardCacheError {
+                correlation_id,
+                code: ErrorCode::StorageFailed,
+                detail: err.to_string(),
+            });
+        }
+
+        metrics::record_served(metrics::OUTCOME_OK);
+        InternalMessage::ForwardCacheOk(ForwardCacheOk {
+            correlation_id,
+            value,
+        })
+    }
+
     /// Whether the client behind a forward may perform `action` on `resource`.
     ///
     /// The forwarder already asked this; the answer is not trusted because the
@@ -202,247 +405,6 @@ impl ForwardingHandler {
         None
     }
 
-    pub(crate) async fn apply(&self, publish: ForwardPublish) -> InternalMessage {
-        let correlation_id = publish.correlation_id;
-        let key = ShardKey {
-            tenant_id: publish.shard.tenant_id.clone(),
-            namespace: publish.shard.namespace.clone(),
-            stream: publish.shard.stream.clone(),
-            shard: publish.shard.shard,
-            kind: ShardKind::Stream,
-        };
-
-        if let Some(denial) = self.check_ownership(correlation_id, &key, publish.shard.generation) {
-            return denial.into_publish_answer(correlation_id);
-        }
-
-        let resource = stream_resource(
-            &TenantId::new(&key.tenant_id),
-            &Namespace::new(&key.namespace),
-            &StreamName::new(&key.stream),
-        );
-        if let Err(detail) = self
-            .authorize(
-                &publish.credential,
-                &key.tenant_id,
-                Action::StreamPublish,
-                &resource,
-            )
-            .await
-        {
-            metrics::record_served(metrics::OUTCOME_UNAUTHORIZED);
-            return error(correlation_id, ErrorCode::Unauthorized, detail);
-        }
-
-        let handle = match self
-            .broker
-            .resolve_stream_handle(&key.tenant_id, &key.namespace, &key.stream, key.shard)
-            .await
-        {
-            Ok(handle) => handle,
-            Err(err) => {
-                metrics::record_served(metrics::OUTCOME_REFUSED);
-                return error(correlation_id, ErrorCode::Unavailable, err.to_string());
-            }
-        };
-
-        match self
-            .broker
-            .publish_batch_with_outcome(&handle, &publish.payloads)
-            .await
-        {
-            Ok(outcome) => {
-                // The same wait the direct publish path makes. A forwarded
-                // publish is still a publish to this stream, and the client on
-                // the other end of the forward asked for the stream's guarantee,
-                // not for whichever one this path happened to provide.
-                if let Err(err) = crate::replication::quorum::await_quorum(
-                    &handle,
-                    Some(&key),
-                    &outcome,
-                    self.marks.as_deref(),
-                    Some(self.ingress.as_ref()),
-                    self.quorum_timeout,
-                )
-                .await
-                {
-                    metrics::record_served(metrics::OUTCOME_ERROR);
-                    return error(correlation_id, ErrorCode::StorageFailed, err.to_string());
-                }
-                metrics::record_served(metrics::OUTCOME_OK);
-                // An ephemeral stream has no log, so there are no offsets to
-                // report. Zero is not a lie here: the requester only relays an
-                // acknowledgement, and the client protocol carries no offset on
-                // a publish ack at all.
-                let (first, last) = outcome.offsets.unwrap_or((0, 0));
-                InternalMessage::ForwardPublishOk(ForwardPublishOk {
-                    correlation_id,
-                    first_offset: first,
-                    last_offset: last,
-                })
-            }
-            Err(err) => {
-                // The owner accepted the request and the write failed. Distinct
-                // from a refusal: the requester must not retry, because this
-                // broker did try.
-                metrics::record_served(metrics::OUTCOME_ERROR);
-                error(correlation_id, ErrorCode::StorageFailed, err.to_string())
-            }
-        }
-    }
-}
-
-/// Why a forwarded request is not this broker's to serve.
-///
-/// Kept abstract rather than pre-built, because the two forwarded paths answer
-/// a refusal in different shapes: a requester matches on the message kind to
-/// decide what happened, so a cache operation refused with a publish's error
-/// type reads to it as a protocol violation rather than a refusal.
-enum Denial {
-    /// Already complete. `NotLeader` is a routing answer and is the same
-    /// message whichever path asked.
-    Answer(InternalMessage),
-    /// A refusal each path wraps in its own error kind.
-    Refused { code: ErrorCode, detail: String },
-}
-
-impl Denial {
-    fn into_publish_answer(self, correlation_id: u64) -> InternalMessage {
-        match self {
-            Self::Answer(message) => message,
-            Self::Refused { code, detail } => error(correlation_id, code, detail),
-        }
-    }
-
-    fn into_cache_answer(self, correlation_id: u64) -> InternalMessage {
-        match self {
-            Self::Answer(message) => message,
-            Self::Refused { code, detail } => {
-                InternalMessage::ForwardCacheError(ForwardCacheError {
-                    correlation_id,
-                    code,
-                    detail,
-                })
-            }
-        }
-    }
-}
-
-impl ForwardingHandler {
-    /// Serve a cache operation forwarded here because this broker owns the
-    /// key's shard.
-    ///
-    /// The same ownership gates as a forwarded publish, for the same reason: a
-    /// broker that served a cache key it no longer owns is the divergence this
-    /// whole path exists to prevent.
-    pub(crate) async fn apply_cache_op(&self, op: ForwardCacheOp) -> InternalMessage {
-        let correlation_id = op.correlation_id;
-        let key = ShardKey {
-            tenant_id: op.shard.tenant_id.clone(),
-            namespace: op.shard.namespace.clone(),
-            stream: op.shard.stream.clone(),
-            shard: op.shard.shard,
-            kind: ShardKind::Cache,
-        };
-
-        if let Some(denial) = self.check_ownership(correlation_id, &key, op.shard.generation) {
-            return denial.into_cache_answer(correlation_id);
-        }
-
-        let action = match op.op {
-            CacheOpKind::Get | CacheOpKind::CounterGet => Action::CacheRead,
-            CacheOpKind::Put | CacheOpKind::Delete | CacheOpKind::CounterAdd => Action::CacheWrite,
-        };
-        let resource = cache_resource(
-            &TenantId::new(&key.tenant_id),
-            &Namespace::new(&key.namespace),
-            &CacheScope::new(&key.stream),
-        );
-        if let Err(detail) = self
-            .authorize(&op.credential, &key.tenant_id, action, &resource)
-            .await
-        {
-            metrics::record_served(metrics::OUTCOME_UNAUTHORIZED);
-            return InternalMessage::ForwardCacheError(ForwardCacheError {
-                correlation_id,
-                code: ErrorCode::Unauthorized,
-                detail,
-            });
-        }
-
-        let cache = self.broker.cache();
-        let writes = matches!(op.op, CacheOpKind::Put | CacheOpKind::Delete);
-        let value = match op.op {
-            CacheOpKind::Put => {
-                let ttl = (op.ttl_ms > 0).then(|| std::time::Duration::from_millis(op.ttl_ms));
-                cache
-                    .put(
-                        &key.tenant_id,
-                        &key.namespace,
-                        &key.stream,
-                        key.shard,
-                        &op.key,
-                        op.value,
-                        ttl,
-                    )
-                    .await;
-                None
-            }
-            CacheOpKind::Get => {
-                cache
-                    .get(
-                        &key.tenant_id,
-                        &key.namespace,
-                        &key.stream,
-                        key.shard,
-                        &op.key,
-                    )
-                    .await
-            }
-            CacheOpKind::Delete => {
-                cache
-                    .delete(
-                        &key.tenant_id,
-                        &key.namespace,
-                        &key.stream,
-                        key.shard,
-                        &op.key,
-                    )
-                    .await
-            }
-            CacheOpKind::CounterAdd | CacheOpKind::CounterGet => {
-                return self.apply_counter_op(op, &key).await;
-            }
-        };
-
-        // The same wait the requester's own path makes for a local write: the
-        // client asked for the cache's guarantee, wherever the key happens to
-        // live.
-        if writes
-            && let Err(err) = crate::replication::quorum::await_cache_quorum(
-                &self.broker,
-                &key,
-                self.marks.as_deref(),
-                Some(self.ingress.as_ref()),
-                self.quorum_timeout,
-            )
-            .await
-        {
-            metrics::record_served(metrics::OUTCOME_ERROR);
-            return InternalMessage::ForwardCacheError(ForwardCacheError {
-                correlation_id,
-                code: ErrorCode::StorageFailed,
-                detail: err.to_string(),
-            });
-        }
-
-        metrics::record_served(metrics::OUTCOME_OK);
-        InternalMessage::ForwardCacheOk(ForwardCacheOk {
-            correlation_id,
-            value,
-        })
-    }
-
     /// The counter half of a forwarded cache op: the delta and the sum both
     /// ride the envelope's value bytes as eight big-endian bytes.
     async fn apply_counter_op(&self, op: ForwardCacheOp, key: &ShardKey) -> InternalMessage {
@@ -523,6 +485,42 @@ impl PeerRequestHandler for ForwardingHandler {
                 ErrorCode::Malformed,
                 format!("{:?} is not a request", other.kind()),
             ),
+        }
+    }
+}
+
+/// Why a forwarded request is not this broker's to serve.
+///
+/// Kept abstract rather than pre-built, because the two forwarded paths answer
+/// a refusal in different shapes: a requester matches on the message kind to
+/// decide what happened, so a cache operation refused with a publish's error
+/// type reads to it as a protocol violation rather than a refusal.
+enum Denial {
+    /// Already complete. `NotLeader` is a routing answer and is the same
+    /// message whichever path asked.
+    Answer(InternalMessage),
+    /// A refusal each path wraps in its own error kind.
+    Refused { code: ErrorCode, detail: String },
+}
+
+impl Denial {
+    fn into_publish_answer(self, correlation_id: u64) -> InternalMessage {
+        match self {
+            Self::Answer(message) => message,
+            Self::Refused { code, detail } => error(correlation_id, code, detail),
+        }
+    }
+
+    fn into_cache_answer(self, correlation_id: u64) -> InternalMessage {
+        match self {
+            Self::Answer(message) => message,
+            Self::Refused { code, detail } => {
+                InternalMessage::ForwardCacheError(ForwardCacheError {
+                    correlation_id,
+                    code,
+                    detail,
+                })
+            }
         }
     }
 }

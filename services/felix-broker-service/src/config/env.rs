@@ -327,6 +327,15 @@ impl BrokerConfig {
     }
 }
 
+pub(super) fn parse_sub_queue_policy(value: &str) -> Option<SubQueuePolicy> {
+    match value {
+        "block" => Some(SubQueuePolicy::Block),
+        "drop_new" => Some(SubQueuePolicy::DropNew),
+        "drop_old" => Some(SubQueuePolicy::DropOld),
+        _ => None,
+    }
+}
+
 /// How many client-facing QUIC listeners to bind.
 ///
 /// Defaults to 1, which is exactly today's behaviour: one socket, one endpoint
@@ -384,14 +393,5 @@ fn controlplane_token_from_env() -> std::io::Result<String> {
             .ok()
             .map(|value| value.trim().to_string())
             .unwrap_or_default()),
-    }
-}
-
-pub(super) fn parse_sub_queue_policy(value: &str) -> Option<SubQueuePolicy> {
-    match value {
-        "block" => Some(SubQueuePolicy::Block),
-        "drop_new" => Some(SubQueuePolicy::DropNew),
-        "drop_old" => Some(SubQueuePolicy::DropOld),
-        _ => None,
     }
 }

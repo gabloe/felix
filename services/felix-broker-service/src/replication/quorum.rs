@@ -96,13 +96,6 @@ impl QuorumMarks {
         (mark.generation == generation).then(|| *mark.offset.borrow())
     }
 
-    /// A receiver for `key` at `generation`, if this broker is tracking it.
-    fn watcher(&self, key: &ShardKey, generation: u64) -> Option<watch::Receiver<u64>> {
-        let shards = self.shards.lock();
-        let mark = shards.get(key)?;
-        (mark.generation == generation).then(|| mark.offset.subscribe())
-    }
-
     /// Wait until a majority holds every offset below `offset`.
     ///
     /// `offset` is one past the last record of the batch, so this returns when
@@ -143,6 +136,13 @@ impl QuorumMarks {
             Ok(false) => QuorumWait::NotLeading,
             Err(_) => QuorumWait::TimedOut,
         }
+    }
+
+    /// A receiver for `key` at `generation`, if this broker is tracking it.
+    fn watcher(&self, key: &ShardKey, generation: u64) -> Option<watch::Receiver<u64>> {
+        let shards = self.shards.lock();
+        let mark = shards.get(key)?;
+        (mark.generation == generation).then(|| mark.offset.subscribe())
     }
 }
 

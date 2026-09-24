@@ -135,6 +135,27 @@ impl PeerPool {
         result
     }
 
+    /// Live connections across all peers. Test and metrics surface.
+    pub async fn connection_count(&self) -> usize {
+        let peers: Vec<_> = self.peers.lock().values().cloned().collect();
+        let mut total = 0;
+        for peer in peers {
+            total += peer.state.lock().await.live_connections();
+        }
+        total
+    }
+
+    /// Close every connection and stop the reaper.
+    pub async fn shutdown(&self) {
+        self.shutdown.cancel();
+        let peers: Vec<_> = self.peers.lock().drain().map(|(_, peer)| peer).collect();
+        for peer in peers {
+            peer.state.lock().await.close_all("broker shutting down");
+        }
+        metrics::set_connections(0);
+        metrics::set_streams(0);
+    }
+
     async fn request_inner(
         &self,
         node_id: &str,
@@ -198,27 +219,6 @@ impl PeerPool {
                 self.config.max_inflight_per_peer,
             ))
         }))
-    }
-
-    /// Live connections across all peers. Test and metrics surface.
-    pub async fn connection_count(&self) -> usize {
-        let peers: Vec<_> = self.peers.lock().values().cloned().collect();
-        let mut total = 0;
-        for peer in peers {
-            total += peer.state.lock().await.live_connections();
-        }
-        total
-    }
-
-    /// Close every connection and stop the reaper.
-    pub async fn shutdown(&self) {
-        self.shutdown.cancel();
-        let peers: Vec<_> = self.peers.lock().drain().map(|(_, peer)| peer).collect();
-        for peer in peers {
-            peer.state.lock().await.close_all("broker shutting down");
-        }
-        metrics::set_connections(0);
-        metrics::set_streams(0);
     }
 
     /// Close connections that have gone unused, and republish the gauges.

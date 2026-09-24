@@ -17,6 +17,15 @@ use crate::replication::{
     FollowerCursor, Progress, Rebuilds, lag_records, metrics, quorum_offset, ship_once,
 };
 
+/// Passes a draining shard's tail must hold still before it reports drained.
+pub(super) const DRAIN_SETTLE_PASSES: u32 = 2;
+
+/// How much of the log one exchange may carry.
+///
+/// Bounds the leader's memory per follower. A follower far behind costs one
+/// batch, not the distance it is behind.
+pub(super) const MAX_BATCH_BYTES: usize = 1024 * 1024;
+
 /// Cursors for one shard, valid only at `generation`.
 pub struct ShardCursors {
     pub(super) generation: u64,
@@ -56,15 +65,6 @@ impl ShardCursors {
         passes >= DRAIN_SETTLE_PASSES
     }
 }
-
-/// Passes a draining shard's tail must hold still before it reports drained.
-pub(super) const DRAIN_SETTLE_PASSES: u32 = 2;
-
-/// How much of the log one exchange may carry.
-///
-/// Bounds the leader's memory per follower. A follower far behind costs one
-/// batch, not the distance it is behind.
-pub(super) const MAX_BATCH_BYTES: usize = 1024 * 1024;
 
 /// One shard's pass: what it shipped, and the cursors it owned while doing it.
 pub(super) struct ShardPass {

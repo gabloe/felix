@@ -4,13 +4,6 @@ use anyhow::{Context, Result};
 
 use super::wire::*;
 
-fn with_bearer(request: reqwest::RequestBuilder, bearer: Option<&str>) -> reqwest::RequestBuilder {
-    match bearer {
-        Some(bearer) => request.bearer_auth(bearer),
-        None => request,
-    }
-}
-
 /// Fetches the full stream snapshot from `/v1/streams/snapshot`.
 /// `base_url` is trimmed of trailing `/`. Non-2xx is treated as error.
 pub(super) async fn fetch_snapshot(
@@ -165,4 +158,11 @@ pub(super) async fn fetch_namespace_changes(
         .error_for_status()
         .context("namespace changes status")?;
     response.json().await.context("namespace changes body")
+}
+
+fn with_bearer(request: reqwest::RequestBuilder, bearer: Option<&str>) -> reqwest::RequestBuilder {
+    match bearer {
+        Some(bearer) => request.bearer_auth(bearer),
+        None => request,
+    }
 }

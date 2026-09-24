@@ -8,6 +8,8 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
+
 struct TimingCollector {
     decode_ns: Mutex<Vec<u64>>,
     fanout_ns: Mutex<Vec<u64>>,
@@ -29,8 +31,6 @@ struct TimingCollector {
     enabled: AtomicBool,
     counter: AtomicUsize,
 }
-
-static COLLECTOR: OnceLock<TimingCollector> = OnceLock::new();
 
 /// Broker samples, in order: decode, fanout, ack_write, quic_write,
 /// sub_queue_wait, sub_prefix, sub_write, sub_write_await, sub_delivery.

@@ -181,25 +181,6 @@ impl std::fmt::Debug for Identity {
     }
 }
 
-fn load_identity(paths: &PeerTlsConfig) -> Result<Loaded> {
-    let cert = load_pem_certs(&paths.cert_path)
-        .with_context(|| format!("read FELIX_INTERNAL_TLS_CERT {}", paths.cert_path))?;
-    let key = rustls::pki_types::PrivateKeyDer::from_pem_file(&paths.key_path)
-        .with_context(|| format!("read FELIX_INTERNAL_TLS_KEY {}", paths.key_path))?;
-    let key = CertifiedKey::from_der(cert.clone(), key, &provider())
-        .context("the internal TLS key does not match its certificate")?;
-    Ok(Loaded {
-        cert,
-        key: Arc::new(key),
-    })
-}
-
-fn load_pem_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
-    let certs = CertificateDer::pem_file_iter(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
-    anyhow::ensure!(!certs.is_empty(), "no certificates in {path}");
-    Ok(certs)
-}
-
 /// Build the internal listener's TLS config.
 pub(super) fn server_config(tls: Option<&PeerTls>) -> Result<ServerConfig> {
     let builder = rustls::ServerConfig::builder_with_provider(provider())
@@ -272,6 +253,25 @@ pub(super) fn client_config(tls: Option<&PeerTls>) -> Result<ClientConfig> {
     let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(config)
         .context("internal client crypto")?;
     Ok(ClientConfig::new(Arc::new(crypto)))
+}
+
+fn load_identity(paths: &PeerTlsConfig) -> Result<Loaded> {
+    let cert = load_pem_certs(&paths.cert_path)
+        .with_context(|| format!("read FELIX_INTERNAL_TLS_CERT {}", paths.cert_path))?;
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_file(&paths.key_path)
+        .with_context(|| format!("read FELIX_INTERNAL_TLS_KEY {}", paths.key_path))?;
+    let key = CertifiedKey::from_der(cert.clone(), key, &provider())
+        .context("the internal TLS key does not match its certificate")?;
+    Ok(Loaded {
+        cert,
+        key: Arc::new(key),
+    })
+}
+
+fn load_pem_certs(path: &str) -> Result<Vec<CertificateDer<'static>>> {
+    let certs = CertificateDer::pem_file_iter(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    anyhow::ensure!(!certs.is_empty(), "no certificates in {path}");
+    Ok(certs)
 }
 
 /// The crypto provider both internal endpoints use.

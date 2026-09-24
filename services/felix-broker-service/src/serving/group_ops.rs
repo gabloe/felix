@@ -18,67 +18,6 @@ use crate::serving::quic::handlers::publish::PublishContext;
 use crate::shards::routing::{Dispatch, dispatch};
 use crate::shards::{ShardKey, ShardKind};
 
-/// Check that this broker leads the shard, and name the owner if it does not.
-fn owned_here(
-    publish_ctx: &PublishContext,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    shard: u32,
-) -> Result<(), String> {
-    let key = ShardKey {
-        tenant_id: tenant_id.to_string(),
-        namespace: namespace.to_string(),
-        stream: stream.to_string(),
-        shard,
-        kind: ShardKind::Stream,
-    };
-    match dispatch(publish_ctx.ingress.as_deref(), &key) {
-        Dispatch::Local => Ok(()),
-        Dispatch::Forward { node_id, .. } => {
-            Err(format!("shard {shard} of {stream} is served by {node_id}"))
-        }
-        Dispatch::Unavailable(reason) => Err(reason.to_string()),
-    }
-}
-
-/// The pieces a group operation needs, or why it cannot run.
-fn reader_and_log<'a>(
-    broker: &'a Broker,
-    publish_ctx: &PublishContext,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    shard: u32,
-) -> Result<
-    (
-        &'a std::sync::Arc<felix_broker::GroupReader>,
-        felix_broker::StreamLog,
-    ),
-    String,
-> {
-    owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
-    let reader = broker
-        .group_reader()
-        .ok_or("this broker has no durable storage, so it serves no consumer groups")?;
-    let log = broker
-        .durable_storage()
-        .ok_or("this broker has no durable storage")?
-        .open_stream(tenant_id, namespace, stream, shard)
-        .map_err(|err| err.to_string())?;
-    Ok((reader, log))
-}
-
-fn group_key(tenant_id: &str, namespace: &str, stream: &str, shard: u32, group: &str) -> GroupKey {
-    GroupKey {
-        tenant_id: tenant_id.to_string(),
-        namespace: namespace.to_string(),
-        stream: stream.to_string(),
-        shard,
-        group: group.to_string(),
-    }
-}
-
 /// How often a waiting poll re-checks for work.
 ///
 /// The check is a read lock and a field read — no I/O, no allocation — so the
@@ -203,5 +142,66 @@ pub(crate) async fn settle(
         reader.ack(&key, offset).await.map_err(|e| e.to_string())
     } else {
         reader.nack(&key, offset).await.map_err(|e| e.to_string())
+    }
+}
+
+/// Check that this broker leads the shard, and name the owner if it does not.
+fn owned_here(
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+) -> Result<(), String> {
+    let key = ShardKey {
+        tenant_id: tenant_id.to_string(),
+        namespace: namespace.to_string(),
+        stream: stream.to_string(),
+        shard,
+        kind: ShardKind::Stream,
+    };
+    match dispatch(publish_ctx.ingress.as_deref(), &key) {
+        Dispatch::Local => Ok(()),
+        Dispatch::Forward { node_id, .. } => {
+            Err(format!("shard {shard} of {stream} is served by {node_id}"))
+        }
+        Dispatch::Unavailable(reason) => Err(reason.to_string()),
+    }
+}
+
+/// The pieces a group operation needs, or why it cannot run.
+fn reader_and_log<'a>(
+    broker: &'a Broker,
+    publish_ctx: &PublishContext,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    shard: u32,
+) -> Result<
+    (
+        &'a std::sync::Arc<felix_broker::GroupReader>,
+        felix_broker::StreamLog,
+    ),
+    String,
+> {
+    owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
+    let reader = broker
+        .group_reader()
+        .ok_or("this broker has no durable storage, so it serves no consumer groups")?;
+    let log = broker
+        .durable_storage()
+        .ok_or("this broker has no durable storage")?
+        .open_stream(tenant_id, namespace, stream, shard)
+        .map_err(|err| err.to_string())?;
+    Ok((reader, log))
+}
+
+fn group_key(tenant_id: &str, namespace: &str, stream: &str, shard: u32, group: &str) -> GroupKey {
+    GroupKey {
+        tenant_id: tenant_id.to_string(),
+        namespace: namespace.to_string(),
+        stream: stream.to_string(),
+        shard,
+        group: group.to_string(),
     }
 }

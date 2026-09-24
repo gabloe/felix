@@ -304,6 +304,27 @@ impl ShardLifecycle {
         }
     }
 
+    /// Shards this broker can serve, and the generation each was opened at.
+    ///
+    /// The form ingress reads on every publish. Handing out a snapshot rather
+    /// than exposing the lock keeps the hot path off any mutex this holds.
+    pub fn servable(&self) -> HashMap<ShardKey, u64> {
+        self.shards
+            .iter()
+            .filter(|(_, shard)| shard.phase.may_serve())
+            .map(|(key, shard)| (key.clone(), shard.generation))
+            .collect()
+    }
+
+    /// How many shards sit in each phase, for the gauge.
+    pub fn counts(&self) -> HashMap<Phase, usize> {
+        let mut counts = HashMap::new();
+        for shard in self.shards.values() {
+            *counts.entry(shard.phase).or_default() += 1;
+        }
+        counts
+    }
+
     fn begin_open(&mut self, key: &ShardKey, generation: u64, draining: bool) -> Action {
         self.set(key, Phase::Opening, generation, draining);
         Action::Open {
@@ -326,27 +347,6 @@ impl ShardLifecycle {
             mm::record_transition(previous.unwrap_or(Phase::Unassigned), phase);
             mm::record_phase_counts(self.counts());
         }
-    }
-
-    /// Shards this broker can serve, and the generation each was opened at.
-    ///
-    /// The form ingress reads on every publish. Handing out a snapshot rather
-    /// than exposing the lock keeps the hot path off any mutex this holds.
-    pub fn servable(&self) -> HashMap<ShardKey, u64> {
-        self.shards
-            .iter()
-            .filter(|(_, shard)| shard.phase.may_serve())
-            .map(|(key, shard)| (key.clone(), shard.generation))
-            .collect()
-    }
-
-    /// How many shards sit in each phase, for the gauge.
-    pub fn counts(&self) -> HashMap<Phase, usize> {
-        let mut counts = HashMap::new();
-        for shard in self.shards.values() {
-            *counts.entry(shard.phase).or_default() += 1;
-        }
-        counts
     }
 }
 

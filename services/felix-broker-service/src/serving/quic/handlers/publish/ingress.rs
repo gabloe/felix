@@ -77,37 +77,6 @@ pub(crate) fn publish_worker_index(
     (hasher.finish() as usize) % worker_count
 }
 
-/// Await `fut` unless the connection is cancelled first.
-///
-/// `None` means cancellation won. A dropped sender counts as cancelled: the owner
-/// of the control stream is gone, so there is nobody left to deliver for.
-async fn until_cancelled<F: Future>(
-    fut: F,
-    cancel: &mut Option<watch::Receiver<bool>>,
-) -> Option<F::Output> {
-    let Some(rx) = cancel else {
-        return Some(fut.await);
-    };
-    // Pinned so a watch wake-up that turns out not to be a cancellation can go
-    // back to waiting on the same future instead of restarting it.
-    tokio::pin!(fut);
-    loop {
-        if *rx.borrow() {
-            return None;
-        }
-        tokio::select! {
-            out = &mut fut => return Some(out),
-            changed = rx.changed() => {
-                // A dropped sender means the connection is gone; anything else
-                // loops round to re-read the flag.
-                if changed.is_err() {
-                    return None;
-                }
-            }
-        }
-    }
-}
-
 /// Enqueue a publish job into the appropriate worker queue with explicit overload semantics.
 ///
 /// Return value:
@@ -375,6 +344,37 @@ pub(crate) fn reset_local_depth_only(
                 break;
             }
             Err(updated) => prev = updated,
+        }
+    }
+}
+
+/// Await `fut` unless the connection is cancelled first.
+///
+/// `None` means cancellation won. A dropped sender counts as cancelled: the owner
+/// of the control stream is gone, so there is nobody left to deliver for.
+async fn until_cancelled<F: Future>(
+    fut: F,
+    cancel: &mut Option<watch::Receiver<bool>>,
+) -> Option<F::Output> {
+    let Some(rx) = cancel else {
+        return Some(fut.await);
+    };
+    // Pinned so a watch wake-up that turns out not to be a cancellation can go
+    // back to waiting on the same future instead of restarting it.
+    tokio::pin!(fut);
+    loop {
+        if *rx.borrow() {
+            return None;
+        }
+        tokio::select! {
+            out = &mut fut => return Some(out),
+            changed = rx.changed() => {
+                // A dropped sender means the connection is gone; anything else
+                // loops round to re-read the flag.
+                if changed.is_err() {
+                    return None;
+                }
+            }
         }
     }
 }

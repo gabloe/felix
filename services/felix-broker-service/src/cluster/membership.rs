@@ -311,36 +311,6 @@ pub async fn run_heartbeat(
     }
 }
 
-async fn send_heartbeat(
-    client: &reqwest::Client,
-    url: &str,
-    token: &str,
-    incarnation: u64,
-) -> std::result::Result<HeartbeatResponse, MembershipError> {
-    let response = client
-        .post(url)
-        .bearer_auth(token)
-        .json(&HeartbeatRequest { incarnation })
-        .send()
-        .await
-        .context("send heartbeat")
-        .map_err(MembershipError::Unavailable)?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(MembershipError::from_status(
-            status,
-            format!("heartbeat rejected ({status}): {body}"),
-        ));
-    }
-    response
-        .json()
-        .await
-        .context("decode heartbeat response")
-        .map_err(MembershipError::Unavailable)
-}
-
 /// Stop receiving new placement, without stopping service.
 pub async fn drain(
     client: &reqwest::Client,
@@ -359,58 +329,6 @@ pub async fn deregister(
     token: &str,
 ) -> Result<()> {
     post_lifecycle(client, base_url, node_id, token, "deregister").await
-}
-
-async fn post_lifecycle(
-    client: &reqwest::Client,
-    base_url: &str,
-    node_id: &str,
-    token: &str,
-    action: &str,
-) -> Result<()> {
-    let response = client
-        .post(format!(
-            "{}/v1/nodes/{node_id}/{action}",
-            base_url.trim_end_matches('/')
-        ))
-        .bearer_auth(token)
-        .send()
-        .await
-        .with_context(|| format!("{action} node {node_id}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(anyhow!("{action} rejected ({status}): {body}"));
-    }
-    Ok(())
-}
-
-/// Exponential backoff, capped.
-///
-/// `failures` is the count so far, so the first retry waits one interval rather
-/// than doubling immediately.
-fn backoff(interval: Duration, failures: u64) -> Duration {
-    let shift = failures.saturating_sub(1).min(16) as u32;
-    interval
-        .saturating_mul(2u32.saturating_pow(shift))
-        .min(MAX_RETRY_BACKOFF)
-}
-
-/// Spread a delay so a restarted fleet does not report in lockstep.
-fn jittered(delay: Duration) -> Duration {
-    let spread = delay.as_secs_f64() * JITTER_FRACTION;
-    if spread <= 0.0 {
-        return delay;
-    }
-    // Cheap and adequate: this only needs to decorrelate brokers, not resist
-    // prediction, so it avoids pulling in an RNG on the shutdown path.
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let fraction = f64::from(nanos) / f64::from(u32::MAX);
-    delay + Duration::from_secs_f64(spread * fraction)
 }
 
 /// Everything the broker needs to keep its membership current.
@@ -531,6 +449,88 @@ pub async fn shutdown_membership(
     } else {
         tracing::info!(node_id, "deregistered from the control plane");
     }
+}
+
+async fn send_heartbeat(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    incarnation: u64,
+) -> std::result::Result<HeartbeatResponse, MembershipError> {
+    let response = client
+        .post(url)
+        .bearer_auth(token)
+        .json(&HeartbeatRequest { incarnation })
+        .send()
+        .await
+        .context("send heartbeat")
+        .map_err(MembershipError::Unavailable)?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(MembershipError::from_status(
+            status,
+            format!("heartbeat rejected ({status}): {body}"),
+        ));
+    }
+    response
+        .json()
+        .await
+        .context("decode heartbeat response")
+        .map_err(MembershipError::Unavailable)
+}
+
+async fn post_lifecycle(
+    client: &reqwest::Client,
+    base_url: &str,
+    node_id: &str,
+    token: &str,
+    action: &str,
+) -> Result<()> {
+    let response = client
+        .post(format!(
+            "{}/v1/nodes/{node_id}/{action}",
+            base_url.trim_end_matches('/')
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .with_context(|| format!("{action} node {node_id}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("{action} rejected ({status}): {body}"));
+    }
+    Ok(())
+}
+
+/// Exponential backoff, capped.
+///
+/// `failures` is the count so far, so the first retry waits one interval rather
+/// than doubling immediately.
+fn backoff(interval: Duration, failures: u64) -> Duration {
+    let shift = failures.saturating_sub(1).min(16) as u32;
+    interval
+        .saturating_mul(2u32.saturating_pow(shift))
+        .min(MAX_RETRY_BACKOFF)
+}
+
+/// Spread a delay so a restarted fleet does not report in lockstep.
+fn jittered(delay: Duration) -> Duration {
+    let spread = delay.as_secs_f64() * JITTER_FRACTION;
+    if spread <= 0.0 {
+        return delay;
+    }
+    // Cheap and adequate: this only needs to decorrelate brokers, not resist
+    // prediction, so it avoids pulling in an RNG on the shutdown path.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let fraction = f64::from(nanos) / f64::from(u32::MAX);
+    delay + Duration::from_secs_f64(spread * fraction)
 }
 
 #[cfg(test)]

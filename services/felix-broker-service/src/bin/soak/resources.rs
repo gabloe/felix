@@ -67,19 +67,6 @@ fn read_rss_kb() -> u64 {
         .unwrap_or(0)
 }
 
-/// Count of open file descriptors.
-///
-/// `/dev/fd` is present on both Linux (symlinked to `/proc/self/fd`) and macOS,
-/// so one path covers both. The directory handle opened to read it is itself an
-/// fd, but it is opened and closed identically on every sample, so it cancels
-/// out of any comparison.
-fn count_open_fds() -> u64 {
-    let Ok(entries) = std::fs::read_dir("/dev/fd") else {
-        return 0;
-    };
-    entries.count() as u64
-}
-
 /// Extract gauge values from rendered Prometheus text.
 ///
 /// Only gauges are collected: counters grow monotonically by design and say
@@ -116,6 +103,19 @@ pub(crate) fn scrape_gauges(rendered: &str) -> HashMap<String, f64> {
         }
     }
     values
+}
+
+/// Count of open file descriptors.
+///
+/// `/dev/fd` is present on both Linux (symlinked to `/proc/self/fd`) and macOS,
+/// so one path covers both. The directory handle opened to read it is itself an
+/// fd, but it is opened and closed identically on every sample, so it cancels
+/// out of any comparison.
+fn count_open_fds() -> u64 {
+    let Ok(entries) = std::fs::read_dir("/dev/fd") else {
+        return 0;
+    };
+    entries.count() as u64
 }
 
 #[cfg(test)]

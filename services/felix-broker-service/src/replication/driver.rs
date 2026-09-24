@@ -25,6 +25,14 @@ use super::{RebuildPolicy, Rebuilds, metrics};
 use crate::peer::PeerRequester;
 use shard::{AuxCursors, ShardCursors, ShardPass, replicate_shard, watch_key};
 
+/// How many shards a pass ships at the same time.
+///
+/// Each one in flight holds a peer request and may hold an HTTP report, so a
+/// broker leading thousands of shards must not open thousands of those at
+/// once. High enough that one slow follower does not gate the rest, low enough
+/// to stay a bounded amount of concurrent work.
+const SHARD_CONCURRENCY: usize = 16;
+
 /// Run replication until cancelled.
 /// What a pass publishes for the rest of the broker to read.
 ///
@@ -259,14 +267,6 @@ pub struct Pass {
     /// an operator reads instead.
     pub halted: Vec<HaltedReplica>,
 }
-
-/// How many shards a pass ships at the same time.
-///
-/// Each one in flight holds a peer request and may hold an HTTP report, so a
-/// broker leading thousands of shards must not open thousands of those at
-/// once. High enough that one slow follower does not gate the rest, low enough
-/// to stay a bounded amount of concurrent work.
-const SHARD_CONCURRENCY: usize = 16;
 
 fn rebuilding_count(maps: &[&HashMap<ShardKey, ShardCursors>]) -> usize {
     maps.iter()

@@ -38,52 +38,6 @@ impl ReplicaHandler {
         Self { broker, router }
     }
 
-    /// May this broker store anything for `key` at `generation`?
-    ///
-    /// Shared by both entry points on purpose: storing records and placing the
-    /// log that holds them are the same authority question, and a fence applied
-    /// to one and not the other is a fence with a way round it.
-    fn check_role(
-        &self,
-        correlation_id: u64,
-        key: &felix_router::ShardKey,
-        generation: u64,
-    ) -> Option<InternalMessage> {
-        match self.router.replica_role(key, generation) {
-            ReplicaRole::Follower => None,
-            ReplicaRole::Fenced { have, named } => {
-                metrics::record_replicated(metrics::OUTCOME_FENCED);
-                Some(refused(
-                    correlation_id,
-                    ErrorCode::FencedEpoch,
-                    0,
-                    format!("this broker is at generation {have}, the sender at {named}"),
-                ))
-            }
-            ReplicaRole::Behind { have, named } => {
-                // Not a refusal of the leader, only of this moment: the watch
-                // has not caught up. Retryable, and the leader will find us
-                // ready once it has.
-                metrics::record_replicated(metrics::OUTCOME_BEHIND);
-                Some(refused(
-                    correlation_id,
-                    ErrorCode::StaleRoute,
-                    0,
-                    format!("this broker is at generation {have}, the sender at {named}"),
-                ))
-            }
-            ReplicaRole::NotAReplica => {
-                metrics::record_replicated(metrics::OUTCOME_REFUSED);
-                Some(refused(
-                    correlation_id,
-                    ErrorCode::Unauthorized,
-                    0,
-                    "this broker is not a replica of that shard".to_string(),
-                ))
-            }
-        }
-    }
-
     /// Begin this shard's log where the leader's surviving log begins.
     ///
     /// The leader has nothing older left, so the records below `base_offset`
@@ -449,6 +403,52 @@ impl ReplicaHandler {
                 // leader must not treat it as divergence and stop.
                 metrics::record_replicated(metrics::OUTCOME_ERROR);
                 refused(correlation_id, ErrorCode::StorageFailed, 0, err.to_string())
+            }
+        }
+    }
+
+    /// May this broker store anything for `key` at `generation`?
+    ///
+    /// Shared by both entry points on purpose: storing records and placing the
+    /// log that holds them are the same authority question, and a fence applied
+    /// to one and not the other is a fence with a way round it.
+    fn check_role(
+        &self,
+        correlation_id: u64,
+        key: &felix_router::ShardKey,
+        generation: u64,
+    ) -> Option<InternalMessage> {
+        match self.router.replica_role(key, generation) {
+            ReplicaRole::Follower => None,
+            ReplicaRole::Fenced { have, named } => {
+                metrics::record_replicated(metrics::OUTCOME_FENCED);
+                Some(refused(
+                    correlation_id,
+                    ErrorCode::FencedEpoch,
+                    0,
+                    format!("this broker is at generation {have}, the sender at {named}"),
+                ))
+            }
+            ReplicaRole::Behind { have, named } => {
+                // Not a refusal of the leader, only of this moment: the watch
+                // has not caught up. Retryable, and the leader will find us
+                // ready once it has.
+                metrics::record_replicated(metrics::OUTCOME_BEHIND);
+                Some(refused(
+                    correlation_id,
+                    ErrorCode::StaleRoute,
+                    0,
+                    format!("this broker is at generation {have}, the sender at {named}"),
+                ))
+            }
+            ReplicaRole::NotAReplica => {
+                metrics::record_replicated(metrics::OUTCOME_REFUSED);
+                Some(refused(
+                    correlation_id,
+                    ErrorCode::Unauthorized,
+                    0,
+                    "this broker is not a replica of that shard".to_string(),
+                ))
             }
         }
     }

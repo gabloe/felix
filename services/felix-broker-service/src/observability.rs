@@ -65,6 +65,35 @@ pub(crate) fn init_observability(service_name: &str) -> PrometheusHandle {
     install_metrics_recorder()
 }
 
+/// Serves Prometheus metrics and health endpoints on the given socket address.
+///
+/// Starts an asynchronous HTTP server exposing:
+/// - `/metrics`: Prometheus metrics endpoint.
+/// - `/live`: liveness probe returning "ok".
+/// - `/ready`: readiness probe, gated on `readiness`.
+/// - `/replication/halted`: replicas replication has stopped for.
+///
+/// Runs until `shutdown` resolves, then stops accepting new requests and lets
+/// in-flight ones finish. Returns an I/O error if binding or serving fails.
+pub(crate) async fn serve_metrics<F>(
+    handle: PrometheusHandle,
+    addr: SocketAddr,
+    readiness: Readiness,
+    halted: std::sync::Arc<crate::replication::halted::HaltedReplicas>,
+    shutdown: F,
+) -> std::io::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(
+        listener,
+        health_router(handle, readiness, halted).into_make_service(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
+}
+
 /// Builds an OpenTelemetry tracer provider with OTLP exporter for the given service.
 ///
 /// Attaches resource attributes describing the service and environment.
@@ -116,35 +145,6 @@ fn resource_attributes(service_name: &str) -> Vec<KeyValue> {
         attrs.push(KeyValue::new("deployment.environment", value));
     }
     attrs
-}
-
-/// Serves Prometheus metrics and health endpoints on the given socket address.
-///
-/// Starts an asynchronous HTTP server exposing:
-/// - `/metrics`: Prometheus metrics endpoint.
-/// - `/live`: liveness probe returning "ok".
-/// - `/ready`: readiness probe, gated on `readiness`.
-/// - `/replication/halted`: replicas replication has stopped for.
-///
-/// Runs until `shutdown` resolves, then stops accepting new requests and lets
-/// in-flight ones finish. Returns an I/O error if binding or serving fails.
-pub(crate) async fn serve_metrics<F>(
-    handle: PrometheusHandle,
-    addr: SocketAddr,
-    readiness: Readiness,
-    halted: std::sync::Arc<crate::replication::halted::HaltedReplicas>,
-    shutdown: F,
-) -> std::io::Result<()>
-where
-    F: Future<Output = ()> + Send + 'static,
-{
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(
-        listener,
-        health_router(handle, readiness, halted).into_make_service(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await
 }
 
 /// Build the metrics/health router.

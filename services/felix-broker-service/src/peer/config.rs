@@ -271,56 +271,6 @@ impl PeerTransportConfig {
         Ok(config)
     }
 
-    /// Refuse a configuration in which the two roles could be reached at the
-    /// same place.
-    ///
-    /// Sharing a port is not merely a conflicting bind: it would put client
-    /// traffic and peer traffic on one listener, which is the separation the
-    /// internal protocol exists to keep.
-    fn validate(&self, client_bind: SocketAddr, client_listeners: usize) -> std::io::Result<()> {
-        // The client-facing side may occupy a run of consecutive ports
-        // (`FELIX_QUIC_LISTENERS`), so the internal listener has to clear the
-        // whole range rather than just the first one. Landing inside it is the
-        // same fault as sharing the single port -- peer traffic and client
-        // traffic on one listener -- and it is easier to do by accident, since
-        // the colliding port is one nobody wrote down.
-        let first = client_bind.port();
-        let last = first.saturating_add(client_listeners.saturating_sub(1) as u16);
-        if (first..=last).contains(&self.bind.port()) {
-            let clash = if first == last {
-                format!("and FELIX_QUIC_BIND ({client_bind}) share a port")
-            } else {
-                format!("falls inside the FELIX_QUIC_BIND listener range {first}-{last}")
-            };
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                format!(
-                    "FELIX_INTERNAL_BIND ({}) {clash}; \
-                     the internal and client-facing listeners must be separate",
-                    self.bind
-                ),
-            ));
-        }
-        if self.max_inbound_per_source > self.max_inbound_connections {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                format!(
-                    "FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE ({}) exceeds \
-                     FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS ({}); the per-source \
-                     limit would never be the one that applies",
-                    self.max_inbound_per_source, self.max_inbound_connections
-                ),
-            ));
-        }
-        if self.reconnect_base > self.reconnect_max {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "FELIX_INTERNAL_RECONNECT_BASE_MS exceeds FELIX_INTERNAL_RECONNECT_MAX_MS",
-            ));
-        }
-        Ok(())
-    }
-
     /// Transport settings for both internal endpoints.
     ///
     /// How long a peer connection may hear nothing before it is declared dead.
@@ -375,6 +325,56 @@ impl PeerTransportConfig {
         // Full jitter: uniform over [0, exponential]. Decorrelates redials even
         // when every broker starts its backoff in the same millisecond.
         exponential.mul_f64(jitter)
+    }
+
+    /// Refuse a configuration in which the two roles could be reached at the
+    /// same place.
+    ///
+    /// Sharing a port is not merely a conflicting bind: it would put client
+    /// traffic and peer traffic on one listener, which is the separation the
+    /// internal protocol exists to keep.
+    fn validate(&self, client_bind: SocketAddr, client_listeners: usize) -> std::io::Result<()> {
+        // The client-facing side may occupy a run of consecutive ports
+        // (`FELIX_QUIC_LISTENERS`), so the internal listener has to clear the
+        // whole range rather than just the first one. Landing inside it is the
+        // same fault as sharing the single port -- peer traffic and client
+        // traffic on one listener -- and it is easier to do by accident, since
+        // the colliding port is one nobody wrote down.
+        let first = client_bind.port();
+        let last = first.saturating_add(client_listeners.saturating_sub(1) as u16);
+        if (first..=last).contains(&self.bind.port()) {
+            let clash = if first == last {
+                format!("and FELIX_QUIC_BIND ({client_bind}) share a port")
+            } else {
+                format!("falls inside the FELIX_QUIC_BIND listener range {first}-{last}")
+            };
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "FELIX_INTERNAL_BIND ({}) {clash}; \
+                     the internal and client-facing listeners must be separate",
+                    self.bind
+                ),
+            ));
+        }
+        if self.max_inbound_per_source > self.max_inbound_connections {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "FELIX_INTERNAL_MAX_INBOUND_PER_SOURCE ({}) exceeds \
+                     FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS ({}); the per-source \
+                     limit would never be the one that applies",
+                    self.max_inbound_per_source, self.max_inbound_connections
+                ),
+            ));
+        }
+        if self.reconnect_base > self.reconnect_max {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "FELIX_INTERNAL_RECONNECT_BASE_MS exceeds FELIX_INTERNAL_RECONNECT_MAX_MS",
+            ));
+        }
+        Ok(())
     }
 }
 

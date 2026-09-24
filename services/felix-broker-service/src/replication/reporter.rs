@@ -73,49 +73,6 @@ impl Reporter {
     }
 }
 
-async fn flush_loop(to: ReportTo, mut rx: mpsc::Receiver<Pending>, shutdown: CancellationToken) {
-    loop {
-        let first = tokio::select! {
-            _ = shutdown.cancelled() => break,
-            received = rx.recv() => match received {
-                Some(pending) => pending,
-                // Every handle dropped.
-                None => break,
-            },
-        };
-
-        // Everything already waiting joins this request. Nothing is waited
-        // *for*: what queues while the request is in flight goes in the next.
-        let mut batch = vec![first];
-        while batch.len() < MAX_BATCH {
-            match rx.try_recv() {
-                Ok(pending) => batch.push(pending),
-                Err(_) => break,
-            }
-        }
-
-        metrics::histogram!(super::metrics::REPORTS_PER_REQUEST).record(batch.len() as f64);
-        let reports: Vec<ShardReport> =
-            batch.iter().map(|pending| pending.report.clone()).collect();
-        let landed = send_reports(&to, &reports).await;
-
-        // One answer for the whole request, which is what the endpoint gives:
-        // it walks the list, skips a shard it will not accept, and answers for
-        // the request as a whole. A shard it skipped is not an error to the
-        // caller either way — the next pass sends a fresher report.
-        for pending in batch {
-            let _ = pending.landed.send(landed);
-        }
-    }
-
-    // Anything still queued will never be sent, and a caller blocked on an
-    // answer must not wait out its publish timeout for one that is not coming.
-    rx.close();
-    while let Ok(pending) = rx.try_recv() {
-        let _ = pending.landed.send(false);
-    }
-}
-
 /// Where a leader sends its replica reports.
 ///
 /// Optional: a broker with no control plane has nobody to tell, and the reports
@@ -164,6 +121,49 @@ pub(super) fn shard_report(
             .map(|follower| (follower.node_id.clone(), follower.next_offset))
             .collect(),
         drained,
+    }
+}
+
+async fn flush_loop(to: ReportTo, mut rx: mpsc::Receiver<Pending>, shutdown: CancellationToken) {
+    loop {
+        let first = tokio::select! {
+            _ = shutdown.cancelled() => break,
+            received = rx.recv() => match received {
+                Some(pending) => pending,
+                // Every handle dropped.
+                None => break,
+            },
+        };
+
+        // Everything already waiting joins this request. Nothing is waited
+        // *for*: what queues while the request is in flight goes in the next.
+        let mut batch = vec![first];
+        while batch.len() < MAX_BATCH {
+            match rx.try_recv() {
+                Ok(pending) => batch.push(pending),
+                Err(_) => break,
+            }
+        }
+
+        metrics::histogram!(super::metrics::REPORTS_PER_REQUEST).record(batch.len() as f64);
+        let reports: Vec<ShardReport> =
+            batch.iter().map(|pending| pending.report.clone()).collect();
+        let landed = send_reports(&to, &reports).await;
+
+        // One answer for the whole request, which is what the endpoint gives:
+        // it walks the list, skips a shard it will not accept, and answers for
+        // the request as a whole. A shard it skipped is not an error to the
+        // caller either way — the next pass sends a fresher report.
+        for pending in batch {
+            let _ = pending.landed.send(landed);
+        }
+    }
+
+    // Anything still queued will never be sent, and a caller blocked on an
+    // answer must not wait out its publish timeout for one that is not coming.
+    rx.close();
+    while let Ok(pending) = rx.try_recv() {
+        let _ = pending.landed.send(false);
     }
 }
 

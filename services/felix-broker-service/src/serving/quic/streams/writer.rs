@@ -43,18 +43,6 @@ use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 // "tenant mismatch", "stream full", decode errors) to survive intact.
 const MAX_ACK_MESSAGE_BYTES: usize = 512;
 
-// Truncate on a char boundary so the result stays valid UTF-8.
-fn truncate_ack_message(message: &str) -> &str {
-    if message.len() <= MAX_ACK_MESSAGE_BYTES {
-        return message;
-    }
-    let mut end = MAX_ACK_MESSAGE_BYTES;
-    while end > 0 && !message.is_char_boundary(end) {
-        end -= 1;
-    }
-    &message[..end]
-}
-
 // Drains outgoing responses, updates depth counters, and handles shutdown on error.
 pub(super) async fn run_writer_loop(
     mut send: SendStream,
@@ -234,4 +222,16 @@ pub(super) async fn run_writer_loop(
         }
     }
     let _ = send.finish();
+}
+
+// Truncate on a char boundary so the result stays valid UTF-8.
+fn truncate_ack_message(message: &str) -> &str {
+    if message.len() <= MAX_ACK_MESSAGE_BYTES {
+        return message;
+    }
+    let mut end = MAX_ACK_MESSAGE_BYTES;
+    while end > 0 && !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    &message[..end]
 }

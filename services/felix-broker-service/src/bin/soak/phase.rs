@@ -12,6 +12,11 @@ use crate::fixture::{AuthFixture, BrokerHarness};
 use crate::load::{LoadStats, spawn_publishers, spawn_subscribers};
 use crate::resources::ResourceSample;
 
+/// How long a resource reading must hold steady before it counts as settled.
+pub(crate) const SETTLE_POLL: Duration = Duration::from_millis(500);
+
+pub(crate) const SETTLE_CONSECUTIVE: usize = 4;
+
 /// Run one phase with resource sampling alongside the workload.
 pub(crate) async fn run_phase<F, Fut>(
     name: &'static str,
@@ -147,11 +152,6 @@ impl PhaseReport {
         self.samples.last()
     }
 }
-
-/// How long a resource reading must hold steady before it counts as settled.
-pub(crate) const SETTLE_POLL: Duration = Duration::from_millis(500);
-
-pub(crate) const SETTLE_CONSECUTIVE: usize = 4;
 
 /// Result of waiting for process resources to come to rest.
 pub(crate) struct SettleOutcome {

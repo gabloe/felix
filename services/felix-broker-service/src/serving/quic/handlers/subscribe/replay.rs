@@ -6,6 +6,12 @@ use std::sync::Arc;
 use anyhow::Result;
 use felix_broker::Broker;
 
+/// Bound on catch-up passes, so a stream being published to faster than it can
+/// be written cannot keep a subscribe from completing. Reaching it hands over to
+/// live delivery, which is correct: offsets are on the wire, so a client can see
+/// any residual gap rather than being misled about it.
+const MAX_CATCH_UP_PASSES: usize = 8;
+
 /// Where replayed events are written.
 ///
 /// A trait rather than the QUIC stream itself, so the rules below — paging
@@ -153,12 +159,6 @@ pub(super) async fn write_replay<S: EventSink>(
     }
     Ok(())
 }
-
-/// Bound on catch-up passes, so a stream being published to faster than it can
-/// be written cannot keep a subscribe from completing. Reaching it hands over to
-/// live delivery, which is correct: offsets are on the wire, so a client can see
-/// any residual gap rather than being misled about it.
-const MAX_CATCH_UP_PASSES: usize = 8;
 
 /// Write `[from, until)` from disk, returning the offset reached.
 #[allow(clippy::too_many_arguments)]

@@ -204,6 +204,18 @@ impl TenantKeyStore for ControlPlaneKeyStore {
     }
 }
 
+/// Fetch JWKS for a tenant only if the cache is missing or expired.
+///
+/// # Errors
+/// Network or decode failures from the fetch.
+pub async fn ensure_jwks_cached(key_store: &ControlPlaneKeyStore, tenant_id: &str) -> Result<()> {
+    let tenant = TenantId::new(tenant_id);
+    if key_store.cached_jwks(&tenant).is_none() {
+        key_store.refresh(&tenant).await?;
+    }
+    Ok(())
+}
+
 fn jwks_to_keys(jwks: &Jwks) -> AuthzResult<Vec<TenantVerificationKey>> {
     let mut keys = Vec::new();
     for key in &jwks.keys {
@@ -227,18 +239,6 @@ fn jwks_to_keys(jwks: &Jwks) -> AuthzResult<Vec<TenantVerificationKey>> {
         });
     }
     Ok(keys)
-}
-
-/// Fetch JWKS for a tenant only if the cache is missing or expired.
-///
-/// # Errors
-/// Network or decode failures from the fetch.
-pub async fn ensure_jwks_cached(key_store: &ControlPlaneKeyStore, tenant_id: &str) -> Result<()> {
-    let tenant = TenantId::new(tenant_id);
-    if key_store.cached_jwks(&tenant).is_none() {
-        key_store.refresh(&tenant).await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

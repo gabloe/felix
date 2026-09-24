@@ -53,65 +53,6 @@ use config::EventWriterConfig;
 use feeder::run_lane_feeder;
 use replay::write_replay;
 
-/// Turn a broker error into the most specific protocol message available.
-///
-/// A cursor rejection is machine-readable so the client can choose a remedy;
-/// everything else stays a generic `Error`.
-fn subscribe_error_message(err: felix_broker::BrokerError) -> Message {
-    match err {
-        felix_broker::BrokerError::CursorTooOld { oldest, requested } => {
-            Message::SubscribeCursorError {
-                reason: felix_wire::CursorErrorReason::TooOld,
-                requested,
-                available: oldest,
-            }
-        }
-        felix_broker::BrokerError::CursorInFuture { requested, tail } => {
-            Message::SubscribeCursorError {
-                reason: felix_wire::CursorErrorReason::InFuture,
-                requested,
-                available: tail,
-            }
-        }
-        other => Message::Error {
-            message: other.to_string(),
-        },
-    }
-}
-
-/// Report a failed subscribe on the control stream and keep the stream alive.
-///
-/// Extracted because the tail-only and resume paths fail identically, and
-/// duplicating the ack-queue plumbing between them is how the two drift apart.
-#[allow(clippy::too_many_arguments)]
-async fn subscribe_failed(
-    message: Message,
-    subscriptions: &Arc<SubscriptionLimiter>,
-    out_ack_tx: &mpsc::Sender<Outgoing>,
-    out_ack_depth: &Arc<std::sync::atomic::AtomicUsize>,
-    ack_throttle_tx: &tokio::sync::watch::Sender<bool>,
-    ack_timeout_state: &Arc<tokio::sync::Mutex<super::publish::AckTimeoutState>>,
-    cancel_tx: &tokio::sync::watch::Sender<bool>,
-) -> Result<bool> {
-    subscriptions.release();
-    t_counter!("felix_subscribe_requests_total", "result" => "error").increment(1);
-    super::publish::handle_ack_enqueue_result(
-        send_outgoing_critical(
-            out_ack_tx,
-            out_ack_depth,
-            "felix_broker_out_ack_depth",
-            ack_throttle_tx,
-            Outgoing::Message(message),
-        )
-        .await,
-        ack_timeout_state,
-        ack_throttle_tx,
-        cancel_tx,
-    )
-    .await?;
-    Ok(true)
-}
-
 /// Handle a subscribe request received on the bi-directional control stream.
 ///
 /// This function is invoked from the control stream read loop when a `Message::Subscribe`
@@ -474,6 +415,65 @@ pub(crate) async fn handle_subscribe_message(
             tokio::spawn(feeder);
         }
     }
+    Ok(true)
+}
+
+/// Turn a broker error into the most specific protocol message available.
+///
+/// A cursor rejection is machine-readable so the client can choose a remedy;
+/// everything else stays a generic `Error`.
+fn subscribe_error_message(err: felix_broker::BrokerError) -> Message {
+    match err {
+        felix_broker::BrokerError::CursorTooOld { oldest, requested } => {
+            Message::SubscribeCursorError {
+                reason: felix_wire::CursorErrorReason::TooOld,
+                requested,
+                available: oldest,
+            }
+        }
+        felix_broker::BrokerError::CursorInFuture { requested, tail } => {
+            Message::SubscribeCursorError {
+                reason: felix_wire::CursorErrorReason::InFuture,
+                requested,
+                available: tail,
+            }
+        }
+        other => Message::Error {
+            message: other.to_string(),
+        },
+    }
+}
+
+/// Report a failed subscribe on the control stream and keep the stream alive.
+///
+/// Extracted because the tail-only and resume paths fail identically, and
+/// duplicating the ack-queue plumbing between them is how the two drift apart.
+#[allow(clippy::too_many_arguments)]
+async fn subscribe_failed(
+    message: Message,
+    subscriptions: &Arc<SubscriptionLimiter>,
+    out_ack_tx: &mpsc::Sender<Outgoing>,
+    out_ack_depth: &Arc<std::sync::atomic::AtomicUsize>,
+    ack_throttle_tx: &tokio::sync::watch::Sender<bool>,
+    ack_timeout_state: &Arc<tokio::sync::Mutex<super::publish::AckTimeoutState>>,
+    cancel_tx: &tokio::sync::watch::Sender<bool>,
+) -> Result<bool> {
+    subscriptions.release();
+    t_counter!("felix_subscribe_requests_total", "result" => "error").increment(1);
+    super::publish::handle_ack_enqueue_result(
+        send_outgoing_critical(
+            out_ack_tx,
+            out_ack_depth,
+            "felix_broker_out_ack_depth",
+            ack_throttle_tx,
+            Outgoing::Message(message),
+        )
+        .await,
+        ack_timeout_state,
+        ack_throttle_tx,
+        cancel_tx,
+    )
+    .await?;
     Ok(true)
 }
 
