@@ -2,6 +2,9 @@
 use crate::model::ShardAssignment;
 
 /// What placement decided for one shard.
+// One per shard per pass, so the size of the move variant costs nothing worth
+// a box at every match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// The existing assignment is still valid. Nothing to write.

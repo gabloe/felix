@@ -92,6 +92,7 @@ fn a_replica_report_is_restamped() {
         offsets: [("broker-b".to_string(), 10)].into_iter().collect(),
         reported_at_millis: 111,
         drained: false,
+        leader_offset: None,
     };
     let encoded = encode_command(&MetaCommand::RecordReplicaReport {
         report: report.clone(),

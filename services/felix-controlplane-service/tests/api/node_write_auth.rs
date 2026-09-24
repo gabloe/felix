@@ -405,6 +405,8 @@ async fn seed_shard(store: &InMemoryStore, leader: &str, generation: u64) {
                 generation: 0,
                 state: ShardState::Assigning,
                 successor: None,
+                joining: None,
+                move_started_at_millis: None,
             })
             .await
             .expect("assign");

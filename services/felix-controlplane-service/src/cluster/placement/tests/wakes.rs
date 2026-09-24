@@ -20,6 +20,8 @@ async fn a_requested_pass_runs_without_waiting_for_the_interval() {
             generation: 0,
             state: ShardState::Draining,
             successor: Some("broker-y".to_string()),
+            joining: None,
+            move_started_at_millis: None,
         })
         .await
         .expect("fenced move");
@@ -55,6 +57,7 @@ async fn a_requested_pass_runs_without_waiting_for_the_interval() {
             offsets: Default::default(),
             reported_at_millis: store.now_millis().await.expect("clock"),
             drained: true,
+            leader_offset: None,
         })
         .await
         .expect("report");

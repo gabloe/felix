@@ -29,6 +29,9 @@ async fn a_pass_reports_who_could_take_the_shard_over() {
     assert_eq!(report.key, key());
     assert_eq!(report.generation, 4);
     assert_eq!(report.caught_up, vec!["broker-b".to_string()]);
+    // What the offsets are measured against: placement fences a move on how
+    // far behind the destination is.
+    assert_eq!(report.tail, 3);
 }
 
 /// **A follower that did not keep up is not reported as able to lead.**
@@ -234,6 +237,7 @@ fn a_report_body_is_the_shape_the_control_plane_parses() {
                 durable_offset: 41,
             }],
             drained: false,
+            leader_offset: Some(44),
         }],
     };
 
@@ -251,6 +255,7 @@ fn a_report_body_is_the_shape_the_control_plane_parses() {
     assert_eq!(shard["caught_up"][0], "broker-b");
     assert_eq!(shard["replica_offsets"][0]["node_id"], "broker-b");
     assert_eq!(shard["replica_offsets"][0]["durable_offset"], 41);
+    assert_eq!(shard["leader_offset"], 44);
 
     assert_eq!(
         serde_json::from_value::<ReplicaStatusRequest>(json).expect("parse"),

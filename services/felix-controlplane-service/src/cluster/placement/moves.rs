@@ -133,6 +133,8 @@ pub(super) fn move_step<'a>(
                 generation: 0,
                 state: ShardState::Assigning,
                 successor: None,
+                joining: None,
+                move_started_at_millis: None,
             },
         );
     }
@@ -154,6 +156,8 @@ pub(super) fn move_step<'a>(
                     generation: 0,
                     state: existing.state,
                     successor: None,
+                    joining: None,
+                    move_started_at_millis: None,
                 },
             );
         }
@@ -167,6 +171,8 @@ pub(super) fn move_step<'a>(
                     generation: 0,
                     state: ShardState::Draining,
                     successor: Some(successor.to_string()),
+                    joining: None,
+                    move_started_at_millis: None,
                 },
             );
         }
@@ -214,6 +220,8 @@ pub(super) fn move_step<'a>(
                         generation: 0,
                         state: ShardState::Draining,
                         successor: Some(destination.to_string()),
+                        joining: None,
+                        move_started_at_millis: None,
                     },
                 );
             }
@@ -233,6 +241,8 @@ pub(super) fn move_step<'a>(
                     generation: 0,
                     state: existing.state,
                     successor: Some(destination.to_string()),
+                    joining: None,
+                    move_started_at_millis: None,
                 },
             )
         }
@@ -305,6 +315,8 @@ fn reseat<'a>(
             generation: 0,
             state: existing.state,
             successor: None,
+            joining: None,
+            move_started_at_millis: None,
         },
     )
 }

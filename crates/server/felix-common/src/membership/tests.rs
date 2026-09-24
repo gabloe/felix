@@ -38,6 +38,7 @@ fn a_report_that_is_not_drained_omits_the_field() {
         caught_up: Vec::new(),
         replica_offsets: Vec::new(),
         drained: false,
+        leader_offset: None,
     };
     let json = serde_json::to_string(&status).expect("write");
     assert!(!json.contains("drained"), "{json}");
@@ -70,6 +71,7 @@ fn a_report_round_trips() {
                 durable_offset: 42,
             }],
             drained: true,
+            leader_offset: None,
         }],
     };
     let json = serde_json::to_string(&report).expect("write");

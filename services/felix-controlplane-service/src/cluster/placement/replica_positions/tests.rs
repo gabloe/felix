@@ -45,6 +45,7 @@ fn report(stream: &str, caught_up: &[&str], reported_at_millis: u64) -> ReplicaR
         caught_up,
         reported_at_millis,
         drained: false,
+        leader_offset: None,
     }
 }
 
@@ -210,6 +211,7 @@ async fn load_reads_the_store_on_the_stores_clock() {
             offsets: [("broker-b".to_string(), 7)].into_iter().collect(),
             reported_at_millis: now,
             drained: false,
+            leader_offset: None,
         })
         .await
         .expect("record");

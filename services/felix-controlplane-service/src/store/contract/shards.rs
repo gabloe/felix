@@ -45,6 +45,8 @@ pub(crate) fn assignment(shard: u32, leader: &str) -> ShardAssignment {
         generation: 999,
         state: ShardState::Assigning,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     }
 }
 
@@ -132,7 +134,9 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     replica_reports::a_report_at_the_same_generation_is_an_update(store).await;
     replica_reports::a_report_needs_an_assignment_and_goes_with_it(store).await;
     a_move_in_progress_is_persisted(store).await;
+    a_replacement_in_progress_is_persisted(store).await;
     replica_reports::a_drained_report_is_kept(store).await;
+    replica_reports::the_leader_offset_is_kept(store).await;
     a_conditional_write_lands_only_at_the_expected_generation(store).await;
     a_fence_planned_before_a_cut_over_is_refused_after_it(store).await;
 }
@@ -155,6 +159,8 @@ fn cache_assignment(shard: u32, leader: &str) -> ShardAssignment {
         generation: 999,
         state: ShardState::Assigning,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     }
 }
 
@@ -467,6 +473,38 @@ async fn a_move_in_progress_is_persisted(store: &dyn ControlPlaneStore) {
     assert_eq!(written.leader, "broker-y");
     assert_eq!(written.successor, None);
     assert_eq!(written.generation, 3);
+}
+
+/// A follower being copied in, and when the move started, survive a round
+/// trip; a joining follower must be one of the replicas.
+async fn a_replacement_in_progress_is_persisted(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    let mut replacing = assignment(0, "broker-x");
+    replacing.replicas = vec!["broker-y".to_string()];
+    replacing.joining = Some("broker-y".to_string());
+    replacing.move_started_at_millis = Some(42_000);
+    store
+        .put_shard_assignment(replacing)
+        .await
+        .expect("replace");
+    let read = store.get_shard_assignment(&key(0)).await.expect("get");
+    assert_eq!(read.joining.as_deref(), Some("broker-y"));
+    assert_eq!(read.move_started_at_millis, Some(42_000));
+
+    let mut not_a_replica = read.clone();
+    not_a_replica.replicas = Vec::new();
+    let err = store
+        .put_shard_assignment(not_a_replica)
+        .await
+        .expect_err("a joining follower outside the replica set");
+    assert!(matches!(err, StoreError::Conflict(_)), "got {err:?}");
+
+    let mut seated = read;
+    seated.joining = None;
+    seated.move_started_at_millis = None;
+    let written = store.put_shard_assignment(seated).await.expect("seat");
+    assert_eq!(written.joining, None);
+    assert_eq!(written.move_started_at_millis, None);
 }
 
 /// A conditional write lands only over the generation it names, or where
@@ -858,6 +896,8 @@ async fn deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(
         generation: 0,
         state: ShardState::Assigning,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     };
     for shard in 0..2 {
         store

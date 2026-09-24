@@ -193,6 +193,8 @@ impl Cluster {
                 generation: 0,
                 state,
                 successor: None,
+                joining: None,
+                move_started_at_millis: None,
             })
             .await
             .expect("assign");

@@ -66,6 +66,7 @@ fn report(stream: &str) -> ShardReport {
         caught_up: vec!["broker-b".to_string()],
         offsets: vec![("broker-b".to_string(), 10)],
         drained: false,
+        tail: 0,
     }
 }
 

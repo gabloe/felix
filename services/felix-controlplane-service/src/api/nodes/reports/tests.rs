@@ -19,6 +19,8 @@ fn assignment(state: ShardState, successor: Option<&str>) -> ShardAssignment {
         generation: 4,
         state,
         successor: successor.map(str::to_string),
+        joining: None,
+        move_started_at_millis: None,
     }
 }
 
@@ -57,6 +59,8 @@ async fn a_drained_report_cuts_over_without_waiting_for_the_interval() {
             generation: 0,
             state: ShardState::Draining,
             successor: Some("broker-y".to_string()),
+            joining: None,
+            move_started_at_millis: None,
         })
         .await
         .expect("fenced move");

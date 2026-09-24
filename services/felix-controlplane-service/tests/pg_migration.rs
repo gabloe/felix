@@ -197,6 +197,8 @@ async fn seed(store: &(dyn ControlPlaneAuthStore + Send + Sync)) {
             generation: 0,
             state: ShardState::Assigning,
             successor: None,
+            joining: None,
+            move_started_at_millis: None,
         })
         .await
         .expect("assignment");

@@ -95,6 +95,8 @@ fn pinned(stream: &str, shard: u32, leader: &str) -> ShardAssignment {
         generation: 3,
         state: ShardState::Active,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     }
 }
 
@@ -112,5 +114,7 @@ fn assigned(stream: &str, leader: &str, replicas: &[&str]) -> ShardAssignment {
         generation: 3,
         state: ShardState::Active,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     }
 }

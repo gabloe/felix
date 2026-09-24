@@ -94,6 +94,22 @@ pub(super) async fn a_drained_report_is_kept(store: &dyn ControlPlaneStore) {
     assert_eq!(report_for(store, shard).await, Some(unstamped(drained)));
 }
 
+/// The leader's own tail rides the report too.
+pub(super) async fn the_leader_offset_is_kept(store: &dyn ControlPlaneStore) {
+    let shard = 3;
+    store
+        .put_shard_assignment(assignment(shard, "broker-x"))
+        .await
+        .expect("assign");
+    let mut with_tail = report(shard, 1, &["broker-y"], 7_000);
+    with_tail.leader_offset = Some(12);
+    store
+        .record_replica_report(with_tail.clone())
+        .await
+        .expect("record");
+    assert_eq!(report_for(store, shard).await, Some(unstamped(with_tail)));
+}
+
 fn report(shard: u32, generation: u64, caught_up: &[&str], at: u64) -> ReplicaReport {
     ReplicaReport {
         key: key(shard),
@@ -102,6 +118,7 @@ fn report(shard: u32, generation: u64, caught_up: &[&str], at: u64) -> ReplicaRe
         offsets: caught_up.iter().map(|n| (n.to_string(), 10)).collect(),
         reported_at_millis: at,
         drained: false,
+        leader_offset: None,
     }
 }
 

@@ -180,6 +180,7 @@ pub(crate) async fn report_replica_status(
                     .map(|replica| (replica.node_id, replica.durable_offset))
                     .collect(),
                 reported_at_millis: now,
+                leader_offset: shard.leader_offset,
             })
             .await
         {
