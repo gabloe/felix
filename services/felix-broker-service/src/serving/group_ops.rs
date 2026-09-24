@@ -36,6 +36,9 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) async fn poll(
     broker: &Broker,
     publish_ctx: &PublishContext,
+    // The operation's place in the shard's write fence, taken when it was
+    // admitted.
+    mut admitted: Option<FenceGuard>,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
@@ -48,11 +51,20 @@ pub(crate) async fn poll(
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
     let deadline = Instant::now() + wait;
+    let mut first = true;
 
     loop {
         // A poll writes: it records what it hands out, and dead-letters what
         // has run out of attempts.
-        let fenced = owned.enter(publish_ctx)?;
+        let fenced = match owned.enter(publish_ctx, &mut admitted) {
+            Ok(fenced) => fenced,
+            // The shard stopped serving here while this poll waited. Nothing
+            // was claimed, and the consumer's next poll is held until the
+            // move cuts over and then sent to the new owner.
+            Err(_) if !first => return Ok(Vec::new()),
+            Err(refused) => return Err(refused),
+        };
+        first = false;
         let claimed = reader
             .poll(&key, &log, max_records, Instant::now())
             .await
@@ -78,7 +90,9 @@ pub(crate) async fn poll(
         // Ownership is re-checked every round, because the shard can move while
         // a poll is waiting. Serving one after that would hand out records the
         // new owner is handing out too.
-        owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
+        if owned_here(publish_ctx, tenant_id, namespace, stream, shard).is_err() {
+            return Ok(Vec::new());
+        }
         tokio::time::sleep(WAIT_POLL_INTERVAL.min(deadline - now)).await;
     }
 }
@@ -104,6 +118,9 @@ pub(crate) async fn dead_letters(
 pub(crate) async fn manage_dead_letter(
     broker: &Broker,
     publish_ctx: &PublishContext,
+    // The operation's place in the shard's write fence, taken when it was
+    // admitted.
+    mut admitted: Option<FenceGuard>,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
@@ -115,7 +132,7 @@ pub(crate) async fn manage_dead_letter(
     let (reader, _log, owned) =
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
-    let _fenced = owned.enter(publish_ctx)?;
+    let _fenced = owned.enter(publish_ctx, &mut admitted)?;
     let taken = if redrive {
         reader.redrive(&key, offset).await
     } else {
@@ -138,6 +155,9 @@ pub(crate) async fn manage_dead_letter(
 pub(crate) async fn settle(
     broker: &Broker,
     publish_ctx: &PublishContext,
+    // The operation's place in the shard's write fence, taken when it was
+    // admitted.
+    mut admitted: Option<FenceGuard>,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
@@ -149,7 +169,7 @@ pub(crate) async fn settle(
     let (reader, _log, owned) =
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
-    let _fenced = owned.enter(publish_ctx)?;
+    let _fenced = owned.enter(publish_ctx, &mut admitted)?;
     if finish {
         reader.ack(&key, offset).await.map_err(storage)
     } else {
@@ -164,11 +184,16 @@ struct Owned {
 }
 
 impl Owned {
-    /// Enter the shard's write fence, right before a group write. Group state
-    /// moves with the shard, so a write landing after the shard stopped
-    /// serving here would be left behind.
-    fn enter(&self, publish_ctx: &PublishContext) -> Result<Option<FenceGuard>, ClientError> {
-        fence::enter(
+    /// Enter the shard's write fence, right before a group write, or keep the
+    /// place `admitted` took. Group state moves with the shard, so a write
+    /// landing after the shard stopped serving here would be left behind.
+    fn enter(
+        &self,
+        publish_ctx: &PublishContext,
+        admitted: &mut Option<FenceGuard>,
+    ) -> Result<Option<FenceGuard>, ClientError> {
+        fence::enter_or_keep(
+            admitted,
             publish_ctx.ingress.as_deref(),
             Some(&self.key),
             self.generation,

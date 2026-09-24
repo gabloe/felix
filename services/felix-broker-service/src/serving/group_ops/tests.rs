@@ -47,6 +47,7 @@ async fn claimed_one() -> (Leader, PublishContext) {
     let claimed = poll(
         &leader.broker,
         &publish_ctx,
+        None,
         TENANT,
         NAMESPACE,
         DURABLE,
@@ -81,6 +82,7 @@ async fn an_ack_after_the_fence_is_refused() {
             settle(
                 &leader.broker,
                 &publish_ctx,
+                None,
                 TENANT,
                 NAMESPACE,
                 DURABLE,
@@ -106,6 +108,7 @@ async fn a_poll_after_the_fence_is_refused() {
         poll(
             &leader.broker,
             &publish_ctx,
+            None,
             TENANT,
             NAMESPACE,
             DURABLE,
@@ -137,6 +140,7 @@ async fn a_dead_letter_change_after_the_fence_is_refused() {
         let refused = manage_dead_letter(
             &leader.broker,
             &publish_ctx,
+            None,
             TENANT,
             NAMESPACE,
             DURABLE,
@@ -156,4 +160,55 @@ async fn a_dead_letter_change_after_the_fence_is_refused() {
         vec![0],
         "the dead letter was touched"
     );
+}
+
+/// A poll waiting for work when the shard stops serving here answers empty
+/// rather than with an error: it claimed nothing, and the consumer's next poll
+/// is held until the move cuts over.
+#[tokio::test]
+async fn a_waiting_poll_that_loses_its_shard_answers_empty() {
+    let (mut leader, publish_ctx) = claimed_one().await;
+    // Take the other record, so the next poll has to wait.
+    let second = poll(
+        &leader.broker,
+        &publish_ctx,
+        None,
+        TENANT,
+        NAMESPACE,
+        DURABLE,
+        0,
+        GROUP,
+        1,
+        Duration::ZERO,
+    )
+    .await
+    .expect("poll");
+    assert_eq!(second.len(), 1);
+
+    let waiting = tokio::spawn({
+        let broker = Arc::clone(&leader.broker);
+        let publish_ctx = publish_ctx.clone();
+        async move {
+            poll(
+                &broker,
+                &publish_ctx,
+                None,
+                TENANT,
+                NAMESPACE,
+                DURABLE,
+                0,
+                GROUP,
+                1,
+                Duration::from_secs(5),
+            )
+            .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    leader.fence_move(&leader::stream_key(DURABLE));
+    let answered = tokio::time::timeout(Duration::from_secs(2), waiting)
+        .await
+        .expect("the poll kept waiting on a shard it lost")
+        .expect("poll task");
+    assert_eq!(answered.expect("an empty answer, not an error"), Vec::new());
 }
