@@ -10,7 +10,16 @@ use felix_storage::log::{FsyncMode, LogConfig};
 use felix_wire::internal::{ReplicateError, ReplicateOk};
 use tempfile::TempDir;
 
+use super::rebuild::*;
+use super::ship::*;
 use super::*;
+use crate::peer::{PeerError, PeerRequester};
+use bytes::Bytes;
+use felix_broker::StreamLog;
+use felix_wire::internal::{
+    ErrorCode, InternalMessage, ReplicaLog, ReplicateRecords, ShardRef, batch_checksum,
+};
+use std::net::SocketAddr;
 
 const TENANT: &str = "t1";
 const NAMESPACE: &str = "ns";
