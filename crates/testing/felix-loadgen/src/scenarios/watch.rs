@@ -69,6 +69,9 @@ pub(crate) async fn watch(common: &Common, cache: &str) -> Result<()> {
                     Ok(Some(felix_client::CacheWatchItem::Lagged { resume_from })) => {
                         bail!("watcher {index} lagged at offset {resume_from}: raise the pace or lower fanout");
                     }
+                    Ok(Some(felix_client::CacheWatchItem::ShardMoved(moved))) => {
+                        bail!("watcher {index} ended because its shard moved: {moved:?}");
+                    }
                     Ok(None) | Err(_) => break,
                 }
             }

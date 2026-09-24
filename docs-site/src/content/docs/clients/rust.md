@@ -479,7 +479,7 @@ let mut start = match checkpoint.load()? {
 };
 
 loop {
-    let (_client, mut subscription) = cluster
+    let mut subscription = cluster
         .subscribe_from("acme", "prod", "events", Some(start))
         .await?;
 

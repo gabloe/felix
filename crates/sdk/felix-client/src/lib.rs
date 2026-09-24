@@ -68,13 +68,14 @@ pub use auth::{RefreshingToken, TokenFuture, TokenProvider};
 pub use cache::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
 pub use client::Client;
 pub use cluster::{
-    ClusterClient, ReconnectPolicy, ShardEvent, ShardOffsets, ShardedCacheWatch,
-    ShardedCacheWatchItem, ShardedGroup, ShardedGroupRecord, ShardedSubscription,
+    ClusterClient, ClusterSubscription, ReconnectPolicy, ShardEvent, ShardOffsets,
+    ShardedCacheWatch, ShardedCacheWatchItem, ShardedGroup, ShardedGroupRecord,
+    ShardedSubscription,
 };
 pub use config::{ClientConfig, ClientSubQueuePolicy};
 pub use error::{BrokerError, NotLeaderError, PublishRefused, SubscribeCursorError};
 pub use publish::{IdempotentProducer, PublishSharding, Publisher};
-pub use subscribe::{Event, Subscription};
+pub use subscribe::{Event, ShardMoved, Subscription};
 pub use telemetry::{
     FrameCountersSnapshot, frame_counters_snapshot, publishes_forwarded, reset_frame_counters,
 };

@@ -124,6 +124,7 @@ fn change(item: CacheWatchItem) -> felix_client::CacheChange {
         CacheWatchItem::Lagged { resume_from } => {
             panic!("the watch lagged unexpectedly (resume_from {resume_from})")
         }
+        CacheWatchItem::ShardMoved(moved) => panic!("the shard moved unexpectedly: {moved:?}"),
     }
 }
 

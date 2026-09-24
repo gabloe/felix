@@ -566,3 +566,118 @@ async fn subscription_binary_batch_success_records_decode_timing() -> Result<()>
     crate::timings::set_enabled(false);
     Ok(())
 }
+
+/// A `shard_moved` frame ends the subscription after the events before it,
+/// and says where the shard went.
+#[tokio::test]
+#[serial_test::serial]
+async fn subscription_ends_with_shard_moved_after_its_events() -> Result<()> {
+    let _env_guard = set_client_env();
+
+    let (server_config, cert) = build_server_config()?;
+    let server = QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?;
+    let addr = server.local_addr()?;
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server_task = tokio::spawn(async move {
+        async fn handle_connection(connection: felix_transport::QuicConnection) -> Result<()> {
+            let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
+            let Ok((mut send, mut recv)) = connection.accept_bi().await else {
+                return Ok(());
+            };
+            let _ = read_message(&mut recv, &mut frame_scratch).await?;
+            write_message(&mut send, Message::Ok).await?;
+            while let Some(message) = read_message(&mut recv, &mut frame_scratch).await? {
+                let Message::Subscribe {
+                    subscription_id, ..
+                } = message
+                else {
+                    continue;
+                };
+                let sub_id = subscription_id.unwrap_or(9);
+                write_message(
+                    &mut send,
+                    Message::Subscribed {
+                        subscription_id: sub_id,
+                        start_offset: None,
+                        live_offset: None,
+                    },
+                )
+                .await?;
+                let mut uni = connection.open_uni().await?;
+                write_message(
+                    &mut uni,
+                    Message::EventStreamHello {
+                        subscription_id: sub_id,
+                    },
+                )
+                .await?;
+                let encoded = felix_wire::binary::encode_event_batch_bytes_with_offset(
+                    sub_id,
+                    &[Bytes::from_static(b"before-move")],
+                    7,
+                )?;
+                uni.write_all(&encoded).await?;
+                write_message(
+                    &mut uni,
+                    Message::ShardMoved {
+                        subscription_id: sub_id,
+                        resume_from: Some(8),
+                        node_id: Some("node-b".to_string()),
+                        addr: Some("127.0.0.1:5001".to_string()),
+                        generation: 4,
+                    },
+                )
+                .await?;
+                let _ = uni.finish();
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                break;
+            }
+            Ok(())
+        }
+
+        let mut tasks = Vec::new();
+        let accept_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while let Ok(Ok(connection)) =
+            tokio::time::timeout_at(accept_deadline, server.accept()).await
+        {
+            tasks.push(tokio::spawn(handle_connection(connection)));
+        }
+        let _ = shutdown_rx.await;
+        drop(tasks);
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let client = Client::connect_with_transport(
+        addr,
+        "localhost",
+        build_client_config_with_overrides(cert, 1)?,
+        TransportConfig::default(),
+    )
+    .await?;
+    let mut subscription = client.subscribe("t1", "default", "updates").await?;
+    let event = timeout(Duration::from_secs(5), subscription.next_event())
+        .await??
+        .expect("the event before the move");
+    assert_eq!(event.payload, Bytes::from_static(b"before-move"));
+    assert_eq!(event.offset, Some(7));
+    let end = timeout(Duration::from_secs(5), subscription.next_event()).await??;
+    assert!(end.is_none(), "the subscription ends after shard_moved");
+    assert_eq!(
+        subscription.shard_moved(),
+        Some(&crate::ShardMoved {
+            resume_from: Some(8),
+            node_id: Some("node-b".to_string()),
+            addr: Some("127.0.0.1:5001".to_string()),
+            generation: 4,
+        })
+    );
+
+    let _ = shutdown_tx.send(());
+    server_task.abort();
+    Ok(())
+}

@@ -20,8 +20,8 @@ use tokio::task::JoinHandle;
 
 use super::ShardOffsets;
 use crate::client::Client;
-use crate::cluster::ClusterClient;
-use crate::subscribe::{Event, Subscription};
+use crate::cluster::{ClusterClient, resume_position};
+use crate::subscribe::{Event, ShardMoved, Subscription};
 
 /// How much to wait between attempts to re-establish one shard.
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
@@ -97,6 +97,7 @@ impl Drop for ShardedSubscription {
 /// Losing a shard is an **item**, not an error and not silence. A consumer that
 /// ignores these variants is choosing to read an incomplete stream, which is
 /// different from doing it by accident.
+#[non_exhaustive]
 pub enum ShardEvent {
     /// A record, and the shard it was read from.
     Record { shard: u32, event: Event },
@@ -108,6 +109,10 @@ pub enum ShardEvent {
     /// skipped — but they arrive later than records written to other shards at
     /// the same time, which was already true of any two shards.
     ShardRecovered { shard: u32 },
+    /// This shard moved to another broker, and is being followed there. The
+    /// records that follow resume where the old owner left off; if the new
+    /// owner cannot be reached, a [`ShardEvent::ShardLost`] comes next.
+    ShardMoved { shard: u32, moved: ShardMoved },
 }
 
 impl std::fmt::Debug for ShardEvent {
@@ -129,6 +134,11 @@ impl std::fmt::Debug for ShardEvent {
             Self::ShardRecovered { shard } => f
                 .debug_struct("ShardRecovered")
                 .field("shard", shard)
+                .finish(),
+            Self::ShardMoved { shard, moved } => f
+                .debug_struct("ShardMoved")
+                .field("shard", shard)
+                .field("moved", moved)
                 .finish(),
         }
     }
@@ -260,6 +270,9 @@ async fn forward_shard(
     // The last offset this task actually forwarded, so a reconnect resumes
     // after it rather than at whatever the original call asked for.
     let mut last_offset: Option<u64> = None;
+    // Where the old owner said to resume, when following a move failed and the
+    // reconnect loop below has to do it instead.
+    let mut moved_resume_from: Option<u64> = None;
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -276,9 +289,44 @@ async fn forward_shard(
                 }
                 continue;
             }
-            // A clean end of stream is still the loss of this shard's feed: the
-            // broker closed it, and the other shards are still going.
-            Ok(None) => "the shard's event stream ended".to_string(),
+            Ok(None) => match feed.1.shard_moved().cloned() {
+                Some(moved) => {
+                    let resume_from = moved.resume_from;
+                    if tx
+                        .send(ShardEvent::ShardMoved {
+                            shard,
+                            moved: moved.clone(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    match cluster
+                        .follow_moved_shard(
+                            &tenant_id,
+                            &namespace,
+                            &stream,
+                            shard,
+                            &moved,
+                            last_offset,
+                        )
+                        .await
+                    {
+                        Ok(next) => {
+                            feed = next;
+                            continue;
+                        }
+                        Err(err) => {
+                            moved_resume_from = resume_from;
+                            format!("{err:#}")
+                        }
+                    }
+                }
+                // A clean end of stream is still the loss of this shard's feed:
+                // the broker closed it, and the other shards are still going.
+                None => "the shard's event stream ended".to_string(),
+            },
             Err(err) => format!("{err:#}"),
         };
 
@@ -301,18 +349,17 @@ async fn forward_shard(
                 return;
             }
             tokio::time::sleep(RECONNECT_BACKOFF).await;
-            // Resume after what was forwarded. `Latest` only when this shard
-            // has delivered nothing at all — there is no offset to resume from,
-            // and replaying from the start would duplicate a history the caller
-            // never asked for.
-            let at = last_offset
-                .map(|offset| StartPosition::Offset(offset.saturating_add(1)))
-                .or(Some(StartPosition::Latest));
+            // Resume after what was forwarded, or where a moved shard's old
+            // owner said. `Latest` only with neither — there is no offset to
+            // resume from, and replaying from the start would duplicate a
+            // history the caller never asked for.
+            let at = Some(resume_position(last_offset, moved_resume_from));
             if let Ok(next) = cluster
                 .subscribe_shard_following_redirects(&tenant_id, &namespace, &stream, shard, at)
                 .await
             {
                 feed = next;
+                moved_resume_from = None;
                 if tx.send(ShardEvent::ShardRecovered { shard }).await.is_err() {
                     return;
                 }

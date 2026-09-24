@@ -34,18 +34,21 @@
 //! answer at all.
 
 mod cache_watch;
+mod follow;
 mod publish;
 mod retry;
 mod routing;
 mod sharded;
 mod subscribe;
 
+pub use follow::ClusterSubscription;
 pub use retry::ReconnectPolicy;
 pub use sharded::{
     ShardEvent, ShardOffsets, ShardedCacheWatch, ShardedCacheWatchItem, ShardedGroup,
     ShardedGroupRecord, ShardedSubscription,
 };
 
+pub(crate) use follow::resume_position;
 pub(crate) use retry::{Attempt, Next, Retrying, next_step, route_went_stale, wants_reconnect};
 
 use std::collections::HashMap;

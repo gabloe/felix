@@ -12,3 +12,4 @@ mod rebalance;
 mod redirect;
 mod sharded_subscribe;
 mod sharding;
+mod subscriptions_follow;

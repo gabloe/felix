@@ -180,7 +180,7 @@ async fn at_least_once_resends_an_outcome_unknown() -> Result<()> {
 async fn a_subscribe_refusal_is_typed() -> Result<()> {
     let (entry, cert) =
         StubBroker::start(|_| error(ErrorCode::ShardUnavailable, Some("not_ready")))?;
-    let cluster = cluster(&entry, build_client_config_with_overrides(cert, 1)?).await?;
+    let cluster = Arc::new(cluster(&entry, build_client_config_with_overrides(cert, 1)?).await?);
 
     let err = cluster
         .subscribe("t1", "default", "orders")
@@ -218,7 +218,7 @@ async fn a_fenced_redirect_target_sends_the_subscribe_back() -> Result<()> {
             error(ErrorCode::Forbidden, None)
         }
     })?;
-    let cluster = cluster(&entry, build_client_config_with_overrides(cert, 1)?).await?;
+    let cluster = Arc::new(cluster(&entry, build_client_config_with_overrides(cert, 1)?).await?);
 
     let err = cluster
         .subscribe("t1", "default", "orders")

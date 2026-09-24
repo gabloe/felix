@@ -13,8 +13,8 @@ mod queue;
 
 pub(crate) use pipeline::SubscriptionPipelineConfig;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
 
@@ -43,6 +43,8 @@ pub struct Subscription {
     bench_embed_ts: bool,
     start_offset: Option<u64>,
     live_offset: Option<u64>,
+    /// Filled by the dispatch task before it closes the event queue.
+    shard_moved: Arc<OnceLock<ShardMoved>>,
 }
 
 impl Subscription {
@@ -67,6 +69,16 @@ impl Subscription {
     /// equals [`Self::start_offset`].
     pub fn live_offset(&self) -> Option<u64> {
         self.live_offset
+    }
+
+    /// Why the subscription ended, when it ended because its shard moved to
+    /// another broker.
+    ///
+    /// Set before [`Self::next_event`] returns `None`, so check it then:
+    /// `Some` means resubscribe where it says, `None` means the stream simply
+    /// closed. [`crate::ClusterClient::subscribe`] does this on its own.
+    pub fn shard_moved(&self) -> Option<&ShardMoved> {
+        self.shard_moved.get()
     }
 
     /// The next event, or `None` once the event stream has closed.
@@ -152,6 +164,24 @@ pub struct Event {
     /// gap -- the subscriber queue dropped something, which is otherwise
     /// invisible.
     pub offset: Option<u64>,
+}
+
+/// Where a subscription's shard went, sent by the broker as the last frame
+/// before it ended the subscription.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardMoved {
+    /// The first offset the old owner did not hand to this subscription.
+    /// Resuming at the larger of this and the last delivered offset plus one
+    /// neither repeats nor skips a record. `None` for an in-memory stream, and
+    /// for a cache watch whose shard was still taking writes when it ended.
+    pub resume_from: Option<u64>,
+    /// The broker taking the shard, when the old owner knew. A hint only: the
+    /// shard may have moved again, and that broker then redirects.
+    pub node_id: Option<String>,
+    /// That broker's client address, when the cluster publishes one.
+    pub addr: Option<String>,
+    /// The assignment generation that moved the shard.
+    pub generation: u64,
 }
 
 enum QueuedEvent {
