@@ -262,6 +262,9 @@ conformance runner checks the frame on the wire, offered and not.
   `FelixShardCancel` passes with writes acknowledged on admission;
   `FelixShardCancelStalePlanner`, with the cancel written unconditionally,
   serves the shard on two brokers.
+  A retake keeps the leader's log and so the producer sequences in it:
+  `FelixShardCancelResend` re-sends writes across the cancel and none is
+  stored twice.
 - **Pausing.** A switch in the store (`placement_settings`, a Raft command,
   memory) that every instance's placement reads each pass. Paused, placement
   starts no move or replacement of its own, drains included. Moves in flight

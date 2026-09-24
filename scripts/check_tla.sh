@@ -87,6 +87,8 @@ expectations=(
   "FelixShardCancel pass"
   "FelixShardCancelStalePlannerCas pass"
   "FelixShardCancelStalePlanner violates AtMostOneServing"
+  "FelixShardCancelResend pass"
+  "FelixShardCancelResendMemory violates NoDuplicate"
   "FelixPlacementPacing pass"
   "FelixPlacementPacingUncountedReplacement violates CopiesWithinLimit"
   "FelixShardIdempotentFailover pass"

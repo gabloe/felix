@@ -139,6 +139,8 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardIdempotentFailoverMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
 | `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (14M states) |
 | `FelixShardIdempotentHandoffMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
+| `FelixShardCancelResend.cfg` | `FelixShardCancel.cfg` with writes re-sent, checked against the retaken leader's log | pass every invariant and `NoDuplicate` (5.6M states) |
+| `FelixShardCancelResendMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -233,6 +235,16 @@ Time stops short of any lease lapse in these configurations. A leader whose
 lease lapses drops what it acknowledged on admission whether or not a move
 is cancelled; that is the acknowledge-on-admission trade-off, not the
 cancel's.
+
+A retake keeps the leader's log, and with it the producer sequences its
+records carry, so a write re-sent after a cancel is answered from there.
+`FelixShardCancelResend.cfg` adds re-sends to `FelixShardCancel.cfg` and
+reaches exactly the same states: every re-send is answered, none appends.
+It runs two writes, unlike the other re-send configurations, because no
+lease lapses and so no deposed leader keeps a stale copy. In
+`FelixShardCancelResendMemory.cfg` the retaken leader, now at a new
+generation, knows none of what it wrote before and stores the re-sent write
+twice.
 
 ### A fence before the destination is level
 
