@@ -93,6 +93,10 @@ impl ForwardingHandler {
             kind: ShardKind::Stream,
         };
 
+        // A forward can reach this broker between a move's fence and its
+        // cut-over, or ahead of this broker's own routes. Either settles in
+        // milliseconds, so it waits here rather than bouncing the requester.
+        self.ingress.settle(&key, publish.shard.generation).await;
         if let Some(denial) = self.check_ownership(correlation_id, &key, publish.shard.generation) {
             return denial.into_publish_answer(correlation_id);
         }
@@ -129,7 +133,18 @@ impl ForwardingHandler {
 
         let fenced = match self.ingress.fence().admit(&key, publish.shard.generation) {
             Ok(fenced) => fenced,
-            Err(refused) => return self.fenced(refused).into_publish_answer(correlation_id),
+            Err(refused) => {
+                // The shard stopped serving here since the check above. Wait
+                // for the routes that say where it went, so the requester is
+                // sent there instead of refused.
+                self.ingress
+                    .settle(&key, publish.shard.generation.saturating_add(1))
+                    .await;
+                return match self.check_ownership(correlation_id, &key, publish.shard.generation) {
+                    Some(denial) => denial.into_publish_answer(correlation_id),
+                    None => self.fenced(refused).into_publish_answer(correlation_id),
+                };
+            }
         };
         let published = self
             .broker

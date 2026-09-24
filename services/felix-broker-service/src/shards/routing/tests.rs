@@ -7,6 +7,8 @@ use super::*;
 use crate::shards::lifecycle::ShardLifecycle;
 use crate::shards::watch::ShardAssignment;
 
+mod hold;
+
 fn key(shard: u32) -> ShardKey {
     ShardKey {
         tenant_id: "t1".to_string(),

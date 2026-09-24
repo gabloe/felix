@@ -13,6 +13,11 @@ use crate::serving::forward::ForwardError;
 use crate::shards::lifecycle::fence::Fenced;
 use crate::shards::routing::Reason;
 
+/// What a `moving` refusal suggests waiting. A switch-over is normally tens of
+/// milliseconds; a move still going after the hold window is not one that the
+/// next millisecond will finish.
+const MOVING_RETRY_AFTER_MS: u64 = 100;
+
 /// A failed request, as the client will see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClientError {
@@ -69,8 +74,15 @@ impl ClientError {
     }
 
     /// The shard cannot be served right now, and why.
+    ///
+    /// A shard that is moving has already been waited on for the hold window,
+    /// so the client is told to pause briefly rather than retry at once.
     pub(crate) fn unavailable(reason: &Reason, message: impl Into<String>) -> Self {
-        Self::new(ErrorCode::ShardUnavailable, message).with_reason(reason.wire_name())
+        let error = Self::new(ErrorCode::ShardUnavailable, message).with_reason(reason.wire_name());
+        match reason {
+            Reason::Moving => error.with_retry_after(MOVING_RETRY_AFTER_MS),
+            _ => error,
+        }
     }
 
     /// Put `context` in front of the message, as `"{context}: {message}"`.
@@ -98,6 +110,13 @@ impl ClientError {
 
     fn with_reason(mut self, reason: &str) -> Self {
         self.detail.get_or_insert_with(ErrorDetail::default).reason = Some(reason.to_string());
+        self
+    }
+
+    fn with_retry_after(mut self, millis: u64) -> Self {
+        self.detail
+            .get_or_insert_with(ErrorDetail::default)
+            .retry_after_ms = Some(millis);
         self
     }
 

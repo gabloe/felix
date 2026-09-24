@@ -1,6 +1,6 @@
 use felix_wire::{ErrorCode, Message, RetryClass};
 
-use super::{ClientError, ErrorCodeSupport};
+use super::{ClientError, ErrorCodeSupport, MOVING_RETRY_AFTER_MS};
 use crate::replication::quorum::QuorumError;
 use crate::serving::forward::ForwardError;
 use crate::shards::routing::Reason;
@@ -163,4 +163,19 @@ fn a_write_refused_by_the_fence_is_fenced_and_retryable() {
         ClientError::not_enqueued(&anyhow::anyhow!("queue full")).code(),
         &ErrorCode::Overloaded
     );
+}
+
+/// A publish refused because its shard is still moving says so, keeps the
+/// `retry` class, and suggests a short pause.
+#[test]
+fn a_moving_shard_is_a_retry_with_a_pause() {
+    let error = ClientError::unavailable(&Reason::Moving, "shard is moving");
+    assert_eq!(error.code(), &ErrorCode::ShardUnavailable);
+    assert_eq!(error.retry(), RetryClass::Retry);
+    let Message::PublishError { detail, .. } = error.into_publish_error(7) else {
+        panic!("a publish error");
+    };
+    let detail = detail.expect("detail");
+    assert_eq!(detail.reason.as_deref(), Some("moving"));
+    assert_eq!(detail.retry_after_ms, Some(MOVING_RETRY_AFTER_MS));
 }

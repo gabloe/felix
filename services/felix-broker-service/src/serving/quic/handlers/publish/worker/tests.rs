@@ -134,15 +134,21 @@ mod fence {
                 "",
             )
             .expect("admitted"),
-            (Kind::Idempotent, PublishRoute::Local { handle, generation }) => {
-                PublishTarget::Idempotent {
+            (
+                Kind::Idempotent,
+                PublishRoute::Local {
                     handle,
-                    shard: local_shard_key(&publish_ctx, TENANT, NAMESPACE, stream, 0),
                     generation,
-                    producer_id: leader.broker.new_producer_id(),
-                    sequence: 0,
-                }
-            }
+                    fenced,
+                },
+            ) => PublishTarget::Idempotent {
+                handle,
+                shard: local_shard_key(&publish_ctx, TENANT, NAMESPACE, stream, 0),
+                generation,
+                fenced,
+                producer_id: leader.broker.new_producer_id(),
+                sequence: 0,
+            },
             (_, other) => panic!("admission should serve it here: {other:?}"),
         };
 

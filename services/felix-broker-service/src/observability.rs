@@ -215,6 +215,7 @@ fn install_metrics_recorder() -> PrometheusHandle {
 /// exporter's default summary.
 fn builder() -> PrometheusBuilder {
     use crate::shards::lifecycle::metrics as shard;
+    use crate::shards::routing::hold::metrics as hold;
     use metrics_exporter_prometheus::Matcher;
     PrometheusBuilder::new()
         .set_buckets_for_metric(
@@ -225,6 +226,12 @@ fn builder() -> PrometheusBuilder {
             builder.set_buckets_for_metric(
                 Matcher::Full(shard::SWITCHOVER_SECONDS.to_string()),
                 shard::SWITCHOVER_BUCKETS,
+            )
+        })
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full(hold::HOLD_SECONDS.to_string()),
+                hold::HOLD_BUCKETS,
             )
         })
         .expect("histogram buckets are non-empty")

@@ -961,7 +961,7 @@ client MUST act on the class it received, not on this table.
 | `forbidden` | `fatal` | 2 | The credential does not grant this operation. | A missing permission, or a tenant other than the token's. Also a forward the owner refused on the client's credential. |
 | `not_found` | `retry_after` | 3 | The tenant, namespace, stream or cache does not exist on this broker. | An unknown stream or cache. Retryable because a broker learns streams from the control plane, and one promoted a moment ago says "not found" for a stream it is about to serve. |
 | `invalid_request` | `fatal` | 4 | The request can never succeed as sent. | A malformed frame or batch, unknown frame flags, a missing `request_id`, a second `auth`, a bad watch filter or shard. |
-| `shard_unavailable` | `retry` | 5 | Nobody can serve the shard right now. `detail.reason` says why: `not_assigned`, `owner_unavailable`, `not_ready`, `stale` or `fenced`. | The shard is unassigned, its owner unreachable, still opening, or the routing view is behind; `fenced` when this broker's lease lapsed, the owner's epoch was superseded, or the shard stopped serving here between admitting a write and claiming its place in the log (nothing was written). |
+| `shard_unavailable` | `retry` | 5 | Nobody can serve the shard right now. `detail.reason` says why: `not_assigned`, `owner_unavailable`, `not_ready`, `stale`, `fenced` or `moving`. | The shard is unassigned, its owner unreachable, still opening, or the routing view is behind; `fenced` when this broker's lease lapsed, the owner's epoch was superseded, or the shard stopped serving here between admitting a write and claiming its place in the log (nothing was written). `moving` when the shard is being moved to another broker and the move had not cut over within `FELIX_SHARD_MOVE_HOLD_MS`, or too many publishes were already waiting on moving shards; `detail.retry_after_ms` then suggests when to try again. |
 | `not_leader` | `redirect` | 6 | Another broker owns the shard. | Only where the `not_leader` message cannot be sent: to a client without `FEATURE_REDIRECT`, or a publish this broker cannot forward. |
 | `quorum_timeout` | `outcome_unknown` | 7 | The leader wrote the batch; a majority did not confirm it in time. It may survive. | A write to a `Quorum` stream or cache. |
 | `leadership_lost` | `outcome_unknown` | 8 | Leadership moved after the leader wrote the batch and before a majority held it. | A write to a `Quorum` stream or cache during a move. |
@@ -973,6 +973,19 @@ client MUST act on the class it received, not on this table.
 | `storage` | `outcome_unknown` | 14 | The storage layer failed. | A durable write, a group's state, or a cache log that could not be read. `retry` for reads. |
 
 `Number` is the `u16` the binary ack carries. `0` is never sent.
+
+A publish that reaches a broker while its shard is moving is not refused at
+once. Between a move's fence and its cut-over nobody serves the shard, so the
+broker holds the publish, before accepting it, until its routes show where the
+shard went and then sends it there, forwarded if that is another broker. A
+client sees a slower acknowledgement, not an error. Only a move that takes
+longer than `FELIX_SHARD_MOVE_HOLD_MS` (2 s by default), or a burst beyond
+`FELIX_SHARD_MOVE_HOLD_MAX` held publishes, is answered with
+`shard_unavailable` / `moving`. A client without `FEATURE_ERROR_CODES` gets the
+same `publish_error` text it always did for a shard it cannot reach. Cache
+writes, counter adds and consumer-group writes are not held: they are refused
+while the shard moves, as `moving` by the broker that was fenced, and the
+client retries.
 
 `quorum_timeout`, `leadership_lost` and `unacknowledged` are what separate "the
 broker refused this" from "the broker cannot say": a client resending a

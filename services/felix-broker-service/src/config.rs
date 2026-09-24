@@ -194,6 +194,12 @@ pub struct BrokerConfig {
     pub replication_rebuild_max_concurrent: usize,
     /// Bytes per second a rebuilding follower is shipped at; zero is unlimited.
     pub replication_rebuild_bytes_per_sec: u64,
+    /// How long a write to a shard that is moving waits for the move to cut
+    /// over before it is refused as `moving`; zero refuses at once.
+    pub shard_move_hold_ms: u64,
+    /// How many writes may wait on moving shards at once. Each holds its
+    /// payload, so this bounds the memory a move can pin.
+    pub shard_move_hold_max: usize,
 }
 
 impl BrokerConfig {
@@ -320,6 +326,8 @@ impl Default for BrokerConfig {
             publish_quorum_timeout_ms: DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS,
             replication_rebuild_max_concurrent: DEFAULT_REPLICATION_REBUILD_MAX_CONCURRENT,
             replication_rebuild_bytes_per_sec: DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC,
+            shard_move_hold_ms: DEFAULT_SHARD_MOVE_HOLD_MS,
+            shard_move_hold_max: DEFAULT_SHARD_MOVE_HOLD_MAX,
         }
     }
 }

@@ -12,7 +12,8 @@ use crate::serving::forward::ForwardTarget;
 use crate::serving::quic::STREAM_CACHE_TTL;
 use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::telemetry::t_counter;
-use crate::shards::routing::{Dispatch, IngressRouter, dispatch};
+use crate::shards::lifecycle::fence::FenceGuard;
+use crate::shards::routing::{Dispatch, IngressRouter};
 use crate::shards::{ShardKey, ShardKind};
 
 /// The shard a publish that carries no routing key belongs to.
@@ -70,10 +71,11 @@ pub(crate) async fn resolve_route(
         ));
     }
 
-    // Carried to the claim, where the fence refuses the write if this broker
-    // stopped serving the shard in the meantime.
+    // Carried to the claim with the write's place in the fence, entered here
+    // so a fence that closes after this point still counts the write.
     let mut generation = 0;
-    if ingress.is_some() {
+    let mut fenced = None;
+    if let Some(ingress) = ingress {
         let key = ShardKey {
             tenant_id: tenant_id.to_string(),
             namespace: namespace.to_string(),
@@ -84,8 +86,14 @@ pub(crate) async fn resolve_route(
             shard,
             kind: ShardKind::Stream,
         };
-        match dispatch(ingress, &key) {
-            Dispatch::Local { generation: at } => generation = at,
+        // Held here, before anything is queued or acknowledged, while the
+        // shard is between its fence and its cut-over.
+        let (dispatched, guard) = ingress.dispatch_write(&key).await;
+        match dispatched {
+            Dispatch::Local { generation: at } => {
+                generation = at;
+                fenced = guard;
+            }
             Dispatch::Forward {
                 node_id,
                 advertise_addr,
@@ -122,7 +130,7 @@ pub(crate) async fn resolve_route(
         && *expires > Instant::now()
         && handle.as_ref().is_none_or(StreamHandle::is_active)
     {
-        return PublishRoute::local(handle.clone(), generation);
+        return PublishRoute::local(handle.clone(), generation, fenced);
     }
     let handle = broker
         .resolve_stream_handle(tenant_id, namespace, stream, shard)
@@ -132,17 +140,19 @@ pub(crate) async fn resolve_route(
         key_scratch.clone(),
         (handle.clone(), Instant::now() + STREAM_CACHE_TTL),
     );
-    PublishRoute::local(handle, generation)
+    PublishRoute::local(handle, generation, fenced)
 }
 
 /// Where a publish should be applied.
 #[derive(Debug)]
 pub(crate) enum PublishRoute {
     /// This broker owns the shard, at `generation`, and the stream resolved
-    /// here.
+    /// here. `fenced` is the write's place in the shard's fence, on a cluster
+    /// member.
     Local {
         handle: StreamHandle,
         generation: u64,
+        fenced: Option<FenceGuard>,
     },
     /// Another broker owns it.
     Forward(ForwardTarget),
@@ -151,9 +161,13 @@ pub(crate) enum PublishRoute {
 }
 
 impl PublishRoute {
-    fn local(handle: Option<StreamHandle>, generation: u64) -> Self {
+    fn local(handle: Option<StreamHandle>, generation: u64, fenced: Option<FenceGuard>) -> Self {
         match handle {
-            Some(handle) => Self::Local { handle, generation },
+            Some(handle) => Self::Local {
+                handle,
+                generation,
+                fenced,
+            },
             None => Self::Refused(ClientError::not_found("stream does not resolve")),
         }
     }
@@ -227,10 +241,15 @@ pub(crate) fn publish_target(
     credential: &str,
 ) -> Result<PublishTarget, ClientError> {
     match route {
-        PublishRoute::Local { handle, generation } => Ok(PublishTarget::Resolved {
+        PublishRoute::Local {
+            handle,
+            generation,
+            fenced,
+        } => Ok(PublishTarget::Resolved {
             handle,
             shard: local_shard_key(publish_ctx, tenant_id, namespace, stream, shard),
             generation,
+            fenced,
         }),
         PublishRoute::Forward(target) => {
             if publish_ctx.peers.is_none() {

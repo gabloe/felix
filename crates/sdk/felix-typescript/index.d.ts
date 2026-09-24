@@ -111,10 +111,13 @@ export type RetryClass = "retry" | "retry_after" | "redirect" | "outcome_unknown
 export interface ErrorDetail {
   /**
    * For `shard_unavailable`: `not_assigned`, `owner_unavailable`, `not_ready`,
-   * `stale` or `fenced`.
+   * `stale`, `fenced` or `moving`.
    */
   reason?: string;
-  /** For `retry_after`: how long the broker suggests waiting. */
+  /**
+   * How long the broker suggests waiting: for `retry_after`, and as a hint with
+   * `retry` for a shard that is `moving`.
+   */
   retry_after_ms?: number;
 }
 

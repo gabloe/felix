@@ -257,6 +257,14 @@ impl BrokerConfig {
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_PUBLISH_QUORUM_TIMEOUT_MS);
+        let shard_move_hold_ms = std::env::var("FELIX_SHARD_MOVE_HOLD_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SHARD_MOVE_HOLD_MS);
+        let shard_move_hold_max = std::env::var("FELIX_SHARD_MOVE_HOLD_MAX")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_SHARD_MOVE_HOLD_MAX);
         let sub_stream_mode = std::env::var("FELIX_SUB_STREAM_MODE")
             .ok()
             .and_then(|value| SubStreamMode::parse_env(value.as_str()))
@@ -323,6 +331,8 @@ impl BrokerConfig {
             publish_quorum_timeout_ms,
             replication_rebuild_max_concurrent,
             replication_rebuild_bytes_per_sec,
+            shard_move_hold_ms,
+            shard_move_hold_max,
         })
     }
 }

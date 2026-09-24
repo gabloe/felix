@@ -269,11 +269,14 @@ impl<'de> Deserialize<'de> for RetryClass {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorDetail {
     /// For `shard_unavailable`: `not_assigned`, `owner_unavailable`,
-    /// `not_ready`, `stale` or `fenced`. A string rather than an enum so a new
-    /// reason reaches an old client as text instead of a decode failure.
+    /// `not_ready`, `stale`, `fenced` or `moving`. A string rather than an enum
+    /// so a new reason reaches an old client as text instead of a decode
+    /// failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// For `retry_after`: how long the broker suggests waiting.
+    /// How long the broker suggests waiting. Always meant for `retry_after`;
+    /// sent as a hint with `retry` where the broker has a better guess than
+    /// "at once", as it does for a shard that is `moving`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
 }
@@ -290,6 +293,9 @@ pub mod shard_unavailable_reason {
     pub const STALE: &str = "stale";
     /// The owner's epoch was superseded; it no longer leads the shard.
     pub const FENCED: &str = "fenced";
+    /// The shard is moving to another broker and the move had not cut over
+    /// in time. `ErrorDetail::retry_after_ms` may suggest when to try again.
+    pub const MOVING: &str = "moving";
 }
 
 #[cfg(test)]
