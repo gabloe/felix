@@ -66,20 +66,21 @@ use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 use super::frame_source::FrameSource;
 use responder::{Responder, send_control_error};
 
-// The loop is intentionally structured as:
-//   read frame -> (optional fast-path) -> decode -> dispatch.
-//
-// Important parameters:
-//   - `source`: abstract frame source (RecvStream in prod, test doubles in unit tests).
-//   - `stream_cache` / `stream_cache_key`: per-connection cache of stream scope lookups used by
-//     publish handlers to avoid repeatedly touching shared metadata for hot streams.
-//   - `out_ack_tx` / `out_ack_depth`: outbound response queue + depth gauge used for backpressure.
-//   - `ack_throttle_rx/tx`: shared throttling state; this loop reads current state, handlers/writer
-//     update it.
-//   - `ack_timeout_state`: shared state used to detect/report ack enqueue timeouts.
-//   - `ack_waiters` / `ack_waiter_tx`: bounds and routes "ack when commit finishes" work.
-//   - `frame_scratch`: reusable buffer to avoid per-frame allocations.
-// Main control-loop: read frames, decode messages, and dispatch to handlers.
+/// Main control loop: read frames, decode messages, and dispatch to handlers.
+///
+/// The loop is intentionally structured as:
+///   read frame -> (optional fast-path) -> decode -> dispatch.
+///
+/// Important parameters:
+///   - `source`: abstract frame source (RecvStream in prod, test doubles in unit tests).
+///   - `stream_cache` / `stream_cache_key`: per-connection cache of stream scope lookups used by
+///     publish handlers to avoid repeatedly touching shared metadata for hot streams.
+///   - `out_ack_tx` / `out_ack_depth`: outbound response queue + depth gauge used for backpressure.
+///   - `ack_throttle_rx/tx`: shared throttling state; this loop reads current state, handlers/writer
+///     update it.
+///   - `ack_timeout_state`: shared state used to detect/report ack enqueue timeouts.
+///   - `ack_waiters` / `ack_waiter_tx`: bounds and routes "ack when commit finishes" work.
+///   - `frame_scratch`: reusable buffer to avoid per-frame allocations.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     source: &mut S,
@@ -265,14 +266,14 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
         };
         // Dispatch by message type. Most handlers are responsible for enqueuing responses into
         // `out_ack_tx` rather than writing directly to the network.
-        match message {
+        let step = match message {
             Message::Auth {
                 tenant_id,
                 token,
                 client_flags,
                 client_features,
             } => {
-                if let Step::Close(graceful) = session::authenticate(
+                session::authenticate(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -281,9 +282,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     client_features,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::Publish {
                 tenant_id,
@@ -294,7 +292,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ack,
             } => {
-                if let Step::Close(graceful) = publish::publish(
+                publish::publish(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -306,9 +304,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     ack,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::PublishBatch {
                 tenant_id,
@@ -319,7 +314,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ack,
             } => {
-                if let Step::Close(graceful) = publish::publish_batch(
+                publish::publish_batch(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -331,9 +326,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     ack,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::PublishIdempotent {
                 tenant_id,
@@ -345,7 +337,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 producer_id,
                 sequence,
             } => {
-                if let Step::Close(graceful) = publish::publish_idempotent(
+                publish::publish_idempotent(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -358,29 +350,18 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     sequence,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::ProducerInit { request_id } => {
-                if let Step::Close(graceful) =
-                    publish::producer_init(&cx, &mut session, request_id).await?
-                {
-                    return Ok(graceful);
-                }
+                publish::producer_init(&cx, &mut session, request_id).await?
             }
-            Message::Topology => {
-                if let Step::Close(graceful) = discovery::topology(&cx, &mut session).await? {
-                    return Ok(graceful);
-                }
-            }
+            Message::Topology => discovery::topology(&cx, &mut session).await?,
             Message::StreamShards {
                 tenant_id,
                 namespace,
                 stream,
                 request_id,
             } => {
-                if let Step::Close(graceful) = discovery::stream_shards(
+                discovery::stream_shards(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -389,9 +370,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::CacheShards {
                 tenant_id,
@@ -399,18 +377,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 cache,
                 request_id,
             } => {
-                if let Step::Close(graceful) = discovery::cache_shards(
-                    &cx,
-                    &mut session,
-                    tenant_id,
-                    namespace,
-                    cache,
-                    request_id,
-                )
-                .await?
-                {
-                    return Ok(graceful);
-                }
+                discovery::cache_shards(&cx, &mut session, tenant_id, namespace, cache, request_id)
+                    .await?
             }
             Message::Subscribe {
                 tenant_id,
@@ -420,7 +388,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 start,
                 shard,
             } => {
-                if let Step::Close(graceful) = subscribe::subscribe(
+                subscribe::subscribe(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -431,17 +399,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     shard,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             // Broker -> client only; a client sending one is a protocol error.
             Message::SubscribeCursorError { .. } => {
-                if let Step::Close(graceful) =
-                    subscribe::subscribe_cursor_error(&cx, &mut session).await?
-                {
-                    return Ok(graceful);
-                }
+                subscribe::subscribe_cursor_error(&cx, &mut session).await?
             }
             Message::CachePut {
                 tenant_id,
@@ -452,7 +413,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ttl_ms,
             } => {
-                if let Step::Close(graceful) = cache::cache_put(
+                cache::cache_put(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -464,9 +425,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     ttl_ms,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::CacheGet {
                 tenant_id,
@@ -475,7 +433,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 key,
                 request_id,
             } => {
-                if let Step::Close(graceful) = cache::cache_get(
+                cache::cache_get(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -485,9 +443,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::CacheWatch {
                 tenant_id,
@@ -500,7 +455,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 retained,
                 subscription_id,
             } => {
-                if let Step::Close(graceful) = cache::cache_watch(
+                cache::cache_watch(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -514,9 +469,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     subscription_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::CounterAdd {
                 tenant_id,
@@ -526,7 +478,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 delta,
                 request_id,
             } => {
-                if let Step::Close(graceful) = counter::counter_add(
+                counter::counter_add(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -537,9 +489,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::CounterGet {
                 tenant_id,
@@ -548,7 +497,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 key,
                 request_id,
             } => {
-                if let Step::Close(graceful) = counter::counter_get(
+                counter::counter_get(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -558,9 +507,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupPoll {
                 tenant_id,
@@ -572,7 +518,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 wait_ms,
                 request_id,
             } => {
-                if let Step::Close(graceful) = group::group_poll(
+                group::group_poll(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -585,9 +531,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupAck {
                 tenant_id,
@@ -598,7 +541,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if let Step::Close(graceful) = group::group_ack(
+                group::group_ack(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -610,9 +553,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupNack {
                 tenant_id,
@@ -623,7 +563,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if let Step::Close(graceful) = group::group_nack(
+                group::group_nack(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -635,9 +575,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupDeadLetters {
                 tenant_id,
@@ -647,7 +584,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 group,
                 request_id,
             } => {
-                if let Step::Close(graceful) = group::group_dead_letters(
+                group::group_dead_letters(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -658,9 +595,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupDiscard {
                 tenant_id,
@@ -671,7 +605,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if let Step::Close(graceful) = group::group_discard(
+                group::group_discard(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -683,9 +617,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupRedrive {
                 tenant_id,
@@ -696,7 +627,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if let Step::Close(graceful) = group::group_redrive(
+                group::group_redrive(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -708,9 +639,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::CacheDelete {
                 tenant_id,
@@ -719,7 +647,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 key,
                 request_id,
             } => {
-                if let Step::Close(graceful) = cache::cache_delete(
+                cache::cache_delete(
                     &cx,
                     &mut session,
                     tenant_id,
@@ -729,9 +657,6 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                 )
                 .await?
-                {
-                    return Ok(graceful);
-                }
             }
             Message::GroupRecords { .. }
             | Message::GroupDeadLetterList { .. }
@@ -773,11 +698,12 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &cancel_tx,
                 )
                 .await?;
-                return Ok(false);
+                Step::Close(false)
             }
-            Message::Error { .. } => {
-                return Ok(false);
-            }
+            Message::Error { .. } => Step::Close(false),
+        };
+        if let Step::Close(graceful) = step {
+            return Ok(graceful);
         }
     }
     // `graceful_close` only tracks EOF from the peer. Any other early-exit path returns false
