@@ -147,3 +147,31 @@ async fn a_learner_is_held_to_the_limit() {
     pass(&follower, &broker, &moving, &throttle, &mut cursors).await;
     assert_eq!(shipped_to(&follower, "broker-c"), 3, "held to the limit");
 }
+
+/// After the fence the shard is not served until the remainder is across,
+/// so the remainder is never paced: a publish held for the cut-over would
+/// otherwise wait on the limit.
+#[tokio::test]
+async fn the_remainder_after_the_fence_is_not_paced() {
+    let (broker, _dir) = leader_with(3).await;
+    let follower = AcceptingFollower::default();
+    let throttle = MoveThrottle::new(4);
+    let mut cursors = HashMap::new();
+
+    let copying = moving_router(&["broker-b", "broker-c"], "broker-c");
+    pass(&follower, &broker, &copying, &throttle, &mut cursors).await;
+    assert_eq!(
+        shipped_to(&follower, "broker-c"),
+        3,
+        "the first batch spends the limit"
+    );
+
+    append(&broker, 3).await;
+    let fenced = draining_router(LOCAL, &["broker-c", "broker-b"], 4);
+    pass(&follower, &broker, &fenced, &throttle, &mut cursors).await;
+    assert_eq!(
+        shipped_to(&follower, "broker-c"),
+        6,
+        "not held to the limit"
+    );
+}

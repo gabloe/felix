@@ -692,7 +692,10 @@ safe for any bound, because the drained report above waits for the successor
 to hold everything to the final tail; the bound only limits how long the
 switch-over waits on the copy. A follower whose last batch did not reach it
 is left out of the report's offsets, so an unreachable successor is never
-fenced on the position it had before it went quiet.
+fenced on the position it had before it went quiet. While a fenced shard has not
+reported drained, the leader runs its next pass 10 ms later rather than on
+the next wake, so the remainder, and a destination that has not yet seen the
+new generation, cost milliseconds rather than a sync interval.
 
 The copy to the successor can be held to `FELIX_SHARD_MOVE_BYTES_PER_SEC`,
 one token bucket per leader across every shard it leads. Only a successor the

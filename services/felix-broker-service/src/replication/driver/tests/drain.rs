@@ -383,3 +383,93 @@ async fn a_draining_shard_with_no_replicas_reports_drained() {
     assert!(report.caught_up.is_empty());
     assert!(follower.batches().is_empty(), "nothing to ship to");
 }
+
+/// Refuses as `StaleRoute` -- its watch has not seen the generation yet --
+/// until it has been asked `refusals` times, then stores everything.
+struct BehindFollower {
+    refusals: std::sync::atomic::AtomicUsize,
+    inner: AcceptingFollower,
+}
+
+impl PeerRequester for BehindFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        use std::sync::atomic::Ordering;
+        if self
+            .refusals
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Ok(InternalMessage::ReplicateError(
+                felix_wire::internal::ReplicateError {
+                    correlation_id: 0,
+                    code: felix_wire::internal::ErrorCode::StaleRoute,
+                    expected_offset: 0,
+                    detail: "behind".to_string(),
+                },
+            ));
+        }
+        self.inner.request(node_id, addr, message).await
+    }
+}
+
+/// **A fence that lands before the destination is level is not left for the
+/// tick.** Fenced within the lag bound, the remainder still has to reach the
+/// destination, which at first refuses the new generation until its own watch
+/// catches up. The drained report waits on that copy, and the next pass must
+/// come promptly rather than a sync interval later: the shard is not served
+/// meanwhile.
+#[tokio::test]
+async fn a_fenced_shard_retries_its_remainder_without_waiting_for_the_tick() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = draining_router(LOCAL, &["broker-b"], 4);
+    let follower = Arc::new(BehindFollower {
+        refusals: std::sync::atomic::AtomicUsize::new(2),
+        inner: AcceptingFollower::default(),
+    });
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let driver = spawn(
+        Arc::clone(&follower),
+        Arc::clone(&broker),
+        router,
+        Arc::default(),
+        Published {
+            marks: Arc::new(QuorumMarks::new()),
+            halted: Arc::new(crate::replication::halted::HaltedReplicas::new()),
+        },
+        None,
+        // A tick long enough that reaching it would mean nothing retried.
+        Duration::from_secs(300),
+        Arc::default(),
+        RebuildPolicy::default(),
+        MoveThrottle::unlimited(),
+        shutdown.clone(),
+    );
+
+    let shipped = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if follower
+                .inner
+                .batches()
+                .iter()
+                .map(|(_, _, n)| n)
+                .sum::<usize>()
+                == 3
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    shutdown.cancel();
+    let _ = driver.await;
+    assert!(
+        shipped.is_ok(),
+        "the remainder was not retried within 2s against a 300s tick"
+    );
+}

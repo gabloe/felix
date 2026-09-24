@@ -72,6 +72,8 @@ pub(super) struct ShardPass {
     /// A destination still copying was cut off at [`COPY_SLICE`] with more to
     /// send.
     pub(super) copying: bool,
+    /// Fenced here and not yet drained: the move is waiting on this broker.
+    pub(super) drain_pending: bool,
 }
 
 impl ShardPass {
@@ -87,6 +89,7 @@ impl ShardPass {
             halted: Vec::new(),
             lag: None,
             copying: false,
+            drain_pending: false,
         }
     }
 }
@@ -450,6 +453,7 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         halted,
         lag,
         copying,
+        drain_pending: route.draining && !drained,
     }
 }
 

@@ -34,6 +34,12 @@ use shard::{AuxCursors, ShardCursors, ShardPass, replicate_shard, watch_key};
 /// to stay a bounded amount of concurrent work.
 const SHARD_CONCURRENCY: usize = 16;
 
+/// How soon a pass follows one that left a fenced shard undrained. Short,
+/// because clients are held for the switch-over; not zero, because a
+/// destination that is gone would otherwise be dialled in a tight loop until
+/// the control plane drops it.
+const DRAIN_RETRY: Duration = Duration::from_millis(10);
+
 /// What a pass publishes for the rest of the broker to read.
 ///
 /// Together because they are the same thing from two sides: the mark is what a
@@ -83,6 +89,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
         let mut dead_letter_cursors = HashMap::new();
         let mut counter_cursors = HashMap::new();
         let mut copying = false;
+        let mut drain_pending = false;
         loop {
             // An append during the previous pass left a permit, so this
             // returns at once rather than waiting for the tick — see
@@ -94,11 +101,19 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 }
                 tokio::task::yield_now().await;
             } else {
+                let retry = async {
+                    if drain_pending {
+                        tokio::time::sleep(DRAIN_RETRY).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                };
                 tokio::select! {
                     _ = shutdown.cancelled() => return,
                     _ = ticker.tick() => {}
                     _ = woken => {}
                     _ = routes_changed.notified() => {}
+                    _ = retry => {}
                 }
             }
             let pass = replicate_once_with(
@@ -121,6 +136,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
             // already shipping again.
             published.halted.publish(pass.halted);
             copying = pass.copying;
+            drain_pending = pass.drain_pending;
         }
     })
 }
@@ -198,6 +214,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
     let table = router.snapshot();
     let mut worst_lag: Option<u64> = None;
     let mut copying = false;
+    let mut drain_pending = false;
     let mut halted: Vec<HaltedReplica> = Vec::new();
     let mut live_shards = Vec::new();
     let mut reports = Vec::new();
@@ -268,6 +285,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
         counter_cursors.insert(pass.key, pass.aux.counters);
         halted.extend(pass.halted);
         copying |= pass.copying;
+        drain_pending |= pass.drain_pending;
         if let Some(lag) = pass.lag {
             worst_lag = Some(worst_lag.map_or(lag, |worst: u64| worst.max(lag)));
         }
@@ -296,6 +314,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
         reports,
         halted,
         copying,
+        drain_pending,
     }
 }
 
@@ -313,6 +332,12 @@ pub struct Pass {
     /// A move's destination is still copying and was cut off at the end of
     /// its slice. The next pass runs at once rather than on the next wake.
     pub copying: bool,
+    /// A shard fenced here has not reported drained yet. The next pass runs
+    /// after [`DRAIN_RETRY`] rather than on the next wake: the remainder of
+    /// a fence made within the lag bound, or a destination that has not yet
+    /// seen the new generation, holds the switch-over, and the shard is not
+    /// served meanwhile.
+    pub drain_pending: bool,
 }
 
 fn rebuilding_count(maps: &[&HashMap<ShardKey, ShardCursors>]) -> usize {
