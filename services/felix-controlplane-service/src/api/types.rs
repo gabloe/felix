@@ -76,7 +76,7 @@ pub struct StreamCreateRequest {
     pub kind: StreamKind,
     pub shards: u32,
     /// Brokers holding each shard, leader included. Defaults to leader-only.
-    #[serde(default = "crate::model::stream::default_replication_factor")]
+    #[serde(default = "crate::model::default_replication_factor")]
     pub replication_factor: u32,
     pub retention: RetentionPolicy,
     pub consistency: ConsistencyLevel,

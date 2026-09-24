@@ -6,7 +6,7 @@ mod cache;
 mod namespace;
 mod node;
 mod shard;
-pub mod stream;
+mod stream;
 mod tenant;
 
 pub use cache::{Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest};
@@ -22,6 +22,7 @@ pub use shard::{
     ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
     ShardKind, ShardState, ShardValidationError,
 };
+pub(crate) use stream::default_replication_factor;
 pub use stream::{
     ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, Stream, StreamChange, StreamChangeOp,
     StreamKey, StreamKind, StreamPatchRequest,
