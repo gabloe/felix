@@ -700,7 +700,7 @@ export FELIX_CLIENT_SUB_QUEUE_CAPACITY="256"
 
 ### `FELIX_CLIENT_SUB_QUEUE_POLICY`
 
-**Description**: Client-side backpressure policy for subscription pipeline queues.
+**Description**: Client-side backpressure policy for subscription pipeline queues. Applies to live records only: history replayed from an earlier offset (below the subscription's `live_offset`) always waits for room and is never dropped.
 
 **Type**: Enum (`block`, `drop_new`, `drop_old`)
 

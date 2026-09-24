@@ -358,7 +358,12 @@ Two consequences worth stating plainly:
   time and writes it before reading the next, so a client resuming from the
   start of a large stream costs one page of memory rather than the whole
   history. A slow client turns into slower reading rather than unbounded
-  buffering.
+  buffering, because the client queues history with backpressure whatever its
+  overflow policy: a record below `live_offset` waits for room, which stops it
+  reading the stream, and QUIC flow control holds the broker's next write. Only
+  live records past `live_offset` are subject to `drop_new`. A client that
+  stops reading mid-replay therefore holds up to one stream receive window of
+  its event connection until it resumes or closes the subscription.
 - **A discarded offset is an error, not a silent skip.** Asking for an offset
   below what retention still holds returns `CursorTooOld` naming the oldest
   available offset. Quietly restarting at the tail — which is what a client got
