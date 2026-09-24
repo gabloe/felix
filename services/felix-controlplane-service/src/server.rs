@@ -119,22 +119,29 @@ where
             .map(tls::load_server_config)
             .transpose()?;
         Some(tokio::spawn(async move {
-            tracing::info!(
-                %bootstrap_addr,
-                mtls = bootstrap_tls.is_some(),
-                "bootstrap control plane listening"
-            );
             match tokio::net::TcpListener::bind(bootstrap_addr).await {
-                Ok(listener) => match bootstrap_tls {
-                    Some(tls) => {
-                        tls::serve_mtls(listener, bootstrap_app, tls, api_shutdown).await;
+                Ok(listener) => {
+                    // Logged after the bind, with the address the socket got, so
+                    // a port-0 bind reports its real port and a failed bind never
+                    // claims to be listening.
+                    tracing::info!(
+                        addr = %listener.local_addr().unwrap_or(bootstrap_addr),
+                        mtls = bootstrap_tls.is_some(),
+                        "bootstrap control plane listening"
+                    );
+                    match bootstrap_tls {
+                        Some(tls) => {
+                            tls::serve_mtls(listener, bootstrap_app, tls, api_shutdown).await;
+                        }
+                        None => {
+                            let _ = axum::serve(listener, bootstrap_app.into_make_service())
+                                .with_graceful_shutdown(
+                                    async move { api_shutdown.cancelled().await },
+                                )
+                                .await;
+                        }
                     }
-                    None => {
-                        let _ = axum::serve(listener, bootstrap_app.into_make_service())
-                            .with_graceful_shutdown(async move { api_shutdown.cancelled().await })
-                            .await;
-                    }
-                },
+                }
                 Err(err) => {
                     tracing::warn!(error = %err, "failed to bind bootstrap listener");
                 }
@@ -144,9 +151,9 @@ where
         None
     };
 
-    let addr = config.bind_addr;
+    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
+    let addr = listener.local_addr().unwrap_or(config.bind_addr);
     tracing::info!(%addr, "control plane listening");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
 
     // The API server drains itself: `with_graceful_shutdown` stops accepting new
     // connections and lets in-flight requests finish. Racing the server against
