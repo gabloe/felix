@@ -125,6 +125,15 @@ method, not one per row touched. Two things fall out:
   them in log entries on the same class of volume changes their exposure
   surface by nothing, but it is stated here so nobody discovers it in a
   review.
+- **A conditional write is decided at apply.** Placement's assignment writes
+  are `PutShardAssignmentIf`, carrying the generation the planner read; the
+  state machine compares it with the generation it holds as the entry applies,
+  so every replica reaches the same answer and a stale write is answered with
+  `StaleAssignment` rather than applied. It is a separate command, not an
+  optional field on `PutShardAssignment`: a follower from before it existed
+  must refuse the entry, as it refuses any unknown `op`, rather than ignore the
+  field, apply the write unconditionally, and diverge from the replicas that
+  skipped it. Entries already in the log are unaffected.
 
 ### Writes: forwarded, proposed, applied
 

@@ -387,7 +387,23 @@ Two deliberate omissions:
   filter on yet.
 
 Reconciliation is idempotent: a pass over a settled cluster writes nothing, so
-running it on a timer does not churn rows or flood the changefeed. A shard with
+running it on a timer does not churn rows or flood the changefeed.
+
+Every control-plane instance runs it over Postgres or the in-memory store;
+under Raft only the leader does, and a deposed leader can still be mid-pass.
+Each instance plans from its own read, so a pass can decide from a state
+another instance has already moved on from. Every write a pass makes — a
+placement, a promotion, each move step — is therefore **conditional on the
+generation it planned from** (`put_shard_assignment_if`; no assignment at all
+for a shard being placed for the first time). The store compares under the
+same lock or log entry as the write. Without that, a fence planned before
+another instance's cut-over could land after it and hand the shard back to
+the old leader, whose log is missing whatever the new one acknowledged, and
+two instances could promote different followers after one failure. A write
+that finds a newer generation writes nothing, is counted in
+`felix_shard_assignment_write_conflicts_total`, and the next pass re-plans
+from a fresh read. An occasional conflict is expected with several instances;
+a steady rate means instances keep planning from reads that are already old. A shard with
 no eligible leader is left unplaced and logged with the reason — an empty
 cluster and a full one are reported differently, because they need different
 fixes.
@@ -448,6 +464,7 @@ nothing: a drain waits and an imbalance stays, both visibly.
 | --- | --- |
 | `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or the move limit holding a drain back |
+| `felix_shard_assignment_write_conflicts_total` | placements and move steps not written because another instance changed the shard after this pass read it; the next pass re-plans |
 
 The fence and the broker's side of it are described in
 [replication-design.md](replication-design.md#planned-handoff).
@@ -630,6 +647,7 @@ Control plane:
 | `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
 | `felix_shard_move_steps_total{step}` | planned-move steps written |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
+| `felix_shard_assignment_write_conflicts_total` | placement writes skipped because the shard changed after the pass read it |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
 | `felix_controlplane_auth_rejected_total{reason}` | credentials turned away by any authenticated endpoint: `missing_token`, `malformed_token`, `invalid_token`, `tenant_mismatch`, `forbidden`. Each is also an `info` log line with the reason and the message the caller saw, never the token. A rising `invalid_token` or `forbidden` is a broker with a stale credential, or something that is not a broker |
 

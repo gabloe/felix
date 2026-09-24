@@ -138,6 +138,20 @@ three, which is what matters.
 
 ### Fixed
 
+- **Two control-plane instances could undo each other's shard moves.** Every
+  instance over Postgres runs placement, and each wrote what it planned
+  unconditionally. An instance that planned a fence, then stalled, could write
+  it after another instance had already cut over, handing the shard back to
+  the old leader after the new one may have acknowledged writes the old one
+  never saw; two instances could likewise promote different followers after
+  one failure. Placement now writes every placement, promotion and move step
+  only if the shard is still at the generation it planned from, through a new
+  `ControlPlaneStore::put_shard_assignment_if` (a new `PutShardAssignmentIf`
+  Raft command). A write that finds the shard changed is skipped, counted in
+  `felix_shard_assignment_write_conflicts_total`, and re-planned on the next
+  pass. `docs/formal/FelixShardStalePlanner.cfg` is the race without the
+  check, and TLC finds two brokers serving the shard.
+
 - **The docs said the clients were not installable.** They are: `felix-client`
   is on crates.io, PyPI and npm, the same name on all three. The client pages
   still told readers to point `pip` at a release asset, to build the Node addon
