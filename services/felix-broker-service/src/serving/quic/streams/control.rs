@@ -44,7 +44,6 @@ mod subscribe;
 
 use anyhow::{Context, Result};
 use bytes::BytesMut;
-use felix_authz::Action;
 use felix_broker::Broker;
 use felix_wire::Message;
 use std::sync::Arc;
@@ -65,8 +64,6 @@ use crate::serving::quic::handlers::publish::{
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
 use super::frame_source::FrameSource;
-use authz::authorize_stream_simple;
-use group::group_redirect;
 use responder::{Responder, send_control_error};
 
 // The loop is intentionally structured as:
@@ -575,95 +572,22 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 wait_ms,
                 request_id,
             } => {
-                // A group is a read position over a stream, so it is authorized
-                // as a read of that stream.
-                if !authorize_stream_simple(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamSubscribe,
-                    &namespace,
-                    &stream,
-                    &authz_ctx,
+                if let Step::Close(graceful) = group::group_poll(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    max_records,
+                    wait_ms,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(answer) = group_redirect(
-                    &publish_ctx,
-                    session.peer_features,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                ) {
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    }
-                    .send(answer)
-                    .await?;
-                    continue;
-                }
-                let polled = crate::serving::group_ops::poll(
-                    &broker,
-                    &publish_ctx,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                    &group,
-                    max_records as usize,
-                    // Capped, so a client cannot hold a broker stream open for
-                    // as long as it likes.
-                    Duration::from_millis(wait_ms.min(config.group_max_wait_ms)),
-                )
-                .await;
-                let records = match polled {
-                    Ok(records) => records,
-                    Err(reason) => {
-                        // Refused rather than answered with an empty batch: a
-                        // consumer told "nothing available" would poll for ever
-                        // against a shard this broker does not lead.
-                        handle_ack_enqueue_result(
-                            send_outgoing_critical(
-                                &out_ack_tx,
-                                &out_ack_depth,
-                                "felix_broker_out_ack_depth",
-                                &ack_throttle_tx,
-                                Outgoing::Message(Message::Error {
-                                    message: format!("group poll not served: {reason}"),
-                                }),
-                            )
-                            .await,
-                            &ack_timeout_state,
-                            &ack_throttle_tx,
-                            &cancel_tx,
-                        )
-                        .await?;
-                        continue;
-                    }
-                };
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::GroupRecords {
-                            records,
-                            request_id,
-                        }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::GroupAck {
                 tenant_id,
@@ -674,82 +598,21 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if !authorize_stream_simple(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamSubscribe,
-                    &namespace,
-                    &stream,
-                    &authz_ctx,
+                if let Step::Close(graceful) = group::group_ack(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(answer) = group_redirect(
-                    &publish_ctx,
-                    session.peer_features,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                ) {
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    }
-                    .send(answer)
-                    .await?;
-                    continue;
-                }
-                if let Err(reason) = crate::serving::group_ops::settle(
-                    &broker,
-                    &publish_ctx,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                    &group,
-                    offset,
-                    true,
-                )
-                .await
-                {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::Message(Message::Error {
-                                message: format!("group ack not served: {reason}"),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    continue;
-                }
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::CacheOk { request_id }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::GroupNack {
                 tenant_id,
@@ -760,82 +623,21 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if !authorize_stream_simple(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamSubscribe,
-                    &namespace,
-                    &stream,
-                    &authz_ctx,
+                if let Step::Close(graceful) = group::group_nack(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(answer) = group_redirect(
-                    &publish_ctx,
-                    session.peer_features,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                ) {
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    }
-                    .send(answer)
-                    .await?;
-                    continue;
-                }
-                if let Err(reason) = crate::serving::group_ops::settle(
-                    &broker,
-                    &publish_ctx,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                    &group,
-                    offset,
-                    false,
-                )
-                .await
-                {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::Message(Message::Error {
-                                message: format!("group nack not served: {reason}"),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    continue;
-                }
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::CacheOk { request_id }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::GroupDeadLetters {
                 tenant_id,
@@ -845,89 +647,20 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 group,
                 request_id,
             } => {
-                if !authorize_stream_simple(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamSubscribe,
-                    &namespace,
-                    &stream,
-                    &authz_ctx,
+                if let Step::Close(graceful) = group::group_dead_letters(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(answer) = group_redirect(
-                    &publish_ctx,
-                    session.peer_features,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                ) {
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    }
-                    .send(answer)
-                    .await?;
-                    continue;
-                }
-                let listed = crate::serving::group_ops::dead_letters(
-                    &broker,
-                    &publish_ctx,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                    &group,
-                )
-                .await;
-                let offsets = match listed {
-                    Ok(offsets) => offsets,
-                    Err(reason) => {
-                        // Refused rather than answered with an empty list: an
-                        // operator told there are no dead letters would stop
-                        // looking.
-                        handle_ack_enqueue_result(
-                            send_outgoing_critical(
-                                &out_ack_tx,
-                                &out_ack_depth,
-                                "felix_broker_out_ack_depth",
-                                &ack_throttle_tx,
-                                Outgoing::Message(Message::Error {
-                                    message: format!("dead letters not served: {reason}"),
-                                }),
-                            )
-                            .await,
-                            &ack_timeout_state,
-                            &ack_throttle_tx,
-                            &cancel_tx,
-                        )
-                        .await?;
-                        continue;
-                    }
-                };
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::GroupDeadLetterList {
-                            offsets,
-                            request_id,
-                        }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::GroupDiscard {
                 tenant_id,
@@ -938,82 +671,21 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if !authorize_stream_simple(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamSubscribe,
-                    &namespace,
-                    &stream,
-                    &authz_ctx,
+                if let Step::Close(graceful) = group::group_discard(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(answer) = group_redirect(
-                    &publish_ctx,
-                    session.peer_features,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                ) {
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    }
-                    .send(answer)
-                    .await?;
-                    continue;
-                }
-                if let Err(reason) = crate::serving::group_ops::manage_dead_letter(
-                    &broker,
-                    &publish_ctx,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                    &group,
-                    offset,
-                    false,
-                )
-                .await
-                {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::Message(Message::Error {
-                                message: format!("group discard not served: {reason}"),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    continue;
-                }
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::CacheOk { request_id }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::GroupRedrive {
                 tenant_id,
@@ -1024,82 +696,21 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 offset,
                 request_id,
             } => {
-                if !authorize_stream_simple(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::StreamSubscribe,
-                    &namespace,
-                    &stream,
-                    &authz_ctx,
+                if let Step::Close(graceful) = group::group_redrive(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(answer) = group_redirect(
-                    &publish_ctx,
-                    session.peer_features,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                ) {
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    }
-                    .send(answer)
-                    .await?;
-                    continue;
-                }
-                if let Err(reason) = crate::serving::group_ops::manage_dead_letter(
-                    &broker,
-                    &publish_ctx,
-                    &tenant_id,
-                    &namespace,
-                    &stream,
-                    shard,
-                    &group,
-                    offset,
-                    true,
-                )
-                .await
-                {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::Message(Message::Error {
-                                message: format!("group redrive not served: {reason}"),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    continue;
-                }
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::Message(Message::CacheOk { request_id }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
             }
             Message::CacheDelete {
                 tenant_id,
