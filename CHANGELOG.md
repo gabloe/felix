@@ -257,6 +257,14 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **One refused publish failed later publishes on the same connection.** A
+  publish the broker refused (an unknown stream, a forbidden one, overload)
+  stopped the client's publish worker that sent it, and every later publish
+  routed to that worker, to any stream, got the same refusal back without a
+  code. `ClusterClient` then took the uncoded error for a dead connection and
+  reconnected. A refusal now answers only the publish it belongs to; a broken
+  or timed-out ack stream still ends the worker.
+
 - **A long replay lost records and could look stalled.** A subscription
   resumed from an early offset dropped history even when the application read
   every event promptly: the broker writes history as fast as it reads it, and

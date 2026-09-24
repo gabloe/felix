@@ -13,6 +13,7 @@ use felix_wire::AckMode;
 use felix_wire::Message;
 use quinn::RecvStream;
 
+use super::AckOutcome;
 use crate::frame_io::read_frame_into_with_limit;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::frame_counters;
@@ -44,12 +45,17 @@ pub(crate) struct AckRead {
 /// Acks arrive on the publish stream strictly in request order, so the next
 /// ack frame must correlate to `request_id` — a mismatch is a protocol error,
 /// not an out-of-order arrival to wait through.
+///
+/// The outer error means the stream can no longer be trusted: it broke, timed
+/// out, or answered out of order. The inner result is the broker's answer to
+/// this one request; a refusal there leaves the stream serving the requests
+/// behind it.
 pub(crate) async fn wait_for_ack(
     recv: &mut RecvStream,
     request_id: u64,
     frame_scratch: &mut BytesMut,
     max_frame_bytes: usize,
-) -> Result<Option<felix_wire::binary::PublishOwner>> {
+) -> Result<AckOutcome> {
     // Bound the wait. The ack reader blocks here, so an ack that never
     // arrives wedges that stream's publishes indefinitely rather than failing.
     // This is a real possibility whenever the broker cannot answer — it is
@@ -86,7 +92,7 @@ pub(crate) async fn wait_for_ack(
                     .ack_items_in_ok
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            Ok(forwarded_to)
+            Ok(Ok(forwarded_to))
         }
         Some(Message::PublishError {
             request_id: ack_id,
@@ -105,19 +111,19 @@ pub(crate) async fn wait_for_ack(
                     .ack_items_in_ok
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            Err(crate::error::refused(
+            Ok(Err(crate::error::refused(
                 "publish failed",
                 message,
                 code,
                 retry,
                 detail,
-            ))
+            )))
         }
         Some(Message::PublishRefused {
             request_id: ack_id,
             reason,
             message,
-        }) if ack_id == request_id => Err(crate::PublishRefused { reason, message }.into()),
+        }) if ack_id == request_id => Ok(Err(crate::PublishRefused { reason, message }.into())),
         other => Err(anyhow::anyhow!("publish failed: {other:?}")),
     }
 }
@@ -241,6 +247,6 @@ pub(crate) async fn maybe_wait_for_ack_with_limit(
     let request_id =
         request_id.ok_or_else(|| anyhow::anyhow!("missing request_id for acked publish"))?;
     wait_for_ack(recv, request_id, frame_scratch, max_frame_bytes)
-        .await
+        .await?
         .map(|_| ())
 }
