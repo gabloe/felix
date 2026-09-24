@@ -13,8 +13,10 @@
 //! The two are separated on purpose, and the names say which is which.
 //!
 //! [`ClusterClient::publish`] reconnects and reports the failed record to the
-//! caller. Nothing is sent twice, so nothing can arrive twice — but the record
-//! that was in flight when the broker died is the caller's problem.
+//! caller. Nothing that may have landed is sent twice, so nothing can arrive
+//! twice — but the record that was in flight when the broker died is the
+//! caller's problem. The one re-send is of a record a cached shard owner said
+//! it did not apply.
 //!
 //! [`ClusterClient::publish_at_least_once`] reconnects *and sends the record
 //! again*. A publish that failed after the broker had already written it will
@@ -44,7 +46,7 @@ pub use sharded::{
     ShardedGroupRecord, ShardedSubscription,
 };
 
-pub(crate) use retry::is_terminal;
+pub(crate) use retry::{Attempt, Next, Retrying, next_step, route_went_stale, wants_reconnect};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

@@ -322,6 +322,26 @@ errors with the same text, so treat a missing `BrokerError` as "no code", not as
 success. The codes and their classes are listed under
 [Error codes](https://github.com/gabloe/felix/blob/main/docs/protocol.md#error-codes).
 
+`ClusterClient` already acts on the class before an error reaches you:
+
+- `Fatal` is returned at once.
+- `OutcomeUnknown` is returned by `publish` and never re-sent.
+  `publish_at_least_once` and an idempotent producer send it again: the first
+  accepts duplicates by name, the second's sequence prevents them.
+- `Retry` and `Redirect` (`shard_unavailable`, `draining`, `not_leader`) from a
+  cached shard owner drop that owner and go straight to the entry broker, even
+  from `publish`, since nothing was applied. From the entry broker the retrying
+  paths back off.
+- `RetryAfter` backs off for at least `retry_after_ms`. `not_found` is retried
+  for 5 s from the first one, long enough for a newly promoted broker to hear
+  about the stream from the control plane and no longer.
+- `publish` replaces its connection only for `draining` or when no broker
+  answered; any other coded answer came from a live broker.
+
+A broker without error codes gets the old handling: only a credential failure
+is final, and everything else is retried. The full table is under "Retries" in
+[the multi-node client guide](https://github.com/gabloe/felix/blob/main/docs/multi-node-client.md#retries).
+
 `SubscribeCursorError` carries more than the other clients get:
 
 ```rust

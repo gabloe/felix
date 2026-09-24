@@ -969,6 +969,13 @@ producer can resend safely, which is what it is for.
 A client without `FEATURE_ERROR_CODES` that the broker is draining still gets no
 answer on a new stream until the connection closes, as it always did.
 
+A forwarded write that the owner refused because its epoch was fenced reaches
+the client as `shard_unavailable` with reason `not_ready`, not `fenced`: the
+broker-to-broker answer does not say which. The class, `retry`, is the same.
+
+How the Rust `ClusterClient` acts on each class, including what it does with a
+peer that sends no code, is in `docs/multi-node-client.md` under "Retries".
+
 ## Not-leader redirects
 
 A subscribe for a shard the broker does not own is answered with `not_leader`,

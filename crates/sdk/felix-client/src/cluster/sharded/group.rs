@@ -166,11 +166,13 @@ impl ShardedGroup {
         Fut: Future<Output = Result<T>>,
     {
         let cached = self.owners.lock().await[shard as usize].clone();
+        let cached_route = cached.is_some();
         let mut client = match cached {
             Some(client) => client,
             None => self.cluster.client().await,
         };
         let mut visited: Vec<String> = Vec::new();
+        let mut went_back = false;
 
         for _ in 0..=MAX_REDIRECTS {
             let error = match op(Arc::clone(&client)).await {
@@ -183,6 +185,18 @@ impl ShardedGroup {
             // Forgotten on any failure, so the next attempt asks afresh rather
             // than repeating a question to a broker that has stopped answering.
             self.owners.lock().await[shard as usize] = None;
+            // A cached or redirected-to leader that answers `shard_unavailable` or
+            // `draining` has lost the shard since it was named. The entry broker
+            // routes by the current assignment, so ask it again, once.
+            if (cached_route || !visited.is_empty())
+                && !went_back
+                && crate::cluster::route_went_stale(&error)
+            {
+                went_back = true;
+                visited.clear();
+                client = self.cluster.client().await;
+                continue;
+            }
             let Some(redirect) = error.downcast_ref::<crate::NotLeaderError>().cloned() else {
                 return Err(error);
             };

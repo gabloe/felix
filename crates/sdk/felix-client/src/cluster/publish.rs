@@ -2,20 +2,29 @@
 //! idempotently. See the parent module for why the first two differ.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use felix_wire::AckMode;
 
-use super::{ClusterClient, ShardKey, StreamKey, is_terminal};
+use super::{
+    Attempt, ClusterClient, Next, Retrying, ShardKey, StreamKey, next_step, wants_reconnect,
+};
 use crate::client::Client;
 use crate::publish::{AckOutcome, IdempotentProducer};
 
 impl ClusterClient {
     /// Publish, reconnecting if the broker in use has gone.
     ///
-    /// **The record is not sent again.** A failure is returned to the caller
-    /// with the connection already replaced, so the next publish goes to a live
-    /// broker. See [`Self::publish_at_least_once`] for the other choice.
+    /// **A record that may have landed is not sent again.** A failure is
+    /// returned to the caller with the connection already replaced, so the next
+    /// publish goes to a live broker. See [`Self::publish_at_least_once`] for
+    /// the other choice.
+    ///
+    /// One case is sent again: a cached shard owner that answers
+    /// `shard_unavailable`, `draining` or `not_leader` has said it applied
+    /// nothing, so the owner is forgotten and the record goes once through the
+    /// entry broker, which routes by the current assignment.
     pub async fn publish(
         &self,
         tenant_id: &str,
@@ -24,43 +33,15 @@ impl ClusterClient {
         payload: Vec<u8>,
         ack: AckMode,
     ) -> Result<()> {
-        // The owner of this stream's shard 0, when a previous publish was
-        // forwarded and the ack said who to use. Falls back to the client in
-        // hand, which forwards -- correct, just slower.
         // An unkeyed publish has nothing to hash, so it always resolves to
         // shard 0 -- no width lookup needed.
-        let key: ShardKey = (
+        let shard: ShardKey = (
             tenant_id.to_string(),
             namespace.to_string(),
             stream.to_string(),
             0,
         );
-        let (client, routed_to_owner) = match self.owners.read().await.get(&key) {
-            Some(owner) => (Arc::clone(&owner.client), Some(owner.node_id.clone())),
-            None => (self.client().await, None),
-        };
-        match publish_once(&client, tenant_id, namespace, stream, payload, ack).await {
-            Ok(forwarded_to) => {
-                if let Some(owner) = forwarded_to {
-                    self.remember_owner(key, owner).await;
-                }
-                Ok(())
-            }
-            Err(err) if routed_to_owner.is_some() => Err(self
-                .forget_owner(&key, routed_to_owner.unwrap_or_default(), err)
-                .await),
-            Err(err) => {
-                // Reconnect before returning, so the caller's next publish does
-                // not repeat this failure against the same dead broker.
-                let reconnected = self.reconnect().await;
-                match reconnected {
-                    Ok(()) => Err(err.context("publish failed; reconnected to another broker")),
-                    Err(reconnect_err) => Err(err.context(format!(
-                        "publish failed and no other broker answered: {reconnect_err:#}"
-                    ))),
-                }
-            }
-        }
+        self.publish_to_shard(shard, payload, None, ack).await
     }
 
     /// Publish with a routing key, which decides the shard.
@@ -88,41 +69,8 @@ impl ClusterClient {
         // with the same function the broker routes with, so the cache is
         // bounded by shard count rather than by distinct keys.
         let shard = self.shard_of(&stream_key, Some(key.as_ref())).await;
-        let owner_key: ShardKey = (stream_key.0, stream_key.1, stream_key.2, shard);
-        let (client, routed_to_owner) = match self.owners.read().await.get(&owner_key) {
-            Some(owner) => (Arc::clone(&owner.client), Some(owner.node_id.clone())),
-            None => (self.client().await, None),
-        };
-        match publish_once_keyed(
-            &client,
-            tenant_id,
-            namespace,
-            stream,
-            payload,
-            Some(key),
-            ack,
-        )
-        .await
-        {
-            Ok(forwarded_to) => {
-                if let Some(owner) = forwarded_to {
-                    self.remember_owner(owner_key, owner).await;
-                }
-                Ok(())
-            }
-            Err(err) if routed_to_owner.is_some() => Err(self
-                .forget_owner(&owner_key, routed_to_owner.unwrap_or_default(), err)
-                .await),
-            Err(err) => {
-                let reconnected = self.reconnect().await;
-                match reconnected {
-                    Ok(()) => Err(err.context("publish failed; reconnected to another broker")),
-                    Err(reconnect_err) => Err(err.context(format!(
-                        "publish failed and no other broker answered: {reconnect_err:#}"
-                    ))),
-                }
-            }
-        }
+        let shard: ShardKey = (stream_key.0, stream_key.1, stream_key.2, shard);
+        self.publish_to_shard(shard, payload, Some(key), ack).await
     }
 
     /// Publish, reconnecting *and sending the record again* if the broker in
@@ -143,10 +91,12 @@ impl ClusterClient {
     ) -> Result<()> {
         let started = std::time::Instant::now();
         let mut last: Option<anyhow::Error> = None;
+        let mut retrying = Retrying::default();
+        let mut at_least = Duration::ZERO;
 
         for attempt in 0..self.policy.attempts.max(1) {
             if attempt > 0 {
-                let delay = self.policy.delay_before(attempt - 1);
+                let delay = self.policy.delay_before(attempt - 1).max(at_least);
                 // Checked before sleeping, not after: sleeping past a deadline
                 // and then reporting it wastes exactly the time the deadline
                 // exists to save.
@@ -165,13 +115,15 @@ impl ClusterClient {
             match publish_once(&client, tenant_id, namespace, stream, payload.clone(), ack).await {
                 Ok(_) => return Ok(()),
                 Err(err) => {
-                    // No amount of reconnecting changes a forbidden credential
-                    // or a stream that does not exist, and burning the whole
-                    // backoff schedule only delays the answer the caller needs.
-                    if is_terminal(&err) {
-                        return Err(
-                            err.context("not retried: this cannot succeed on another attempt")
-                        );
+                    let attempt = Attempt {
+                        resend_ambiguous: true,
+                        ..Attempt::default()
+                    };
+                    match retrying.next(&err, attempt) {
+                        Next::Fail => return Err(err.context("not retried")),
+                        // Never produced: this path does not use the owner cache.
+                        Next::Reroute => at_least = Duration::ZERO,
+                        Next::Backoff { at_least: asked } => at_least = asked,
                     }
                     last = Some(err);
                 }
@@ -194,6 +146,85 @@ impl ClusterClient {
     pub async fn idempotent_producer(&self) -> Result<IdempotentProducer<'_>> {
         let producer_id = self.client().await.producer_init().await?;
         Ok(IdempotentProducer::for_cluster(self, producer_id))
+    }
+
+    /// One publish to one shard: through its cached owner when there is one,
+    /// else through the entry broker, which forwards.
+    async fn publish_to_shard(
+        &self,
+        shard: ShardKey,
+        payload: Vec<u8>,
+        key: Option<bytes::Bytes>,
+        ack: AckMode,
+    ) -> Result<()> {
+        let (tenant_id, namespace, stream) = (&shard.0, &shard.1, &shard.2);
+        let routed = self
+            .owners
+            .read()
+            .await
+            .get(&shard)
+            .map(|owner| (Arc::clone(&owner.client), owner.node_id.clone()));
+        let payload = match routed {
+            None => payload,
+            Some((owner, node_id)) => {
+                // Kept only so a refusal that applied nothing can be sent on.
+                let retained = payload.clone();
+                let err = match publish_once_keyed(
+                    &owner,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    payload,
+                    key.clone(),
+                    ack,
+                )
+                .await
+                {
+                    Ok(forwarded_to) => {
+                        if let Some(owner) = forwarded_to {
+                            self.remember_owner(shard, owner).await;
+                        }
+                        return Ok(());
+                    }
+                    Err(err) => err,
+                };
+                let attempt = Attempt {
+                    routed: true,
+                    ..Attempt::default()
+                };
+                let reroute = next_step(&err, attempt) == Next::Reroute;
+                let err = self.forget_owner(&shard, node_id, err).await;
+                if !reroute {
+                    return Err(err);
+                }
+                tracing::debug!(
+                    error = %format!("{err:#}"),
+                    "the cached owner applied nothing; sending through the entry broker",
+                );
+                retained
+            }
+        };
+
+        let client = self.client().await;
+        match publish_once_keyed(&client, tenant_id, namespace, stream, payload, key, ack).await {
+            Ok(forwarded_to) => {
+                if let Some(owner) = forwarded_to {
+                    self.remember_owner(shard, owner).await;
+                }
+                Ok(())
+            }
+            Err(err) if !wants_reconnect(&err) => Err(err),
+            Err(err) => {
+                // Reconnect before returning, so the caller's next publish does
+                // not repeat this failure against the same dead broker.
+                match self.reconnect().await {
+                    Ok(()) => Err(err.context("publish failed; reconnected to another broker")),
+                    Err(reconnect_err) => Err(err.context(format!(
+                        "publish failed and no other broker answered: {reconnect_err:#}"
+                    ))),
+                }
+            }
+        }
     }
 }
 

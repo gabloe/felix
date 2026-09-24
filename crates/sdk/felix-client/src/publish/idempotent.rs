@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use tokio::sync::Mutex;
 
 use crate::client::Client;
-use crate::cluster::{ClusterClient, is_terminal};
+use crate::cluster::{Attempt, ClusterClient, Next, Retrying};
 use crate::{PublishRefusalReason, PublishRefused};
 
 /// A producer whose batches are appended once, however many times they are
@@ -180,9 +180,15 @@ impl<'a> IdempotentProducer<'a> {
                 let started = std::time::Instant::now();
                 let policy = cluster.policy();
                 let mut last: Option<anyhow::Error> = None;
+                let mut retrying = Retrying::default();
+                // What the last failure asked for: `None` goes again at once
+                // through the entry broker, `Some` backs off at least that long.
+                let mut wait: Option<std::time::Duration> = None;
                 for attempt in 0..policy.attempts.max(1) {
-                    if attempt > 0 {
-                        let delay = policy.delay_before(attempt - 1);
+                    if attempt > 0
+                        && let Some(at_least) = wait
+                    {
+                        let delay = policy.delay_before(attempt - 1).max(at_least);
                         if let Some(budget) = policy.deadline
                             && started.elapsed() + delay >= budget
                         {
@@ -199,7 +205,7 @@ impl<'a> IdempotentProducer<'a> {
                         }
                     }
                     let client = cluster.client().await;
-                    match self
+                    let err = match self
                         .send_via(
                             &client,
                             tenant_id,
@@ -212,16 +218,29 @@ impl<'a> IdempotentProducer<'a> {
                         .await
                     {
                         Ok(()) => return Ok(()),
-                        Err(err) => {
-                            // A refusal is the broker's answer, not a failure
-                            // to get one, and no other broker answers it
-                            // differently.
-                            if err.downcast_ref::<PublishRefused>().is_some() || is_terminal(&err) {
-                                return Err(err);
-                            }
-                            last = Some(err);
+                        Err(err) => err,
+                    };
+                    // A leader remembered now was either used for this attempt
+                    // or learned by following a refusal during it, so the error
+                    // came from that leader.
+                    let attempt = Attempt {
+                        routed: self.leaders.lock().await.contains_key(key),
+                        // The sequence is what makes a re-send safe: the leader
+                        // answers one it already holds from memory.
+                        resend_ambiguous: true,
+                        not_found_for: None,
+                    };
+                    match retrying.next(&err, attempt) {
+                        // A typed refusal or a fatal code is the broker's
+                        // answer, and no other broker answers it differently.
+                        Next::Fail => return Err(err),
+                        Next::Reroute => {
+                            self.leaders.lock().await.remove(key);
+                            wait = None;
                         }
+                        Next::Backoff { at_least } => wait = Some(at_least),
                     }
+                    last = Some(err);
                 }
                 Err(last
                     .unwrap_or_else(|| anyhow::anyhow!("publish failed"))
