@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790246478083,
+  "lastUpdate": 1790250454555,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18414,6 +18414,72 @@ window.BENCHMARK_DATA = {
             "range": "901.15",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1301.00\nmean: 1565.60\nstdev: 901.15\ncv: 57.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c31d58fecbcfc889a665f32cbe46a4915d280d5",
+          "message": "Placement writes are conditional on the generation they were planned from (#660)\n\n* feat(controlplane): conditional shard assignment writes\n\nput_shard_assignment_if writes only if the shard is still at the\ngeneration the caller read (or still has no assignment), and otherwise\nreports it stale without writing or publishing a change.\n\nMemory checks under the shards lock; Postgres checks under the existing\nFOR UPDATE row lock and uses ON CONFLICT DO NOTHING when it expects no\nrow, since there is nothing to lock yet. Raft carries it as a new\nPutShardAssignmentIf command so a follower that predates it refuses it\ninstead of applying it unconditionally and diverging. The shared store\ncontract holds all three to it, including racing writers.\n\n* fix(controlplane): plan-then-write placement cannot undo a newer step\n\nEvery instance runs the placement reconciler unless the store is Raft,\nand each wrote its plan unconditionally. An instance that planned a\nfence, then stalled, could write it after another instance had fenced\nand cut over, handing the shard back to the old leader after the new\none may already have acknowledged writes; a failover promotion planned\nfrom an old read had the same race.\n\nPlacements, promotions and every move step are now written with the\ngeneration the pass planned from. A shard that moved on is not an\nerror: the write is skipped, counted in\nfelix_shard_assignment_write_conflicts_total, and the next pass\nre-plans. The pass is split into plan and apply so a test can\ninterleave two instances deterministically.\n\n* test(controlplane): a promotion planned from an old read is not written later\n\nSpec-Unaffected: test only; the spec change for conditional placement writes is in its own commit.\n\n* docs(formal): model placement deciding from a held read\n\nA placement decision now either reads and writes in one step or comes\nfrom a read a planner took earlier and still holds (cpView). Every\nassignment write bumps the store's generation, and CasWrites makes it\nland only at the generation its read saw.\n\nFelixShardStalePlanner.cfg (a move) and FelixShardStalePromotion.cfg (a\nfailover) hold one read across the other instance's writes without the\ncomparison, and TLC finds two brokers serving. Their Cas companions pass\nevery invariant. The existing configurations run with no held reads\nand keep their outcomes.\n\n* docs: conditional placement writes and the conflicts metric\n\nSpec-Unaffected: prose only; the model change is in the previous commit.",
+          "timestamp": "2026-09-24T04:44:46-07:00",
+          "tree_id": "2c5028a9979f5a76feaf965e8e0cbbede0b48fbf",
+          "url": "https://github.com/gabloe/felix/commit/5c31d58fecbcfc889a665f32cbe46a4915d280d5"
+        },
+        "date": 1790250451572,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 168,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 168.00\nmean: 167.60\nstdev: 1.14\ncv: 0.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 206,
+            "range": "1.48",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 206.20\nstdev: 1.48\ncv: 0.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 236,
+            "range": "14.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 236.00\nmean: 241.00\nstdev: 14.87\ncv: 6.17%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 201,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 201.00\nmean: 201.00\nstdev: 1.00\ncv: 0.50%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 399,
+            "range": "9.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 399.00\nmean: 397.80\nstdev: 9.98\ncv: 2.51%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 583,
+            "range": "66.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 583.00\nmean: 568.00\nstdev: 66.30\ncv: 11.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
