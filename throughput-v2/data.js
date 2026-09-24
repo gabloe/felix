@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790277945025,
+  "lastUpdate": 1790279754515,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14976,6 +14976,58 @@ window.BENCHMARK_DATA = {
             "range": "10654.28",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 915707.35\nmean: 913982.90\nstdev: 10654.28\ncv: 1.17%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39b2811880f930914f6f144ee117d1041b907f86",
+          "message": "Publishes are not refused while their shard moves (#675)\n\n* feat(broker): hold a publish to a moving shard and send it on\n\nBetween a move's fence and its cut-over nobody serves the shard, and a\npublish that landed there was refused. Now routing holds it, before it is\nadmitted, until the broker's routes show the new owner, then dispatches it\nthere: locally, or forwarded. That covers the old leader, any broker that\nwould forward to it, and a write that meets the fence as it closes. A\nforwarded publish that reaches the old leader, or a new leader whose routes\nare behind the requester's, waits on that broker the same way and is then\napplied or redirected.\n\nA local publish now takes its place in the write fence when it is routed,\nnot when it is claimed, so one routed just before the fence lands and the\nmove waits for it instead of it being refused at the claim.\n\nHolding is bounded by FELIX_SHARD_MOVE_HOLD_MS (2000) and\nFELIX_SHARD_MOVE_HOLD_MAX (1024 waiting). Past either, the publish is\nrefused as shard_unavailable with the new reason `moving`, retry class\n`retry` and a retry_after_ms hint; a client without error codes gets the\nrefusal it always did. Only publishes are held.\n\nMetrics: felix_broker_shard_move_held_total,\nfelix_broker_shard_move_hold_seconds and\nfelix_broker_shard_move_hold_refused_total{reason}.\n\n* feat(broker): leave a staged destination out of the quorum while it copies\n\nA move's destination is added to the replica set and counted toward the\nquorum from the moment it is staged, so on a one-replica stream every\nQuorum publish waited for the whole copy, and on a larger one it did\nwhenever a replica was down. A leader that saw the destination added now\ncomputes the quorum mark over the set without it. One that was already a\nreplica keeps counting, and so does one the leader has no earlier pass to\ncompare against.\n\nA pass ends with its slowest follower and the next mark waits for the next\npass, so the copy is also shipped in 50 ms slices, with the next pass run\nat once while it is unfinished.\n\nA Quorum stream placed with one replica refused every publish on a cluster:\nnothing ships for such a shard, so no mark was ever published and the wait\nread that as a lost leadership. The leader alone is its majority now.\n\nSpec: StageMove and LearnerVotes in FelixShard.tla. FelixShardStagedMove\nand FelixShardStagedMoveSingle pass every safety invariant with the\ndestination left out; FelixShardStagedMoveVotes, which counts it, violates\nStagedCopyNeverDelaysAck. FelixShardHandoff now has writes hold the fence\nfrom admission, as routing does.\n\n* test(cluster): publishing through a move is never refused\n\ncontinuous_publishing_through_a_move_is_never_refused runs four publishers\nthrough each of the old owner and the destination for a whole move and\nfinds none refused and every acknowledged record on the new owner exactly\nonce. It reads the log back by offset, because a replay goes through the\nsubscriber queue and can drop or stall on a long history. With\nFELIX_SHARD_MOVE_HOLD_MS=0 it fails with over a thousand refusals.\n\na_quorum_publish_during_a_copy_is_not_held_by_it suspends the destination\nof a one-replica Quorum stream before the move is staged, and Quorum\npublishes keep being acknowledged; counting the destination, the first one\nfails.\n\nDocs: the rebalancing plan marks Phase 0 and Phase 2 done, and the\nreplication design, scaling guide and changelog describe the hold and the\nquorum change.\n\n* fix(broker): hold a write whose fenced leader is a draining node\n\nA drain takes the leader out of the live set, so on any other broker the\nfenced leader's route reads as \"owner unavailable\" rather than as a forward,\nand a write there was refused instead of held. Routing now holds whenever\nthe shard's route is draining, whatever the dispatch says, and a hold that\nruns out is refused as moving.\n\ncontinuous_publishing_through_a_move_is_never_refused failed about one run\nin six on this; a_write_to_a_draining_node_waits_for_the_cut_over pins it.\nA stream that does not resolve is now logged with its error, like the\nother publish refusals.",
+          "timestamp": "2026-09-24T12:53:00-07:00",
+          "tree_id": "1040118193fda5e5178b8f00c17c3da5621e79d5",
+          "url": "https://github.com/gabloe/felix/commit/39b2811880f930914f6f144ee117d1041b907f86"
+        },
+        "date": 1790279753469,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 380424.88,
+            "range": "18735.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 380424.88\nmean: 389231.56\nstdev: 18735.89\ncv: 4.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 380424.88,
+            "range": "18735.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 380424.88\nmean: 389231.56\nstdev: 18735.89\ncv: 4.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 92453.19,
+            "range": "1073.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 92453.19\nmean: 92393.64\nstdev: 1073.01\ncv: 1.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 924531.87,
+            "range": "10730.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 924531.87\nmean: 923936.43\nstdev: 10730.10\ncv: 1.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
