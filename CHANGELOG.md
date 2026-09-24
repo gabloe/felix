@@ -20,7 +20,9 @@ for what the current release actually guarantees.
   while waiting, and without `wait_ms` it behaves exactly as before. A replica
   report that a move is waiting for — a drained leader, or a caught-up staged
   successor — now wakes placement at once instead of at its next tick; wakes
-  coalesce and one pass runs at a time.
+  coalesce and one pass runs at a time. New histograms
+  `felix_shard_move_duration_seconds` and `felix_shard_move_fence_seconds`
+  time moves from the steps each control-plane instance writes.
 
 - **Online shard rebalancing** (#130). A shard whose leader is alive is now
   moved rather than reassigned. The control plane stages the destination as a

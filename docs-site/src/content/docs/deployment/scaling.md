@@ -132,6 +132,8 @@ Metrics on the control plane:
 | `felix_shard_move_steps_total{step}` | steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_assignment_write_conflicts_total` | steps not written because another control-plane instance changed the shard after this pass read it |
+| `felix_shard_move_duration_seconds` | histogram: from a move's first step to its cut-over |
+| `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over, the window in which the shard is not served |
 
 Every step is written only if the shard is still at the generation the pass
 planned from, so two control-plane instances running placement at once

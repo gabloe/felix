@@ -158,7 +158,22 @@ fn install_metrics_recorder() -> PrometheusHandle {
     if let Some(handle) = METRICS_HANDLE.get() {
         return handle.clone();
     }
+    use crate::cluster::placement;
+    use metrics_exporter_prometheus::Matcher;
+    // Buckets only where a histogram is wanted; everything else keeps the
+    // exporter's default summary.
     let handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full(placement::SHARD_MOVE_DURATION_SECONDS.to_string()),
+            placement::MOVE_DURATION_BUCKETS,
+        )
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full(placement::SHARD_MOVE_FENCE_SECONDS.to_string()),
+                placement::MOVE_FENCE_BUCKETS,
+            )
+        })
+        .expect("histogram buckets are non-empty")
         .install_recorder()
         .expect("install metrics recorder");
     let _ = METRICS_HANDLE.set(handle.clone());

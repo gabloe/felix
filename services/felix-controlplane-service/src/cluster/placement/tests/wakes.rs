@@ -1,7 +1,8 @@
-//! Running placement on demand.
+//! Running placement on demand, and timing the moves it writes.
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use super::super::metrics::{MoveClock, MoveTimes};
 use super::*;
 use crate::store::ControlPlaneStore;
 use crate::test_support::{one_shard_cluster, shard_zero};
@@ -81,4 +82,103 @@ async fn a_requested_pass_runs_without_waiting_for_the_interval() {
 
     shutdown.cancel();
     task.await.expect("reconciler");
+}
+
+fn key() -> ShardKey {
+    shard_zero()
+}
+
+fn stage() -> MoveStep {
+    MoveStep::Stage {
+        successor: "broker-y".to_string(),
+    }
+}
+
+fn cut_over() -> MoveStep {
+    MoveStep::CutOver {
+        from: "broker-x".to_string(),
+        to: "broker-y".to_string(),
+    }
+}
+
+#[test]
+fn a_move_is_timed_from_stage_and_from_fence() {
+    let t0 = Instant::now();
+    let mut clock = MoveClock::default();
+    assert_eq!(clock.written(&key(), &stage(), 1, false, t0), None);
+    assert_eq!(
+        clock.written(
+            &key(),
+            &MoveStep::Fence,
+            2,
+            true,
+            t0 + Duration::from_secs(7)
+        ),
+        None
+    );
+    assert_eq!(
+        clock.written(&key(), &cut_over(), 3, true, t0 + Duration::from_secs(9)),
+        Some(MoveTimes {
+            total: Some(Duration::from_secs(9)),
+            fenced: Duration::from_secs(2),
+        })
+    );
+    // Finished: a later cut-over of the same shard is not this move.
+    assert_eq!(clock.written(&key(), &cut_over(), 4, false, t0), None);
+}
+
+/// A move that goes straight to the fence starts there.
+#[test]
+fn a_move_that_starts_at_the_fence_is_timed_from_it() {
+    let t0 = Instant::now();
+    let mut clock = MoveClock::default();
+    clock.written(&key(), &MoveStep::Fence, 1, false, t0);
+    let times = clock
+        .written(&key(), &cut_over(), 2, true, t0 + Duration::from_secs(1))
+        .expect("timed");
+    assert_eq!(times.total, Some(Duration::from_secs(1)));
+    assert_eq!(times.fenced, Duration::from_secs(1));
+}
+
+/// Staged by another instance: when is not known, so only the fence is timed.
+#[test]
+fn a_fence_after_someone_elses_stage_times_only_the_fence() {
+    let t0 = Instant::now();
+    let mut clock = MoveClock::default();
+    clock.written(&key(), &MoveStep::Fence, 1, true, t0);
+    let times = clock
+        .written(&key(), &cut_over(), 2, true, t0 + Duration::from_secs(1))
+        .expect("timed");
+    assert_eq!(times.total, None);
+}
+
+/// Another writer touched the shard between this instance's steps; the
+/// timing is not this instance's any more.
+#[test]
+fn a_shard_changed_elsewhere_is_forgotten() {
+    let t0 = Instant::now();
+    let mut clock = MoveClock::default();
+    clock.written(&key(), &stage(), 1, false, t0);
+    clock.written(&key(), &MoveStep::Fence, 2, true, t0);
+
+    clock.forget_changed(&[(key(), 2)].into_iter().collect());
+    clock.forget_changed(&[(key(), 3)].into_iter().collect());
+    assert_eq!(clock.written(&key(), &cut_over(), 4, true, t0), None);
+}
+
+#[test]
+fn an_abandoned_move_is_forgotten() {
+    let t0 = Instant::now();
+    let mut clock = MoveClock::default();
+    clock.written(&key(), &stage(), 1, false, t0);
+    clock.written(
+        &key(),
+        &MoveStep::Abandon {
+            successor: "broker-y".to_string(),
+        },
+        2,
+        true,
+        t0,
+    );
+    assert_eq!(clock.written(&key(), &cut_over(), 3, false, t0), None);
 }

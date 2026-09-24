@@ -1,6 +1,8 @@
 //! Applying a plan to the store, on a timer or when woken.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
+use super::metrics::MoveClock;
 use super::{MovePolicy, PlacementWakes, Plan, ReplicaPositions, assignment_for, plan_with};
 use crate::model::{Cache, Node, ShardAssignment, ShardKey, Stream};
 use crate::store::AssignmentWrite;
@@ -48,6 +50,8 @@ pub(super) struct PlannedPass {
     plan: Plan,
     /// Absent for a shard that had no assignment when the pass read.
     read: HashMap<ShardKey, u64>,
+    /// Shards that had a successor staged when the pass read.
+    staged: HashSet<ShardKey>,
 }
 
 impl PlannedPass {
@@ -75,7 +79,15 @@ pub async fn reconcile_once(
     policy: MovePolicy,
 ) -> ReconcileOutcome {
     match plan_pass(store, liveness, policy).await {
-        Some(pass) => apply_pass(store, &pass, &PlacementWakes::default()).await,
+        Some(pass) => {
+            apply_pass(
+                store,
+                &pass,
+                &mut MoveClock::default(),
+                &PlacementWakes::default(),
+            )
+            .await
+        }
         None => ReconcileOutcome::default(),
     }
 }
@@ -111,17 +123,24 @@ pub(super) async fn plan_pass(
         .iter()
         .map(|assignment| (assignment.key.clone(), assignment.generation))
         .collect();
-    Some(PlannedPass { plan, read })
+    let staged = existing
+        .iter()
+        .filter(|assignment| assignment.successor.is_some())
+        .map(|assignment| assignment.key.clone())
+        .collect();
+    Some(PlannedPass { plan, read, staged })
 }
 
-/// Write what a planned pass calls for, waking this instance's long-polls on
-/// every write.
+/// Write what a planned pass calls for, timing the moves it advances and
+/// waking this instance's long-polls on every write.
 pub(super) async fn apply_pass(
     store: &dyn crate::store::ControlPlaneStore,
     pass: &PlannedPass,
+    clock: &mut MoveClock,
     wakes: &PlacementWakes,
 ) -> ReconcileOutcome {
     let plan = &pass.plan;
+    clock.forget_changed(&pass.read);
     let mut outcome = ReconcileOutcome {
         kept: plan.kept(),
         ..ReconcileOutcome::default()
@@ -142,6 +161,15 @@ pub(super) async fn apply_pass(
             Ok(AssignmentWrite::Written(written)) => {
                 wakes.assignment_written();
                 outcome.moved += 1;
+                if let Some(times) = clock.written(
+                    key,
+                    step,
+                    written.generation,
+                    pass.staged.contains(key),
+                    Instant::now(),
+                ) {
+                    super::metrics::record(times);
+                }
                 metrics::counter!(SHARD_MOVE_STEPS_TOTAL, "step" => step.label()).increment(1);
                 tracing::info!(
                     kind = %key.kind,
@@ -261,6 +289,7 @@ pub fn spawn_reconciler(
         let mut ticker = tokio::time::interval(interval);
         // A pass that overruns must not then run back-to-back catching up.
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut clock = MoveClock::default();
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
@@ -274,7 +303,7 @@ pub fn spawn_reconciler(
                 continue;
             }
             if let Some(pass) = plan_pass(store.as_ref(), &liveness, policy).await {
-                apply_pass(store.as_ref(), &pass, &wakes).await;
+                apply_pass(store.as_ref(), &pass, &mut clock, &wakes).await;
             }
         }
     })
