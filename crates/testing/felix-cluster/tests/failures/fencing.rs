@@ -202,6 +202,62 @@ async fn a_resumed_leader_does_not_acknowledge_writes_the_cluster_loses() {
     cluster.shutdown().await;
 }
 
+/// The same fault on a `Leader` stream acknowledged on enqueue, the default.
+///
+/// Here the ack goes out before the write, so a resumed broker whose cached
+/// lease flag has not caught up could acknowledge a record its worker then
+/// refuses to write. It may refuse, forward or write; it may not acknowledge
+/// and drop. The unit tests beside the publish handler place the pause exactly;
+/// this checks the same promise end to end.
+#[serial]
+#[tokio::test]
+async fn a_resumed_leader_acking_on_enqueue_does_not_acknowledge_writes_the_cluster_loses() {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::replicated(STREAM, 1, 3)],
+        inherit_output: std::env::var("FELIX_TEST_BROKER_OUTPUT").is_ok(),
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let deposed = cluster.owner(STREAM).await.expect("owner");
+
+    cluster
+        .publish_via(&deposed, STREAM, b"before".to_vec())
+        .await
+        .expect("publish before the pause");
+    // A `Leader` ack does not wait for the followers. Wait here, so a promoted
+    // replica holds the record and the replay below has something to find.
+    cluster
+        .wait_for_replication(STREAM, Duration::from_secs(10))
+        .await
+        .expect("the record reaches a follower");
+
+    cluster.pause_node(&deposed).expect("pause the leader");
+    let promoted = failover_from(&cluster, &deposed)
+        .await
+        .expect("a replica should have been promoted while the leader was frozen");
+    cluster
+        .resume_node(&deposed)
+        .expect("resume the old leader");
+
+    let acknowledged = cluster
+        .publish_via(&deposed, STREAM, b"after-resume".to_vec())
+        .await
+        .is_ok();
+
+    let payloads = replay(&cluster, &promoted).await;
+    if acknowledged && !payloads.contains(&"after-resume".to_string()) {
+        let timeline = timeline(&cluster, "after the resume").await;
+        panic!(
+            "the resumed leader {deposed} acknowledged a record the promoted leader \
+             {promoted} does not have: {payloads:?}{timeline}",
+        );
+    }
+
+    cluster.shutdown().await;
+}
+
 /// **A paused follower does not stop a quorum the rest of the set can reach.**
 /// Losing a minority is the case `Quorum` exists to tolerate; a pause is the
 /// sharpest version of it, because the follower is neither answering nor
