@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790268199269,
+  "lastUpdate": 1790268555347,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18744,6 +18744,72 @@ window.BENCHMARK_DATA = {
             "range": "485.30",
             "unit": "us",
             "extra": "trials: 5\nmedian: 640.00\nmean: 816.20\nstdev: 485.30\ncv: 59.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5ac19759976839be20b3d2c99dc5074c8e26e8cb",
+          "message": "A moved shard keeps its group state and counters (#665)\n\n* fix(replication): report a shard drained only once its group state and counters are on the successor\n\nThe drained pass now ships the consumer-group cursor, dead-letter and\ncounter logs before the report, and withholds drained while any follower\nlevel on the shard's log is behind on one of them. A held report is\nlogged with the shard and follower and counted in\nfelix_broker_replication_drain_withheld_total{log}.\n\n* test(cluster): a moved shard keeps its group state and counters\n\n* docs: the drained report waits for a shard's group state and counters\n\n* fix(replication): gate the drained report on the move's successor only\n\nBrokers now read the assignment's successor. A draining shard reports\ndrained once the successor holds the shard's log and every log that rides\nit; another replica still behind on one of those is left out of caught_up\ninstead of holding the move. A move with no successor keeps the strict rule:\nevery follower level on the main log must hold them.",
+          "timestamp": "2026-09-24T09:46:09-07:00",
+          "tree_id": "1c7a4b08345cdb00930b8ed7f158557e91d9a412",
+          "url": "https://github.com/gabloe/felix/commit/5ac19759976839be20b3d2c99dc5074c8e26e8cb"
+        },
+        "date": 1790268552294,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 169,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 168.40\nstdev: 0.89\ncv: 0.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 207,
+            "range": "2.61",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 207.00\nmean: 206.60\nstdev: 2.61\ncv: 1.26%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 272,
+            "range": "23.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 272.00\nmean: 265.60\nstdev: 23.39\ncv: 8.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 203,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 203.00\nmean: 204.20\nstdev: 2.77\ncv: 1.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 408,
+            "range": "241.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 408.00\nmean: 515.40\nstdev: 241.84\ncv: 46.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 618,
+            "range": "827.08",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 618.00\nmean: 994.80\nstdev: 827.08\ncv: 83.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
