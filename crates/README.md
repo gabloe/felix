@@ -14,7 +14,7 @@ Each directory is named after the package it holds, so `-p felix-wire` lives in
 `crates/protocol/felix-wire`. A new crate goes in the group whose users it
 shares; if none fits, that is worth a conversation before adding a fifth group.
 
-Dependencies point one way: `testing` and `sdk` depend on `protocol`, `server`
-depends on `protocol`, and nothing in `protocol` depends on anything else here.
-The one exception is `felix-client`'s off-by-default `in-process` feature,
-which embeds `felix-broker`.
+Dependencies point one way: `sdk` and `server` depend on `protocol`, `testing`
+depends on whatever it exercises, and nothing in `protocol` depends on anything
+else here. Only `felix-wire`, `felix-transport` and `felix-client` are published
+to crates.io.

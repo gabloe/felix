@@ -10,6 +10,8 @@ homepage.workspace = true
 readme = "README.md"
 keywords = ["felix", "messaging", "config"]
 categories = ["network-programming"]
+# Built into the services, not consumed from a registry.
+publish = false
 
 [dependencies]
 serde = { workspace = true }

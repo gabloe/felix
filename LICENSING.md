@@ -12,7 +12,8 @@ about reciprocity, not about who is allowed to make money.
 | Path | License | Why |
 |---|---|---|
 | `crates/protocol/felix-wire/` | Apache-2.0 | The wire protocol. Anyone should be able to implement a Felix client or server in any language without friction. |
-| `crates/sdk/felix-client/` (default build) | Apache-2.0 | The Rust client SDK. Embeddable in your own products without restriction. |
+| `crates/sdk/felix-client/` | Apache-2.0 | The Rust client SDK. Embeddable in your own products without restriction. |
+| `crates/sdk/felix-python/`, `crates/sdk/felix-typescript/` | Apache-2.0 | The Python and Node.js bindings over the Rust client. |
 | `crates/protocol/felix-transport/` | Apache-2.0 | Generic QUIC transport plumbing, not Felix-specific server logic. |
 | `crates/server/felix-common/` | Apache-2.0 | Membership shapes, the env-var registry, and process lifecycle shared by the services. |
 | `crates/testing/felix-conformance/` | Apache-2.0 | Conformance test runner and wire-format test vectors, so third-party client/server implementations can validate interop. (It links against the AGPL-3.0 crates below to run its checks against the reference broker — that's normal for a dev/CI tool and doesn't change its own license.) |
@@ -62,33 +63,17 @@ used.
 Two practical consequences worth stating plainly:
 
 - **Linking a proprietary application against the AGPL crates is a problem.**
-  That is what the Apache-2.0 half is for. `felix-client`, `felix-wire`,
-  `felix-transport`, and `felix-common` are everything an application needs to
-  *talk to* Felix, and they carry no copyleft obligation at all. Build whatever
-  you like on top.
+  That is what the Apache-2.0 half is for. `felix-client` and the two crates it
+  is built on, `felix-wire` and `felix-transport`, are everything an application
+  needs to *talk to* Felix, and they carry no copyleft obligation at all. They
+  are also the only crates published to crates.io. Build whatever you like on
+  top.
 - **Many organisations ban AGPL dependencies outright.** That is a real cost
   and it is accepted knowingly: the crates such an organisation actually needs
   to depend on are the Apache-2.0 ones.
 
 See the full text in [`LICENSE`](LICENSE) or
 https://www.gnu.org/licenses/agpl-3.0.html.
-
-## `felix-client`'s `in-process` feature
-
-`felix-client` has an optional `in-process` Cargo feature that embeds a
-`felix-broker::Broker` directly for local dev/testing without a real QUIC
-connection. `felix-broker` is AGPL-3.0, so enabling this feature pulls
-AGPL-3.0 code into your build — it is **off by default** specifically so
-the default `felix-client` dependency graph stays 100% Apache-2.0. Only
-enable `in-process` if you're comfortable with that (Felix's own demos and
-test suite do).
-
-It is also why `felix-broker` and `felix-storage` are on crates.io despite
-being AGPL-3.0. crates.io resolves an optional dependency like any other, so
-`felix-client` cannot be published while they are absent. Their presence in
-the registry changes nothing here: the default `felix-client` build still
-pulls no AGPL-3.0 code, and a crate's licence is what governs its use, not
-where it is hosted.
 
 ## Contributions
 

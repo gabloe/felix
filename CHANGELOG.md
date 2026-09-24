@@ -79,6 +79,27 @@ for what the current release actually guarantees.
   `Broker::claim_publish` returns it. The registry keys (`CacheKey`,
   `NamespaceKey`, `StreamKey`, `TopicKey`) are no longer public; nothing
   outside the broker used them.
+- **The workspace is grouped by role.** Crates live under
+  `crates/{protocol,server,sdk,testing}/` and the service packages are renamed
+  `felix-broker-service` and `felix-controlplane-service` (binaries unchanged),
+  so `cargo test -p broker` is now `cargo test -p felix-broker-service`. Crate
+  internals are reorganised by domain; `CONTRIBUTING.md` has the rules.
+- `felix-storage` paths: `CacheOp` is `felix_storage::cache::CacheOp`, `Epoch`
+  is `felix_storage::log::Epoch`, the `Corruption*` types are only at the crate
+  root, and the modules nothing outside the crate used (`commit_order`,
+  `segment::io`, `disk_log::{epochs, recovery, retention, segments, sync}`) are
+  private.
+- Only `felix-wire`, `felix-transport` and `felix-client` are published to
+  crates.io. The server crates were only there because of the `in-process`
+  feature below.
+
+### Removed
+
+- **`felix-client`'s `in-process` feature and `InProcessClient`.** It wrapped
+  an embedded `felix_broker::Broker` for two smoke tests and nothing else used
+  it, but it made `felix-broker` and `felix-storage` optional dependencies of
+  the client, and so forced them onto crates.io. Test against a broker over
+  QUIC instead; `felix-cluster` starts one.
 
 ## [0.6.0-preview] - 2026-09-20
 

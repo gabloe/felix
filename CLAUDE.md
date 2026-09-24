@@ -8,7 +8,7 @@ Rust 1.97, edition 2024. The `Taskfile.yml` shortcuts are the source of truth â€
 
 ```bash
 task lint          # cargo fmt --check + clippy --workspace --all-targets --all-features -D warnings
-task test          # cargo test --workspace, then cargo test -p felix-client --features in-process
+task test          # cargo test --workspace (with Postgres when Docker is available)
 task demo:check    # build/clippy/test the demo crates that are OUTSIDE the workspace
 task coverage      # llvm-cov; spins up a Postgres container unless CI or FELIX_TEST_DATABASE_URL is set
 task conformance   # wire-protocol conformance runner
@@ -46,9 +46,6 @@ degrades gracefully without `pandas`.
   invalidates "revert the fix and watch the test fail": the test keeps passing because it
   is still running the old broker. `task test` is fine â€” `cargo test --workspace` builds
   the binary first.
-- **`task test` deliberately does not use `--all-features` on the whole workspace.**
-  `felix-client`'s `in-process` feature is run separately so its tests do not add concurrent
-  load to timing-sensitive tests elsewhere.
 
 ## Architecture
 

@@ -10,6 +10,8 @@ homepage.workspace = true
 readme = "README.md"
 keywords = ["felix", "routing"]
 categories = ["network-programming"]
+# Built into the services, not consumed from a registry.
+publish = false
 
 [dependencies]
 felix-common = { path = "../felix-common", version = "0.6.0-preview" }

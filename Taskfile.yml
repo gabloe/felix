@@ -46,11 +46,6 @@ tasks:
         else
           cargo test --workspace
         fi
-      # Run separately (not --all-features on the whole workspace): felix-client's
-      # `in-process` feature only affects felix-client itself, and keeping it out of
-      # the main workspace run avoids adding unrelated concurrent test load that can
-      # perturb timing-sensitive tests elsewhere in the suite.
-      - "cargo test -p felix-client --features in-process"
       - |
         if [ -z "${CI:-}" ]; then
           task pg:down
@@ -160,7 +155,7 @@ tasks:
     desc: "Prune build artifacts cargo will never collect, keeping the current build"
     # Cargo keys artifacts by package + features + flags and never garbage-collects
     # the losers, so every distinct build multiplies the directory: default vs
-    # --all-features vs --features in-process, the four standalone demo crates that
+    # --all-features, the four standalone demo crates that
     # resolve features independently, plus release. Measured at 41 GB against a
     # 4.2 GB single clean build — roughly sevenfold duplication, none of it reachable.
     #

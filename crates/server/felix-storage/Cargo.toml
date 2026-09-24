@@ -10,6 +10,8 @@ homepage.workspace = true
 readme = "README.md"
 keywords = ["felix", "storage", "cache"]
 categories = ["network-programming", "caching"]
+# Built into the services, not consumed from a registry.
+publish = false
 
 [dependencies]
 bytes = { workspace = true }

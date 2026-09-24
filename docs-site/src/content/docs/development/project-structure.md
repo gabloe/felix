@@ -177,7 +177,6 @@ config. Connection pooling lives in `felix-client`, not here.
 - `Client`: Main client interface
 - `Publisher`: Publishing handle
 - `Subscription`: Subscription handle
-- `InProcessClient`: Embedded testing client
 - `ClientConfig`: Client configuration
 
 **Key modules**:

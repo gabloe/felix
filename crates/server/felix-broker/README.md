@@ -1,15 +1,12 @@
 # felix-broker
 
-The broker core of [Felix](https://github.com/gabloe/felix): stream registry,
-fanout, per-subscriber queues, and the commit ordering a publish passes through.
+The broker core of [Felix](https://github.com/gabloe/felix): streams, caches and
+consumer groups over one log, the publish path with its commit ordering, and
+fanout to per-subscriber queues. Start at `Broker`.
 
-**This crate is on crates.io so that `felix-client` can be.** `felix-client`'s
-optional `in-process` feature declares it as a dependency, and crates.io
-resolves an optional dependency like any other. Running a broker means the
-`felix-broker` binary from a [release](https://github.com/gabloe/felix/releases)
-or a container image, not this library.
+It has no sockets and no control-plane client; `services/felix-broker-service`
+wires those around it. That split is what lets the semantics be tested without
+a network.
 
-AGPL-3.0-only — running a modified Felix as a network service means publishing
-your changes. `felix-client` itself is Apache-2.0 and a default build pulls none
-of this. See
+Not published; it is built into the broker service. AGPL-3.0-only. See
 [LICENSING.md](https://github.com/gabloe/felix/blob/main/LICENSING.md).

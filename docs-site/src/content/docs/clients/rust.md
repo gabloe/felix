@@ -34,9 +34,6 @@ felix-client = { version = "0.5", features = ["telemetry"] }
 **Features**:
 
 - `telemetry`: per-operation timing and frame counters (adds overhead)
-- `in-process`: embeds a broker directly, for tests without a network. Pulls in
-  AGPL-3.0 code; the default build does not. See
-  [LICENSING.md](https://github.com/gabloe/felix/blob/main/LICENSING.md)
 
 ## Quick Start
 
@@ -871,35 +868,6 @@ opens one watch per shard and merges them. The retained version sends
 `ShardedCacheWatchItem::StateComplete` once every shard's current values have
 arrived. Needs `FEATURE_CACHE_SHARDS`.
 
-## In-Process Client
-
-For testing and embedded scenarios, use the in-process client:
-
-```rust
-use bytes::Bytes;
-use felix_client::InProcessClient;
-use felix_broker::Broker;
-
-// Create embedded broker
-let broker = Broker::new(broker_config).await?;
-
-// Create in-process client (no network)
-let client = InProcessClient::new(broker.clone());
-
-// Same API as network client
-client
-    .publish("acme", "prod", "test", Bytes::from_static(b"data"))
-    .await?;
-let mut sub = client.subscribe("acme", "prod", "test").await?;
-```
-
-**Use cases**:
-
-- Unit tests
-- Integration tests
-- Embedded applications
-- Benchmarking without network overhead
-
 ## Connection Management
 
 ### Automatic Reconnection
@@ -1108,31 +1076,6 @@ async fn batching_publisher(client: &Client) -> Result<()> {
 
 ## Testing
 
-### Unit Tests with In-Process Client
-
-```rust
-#[tokio::test]
-async fn test_publish_subscribe() {
-    use bytes::Bytes;
-
-    let broker = Broker::new(BrokerConfig::default()).await.unwrap();
-    let client = InProcessClient::new(broker);
-    
-    // Subscribe first
-    let mut sub = client.subscribe("test", "ns", "stream").await.unwrap();
-    
-    // Publish
-    client
-        .publish("test", "ns", "stream", Bytes::from_static(b"hello"))
-        .await
-        .unwrap();
-    
-    // Receive
-    let event = sub.recv().await.unwrap();
-    assert_eq!(event, Bytes::from_static(b"hello"));
-}
-```
-
 ### Integration Tests
 
 ```rust
@@ -1193,6 +1136,5 @@ else is a knob to turn off a measurement; see
 | Cache put | `cache_put()` | Store with TTL |
 | Cache get | `cache_get()` | Retrieve value |
 | Publisher | `Client::publisher()` | Streaming publish |
-| In-process | `InProcessClient::new()` | Testing, embedded |
 
 For complete API documentation, see the [rustdoc](https://docs.rs/felix-client).

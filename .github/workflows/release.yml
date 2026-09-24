@@ -722,13 +722,9 @@ jobs:
   # must stay one; `cargo publish` waits for the index between crates on its
   # own, so the sequence is the whole mechanism.
   #
-  # felix-broker and felix-storage are AGPL-3.0 and are on the list anyway,
-  # because felix-client's `in-process` feature declares them as optional
-  # dependencies and crates.io requires an optional dependency to resolve like
-  # any other. Publishing them changes nothing about the licence split: the
-  # default felix-client build still pulls no AGPL-3.0 code, which is what
-  # LICENSING.md promises. The excluded set is the one `check_publish_metadata.py`
-  # calls not-publishable — the service binaries and the dev/CI tools.
+  # Only the client and the two crates it depends on are published. Everything
+  # else is `publish = false`; `check_publish_metadata.py` keeps this list and
+  # those flags in agreement.
   #
   # To turn it on: set the repository variable PUBLISH_CRATES to "true" and add
   # a CARGO_REGISTRY_TOKEN secret with publish rights. Check the names are
@@ -772,8 +768,7 @@ jobs:
           # Re-running a release must not fail on the crates that already
           # landed: a publish that dies halfway leaves the earlier tiers up,
           # and crates.io answers a repeat with an error rather than a no-op.
-          for crate in felix-authz felix-common felix-storage felix-transport \
-                       felix-wire felix-broker felix-router felix-client; do
+          for crate in felix-transport felix-wire felix-client; do
             status=$(curl -sS -o /dev/null -w '%{http_code}' \
               -A "felix-release/${version}" \
               "https://crates.io/api/v1/crates/${crate}/${version}")

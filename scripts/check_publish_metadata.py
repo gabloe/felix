@@ -47,9 +47,15 @@ COPYLEFT = {
     "felix-controlplane-service",
 }
 
-# Service binaries and dev/CI tools with hard AGPL-3.0 dependencies. Nobody
-# consumes these from a registry.
+# Everything except the client SDK and the two crates it is built on. The
+# server libraries are only ever built into the services, and the rest are
+# service binaries or dev/CI tools.
 NOT_PUBLISHABLE = {
+    "felix-authz",
+    "felix-broker",
+    "felix-common",
+    "felix-router",
+    "felix-storage",
     "felix-broker-service",
     "felix-controlplane-service",
     "felix-conformance",
@@ -112,8 +118,8 @@ def check() -> list[str]:
         should_publish = name not in NOT_PUBLISHABLE
         if publishable and not should_publish:
             failures.append(
-                f"{name}: must set `publish = false` — it is a service binary or a "
-                f"dev tool, not a library to consume from a registry."
+                f"{name}: must set `publish = false` — only the client SDK and the "
+                f"crates it depends on are published."
             )
         if not publishable and should_publish:
             failures.append(
