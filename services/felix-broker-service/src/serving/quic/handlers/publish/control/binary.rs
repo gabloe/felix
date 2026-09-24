@@ -137,6 +137,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
             target,
             payloads,
             response: None,
+            acked_on_enqueue: false,
             admission_permit: None,
             fenced: None,
         },

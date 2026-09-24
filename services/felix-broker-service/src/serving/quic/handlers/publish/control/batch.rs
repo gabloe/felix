@@ -313,7 +313,14 @@ pub(crate) async fn handle_publish_batch_message(
     // Same reasoning as the JSON path above: `Quorum` outranks the local
     // ack-on-commit policy, because it is the stream saying this broker alone
     // cannot answer for the record.
-    let commit_ack = ack_on_commit || forwarding || quorum || idempotent;
+    //
+    // The lease check goes last because it reads the clock: see
+    // `PublishContext::must_wait_for_write`.
+    let commit_ack = ack_on_commit
+        || forwarding
+        || quorum
+        || idempotent
+        || (ack_mode != felix_wire::AckMode::None && publish_ctx.must_wait_for_write());
     let (response_tx, response_rx) = if ack_mode != felix_wire::AckMode::None && commit_ack {
         let (response_tx, response_rx) = oneshot::channel();
         (Some(response_tx), Some(response_rx))
@@ -327,6 +334,7 @@ pub(crate) async fn handle_publish_batch_message(
             target,
             payloads,
             response: response_tx,
+            acked_on_enqueue: ack_mode != felix_wire::AckMode::None && !commit_ack,
             admission_permit: None,
             fenced: None,
         },

@@ -45,7 +45,7 @@ beats silently losing an acknowledged record.
 
 | Level | An ack means | Loss window |
 | --- | --- | --- |
-| `Leader` | The shard's leader has it durably | Everything the leader had not yet shipped, if its storage is lost |
+| `Leader` | With `ack_on_commit` on, the shard's leader has it durably. Off, the default, the leader has queued it | Everything the leader had not yet shipped, if its storage is lost; with `ack_on_commit` off, also a record still queued when the leader crashes or its lease runs out |
 | `Quorum` | A majority of the replica set, leader included, has it durably | None within the replica set |
 
 `Quorum` waits. A publish is not acknowledged until the leader can show a
@@ -66,6 +66,23 @@ acknowledges and then dies before its next report leaves a fresh report naming
 a replica without the record, and promotion picks from that report. See
 `docs/replication-design.md` under "Who may be promoted", and #527 for the
 rule change that closes it.
+
+**With `ack_on_commit` off, a `Leader` ack is sent when the publish is queued,
+before it is written.** The record is lost if the leader crashes before the
+write, or if its lease lapses while the record waits in the queue. The worker
+refuses that write, and has to: another broker may lead the shard by then, and
+writing it late is the split brain the lease exists to prevent. To narrow the
+window, a publish admitted with less lease left than the publish queue wait
+plus the ack wait (capped at half the lease) waits for its write instead of
+being acknowledged on enqueue, so a lapse reaches the client as
+`shard_unavailable`. A process pause that starts after the ack and outlasts the
+lease still loses the record; each such loss is counted in
+`felix_broker_acked_publishes_dropped_total` and logged. For an ack that means
+the record is on disk, turn `ack_on_commit` on or declare the stream `Quorum`.
+
+> `a_publish_admitted_near_lease_expiry_waits_for_the_write`,
+> `a_batch_admitted_near_lease_expiry_waits_for_the_write`,
+> `an_acked_publish_the_lease_strands_is_counted`.
 
 **The `Leader` loss window is bounded by replication lag**, exported as
 `felix_broker_replication_lag_records`. An operator choosing `Leader` is
@@ -97,6 +114,10 @@ write the cluster has lost.** It wakes still believing it leads; the lease and
 the generation are what stop it.
 
 > `a_resumed_leader_does_not_acknowledge_writes_the_cluster_loses`.
+
+That holds for acknowledgements sent after it resumes. A `Leader` publish it
+acknowledged on enqueue before the freeze, and had not yet written, is lost —
+see "Consistency" above.
 
 The lease depends on bounded process suspension, not on synchronised clocks:
 each broker measures elapsed time on its own monotonic clock and gives up a

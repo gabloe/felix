@@ -110,6 +110,7 @@ async fn uni_loop_breaks_on_enqueue_error() -> Result<()> {
         client_endpoints: None,
         peers: None,
         lease: None,
+        lease_headroom: std::time::Duration::ZERO,
         marks: None,
         quorum_timeout: Duration::from_secs(1),
         workers: Arc::new(vec![tx]),

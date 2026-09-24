@@ -113,6 +113,15 @@ record before the publisher is told it is safe.**
 durably, and answers. Replication still happens; the acknowledgement simply
 does not wait for it. One round trip.
 
+With the broker's default `ack_on_commit: false`, that answer goes out when the
+publish is queued, before the write. A record acknowledged that way is lost if
+the leader crashes before writing it, or if a pause outlasts the leader's lease:
+the write is then refused, because another broker may lead the shard by then.
+Near the end of the lease the broker waits for the write anyway, so a lapse
+comes back as `shard_unavailable`, and a loss after an ack is counted in
+`felix_broker_acked_publishes_dropped_total`. For an acknowledgement that
+means the record is on disk, set `ack_on_commit: true` or use `Quorum`.
+
 **`Quorum`** — the leader writes durably, ships the record to its replicas
 concurrently, and answers once a **majority of the replica set, counting
 itself**, holds it. On a set of three that is two, so one unreachable replica
@@ -155,8 +164,9 @@ promote a replica, because promoting one would open the shard **without** that
 record and no reader could tell. The shard is left unavailable until the old
 leader returns with its disk.
 
-So the trade is not really safety against latency. Both refuse to lose an
-acknowledged record; they differ in **when you learn there is a problem** —
+So the trade is not really safety against latency. Both refuse to lose a
+record acknowledged after it was written (for `Leader`, with `ack_on_commit`
+on); they differ in **when you learn there is a problem** —
 `Quorum` at publish time, while you still hold the record, or `Leader` at
 failover time, when the only copy is on a broker that is gone.
 

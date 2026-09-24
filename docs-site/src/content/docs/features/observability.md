@@ -55,6 +55,7 @@ felix_publish_latency_ms                    # histogram
 felix_broker_ingress_queue_depth            # publish jobs waiting
 felix_broker_ingress_dropped_total          # overflow, by policy
 felix_broker_ingress_rejected_total
+felix_broker_acked_publishes_dropped_total  # by reason: acked on enqueue, then not written
 felix_client_publish_forwarded_total        # client: publishes the broker had to relay
 felix_broker_json_publishes_total            # by frame: publishes still on JSON
 felix_client_publish_cancelled_after_enqueue_total  # client: publishes whose caller went away

@@ -192,6 +192,19 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **A `Leader` publish acknowledged on enqueue could be dropped without a
+  trace.** With `ack_on_commit` off (the default) the ack goes out when the
+  publish is queued; if the broker's lease lapsed before the worker wrote it,
+  the worker refused the write and the refusal went nowhere. The refusal is
+  right (another broker may lead the shard), so admission now reads the lease
+  clock for such a publish and, with less left than the publish queue wait plus
+  the ack wait (capped at half the lease), waits for the write, so a lapse
+  reaches the client as `shard_unavailable`. A pause that starts after the ack
+  can still strand one; it is counted in the new
+  `felix_broker_acked_publishes_dropped_total{reason}` and logged at warn. The
+  docs no longer claim a `Leader` ack means the record is durable under the
+  default. (#671)
+
 - **An acknowledged write could be lost in a planned shard move.** Admission
   checked that the broker served the shard, but an admitted publish could wait
   in the publish queue and claim its offsets after the old leader had reported

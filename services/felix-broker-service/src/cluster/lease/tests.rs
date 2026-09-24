@@ -197,3 +197,17 @@ async fn an_older_heartbeat_handled_late_does_not_move_the_anchor_back() {
     tokio::time::advance(Duration::from_millis(2)).await;
     assert!(!lease.is_valid_now());
 }
+
+#[tokio::test(start_paused = true)]
+async fn remaining_counts_down_from_the_usable_life_to_zero() {
+    let lease = LeaseState::new(LEASE);
+    assert_eq!(lease.remaining(), Duration::ZERO, "never renewed");
+    lease.renew();
+    assert_eq!(lease.remaining(), Duration::from_secs(3));
+
+    tokio::time::advance(Duration::from_millis(2_500)).await;
+    assert_eq!(lease.remaining(), Duration::from_millis(500));
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(lease.remaining(), Duration::ZERO);
+}

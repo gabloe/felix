@@ -727,6 +727,7 @@ async fn handle_stream_drain_timeout_sleep_branch() -> Result<()> {
             client_endpoints: None,
             peers: None,
             lease: None,
+            lease_headroom: std::time::Duration::ZERO,
             marks: None,
             quorum_timeout: Duration::from_secs(1),
             workers: Arc::new(vec![tx]),

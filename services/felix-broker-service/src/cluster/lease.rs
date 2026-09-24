@@ -143,12 +143,19 @@ impl LeaseState {
     /// fails here even though the cached flag still says otherwise, which is the
     /// entire reason this exists separately.
     pub fn is_valid_now(&self) -> bool {
+        !self.remaining().is_zero()
+    }
+
+    /// How long the lease has left, against the clock. Zero once it has lapsed
+    /// or was never held.
+    pub fn remaining(&self) -> Duration {
         let stamp = self.renewed_at_millis.load(Ordering::Acquire);
         if stamp == 0 {
-            return false;
+            return Duration::ZERO;
         }
         let elapsed = self.base.elapsed().as_millis() as u64 + 1;
-        Duration::from_millis(elapsed.saturating_sub(stamp)) < self.usable()
+        self.usable()
+            .saturating_sub(Duration::from_millis(elapsed.saturating_sub(stamp)))
     }
 
     /// Keep the cached flag in step with the clock.

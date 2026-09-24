@@ -216,6 +216,7 @@ async fn build_publish_context(broker: Arc<Broker>) -> PublishContext {
         client_endpoints: None,
         peers: None,
         lease: None,
+        lease_headroom: std::time::Duration::ZERO,
         marks: None,
         quorum_timeout: Duration::from_secs(1),
         workers: Arc::new(vec![tx]),

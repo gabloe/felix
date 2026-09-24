@@ -9,6 +9,7 @@ mod control_binary;
 mod control_message;
 mod idempotent_acks;
 mod ingress;
+mod lease_headroom;
 mod ownership_gate;
 mod routing;
 mod stream_cache;
@@ -61,6 +62,7 @@ fn make_publish_context(
         client_endpoints: None,
         peers: None,
         lease: None,
+        lease_headroom: Duration::ZERO,
         marks: None,
         quorum_timeout: Duration::from_secs(1),
         workers: Arc::new(vec![tx.clone()]),
@@ -85,6 +87,7 @@ fn make_job() -> PublishJob {
         },
         payloads: vec![Bytes::from_static(b"payload")],
         response: None,
+        acked_on_enqueue: false,
         admission_permit: None,
         fenced: None,
     }
