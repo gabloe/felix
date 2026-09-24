@@ -512,6 +512,7 @@ bandwidth limit below.
 A move that has been fenced is not timed out. The leader has stopped
 serving; going back means a new generation and every client following the
 shard twice, while going on waits for at most the lag bound's worth of copy.
+An operator can still take one back (see [Operator controls](#operator-controls)).
 A destination that dies after the fence, while it is still copying the
 remainder, would hold the drained report forever; it is dropped at a new,
 still fenced generation, the leader reports drained against the followers it
@@ -526,7 +527,7 @@ after the fence.
 
 | Metric | Meaning |
 | --- | --- |
-| `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `timed_out`, `reseat`, `seat` |
+| `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `timed_out`, `reseat`, `seat`, and an operator's `cancel` and `retake` |
 | `felix_shard_moves_timed_out_total` | moves and follower replacements abandoned at the move timeout; a steady count means a copy that cannot finish |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or a move limit holding a drain back |
 | `felix_shard_assignment_write_conflicts_total` | placements and move steps not written because another instance changed the shard after this pass read it; the next pass re-plans |
@@ -550,6 +551,92 @@ broker has acted on it.
 
 The fence and the broker's side of it are described in
 [replication-design.md](replication-design.md#planned-handoff).
+
+#### Operator controls
+
+An operator can see the moves in flight, see what placement would do next,
+start and cancel moves, and pause placement's own. Reads take
+`node.view:cluster:*`, like the assignment listing; everything that changes
+a move takes `node.manage:cluster:*`, the permission that drains a node.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /v1/shard-moves` | moves and follower replacements in progress, and whether placement is paused |
+| `GET /v1/placement/plan` | what the next pass would write, shard by shard, without writing it |
+| `POST /v1/shard-moves` | start moving a shard's leadership to a node |
+| `DELETE /v1/shard-moves/{tenant_id}/{namespace}/{name}/{shard}` | cancel a shard's move or replacement; `?kind=cache` for a cache shard |
+| `POST /v1/placement/pause`, `POST /v1/placement/resume` | stop and restart placement's own moves |
+
+A listed move has a `step` (`staged`, `fenced` or `replacing`), the `reason`
+it started (`drain`, `balance`, `operator` or `replace`, stored on the
+assignment as `move_reason`), `started_at_millis`, and from the leader's
+latest report at the assignment's generation `lag_records`, `caught_up` and,
+for a fenced move, `drained`:
+
+```json
+{ "paused": false,
+  "items": [ { "tenant_id": "t1", "namespace": "ns", "stream": "orders", "shard": 0, "kind": "stream",
+               "leader": "broker-1", "destination": "broker-3", "step": "staged", "reason": "operator",
+               "started_at_millis": 1790000000000, "generation": 12, "lag_records": 4210,
+               "caught_up": false, "drained": false } ] }
+```
+
+**Starting a move** takes the shard's key and a `destination`. It is refused
+where placement would not make it: the destination not registered (404
+`unknown_node`), not live (409 `destination_not_live`), already the leader
+(`already_leader`) or at its `max_shards` cap (`at_capacity`); the shard
+already moving (`already_moving`); its leader down (`leader_unavailable`,
+failover places it); or a move limit reached (`move_limit`). It is held to
+the move limits but not to a pause. From there it runs like any other move,
+through the fence and the cut-over, and a timeout abandons it the same way.
+
+**Cancelling** depends on how far the move has got:
+
+- *Before the fence*, the destination is dropped, as a timeout would, unless
+  the stream already had it as a follower. A replacement drops the follower
+  it was copying in.
+- *After the fence*, the leader that stopped serves again at a new
+  generation (`retake`). Nobody else has led since the fence, so its log
+  holds every write it accepted, and writes still inside its write fence
+  land in that same log. Publishes held for the move go to it once its
+  routes show it serving; subscribers it ended with `shard_moved` looked for
+  the destination, were redirected, and resume on it at the offset they
+  were given, with nothing skipped or repeated. Refused (409
+  `leader_unavailable`) if the leader is down: failover finishes that one.
+- *After the cut-over* there is nothing to cancel (409 `not_moving`). Move
+  the shard back instead.
+
+Every operator step is written only at the generation it was decided from,
+and decided again from a fresh read if the shard changed first. A cancel
+that races a cut-over therefore finds nothing to cancel, rather than handing
+the shard back to a leader missing writes the new one acknowledged
+(`FelixShardCancelStalePlanner.cfg` in `docs/formal/` is that race without
+the check). Either way a cancelled move keeps its start time, so placement
+puts the shard behind others for its next move.
+
+**Pausing** is stored (the `placement_settings` table, a Raft command, or in
+memory), so every instance's placement sees it on its next pass. Paused,
+placement starts no move or follower replacement of its own, drains
+included; new shards are still placed and a failed leader is still
+replaced, since those are not moves. Moves already in flight finish: a
+fenced leader has stopped serving, and freezing it there would keep its
+shard unavailable. Cancel one to stop it. While placement runs it keeps
+leadership even, so it may move a shard an operator placed by hand; pause it
+first to keep a layout that is not even.
+
+The same controls from a shell, as a client of these endpoints:
+
+```bash
+felix-controlplane admin --url http://cp:8443 --token "$TOKEN" moves
+felix-controlplane admin plan
+felix-controlplane admin move t1/ns/orders/0 broker-3
+felix-controlplane admin cancel t1/ns/orders/0        # --cache for a cache shard
+felix-controlplane admin pause
+felix-controlplane admin resume
+```
+
+`--url` defaults to `FELIX_CONTROLPLANE_URL` and `--token` to `FELIX_TOKEN`.
+Output is a plain table; `--json` prints the API's response.
 
 #### How brokers follow ownership
 

@@ -132,6 +132,7 @@ export FELIX_CONTROLPLANE_URL="https://cp.example.com:8443"
 ```
 
 **Usage**:
+- Also where `felix-controlplane admin` sends its requests, unless `--url` is given (default `http://127.0.0.1:8443`)
 - Optional for single-node deployments
 - Required for multi-broker clusters
 - Include scheme (`http://` or `https://`)
@@ -1694,7 +1695,7 @@ absent; they are listed in that script rather than here.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FELIX_CLIENT_CONFIG` | — | Path to a client config file. |
-| `FELIX_AUTH_TENANT`, `FELIX_AUTH_TOKEN`, `FELIX_TOKEN` | — | Credentials a client presents. |
+| `FELIX_AUTH_TENANT`, `FELIX_AUTH_TOKEN`, `FELIX_TOKEN` | — | Credentials a client presents. `FELIX_TOKEN` is also the token `felix-controlplane admin` sends, unless `--token` is given. |
 | `FELIX_KEEPALIVE_MS` | — | QUIC keep-alive interval. |
 | `FELIX_MAX_IDLE_TIMEOUT_MS` | `60000` | QUIC idle timeout before a connection is dropped. |
 | `FELIX_EVENT_ROUTER_MAX_PENDING` | `16384` | Events buffered by the client's router before it applies backpressure. |

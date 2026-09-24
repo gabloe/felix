@@ -66,7 +66,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | 2 | No refused publishes: hold a publish to a moving shard briefly and forward it, a typed "shard moving" refusal the client retries, the destination not counted toward quorum while it copies | done |
 | 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | done |
 | 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | done |
-| 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | planned |
+| 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | done |
 | 6 | Idempotent producers keep their sequences across a planned move | done |
 | 7 | Docs and the status row | planned |
 
@@ -227,13 +227,63 @@ conformance runner checks the frame on the wire, offered and not.
   replacement past it is dropped in one write and its slot goes to the next
   move. A fenced move is finished rather than timed out: going back means a
   new generation and clients following the shard twice, and going on waits
-  for at most the lag bound's worth of copy. Taking a fenced move back is left
-  to the operator's cancel in phase 5.
+  for at most the lag bound's worth of copy. An operator can still take one
+  back (phase 5).
 - **A bandwidth limit**, `FELIX_SHARD_MOVE_BYTES_PER_SEC`, a token bucket per
   leader over its copies to move destinations, applied only to a destination
   the quorum does not need and never to the remainder after the fence.
 - `max_shards` is compared against roles, not leaders, when choosing a
   destination.
+
+### Phase 5: operator controls
+
+- **Seeing moves.** `GET /v1/shard-moves` lists each move and follower
+  replacement in progress: its step (staged, fenced, replacing), why it
+  started (`move_reason` on the assignment: drain, balance, operator,
+  replace), when, and the destination's lag from the leader's latest report.
+  `GET /v1/placement/plan` runs a pass over a fresh read and says what it
+  would write, without writing it.
+- **Starting a move.** `POST /v1/shard-moves` names a shard and a
+  destination. It is decided like a placement step and refused where
+  placement would not make it, including at the move limits, then runs like
+  any other move.
+- **Cancelling.** Before the fence the destination is dropped, as a timeout
+  does. After it the fenced leader serves again at a new generation
+  (`retake`): nobody has led since, so its log holds every accepted write,
+  and writes still inside its write fence land in that log. Held publishes go
+  to it once its routes show it serving, and subscriptions ended with
+  `shard_moved` look for the destination, are redirected, and resume at
+  their offset. Nothing changed on the broker for this: reopening a shard at
+  a new generation after a draining one was already the path a cut-over back
+  to the leader takes. After the cut-over a cancel is a 409.
+- **Conditional, and decided again.** Every operator write lands only at the
+  generation it was decided from; on a conflict the request is decided again
+  from a new read, so a cancel racing a cut-over finds nothing to cancel.
+  `FelixShardCancel` passes with writes acknowledged on admission;
+  `FelixShardCancelStalePlanner`, with the cancel written unconditionally,
+  serves the shard on two brokers.
+- **Pausing.** A switch in the store (`placement_settings`, a Raft command,
+  memory) that every instance's placement reads each pass. Paused, placement
+  starts no move or replacement of its own, drains included. Moves in flight
+  finish, since a fenced leader has already stopped serving; an operator can
+  cancel one, and can still start moves, which is how shards are moved by
+  hand without placement moving others meanwhile. New shards and failovers
+  are not moves and still happen.
+- **A command line.** `felix-controlplane admin moves | plan | move | cancel
+  | pause | resume`, a client of the API with plain tables or `--json`.
+
+`routing::operator_moves` runs these against real brokers: an operator's
+move completes; a staged move cancelled leaves the shard where it was; a
+fenced move cancelled with a publisher and a following subscriber running
+hands the shard back with every acknowledged record delivered once and in
+order; and a paused placement leaves a draining broker's shard alone until
+resumed.
+
+Left out: `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`, a graceful shutdown that
+drains a broker's shards before it stops. The broker's shutdown turns
+readiness off and closes its listener first, while a handoff needs it to
+keep serving and forwarding until each move cuts over, so it needs its own
+ordering and a test that stops a broker under load.
 
 ### Phase 6: idempotent producers keep their sequences
 
