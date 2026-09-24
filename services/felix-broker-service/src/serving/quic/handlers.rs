@@ -2,4 +2,5 @@
 
 pub mod cache_watch;
 pub mod publish;
+pub(crate) mod redirect;
 pub mod subscribe;

@@ -770,7 +770,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // answers, because it is indistinguishable from a quiet stream.
                 // `docs/subscribe-routing.md` records the decision: redirect to
                 // the owner rather than proxy for it.
-                if let Some(answer) = crate::serving::quic::handlers::subscribe::redirect_for(
+                if let Some(answer) = crate::serving::quic::handlers::redirect::redirect_for(
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.client_endpoints.as_deref(),
                     &tenant_id,
@@ -2052,7 +2052,7 @@ fn group_redirect(
     if !felix_wire::supports_feature(peer_features, felix_wire::FEATURE_REDIRECT) {
         return None;
     }
-    match crate::serving::quic::handlers::subscribe::redirect_for(
+    match crate::serving::quic::handlers::redirect::redirect_for(
         publish_ctx.ingress.as_deref(),
         publish_ctx.client_endpoints.as_deref(),
         tenant_id,

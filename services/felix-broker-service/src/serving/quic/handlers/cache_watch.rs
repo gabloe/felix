@@ -184,7 +184,7 @@ pub(crate) async fn handle_cache_watch_message(
     // Watches are served by the shard's owner, never proxied: a watch served
     // off the owner would go quiet on writes it cannot see, which is
     // indistinguishable from a quiet key.
-    if let Some(answer) = super::subscribe::redirect_for(
+    if let Some(answer) = super::redirect::redirect_for(
         publish_ctx.ingress.as_deref(),
         publish_ctx.client_endpoints.as_deref(),
         &request.tenant_id,
