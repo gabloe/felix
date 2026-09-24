@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790279932621,
+  "lastUpdate": 1790285008176,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15080,6 +15080,58 @@ window.BENCHMARK_DATA = {
             "range": "9949.17",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 937421.81\nmean: 938934.77\nstdev: 9949.17\ncv: 1.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d0db97bea7dd2c0a6da0875dd28125e778610e41",
+          "message": "Pace shard moves (#678)\n\n* feat(placement): carry move pacing state and the leader's tail\n\nAn assignment can name a follower being copied in to replace one on a\ndraining node, and when the move in progress started. A replica report\ncarries the leader's own tail, so placement can tell how far behind a\ndestination is. Postgres gains migration 0014; memory and Raft carry the\nfields through serde defaults, and older brokers simply omit the tail.\n\n* feat(placement): pace moves by copies in flight, per node, and time\n\nEvery copy now holds a move slot. A follower replacement names the node\nbeing copied in (`joining`) and keeps the follower it replaces until the\nnew one is within the lag bound, so it counts against the limit and the\nshard never drops below its replication factor while it fills.\n\n- FELIX_SHARD_MOVES_MAX_PER_NODE bounds copies into or out of one node.\n- Drains get slots before rebalancing; a shard whose last move timed out\n  goes behind both.\n- A move fences once the destination is within\n  FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS of the leader's reported tail\n  (default 1000), rather than exactly level, which under steady writes it\n  may never be. The drained report still waits for the rest.\n- A staged move or replacement past FELIX_SHARD_MOVE_TIMEOUT_MS (default\n  30 min) is dropped as a `timed_out` step and counted in\n  felix_shard_moves_timed_out_total. A fenced move is finished instead:\n  going back means a new generation and a second switch for clients.\n- max_shards is compared against roles, not leaders, when choosing a\n  destination, and placement load counts existing followers.\n\n* feat(replication): limit the bandwidth a move's copy takes\n\nFELIX_SHARD_MOVE_BYTES_PER_SEC is one token bucket per broker, shared by\nevery shard it leads, applied to a move's destination while it copies.\nOnly a destination the rest of the replica set can make a majority\nwithout is paced, so a Quorum publish never waits on the limit, and the\nremainder after the fence is not paced at all: the shard is not serving\nuntil it is across. A pass waits at most 50 ms on the limit per\ndestination and leaves the rest to the next pass. Bytes shipped under\nthe limit are counted in\nfelix_broker_replication_move_throttled_bytes_total.\n\n* fix(replication): leave an unreachable follower out of the reported offsets\n\nPlacement now fences a move once its destination is within a lag bound of\nthe leader's tail. A destination the leader cannot reach keeps its last\nposition, and on a small shard that position is within the bound, so the\nmove would fence toward a node that never catches up and wait there. A\nfollower whose last batch did not reach it, or was refused, is now left\nout of the offsets, the way a halted one already was.\n\n* spec: model move pacing and a fence before the destination is level\n\nFelixShard's fence no longer asks that the destination be level: placement\nnow fences within a lag bound, and the model allows any lag, so every bound\nis covered. Every existing configuration still holds.\n\nFelixPlacementPacing is a small second model of the copies placement starts\nacross shards. FelixPlacementPacing passes CopiesWithinLimit and\nFencedNeverTimesOut with every copy counted;\nFelixPlacementPacingUncountedReplacement, with a follower replacement\ninvisible to the count as it used to be written, violates\nCopiesWithinLimit. check_tla.sh picks the module by configuration name.\n\n* test(cluster): a move under steady writes, and one that times out\n\na_move_completes_while_a_publisher_keeps_writing moves a shard while four\nwriters publish batches back to back through both brokers, and checks\nevery acknowledged record on the new owner.\n\na_move_that_cannot_copy_is_abandoned_after_its_timeout partitions the\ndestination from the leader while it keeps heartbeating: the staging is\nundone in one write at the timeout, the leader serves throughout, and the\nmove finishes once the partition heals.\n\n* docs: move pacing, the lag-bound fence, the timeout and the copy limit\n\nControl-plane and scaling docs describe the move slots, the per-node\nlimit, drains first, the fence within a lag bound, the timeout and why a\nfenced move is finished, and the broker's copy bandwidth limit; the\nenvironment reference lists the new variables. The rebalancing plan marks\nphase 4 done.\n\n* fix(placement): drop a destination that dies after the fence\n\nA move now fences while its destination may still be copying, and the\nleader withholds its drained report until the destination is level. One\nthat dies in between never is, so the move sat fenced for good. The\ncontrol plane drops a dead successor from a fenced move that has not\ndrained, at a new generation that is still fenced; the leader reports\ndrained against the followers it has, and the cut-over picks one of them\nor hands the shard back. A draining shard now reports even with no\nreplicas left, which the hand-back waits on.\n\n* fix(replication): retry a fenced shard's remainder without waiting for a wake\n\nWith the fence allowed before the destination is level, the drained pass\nmay still have records to ship, and the destination often refuses the new\ngeneration until its own watch catches up. That pass ended with the shard\nundrained and nothing to wake the next one, so the switch-over waited for\nthe sync tick: 99-1455 ms against 74-238 ms on main. A pass that leaves a\nfenced shard undrained now schedules the next one 10 ms later.\n\nAlso pins that the move throttle never paces the remainder after the fence.",
+          "timestamp": "2026-09-24T14:20:25-07:00",
+          "tree_id": "6e7e99559578d8b234ae6754e611b520bacae432",
+          "url": "https://github.com/gabloe/felix/commit/d0db97bea7dd2c0a6da0875dd28125e778610e41"
+        },
+        "date": 1790285006759,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 391219.09,
+            "range": "14453.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391219.09\nmean: 392518.24\nstdev: 14453.28\ncv: 3.68%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 391219.09,
+            "range": "14453.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391219.09\nmean: 392518.24\nstdev: 14453.28\ncv: 3.68%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 92344.16,
+            "range": "1056.51",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 92344.16\nmean: 92438.55\nstdev: 1056.51\ncv: 1.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 923441.63,
+            "range": "10565.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 923441.63\nmean: 924385.55\nstdev: 10565.10\ncv: 1.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
