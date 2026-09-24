@@ -9,11 +9,11 @@
 //! negotiated error codes says which it is; only an error without a code falls
 //! back to reading the message.
 //!
-//! napi puts an error's *status* on `err.code`, and `#[napi]` requires that
-//! status to be its own fixed `Status` enum, so none of this can be set from
-//! here. The kind travels as a message prefix and `index.js` lifts it onto a
-//! typed `FelixError`, along with the broker's code, retry class and detail
-//! when there are any:
+//! A napi error carries only a status from napi's own fixed `Status` enum and a
+//! message, so none of this can be set as a property from here. The kind
+//! travels as a message prefix and `errors.js` lifts it onto a typed
+//! `FelixError` (as `kind`), along with the broker's code, retry class and
+//! detail when there are any:
 //!
 //! ```text
 //! FELIX_AUTH: <text>                               no broker code
@@ -29,30 +29,30 @@ use felix_wire::RetryClass;
 use napi::{Error, Status};
 
 /// The separator between the kind and the text when there is no broker code.
-pub(crate) const CODE_SEPARATOR: &str = ": ";
+pub(crate) const KIND_SEPARATOR: &str = ": ";
 
 /// The broker rejected the token, or it lacks the permission this call needs.
 /// Not retryable.
-pub(crate) const CODE_AUTH: &str = "FELIX_AUTH";
+pub(crate) const KIND_AUTH: &str = "FELIX_AUTH";
 /// The tenant, namespace, stream or cache does not exist.
-pub(crate) const CODE_NOT_FOUND: &str = "FELIX_NOT_FOUND";
+pub(crate) const KIND_NOT_FOUND: &str = "FELIX_NOT_FOUND";
 /// The requested start offset is gone — retention discarded it. Recover by
 /// restarting from `earliest` and accepting the gap.
-pub(crate) const CODE_CURSOR: &str = "FELIX_CURSOR";
+pub(crate) const KIND_CURSOR: &str = "FELIX_CURSOR";
 /// The broker could not be reached, the connection was lost mid-call, or the
 /// broker is shutting down. Worth retrying, and against a different broker.
-pub(crate) const CODE_CONNECTION: &str = "FELIX_CONNECTION";
+pub(crate) const KIND_CONNECTION: &str = "FELIX_CONNECTION";
 /// Nobody can serve the shard right now, typically while it moves. Nothing was
 /// applied.
-pub(crate) const CODE_SHARD_UNAVAILABLE: &str = "FELIX_SHARD_UNAVAILABLE";
+pub(crate) const KIND_SHARD_UNAVAILABLE: &str = "FELIX_SHARD_UNAVAILABLE";
 /// The broker is shedding load. Nothing was applied.
-pub(crate) const CODE_OVERLOADED: &str = "FELIX_OVERLOADED";
+pub(crate) const KIND_OVERLOADED: &str = "FELIX_OVERLOADED";
 /// The write may have been applied.
-pub(crate) const CODE_OUTCOME_UNKNOWN: &str = "FELIX_OUTCOME_UNKNOWN";
+pub(crate) const KIND_OUTCOME_UNKNOWN: &str = "FELIX_OUTCOME_UNKNOWN";
 /// Something this binding could not classify. Deliberately not a category.
-pub(crate) const CODE_GENERIC: &str = "FELIX_ERROR";
+pub(crate) const KIND_GENERIC: &str = "FELIX_ERROR";
 /// A bad argument to this binding, rather than a failure of the call.
-pub(crate) const CODE_INVALID: &str = "FELIX_INVALID";
+pub(crate) const KIND_INVALID: &str = "FELIX_INVALID";
 
 /// Classify an error from the Rust client into a typed one.
 pub(crate) fn classify(err: impl Into<anyhow::Error>) -> Error {
@@ -63,7 +63,7 @@ pub(crate) fn classify(err: impl Into<anyhow::Error>) -> Error {
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::new(
         Status::InvalidArg,
-        format!("{CODE_INVALID}{CODE_SEPARATOR}{}", message.into()),
+        format!("{KIND_INVALID}{KIND_SEPARATOR}{}", message.into()),
     )
 }
 
@@ -96,17 +96,17 @@ pub(crate) fn encode(err: &anyhow::Error) -> String {
             "code": "not_leader",
             "retry": RetryClass::Redirect.as_str(),
         });
-        return format!("{CODE_SHARD_UNAVAILABLE} {meta}\n{text}");
+        return format!("{KIND_SHARD_UNAVAILABLE} {meta}\n{text}");
     }
     let kind = if err
         .chain()
         .any(|e| e.downcast_ref::<SubscribeCursorError>().is_some())
     {
-        CODE_CURSOR
+        KIND_CURSOR
     } else {
         kind_from_text(&text.to_ascii_lowercase())
     };
-    format!("{kind}{CODE_SEPARATOR}{text}")
+    format!("{kind}{KIND_SEPARATOR}{text}")
 }
 
 /// The kind for a broker code.
@@ -116,16 +116,16 @@ pub(crate) fn encode(err: &anyhow::Error) -> String {
 /// does not know is a plain `FelixError`, with its retry class still on it.
 pub(crate) fn kind_for_code(code: &str, retry: RetryClass) -> &'static str {
     if retry == RetryClass::OutcomeUnknown {
-        return CODE_OUTCOME_UNKNOWN;
+        return KIND_OUTCOME_UNKNOWN;
     }
     match code {
-        "unauthenticated" | "forbidden" => CODE_AUTH,
-        "not_found" => CODE_NOT_FOUND,
-        "shard_unavailable" | "not_leader" => CODE_SHARD_UNAVAILABLE,
-        "overloaded" => CODE_OVERLOADED,
+        "unauthenticated" | "forbidden" => KIND_AUTH,
+        "not_found" => KIND_NOT_FOUND,
+        "shard_unavailable" | "not_leader" => KIND_SHARD_UNAVAILABLE,
+        "overloaded" => KIND_OVERLOADED,
         // This broker is going away; another one will take the request.
-        "draining" => CODE_CONNECTION,
-        _ => CODE_GENERIC,
+        "draining" => KIND_CONNECTION,
+        _ => KIND_GENERIC,
     }
 }
 
@@ -136,16 +136,16 @@ fn kind_from_text(lower: &str) -> &'static str {
         || lower.contains("forbidden")
         || lower.contains("token")
     {
-        CODE_AUTH
+        KIND_AUTH
     } else if lower.contains("unknown tenant")
         || lower.contains("unknown stream")
         || lower.contains("unknown cache")
         || lower.contains("unknown namespace")
         || lower.contains("not found")
     {
-        CODE_NOT_FOUND
+        KIND_NOT_FOUND
     } else if lower.contains("cursor") || lower.contains("trimmed") || lower.contains("too old") {
-        CODE_CURSOR
+        KIND_CURSOR
     } else if lower.contains("connect")
         || lower.contains("connection")
         || lower.contains("timed out")
@@ -153,9 +153,9 @@ fn kind_from_text(lower: &str) -> &'static str {
         || lower.contains("no broker")
         || lower.contains("not leader")
     {
-        CODE_CONNECTION
+        KIND_CONNECTION
     } else {
-        CODE_GENERIC
+        KIND_GENERIC
     }
 }
 

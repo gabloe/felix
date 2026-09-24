@@ -22,8 +22,8 @@ test("a broker code picks the class and rides along", () => {
   );
   assert.ok(err instanceof errors.ShardUnavailableError);
   assert.ok(err instanceof errors.FelixError);
-  assert.equal(err.code, "FELIX_SHARD_UNAVAILABLE");
-  assert.equal(err.brokerCode, "shard_unavailable");
+  assert.equal(err.kind, "FELIX_SHARD_UNAVAILABLE");
+  assert.equal(err.code, "shard_unavailable");
   assert.equal(err.retry, "retry");
   assert.deepEqual(err.detail, { reason: "fenced" });
   assert.equal(err.retryable, true);
@@ -35,7 +35,7 @@ test("an outcome-unknown error is not retryable", () => {
     native('FELIX_OUTCOME_UNKNOWN {"code":"quorum_timeout","retry":"outcome_unknown"}\nquorum'),
   );
   assert.ok(err instanceof errors.OutcomeUnknownError);
-  assert.equal(err.brokerCode, "quorum_timeout");
+  assert.equal(err.code, "quorum_timeout");
   assert.equal(err.retryable, false);
 });
 
@@ -52,10 +52,10 @@ test("the broker's retry class decides retryable over the class default", () => 
 test("without a code the old prefix still types it", () => {
   const err = errors.typed(native("FELIX_AUTH: publish failed: forbidden: a: b"));
   assert.ok(err instanceof errors.AuthError);
-  assert.equal(err.code, "FELIX_AUTH");
-  assert.equal(err.brokerCode, null);
-  assert.equal(err.retry, null);
-  assert.equal(err.detail, null);
+  assert.equal(err.kind, "FELIX_AUTH");
+  assert.equal(err.code, undefined);
+  assert.equal(err.retry, undefined);
+  assert.equal(err.detail, undefined);
   assert.equal(err.retryable, false);
   assert.equal(err.message, "publish failed: forbidden: a: b");
 

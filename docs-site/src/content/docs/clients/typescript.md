@@ -262,7 +262,7 @@ try {
 
 Every error carries what the broker said about it:
 
-- `brokerCode`: the broker's [error code](https://github.com/gabloe/felix/blob/main/docs/protocol.md#error-codes),
+- `code`: the broker's [error code](https://github.com/gabloe/felix/blob/main/docs/protocol.md#error-codes),
   such as `"shard_unavailable"` or `"quorum_timeout"`.
 - `retry`: what you may do about it: `"retry"`, `"retry_after"`,
   `"redirect"`, `"outcome_unknown"` or `"fatal"`.
@@ -276,13 +276,13 @@ promoted a moment ago may not know the stream yet. The class is picked from the
 code, except that an `outcome_unknown` retry class always makes an
 `OutcomeUnknownError`.
 
-All three are `null` when the broker predates error codes, or when the failure
+All three are `undefined` when the broker predates error codes, or when the failure
 happened in the client. Then the class is chosen from the message, the way
 older versions of this client always did.
 
-`err.code` is this client's own name for the class (`FELIX_CONNECTION`,
-`FELIX_SHARD_UNAVAILABLE`, …), for code that would rather switch than test
-`instanceof`. Never match on the message — it is prose and will be reworded.
+`err.kind` is this client's own name for the class (`FELIX_CONNECTION`,
+`FELIX_SHARD_UNAVAILABLE`, …), set whether or not the broker sent a code, for
+code that would rather switch than test `instanceof`. Never match on the message — it is prose and will be reworded.
 
 ## Queues
 

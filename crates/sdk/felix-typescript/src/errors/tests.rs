@@ -5,20 +5,20 @@ use super::*;
 #[test]
 fn every_code_maps_to_a_kind_that_matches_its_retry_class() {
     let expected = [
-        ("unauthenticated", CODE_AUTH),
-        ("forbidden", CODE_AUTH),
-        ("not_found", CODE_NOT_FOUND),
-        ("invalid_request", CODE_GENERIC),
-        ("shard_unavailable", CODE_SHARD_UNAVAILABLE),
-        ("not_leader", CODE_SHARD_UNAVAILABLE),
-        ("quorum_timeout", CODE_OUTCOME_UNKNOWN),
-        ("leadership_lost", CODE_OUTCOME_UNKNOWN),
-        ("unacknowledged", CODE_OUTCOME_UNKNOWN),
-        ("overloaded", CODE_OVERLOADED),
-        ("limit_exceeded", CODE_GENERIC),
-        ("draining", CODE_CONNECTION),
-        ("internal", CODE_OUTCOME_UNKNOWN),
-        ("storage", CODE_OUTCOME_UNKNOWN),
+        ("unauthenticated", KIND_AUTH),
+        ("forbidden", KIND_AUTH),
+        ("not_found", KIND_NOT_FOUND),
+        ("invalid_request", KIND_GENERIC),
+        ("shard_unavailable", KIND_SHARD_UNAVAILABLE),
+        ("not_leader", KIND_SHARD_UNAVAILABLE),
+        ("quorum_timeout", KIND_OUTCOME_UNKNOWN),
+        ("leadership_lost", KIND_OUTCOME_UNKNOWN),
+        ("unacknowledged", KIND_OUTCOME_UNKNOWN),
+        ("overloaded", KIND_OVERLOADED),
+        ("limit_exceeded", KIND_GENERIC),
+        ("draining", KIND_CONNECTION),
+        ("internal", KIND_OUTCOME_UNKNOWN),
+        ("storage", KIND_OUTCOME_UNKNOWN),
     ];
     assert_eq!(expected.len(), ErrorCode::ALL.len(), "a code is unmapped");
     for code in ErrorCode::ALL {
@@ -38,20 +38,20 @@ fn every_code_maps_to_a_kind_that_matches_its_retry_class() {
 fn an_outcome_unknown_retry_class_wins_over_the_code() {
     assert_eq!(
         kind_for_code("overloaded", RetryClass::OutcomeUnknown),
-        CODE_OUTCOME_UNKNOWN
+        KIND_OUTCOME_UNKNOWN
     );
-    assert_eq!(kind_for_code("internal", RetryClass::Retry), CODE_GENERIC);
-    assert_eq!(kind_for_code("brand_new", RetryClass::Retry), CODE_GENERIC);
+    assert_eq!(kind_for_code("internal", RetryClass::Retry), KIND_GENERIC);
+    assert_eq!(kind_for_code("brand_new", RetryClass::Retry), KIND_GENERIC);
 }
 
 #[test]
 fn without_a_code_the_message_decides_and_keeps_the_old_prefix() {
     let cases = [
-        ("publish failed: forbidden", CODE_AUTH),
-        ("unknown stream t1/default/nope", CODE_NOT_FOUND),
-        ("offset trimmed", CODE_CURSOR),
-        ("connection lost", CODE_CONNECTION),
-        ("something nobody foresaw", CODE_GENERIC),
+        ("publish failed: forbidden", KIND_AUTH),
+        ("unknown stream t1/default/nope", KIND_NOT_FOUND),
+        ("offset trimmed", KIND_CURSOR),
+        ("connection lost", KIND_CONNECTION),
+        ("something nobody foresaw", KIND_GENERIC),
     ];
     for (message, kind) in cases {
         assert_eq!(

@@ -106,19 +106,18 @@ export interface ErrorDetail {
 export declare class FelixError extends Error {
   /**
    * Which kind of failure this is (`FELIX_AUTH`, `FELIX_SHARD_UNAVAILABLE`,
-   * ...), the same thing the class says. Branch on this or on the class,
-   * never on the message.
+   * ...), the same thing the class says. Always set.
    */
-  readonly code: string;
+  readonly kind: string;
   /**
    * The broker's error code, such as `shard_unavailable` or `quorum_timeout`.
-   * `null` when the broker predates error codes or the failure was local.
+   * `undefined` when the broker predates error codes or the failure was local.
    */
-  readonly brokerCode: string | null;
-  /** The broker's retry class, or `null` when it sent no code. */
-  readonly retry: RetryClass | null;
-  /** Extra facts from the broker, or `null`. */
-  readonly detail: ErrorDetail | null;
+  readonly code: string | undefined;
+  /** The broker's retry class, or `undefined` when it sent no code. */
+  readonly retry: RetryClass | undefined;
+  /** Extra facts from the broker, or `undefined`. */
+  readonly detail: ErrorDetail | undefined;
   /**
    * Whether sending the same request again could succeed without applying it
    * twice. Decided by `retry` when the broker sent one, and otherwise by the

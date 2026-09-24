@@ -1,9 +1,9 @@
 // The error classes, and turning a native error into one of them.
 //
-// The native layer cannot set properties on its errors: napi puts an error's
-// status on `err.code`, and `#[napi]` requires that status to be napi's own
-// fixed enum. So it prefixes the message with a kind, and with the broker's
-// code, retry class and detail when the broker sent them:
+// The native layer cannot set properties on its errors: napi errors carry only
+// a status from napi's own fixed enum and a message. So it prefixes the message
+// with a kind, and with the broker's code, retry class and detail when the
+// broker sent them:
 //
 //   FELIX_AUTH: <text>
 //   FELIX_SHARD_UNAVAILABLE {"code":"shard_unavailable","retry":"retry"}\n<text>
@@ -25,24 +25,26 @@ const SAFE_TO_RETRY = new Set(["retry", "retry_after", "redirect"]);
 
 /** Base class for every error this client raises. */
 class FelixError extends Error {
-  constructor(code, message, meta = null) {
+  constructor(kind, message, meta = null) {
     super(message);
     this.name = new.target.name;
     /**
      * Which kind of failure this is (`FELIX_AUTH`, `FELIX_SHARD_UNAVAILABLE`,
-     * ...), the same thing the class says. Branch on this or on the class,
-     * never on the message.
+     * ...), the same thing the class says. Always set.
      */
-    this.code = code;
-    /** The broker's error code, such as `shard_unavailable`, or `null`. */
-    this.brokerCode = meta?.code ?? null;
+    this.kind = kind;
+    /**
+     * The broker's error code, such as `shard_unavailable`. `undefined` when
+     * the broker sent none: an older broker, or a failure in the client.
+     */
+    this.code = meta?.code;
     /**
      * What the broker says the caller may do: `retry`, `retry_after`,
-     * `redirect`, `outcome_unknown` or `fatal`. `null` when it sent no code.
+     * `redirect`, `outcome_unknown` or `fatal`. `undefined` without a code.
      */
-    this.retry = meta?.retry ?? null;
-    /** Extra facts, such as `reason` or `retry_after_ms`, or `null`. */
-    this.detail = meta?.detail ?? null;
+    this.retry = meta?.retry;
+    /** Extra facts, such as `reason` or `retry_after_ms`, or `undefined`. */
+    this.detail = meta?.detail;
   }
 
   /**
@@ -54,7 +56,7 @@ class FelixError extends Error {
    * broker say yes.
    */
   get retryable() {
-    if (this.retry !== null) return SAFE_TO_RETRY.has(this.retry);
+    if (this.retry !== undefined) return SAFE_TO_RETRY.has(this.retry);
     return this.constructor.retryableByDefault;
   }
 

@@ -140,10 +140,10 @@ try {
 `OverloadedError`, `OutcomeUnknownError`, `AuthError`, `NotFoundError`,
 `CursorError` and `InvalidArgumentError` are the branches, mirroring the Python
 binding's exceptions. A broker that sends error codes picks the class, and the
-error carries its `brokerCode`, `retry` class and `detail`; from an older
-broker they are `null` and the class comes from the message. Each also carries
-a stable `code` (`FELIX_AUTH`, …) for code that would rather switch than test
-`instanceof`. Never match on the message — it is prose, and it will be
+error carries its `code`, `retry` class and `detail`, as the Python exceptions
+do; from an older broker they are `undefined` and the class comes from the
+message. Each also carries a stable `kind` (`FELIX_AUTH`, …) for code that
+would rather switch than test `instanceof`. Never match on the message — it is prose, and it will be
 reworded.
 
 ## What is not wrapped

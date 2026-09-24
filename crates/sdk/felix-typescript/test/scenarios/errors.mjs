@@ -38,8 +38,8 @@ export default function register(ctx) {
       );
       // Typed either way. A broker with no assignment for the shard cannot
       // tell an unregistered stream from one not placed yet, and says the latter.
-      assert.ok(["not_found", "shard_unavailable"].includes(caught.brokerCode), caught.message);
-      if (caught.brokerCode === "not_found") assert.ok(caught instanceof NotFoundError);
+      assert.ok(["not_found", "shard_unavailable"].includes(caught.code), caught.message);
+      if (caught.code === "not_found") assert.ok(caught instanceof NotFoundError);
     }));
 
   it("an unauthorized publish is typed, and is not retried", () =>
@@ -73,7 +73,7 @@ export default function register(ctx) {
               "an application cannot tell it from a retryable fault",
           );
           assert.equal(caught.retryable, false);
-          assert.equal(caught.brokerCode, "forbidden");
+          assert.equal(caught.code, "forbidden");
           assert.equal(caught.retry, "fatal");
           assert.ok(
             elapsed < 5.0,
@@ -108,9 +108,9 @@ export default function register(ctx) {
         assert.ok(
           caught instanceof ShardUnavailableError,
           `a refusal during a move surfaced as ${caught?.constructor?.name} ` +
-            `(${caught?.brokerCode}/${caught?.retry}): ${caught?.message}`,
+            `(${caught?.code}/${caught?.retry}): ${caught?.message}`,
         );
-        assert.ok(["shard_unavailable", "not_leader"].includes(caught.brokerCode));
+        assert.ok(["shard_unavailable", "not_leader"].includes(caught.code));
         assert.ok(["retry", "redirect"].includes(caught.retry));
         assert.equal(caught.retryable, true);
 
@@ -159,9 +159,9 @@ export default function register(ctx) {
         assert.ok(
           caught instanceof OutcomeUnknownError,
           `a write no majority confirmed surfaced as ${caught?.constructor?.name} ` +
-            `(${caught?.brokerCode}/${caught?.retry}): ${caught?.message}`,
+            `(${caught?.code}/${caught?.retry}): ${caught?.message}`,
         );
-        assert.equal(caught.brokerCode, "quorum_timeout");
+        assert.equal(caught.code, "quorum_timeout");
         assert.equal(caught.retry, "outcome_unknown");
         assert.equal(caught.retryable, false);
       } finally {
