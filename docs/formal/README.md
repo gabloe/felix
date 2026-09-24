@@ -24,9 +24,12 @@ One shard, three brokers, one control plane, discrete time.
   clock, and stops serving `Eps` before that belief expires. Heartbeats can be
   lost. The control plane grants the next generation no earlier than `Margin`
   after the expiry it recorded.
-- **Writes.** Admission checks the lease. Commit checks it again, or not, which
-  is the `CheckAtCommit` knob. Anything may happen between the two: that gap is
-  where a paused process lives.
+- **Writes.** Admission checks the broker is serving. The write then waits,
+  and claims its place in the log; with `FenceAtClaim` the claim checks the
+  handoff fence again. Commit checks the lease again, or not, which is the
+  `CheckAtCommit` knob. Anything may happen between admission and the claim,
+  and between the claim and the commit: those gaps are a queue and a paused
+  process.
 - **Replication.** The leader ships the next record a follower is missing. A
   follower whose log disagrees with the leader's keeps what a newer generation
   than its own last accepted one says, above its high-water mark; anything else
@@ -45,8 +48,9 @@ One shard, three brokers, one control plane, discrete time.
   while its leader is alive: it fences the leader, which stops serving when
   it sees the fence but keeps its lease and keeps shipping, and names the
   successor only once the leader has reported that its log stopped growing.
-  A write admitted before the fence still commits. `WaitForDrained` is that
-  wait. Reports carry the generation they were made at and one from a
+  A write claimed before the fence still commits. `WaitForDrained` is that
+  wait. The report counts claimed writes only, as the broker's write fence
+  does. Reports carry the generation they were made at and one from a
   superseded generation is dropped on arrival, as the store does.
 - **Planners.** The control plane decides from a read of the store, not from
   its live state. A decision (promote, fence, cut over) either reads and writes
@@ -83,18 +87,20 @@ that quietly became a pass would be a model that stopped saying anything.
 
 | Configuration | Knobs | Must |
 | --- | --- | --- |
-| `FelixShardLease.cfg` | drifting clocks, no writes: heartbeats, lapses, promotions | pass `AtMostOneServing` and `NoStaleCommit` (1.0M states) |
-| `FelixShardLogOrder.cfg` | both lease checks, `Quorum`, two writes, promotion by log order | pass every invariant (3.0M states) |
+| `FelixShardLease.cfg` | drifting clocks, no writes: heartbeats, lapses, promotions | pass `AtMostOneServing` and `NoStaleCommit` (0.8M states) |
+| `FelixShardLogOrder.cfg` | both lease checks, `Quorum`, two writes, promotion by log order | pass every invariant (2.0M states) |
 | `FelixShardThinMargin.cfg` | drifting clocks with `Margin = 0` and `Eps = 0` | violate `AtMostOneServing` |
 | `FelixShardNoCommitCheck.cfg` | commit-time lease check removed | violate `NoStaleCommit` |
 | `FelixShardNoReportOrder.cfg` | the design *before* #268: a `Quorum` ack released before the report describing it lands | violate `AckedSurvive` |
-| `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.4M states) |
-| `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over | pass every invariant (2.6M states) |
+| `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.0M states) |
+| `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over | pass every invariant (2.7M states) |
 | `FelixShardHandoffNoWait.cfg` | the same move cutting over without waiting for the drained report | violate `AtMostOneServing` |
 | `FelixShardStalePlannerCas.cfg` | two instances moving the shard, one acting on a held read; writes conditional on the generation read | pass every invariant (2.6M states) |
 | `FelixShardStalePlanner.cfg` | the same, writing unconditionally | violate `AtMostOneServing` |
 | `FelixShardStalePromotionCas.cfg` | two instances failing the shard over, one acting on a held read; writes conditional | pass every invariant (29K states) |
 | `FelixShardStalePromotion.cfg` | the same, writing unconditionally | violate `AtMostOneServing` |
+| `FelixShardHandoffLeaderAck.cfg` | a planned move under `Leader` acknowledgement, the claim checking the fence | pass every invariant (1.3M states) |
+| `FelixShardHandoffNoClaimFence.cfg` | the same move with the fence checked at admission only | violate `AckedSurvive` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -194,14 +200,41 @@ was meant to keep it.
 What closes it is the leader saying it stopped. `WaitForDrained = TRUE` holds
 the cut-over until a report at the fenced generation says the leader has
 stopped serving and its log is not growing, and the same configuration then
-explores 2.6M states without a violation. The generation on the report matters
+explores 2.7M states without a violation. The generation on the report matters
 as much as the flag: an earlier leader's drained report is about a leadership
 that has ended, and believing it lets the next move skip its wait.
 
-The broker's half is `ShardLifecycle::observe`, which releases a shard the
-moment a draining assignment arrives and never serves it again at that
-generation, and the driver's settle rule, which withholds the drained report
-until the tail has held still with no publish in flight.
+The broker's half is `ShardLifecycle::observe`, which closes the shard's write
+fence the moment a draining assignment arrives and never serves it again at
+that generation, and the replication driver, which withholds the drained
+report until the fence is closed with no write inside it.
+
+### The fence at the claim that is load-bearing
+
+`FelixShardHandoffNoClaimFence.cfg` checks the fence at admission only. TLC
+finds an acknowledged record lost in eleven steps:
+
+1. The leader admits a write. It waits to be claimed — in the broker, in a
+   publish queue.
+2. The control plane fences the leader, which sees it and stops serving.
+3. The leader reports `drained`. The report counts claimed writes, and this
+   one is not claimed yet, so the report is true as far as it goes.
+4. The write is claimed and committed. Under `Leader` consistency the commit
+   is the acknowledgement.
+5. The control plane cuts over on the drained report, to a successor the
+   report named caught up. It does not hold the record. `AckedSurvive` fails.
+
+Nothing about waiting longer closes this: however still the leader's tail
+holds, a write can wait in the queue for longer. What closes it is the claim
+checking the fence — `FenceAtClaim = TRUE`, which is
+`FelixShardHandoffLeaderAck.cfg`, passing. The broker's check is
+`ShardFence::enter` in `services/felix-broker-service/src/shards/lifecycle/fence.rs`,
+entered by every write right before it claims its place in the log and held
+until the write is durable, and the drained report waits for the fence to be
+closed with nothing inside it. Under `Quorum` the report-before-mark ordering
+keeps such a record from being acknowledged, which is why the counterexample
+needs `Leader`; the record would still land on the old leader after it said
+it had stopped.
 
 ### The ordering that is load-bearing
 
@@ -226,7 +259,7 @@ then moves the quorum mark that releases the acknowledgement. That is
 `publish_mark` in `services/felix-broker-service/src/replication/driver/shard.rs`, which moves the
 mark only `if reported`, and `await_quorum`, which blocks the publish on the
 mark. With `ReportBeforeAck = TRUE` — `FelixShard.cfg`, the implemented design
-— TLC explores 2.4M distinct states and finds no violation.
+— TLC explores 2.0M distinct states and finds no violation.
 
 So the pair is the point. The ordering is not merely present in the code; the
 model shows the guarantee fails without it.
@@ -235,7 +268,7 @@ model shows the guarantee fails without it.
 > acknowledgements actually happen under the added precondition — a
 > precondition nothing can satisfy would make `AckedSurvive` vacuously true.
 > Checked by hand with a temporary `acked = {}` invariant, which TLC violates
-> in 7,107 states: acknowledgements are released, and the pass is about them.
+> in 2,307 states: acknowledgements are released, and the pass is about them.
 
 Promotion by log order finds no trace, in the same bounds. A replica holding an
 acknowledged `Quorum` record is in every majority that could acknowledge one
