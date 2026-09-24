@@ -92,6 +92,7 @@ impl ControlPlane {
                 )),
             ),
             in_flight: Default::default(),
+            placement_wakes: Default::default(),
         };
 
         let addr = ports::free_tcp()?;

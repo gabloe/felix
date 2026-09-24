@@ -42,6 +42,7 @@ fn bootstrap_state(enabled: bool, tokens: Vec<String>) -> (Arc<InMemoryStore>, A
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     (store, state)
 }

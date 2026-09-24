@@ -477,6 +477,24 @@ there. A broker applies the snapshot and then polls, and the two together
 describe every committed change exactly once — the snapshot is read at a
 consistent point and `next_seq` is the log position at that same point.
 
+**Long-poll.** `changes?since=N&wait_ms=M` waits, when there is nothing new,
+for up to `M` ms (capped at 25 000, under the 30 s idle timeout common to
+proxies and HTTP clients) and answers as soon as there is. "Nothing new" means
+an empty page with `next_seq` equal to `since`; anything else — a change, or
+any of the re-snapshot signals below — answers at once, and the page is read
+exactly as it is without `wait_ms`, so retention, the page limit and the
+snapshot fallback are unchanged. A wait that runs out answers the same empty
+page an immediate request would have. Without `wait_ms` (or with `0`) the
+request never waits.
+
+A waiting request holds no store connection: it re-reads the store every 50 ms,
+each read taking a connection only for itself, which is how it sees a write by
+another instance. A write by the instance serving the request (its own
+placement pass) wakes it at once rather than at the next re-check. Each
+waiting request costs about 20 small reads a second while it waits. A waiting
+request answers as soon as the instance begins to drain, so long-polls never
+hold a shutdown open.
+
 Three things can break that, and a broker has to notice each rather than carry
 on from a checkpoint the control plane can no longer honour:
 

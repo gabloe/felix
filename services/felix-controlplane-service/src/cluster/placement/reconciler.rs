@@ -1,7 +1,7 @@
 //! Applying a plan to the store, on a timer.
 use std::collections::HashMap;
 
-use super::{MovePolicy, Plan, ReplicaPositions, assignment_for, plan_with};
+use super::{MovePolicy, PlacementWakes, Plan, ReplicaPositions, assignment_for, plan_with};
 use crate::model::{Cache, Node, ShardAssignment, ShardKey, Stream};
 use crate::store::AssignmentWrite;
 
@@ -75,7 +75,7 @@ pub async fn reconcile_once(
     policy: MovePolicy,
 ) -> ReconcileOutcome {
     match plan_pass(store, liveness, policy).await {
-        Some(pass) => apply_pass(store, &pass).await,
+        Some(pass) => apply_pass(store, &pass, &PlacementWakes::default()).await,
         None => ReconcileOutcome::default(),
     }
 }
@@ -114,10 +114,12 @@ pub(super) async fn plan_pass(
     Some(PlannedPass { plan, read })
 }
 
-/// Write what a planned pass calls for.
+/// Write what a planned pass calls for, waking this instance's long-polls on
+/// every write.
 pub(super) async fn apply_pass(
     store: &dyn crate::store::ControlPlaneStore,
     pass: &PlannedPass,
+    wakes: &PlacementWakes,
 ) -> ReconcileOutcome {
     let plan = &pass.plan;
     let mut outcome = ReconcileOutcome {
@@ -138,6 +140,7 @@ pub(super) async fn apply_pass(
                 conflict(key, step.label(), pass.read.get(key).copied(), current);
             }
             Ok(AssignmentWrite::Written(written)) => {
+                wakes.assignment_written();
                 outcome.moved += 1;
                 metrics::counter!(SHARD_MOVE_STEPS_TOTAL, "step" => step.label()).increment(1);
                 tracing::info!(
@@ -192,6 +195,7 @@ pub(super) async fn apply_pass(
                 conflict(key, "place", pass.read.get(key).copied(), current);
             }
             Ok(AssignmentWrite::Written(assignment)) => {
+                wakes.assignment_written();
                 outcome.placed += 1;
                 tracing::info!(
                     kind = %key.kind,
@@ -239,13 +243,15 @@ pub(super) async fn apply_pass(
     outcome
 }
 
-/// Place shards on an interval until `shutdown` fires.
+/// Place shards on an interval until `shutdown` fires. Every assignment it
+/// writes wakes this instance's long-polls through `wakes`.
 pub fn spawn_reconciler(
     store: std::sync::Arc<dyn crate::store::ControlPlaneStore + Send + Sync>,
     liveness: crate::config::NodeLivenessConfig,
     policy: MovePolicy,
     interval: std::time::Duration,
     gate: crate::raft::LeadershipGate,
+    wakes: std::sync::Arc<PlacementWakes>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -255,15 +261,16 @@ pub fn spawn_reconciler(
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => return,
-                _ = ticker.tick() => {
-                    // Placement decides from what it reads; under Raft the
-                    // gate's linearizable check also guarantees those reads
-                    // are current before any assignment is proposed.
-                    if !gate.holds().await {
-                        continue;
-                    }
-                    reconcile_once(store.as_ref(), &liveness, policy).await;
-                }
+                _ = ticker.tick() => {}
+            }
+            // Placement decides from what it reads; under Raft the gate's
+            // linearizable check also guarantees those reads are current
+            // before any assignment is proposed.
+            if !gate.holds().await {
+                continue;
+            }
+            if let Some(pass) = plan_pass(store.as_ref(), &liveness, policy).await {
+                apply_pass(store.as_ref(), &pass, &wakes).await;
             }
         }
     })

@@ -42,7 +42,7 @@ fn with_bootstrap(mut config: ControlPlaneConfig) -> ControlPlaneConfig {
 
 #[tokio::test]
 async fn build_state_memory_backend() {
-    let (state, _raft) = build_state(config(), Readiness::ready())
+    let (state, _raft) = build_state(config(), Readiness::ready(), &Default::default())
         .await
         .expect("state");
     assert_eq!(state.region.region_id, "local");
@@ -55,7 +55,7 @@ async fn build_state_postgres_requires_config() {
         storage: StorageBackend::Postgres,
         ..config()
     };
-    let err = build_state(config, Readiness::ready())
+    let err = build_state(config, Readiness::ready(), &Default::default())
         .await
         .err()
         .expect("missing postgres");
@@ -74,7 +74,7 @@ async fn build_state_postgres_attempts_connection_when_config_present() {
         }),
         ..config()
     });
-    let err = build_state(config, Readiness::ready())
+    let err = build_state(config, Readiness::ready(), &Default::default())
         .await
         .err()
         .expect("connect should fail");

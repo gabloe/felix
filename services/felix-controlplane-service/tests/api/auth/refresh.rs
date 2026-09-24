@@ -113,6 +113,7 @@ async fn fixture() -> (AppState, Arc<InMemoryStore>) {
             Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     (state, store)
 }

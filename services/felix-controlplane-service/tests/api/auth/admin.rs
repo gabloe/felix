@@ -41,6 +41,7 @@ fn build_state(store: Arc<InMemoryStore>) -> AppState {
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     }
 }
 

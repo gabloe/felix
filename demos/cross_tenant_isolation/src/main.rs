@@ -460,6 +460,7 @@ async fn spawn_controlplane(store: Arc<PostgresStore>) -> Result<(SocketAddr, Jo
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
 
     let app = build_router(state.clone()).merge(build_bootstrap_router(state));

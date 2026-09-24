@@ -1806,6 +1806,7 @@ async fn pg_bootstrap_initialize_and_jwks_includes_previous_keys() -> Result<()>
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     let bootstrap_app = api::build_bootstrap_router(state.clone());
     let body = json!({
@@ -1962,4 +1963,159 @@ fn felix_test_container_name() -> String {
             .unwrap_or_default()
             .as_nanos()
     )
+}
+
+/// Long-polls on the assignment feed hold no connection while they wait.
+///
+/// Four times as many waiting requests as the pool has connections: if a
+/// waiter held one, the write below could not get a connection until the
+/// waits ran out, and the waiters would answer at their deadline, not at the
+/// write.
+#[tokio::test]
+#[serial]
+async fn pg_assignment_long_polls_do_not_hold_connections() -> Result<()> {
+    let Some(fixture) = pg_store().await? else {
+        return Ok(());
+    };
+    let store = fixture.store.clone();
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "T".to_string(),
+        })
+        .await?;
+    let keys = generate_signing_keys()?;
+    store.set_tenant_signing_keys("t1", keys.clone()).await?;
+    store
+        .create_namespace(Namespace {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            display_name: "Default".to_string(),
+        })
+        .await?;
+    store
+        .create_stream(Stream {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "orders".to_string(),
+            kind: StreamKind::Stream,
+            shards: 1,
+            replication_factor: 1,
+            retention: RetentionPolicy {
+                max_age_seconds: None,
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Leader,
+            delivery: DeliveryGuarantee::AtMostOnce,
+            durable: true,
+        })
+        .await?;
+    let leader = format!("broker-lp-{}", std::process::id());
+    store
+        .register_node(felix_controlplane_service::model::Node {
+            node_id: leader.clone(),
+            spec: felix_controlplane_service::model::NodeSpec {
+                advertise_addr: "10.9.9.9:7000".to_string(),
+                client_addr: None,
+                region: "local".to_string(),
+                labels: Default::default(),
+                capacity: Default::default(),
+            },
+            status: felix_controlplane_service::model::NodeStatus {
+                lifecycle: felix_controlplane_service::model::NodeLifecycle::Live,
+                last_heartbeat_at_millis: 1,
+                registered_at_millis: 1,
+                incarnation: 0,
+            },
+        })
+        .await?;
+    let since = store.shard_assignment_snapshot().await?.next_seq;
+
+    let state = api::AppState {
+        region: felix_controlplane_service::api::types::Region {
+            region_id: "local".to_string(),
+            display_name: "Local".to_string(),
+        },
+        api_version: "v1".to_string(),
+        features: felix_controlplane_service::api::types::FeatureFlags {
+            durable_storage: true,
+            tiered_storage: false,
+            bridges: false,
+        },
+        store: store.clone(),
+        oidc_validator: UpstreamOidcValidator::default(),
+        bootstrap_enabled: false,
+        bootstrap_tokens: Vec::new(),
+        node_liveness: Default::default(),
+        readiness: std::sync::Arc::new(felix_controlplane_service::api::readiness::Readiness::new(
+            std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
+        )),
+        in_flight: Default::default(),
+        placement_wakes: Default::default(),
+    };
+    let app = api::build_router(state);
+    let bearer = felix_controlplane_service::auth::felix_token::mint_token(
+        &keys,
+        "t1",
+        "p:test",
+        vec!["node.view:cluster:*".to_string()],
+        Duration::from_secs(900),
+    )?;
+
+    // The fixture's pool has five connections.
+    const WAITERS: usize = 20;
+    let started = tokio::time::Instant::now();
+    let waiters: Vec<_> = (0..WAITERS)
+        .map(|_| {
+            let app = app.clone();
+            let request = Request::builder()
+                .uri(format!(
+                    "/v1/shard-assignments/changes?since={since}&wait_ms=15000"
+                ))
+                .header("authorization", format!("Bearer {bearer}"))
+                .body(Body::empty())
+                .expect("request");
+            tokio::spawn(async move {
+                let response = app.oneshot(request).await.expect("response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let body: serde_json::Value = read_json(response).await;
+                (body, started.elapsed())
+            })
+        })
+        .collect();
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let write_began = started.elapsed();
+    store
+        .put_shard_assignment(felix_controlplane_service::model::ShardAssignment {
+            key: felix_controlplane_service::model::ShardKey {
+                tenant_id: "t1".to_string(),
+                namespace: "default".to_string(),
+                stream: "orders".to_string(),
+                shard: 0,
+                kind: felix_controlplane_service::model::ShardKind::Stream,
+            },
+            leader: leader.clone(),
+            replicas: Vec::new(),
+            generation: 0,
+            state: felix_controlplane_service::model::ShardState::Assigning,
+            successor: None,
+        })
+        .await?;
+    let written = started.elapsed();
+    assert!(
+        written - write_began < Duration::from_secs(2),
+        "the write waited {:?} for a connection",
+        written - write_began,
+    );
+
+    for waiter in waiters {
+        let (body, answered) = waiter.await?;
+        assert_eq!(body["items"][0]["assignment"]["leader"], leader.as_str());
+        assert!(
+            answered < written + Duration::from_secs(3),
+            "answered at {answered:?}, the write landed at {written:?}",
+        );
+    }
+    Ok(())
 }

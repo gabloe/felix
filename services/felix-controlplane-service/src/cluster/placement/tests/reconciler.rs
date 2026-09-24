@@ -214,7 +214,7 @@ async fn a_fence_planned_before_a_cut_over_is_not_written_after_it() {
         .expect("get");
     assert_eq!(cut_over.leader, "broker-y");
 
-    let late = super::super::reconciler::apply_pass(&store, &stale).await;
+    let late = super::super::reconciler::apply_pass(&store, &stale, &Default::default()).await;
     assert_eq!(late.moved, 0);
     assert_eq!(late.conflicts, 1);
     assert_eq!(
@@ -240,13 +240,13 @@ async fn a_placement_planned_against_no_assignment_does_not_overwrite_one() {
         .expect("plan");
 
     assert_eq!(
-        super::super::reconciler::apply_pass(&store, &first)
+        super::super::reconciler::apply_pass(&store, &first, &Default::default())
             .await
             .placed,
         3
     );
     let placed = store.list_shard_assignments().await.expect("list");
-    let late = super::super::reconciler::apply_pass(&store, &second).await;
+    let late = super::super::reconciler::apply_pass(&store, &second, &Default::default()).await;
     assert_eq!(late.placed, 0);
     assert_eq!(late.conflicts, 3);
     assert_eq!(store.list_shard_assignments().await.expect("list"), placed);
@@ -324,7 +324,7 @@ async fn a_promotion_planned_from_an_old_read_is_not_written_later() {
         .expect("get");
     assert_ne!(again.leader, first);
 
-    let late = super::super::reconciler::apply_pass(&store, &stale).await;
+    let late = super::super::reconciler::apply_pass(&store, &stale, &Default::default()).await;
     assert_eq!(late.placed, 0);
     assert_eq!(late.conflicts, 1);
     assert_eq!(

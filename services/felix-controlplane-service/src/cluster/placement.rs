@@ -32,6 +32,7 @@ mod plan;
 mod reconciler;
 mod rendezvous;
 mod replica_positions;
+mod wakes;
 
 pub use caught_up::{CaughtUp, NothingCaughtUp};
 pub use decision::{Blocked, Decision, MoveStep, Unplaceable};
@@ -43,6 +44,7 @@ pub use reconciler::{
     reconcile_once, spawn_reconciler,
 };
 pub use replica_positions::ReplicaPositions;
+pub use wakes::PlacementWakes;
 
 #[cfg(test)]
 mod tests;

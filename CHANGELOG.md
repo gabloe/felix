@@ -13,6 +13,12 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Faster shard move switch-over, control-plane side.**
+  `GET /v1/shard-assignments/changes` takes an optional `wait_ms`: with
+  nothing newer than `since`, the request waits up to that long (capped at
+  25 s) and answers as soon as a change lands. It holds no store connection
+  while waiting, and without `wait_ms` it behaves exactly as before.
+
 - **Online shard rebalancing** (#130). A shard whose leader is alive is now
   moved rather than reassigned. The control plane stages the destination as a
   replica and lets the leader catch it up, fences the leader once the copy is

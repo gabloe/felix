@@ -82,6 +82,7 @@ fn state_with_token() -> AppState {
             Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     }
 }
 

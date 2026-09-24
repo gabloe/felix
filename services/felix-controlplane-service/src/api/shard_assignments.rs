@@ -1,5 +1,8 @@
 //! Which broker leads each shard, as operators and brokers read it.
 use std::collections::HashMap;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use axum::Json;
 use axum::extract::{Query, State};
@@ -11,6 +14,14 @@ use crate::api::nodes::require_cluster_node_view;
 use crate::api::types::{
     ShardAssignmentChangesResponse, ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
 };
+
+/// The longest a changes request waits. Under the usual 30 s idle timeout of
+/// proxies and HTTP clients, so a wait ends in an answer rather than a cut
+/// connection.
+pub(crate) const MAX_CHANGES_WAIT_MS: u64 = 25_000;
+
+/// How often a waiting changes request re-reads the store.
+const CHANGES_RECHECK: Duration = Duration::from_millis(50);
 
 #[utoipa::path(
     get,
@@ -78,7 +89,10 @@ pub(crate) async fn shard_assignment_snapshot(
     get,
     path = "/v1/shard-assignments/changes",
     tag = "nodes",
-    params(("since" = Option<u64>, Query, description = "Last seen sequence")),
+    params(
+        ("since" = Option<u64>, Query, description = "Last seen sequence"),
+        ("wait_ms" = Option<u64>, Query, description = "When nothing is newer than `since`, wait up to this many milliseconds (at most 25000) and answer as soon as a change lands")
+    ),
     responses((status = 200, description = "Assignment changes", body = ShardAssignmentChangesResponse))
 )]
 /// Assignment changes at or after `since`.
@@ -100,13 +114,47 @@ pub(crate) async fn shard_assignment_changes(
         .get("since")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0);
-    let changes = state
-        .store
-        .shard_assignment_changes(since)
-        .await
-        .map_err(|ref err| api_internal("failed to load shard assignment changes", err))?;
-    Ok(Json(ShardAssignmentChangesResponse {
-        items: changes.items,
-        next_seq: changes.next_seq,
-    }))
+    let deadline = query
+        .get("wait_ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|ms| Instant::now() + Duration::from_millis(ms.min(MAX_CHANGES_WAIT_MS)));
+    // Subscribed before the first read, so a write landing between that read
+    // and the wait still wakes it.
+    let mut written = state.placement_wakes.watch_assignments();
+    loop {
+        let changes = state
+            .store
+            .shard_assignment_changes(since)
+            .await
+            .map_err(|ref err| api_internal("failed to load shard assignment changes", err))?;
+        let nothing_new = changes.items.is_empty() && changes.next_seq == since;
+        let now = Instant::now();
+        match deadline {
+            Some(deadline) if nothing_new && now < deadline => {
+                // Nothing is held while waiting: each re-check takes a store
+                // connection only for its own read. The re-check is how a
+                // write by another instance is seen; this instance's own
+                // writes wake the wait directly.
+                tokio::select! {
+                    _ = written.changed() => {}
+                    _ = tokio::time::sleep(CHANGES_RECHECK.min(deadline - now)) => {}
+                    _ = state.placement_wakes.closing().cancelled() => {
+                        return Ok(Json(ShardAssignmentChangesResponse {
+                            items: changes.items,
+                            next_seq: changes.next_seq,
+                        }));
+                    }
+                }
+            }
+            _ => {
+                return Ok(Json(ShardAssignmentChangesResponse {
+                    items: changes.items,
+                    next_seq: changes.next_seq,
+                }));
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+mod tests;
