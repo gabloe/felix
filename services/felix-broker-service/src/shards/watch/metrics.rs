@@ -21,6 +21,17 @@ pub const RESYNCS_TOTAL: &str = "felix_broker_shard_watch_resyncs_total";
 /// Polls that failed outright.
 pub const FAILURES_TOTAL: &str = "felix_broker_shard_watch_failures_total";
 
+/// Nodes in the address book this broker can forward to.
+///
+/// Zero while assignments are known is the shape of a cluster that cannot
+/// forward: every remote shard resolves to "owner unavailable" because the id
+/// has no address behind it.
+pub const CATALOG_NODES: &str = "felix_broker_node_catalog_nodes";
+/// Node-catalog refreshes that failed. The previous catalog is kept, so this
+/// rising while `CATALOG_NODES` holds steady means routes are going stale
+/// rather than disappearing.
+pub const CATALOG_REFRESH_FAILURES_TOTAL: &str = "felix_broker_node_catalog_refresh_failures_total";
+
 pub fn record_checkpoint(seq: u64) {
     metrics::gauge!(CHECKPOINT).set(seq as f64);
 }
@@ -49,17 +60,6 @@ pub fn record_resync(reason: super::Resync) {
     };
     metrics::counter!(RESYNCS_TOTAL, "reason" => label).increment(1);
 }
-
-/// Nodes in the address book this broker can forward to.
-///
-/// Zero while assignments are known is the shape of a cluster that cannot
-/// forward: every remote shard resolves to "owner unavailable" because the id
-/// has no address behind it.
-pub const CATALOG_NODES: &str = "felix_broker_node_catalog_nodes";
-/// Node-catalog refreshes that failed. The previous catalog is kept, so this
-/// rising while `CATALOG_NODES` holds steady means routes are going stale
-/// rather than disappearing.
-pub const CATALOG_REFRESH_FAILURES_TOTAL: &str = "felix_broker_node_catalog_refresh_failures_total";
 
 pub fn set_catalog_nodes(count: usize) {
     metrics::gauge!(CATALOG_NODES).set(count as f64);

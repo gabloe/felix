@@ -53,6 +53,32 @@ pub const REBUILDS_TOTAL: &str = "felix_broker_replication_rebuilds_total";
 /// Followers this broker is rebuilding right now, across every shard it leads.
 pub const REBUILDING: &str = "felix_broker_replication_rebuilding";
 
+/// Quorum marks held back because the replica report did not reach the control
+/// plane.
+///
+/// Worth alerting on: `Quorum` publishes are timing out on those shards, and
+/// nothing else in the broker looks unwell — the replication itself succeeded.
+pub const MARKS_WITHHELD: &str = "felix_broker_quorum_marks_withheld_total";
+
+/// How many shards' reports shared one control-plane request.
+///
+/// One means the batching found nothing to batch, which is correct for a
+/// broker leading a single shard and a warning sign for one leading hundreds.
+pub const REPORTS_PER_REQUEST: &str = "felix_broker_replica_reports_per_request";
+
+/// Publishes to a `Quorum` stream that did not reach a majority, by `reason`.
+///
+/// The `ok` case is not counted here: an acknowledged publish is already
+/// counted on the publish path, and a second counter for the same event only
+/// invites the two to disagree.
+pub const QUORUM_FAILED_TOTAL: &str = "felix_broker_publish_quorum_failed_total";
+
+/// No majority within the budget. The records are durable on this broker and
+/// may yet reach one; this broker simply cannot say that they have.
+pub const QUORUM_TIMED_OUT: &str = "timed_out";
+/// Leadership moved before the batch reached a majority.
+pub const QUORUM_NOT_LEADING: &str = "not_leading";
+
 pub fn record_rebuild(outcome: &'static str) {
     metrics::counter!(REBUILDS_TOTAL, "outcome" => outcome).increment(1);
 }
@@ -73,35 +99,9 @@ pub fn record_halted(count: usize) {
     metrics::gauge!(HALTED).set(count as f64);
 }
 
-/// Quorum marks held back because the replica report did not reach the control
-/// plane.
-///
-/// Worth alerting on: `Quorum` publishes are timing out on those shards, and
-/// nothing else in the broker looks unwell — the replication itself succeeded.
-pub const MARKS_WITHHELD: &str = "felix_broker_quorum_marks_withheld_total";
-
-/// How many shards' reports shared one control-plane request.
-///
-/// One means the batching found nothing to batch, which is correct for a
-/// broker leading a single shard and a warning sign for one leading hundreds.
-pub const REPORTS_PER_REQUEST: &str = "felix_broker_replica_reports_per_request";
-
 pub fn record_mark_withheld() {
     metrics::counter!(MARKS_WITHHELD).increment(1);
 }
-
-/// Publishes to a `Quorum` stream that did not reach a majority, by `reason`.
-///
-/// The `ok` case is not counted here: an acknowledged publish is already
-/// counted on the publish path, and a second counter for the same event only
-/// invites the two to disagree.
-pub const QUORUM_FAILED_TOTAL: &str = "felix_broker_publish_quorum_failed_total";
-
-/// No majority within the budget. The records are durable on this broker and
-/// may yet reach one; this broker simply cannot say that they have.
-pub const QUORUM_TIMED_OUT: &str = "timed_out";
-/// Leadership moved before the batch reached a majority.
-pub const QUORUM_NOT_LEADING: &str = "not_leading";
 
 pub fn record_quorum(reason: &'static str) {
     metrics::counter!(QUORUM_FAILED_TOTAL, "reason" => reason).increment(1);

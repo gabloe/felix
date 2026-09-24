@@ -51,6 +51,51 @@ pub const OUTCOME_REFUSED: &str = "refused";
 /// The request carried no credential, or one that does not allow the write.
 pub const OUTCOME_UNAUTHORIZED: &str = "unauthorized";
 
+/// Publishes this broker forwarded to an owner, by `outcome`.
+pub const FORWARDS_TOTAL: &str = "felix_broker_forwards_total";
+/// Forward attempts that were not the first: a redirect followed, or a
+/// retryable refusal retried. Rising steadily means the routing view is
+/// churning, not that anything is broken.
+pub const FORWARD_RETRIES_TOTAL: &str = "felix_broker_forward_retries_total";
+
+/// The attempt budget ran out while the owner kept refusing or moving.
+pub const OUTCOME_EXHAUSTED: &str = "exhausted";
+/// The batch was sent and its answer never arrived. Alert on this: it is the
+/// only outcome where the broker cannot say whether the write landed.
+pub const OUTCOME_INDETERMINATE: &str = "indeterminate";
+
+/// Replication batches this broker stored as a follower, by `outcome`.
+///
+/// The failure outcomes are separated because they need different responses.
+/// `gap` is ordinary during catch-up and self-repairing. `conflict` and
+/// `fenced` are not: the first means two logs have diverged, the second that a
+/// superseded leader is still shipping. Either one standing is worth waking
+/// someone for.
+pub const REPLICATED_TOTAL: &str = "felix_broker_replicated_total";
+
+/// The sender named an epoch older than this broker's, so it is no longer the
+/// leader.
+pub const OUTCOME_FENCED: &str = "fenced";
+/// This broker's routing view has not caught up with the epoch the sender
+/// named. Transient by nature.
+pub const OUTCOME_BEHIND: &str = "behind";
+/// The batch starts past this broker's tail. The leader resumes from the offset
+/// in the answer.
+pub const OUTCOME_GAP: &str = "gap";
+/// The batch disagrees with bytes already stored.
+pub const OUTCOME_CONFLICT: &str = "conflict";
+/// A divergent suffix from a previous generation was dropped and replication
+/// resumed. Not an error — but worth watching, because a steady rate means
+/// leadership is changing more often than it should.
+pub const OUTCOME_TRUNCATED: &str = "truncated";
+/// The batch did not survive the trip.
+pub const OUTCOME_CORRUPT: &str = "corrupt";
+/// This broker placed a shard log to begin where the leader's surviving log
+/// begins. Rare and deliberate: it happens once per replica per shard.
+pub const OUTCOME_BOOTSTRAPPED: &str = "bootstrapped";
+/// This broker discarded its copy of a shard at the leader's request.
+pub const OUTCOME_REBUILT: &str = "rebuilt";
+
 pub fn record_connect_attempt(outcome: &'static str) {
     metrics::counter!(CONNECT_ATTEMPTS_TOTAL, "outcome" => outcome).increment(1);
 }
@@ -88,19 +133,6 @@ pub fn record_inbound_rejected(reason: &'static str) {
     metrics::counter!(INBOUND_REJECTED_TOTAL, "reason" => reason).increment(1);
 }
 
-/// Publishes this broker forwarded to an owner, by `outcome`.
-pub const FORWARDS_TOTAL: &str = "felix_broker_forwards_total";
-/// Forward attempts that were not the first: a redirect followed, or a
-/// retryable refusal retried. Rising steadily means the routing view is
-/// churning, not that anything is broken.
-pub const FORWARD_RETRIES_TOTAL: &str = "felix_broker_forward_retries_total";
-
-/// The attempt budget ran out while the owner kept refusing or moving.
-pub const OUTCOME_EXHAUSTED: &str = "exhausted";
-/// The batch was sent and its answer never arrived. Alert on this: it is the
-/// only outcome where the broker cannot say whether the write landed.
-pub const OUTCOME_INDETERMINATE: &str = "indeterminate";
-
 pub fn record_forward(outcome: &'static str) {
     metrics::counter!(FORWARDS_TOTAL, "outcome" => outcome).increment(1);
 }
@@ -108,38 +140,6 @@ pub fn record_forward(outcome: &'static str) {
 pub fn record_forward_retry() {
     metrics::counter!(FORWARD_RETRIES_TOTAL).increment(1);
 }
-
-/// Replication batches this broker stored as a follower, by `outcome`.
-///
-/// The failure outcomes are separated because they need different responses.
-/// `gap` is ordinary during catch-up and self-repairing. `conflict` and
-/// `fenced` are not: the first means two logs have diverged, the second that a
-/// superseded leader is still shipping. Either one standing is worth waking
-/// someone for.
-pub const REPLICATED_TOTAL: &str = "felix_broker_replicated_total";
-
-/// The sender named an epoch older than this broker's, so it is no longer the
-/// leader.
-pub const OUTCOME_FENCED: &str = "fenced";
-/// This broker's routing view has not caught up with the epoch the sender
-/// named. Transient by nature.
-pub const OUTCOME_BEHIND: &str = "behind";
-/// The batch starts past this broker's tail. The leader resumes from the offset
-/// in the answer.
-pub const OUTCOME_GAP: &str = "gap";
-/// The batch disagrees with bytes already stored.
-pub const OUTCOME_CONFLICT: &str = "conflict";
-/// A divergent suffix from a previous generation was dropped and replication
-/// resumed. Not an error — but worth watching, because a steady rate means
-/// leadership is changing more often than it should.
-pub const OUTCOME_TRUNCATED: &str = "truncated";
-/// The batch did not survive the trip.
-pub const OUTCOME_CORRUPT: &str = "corrupt";
-/// This broker placed a shard log to begin where the leader's surviving log
-/// begins. Rare and deliberate: it happens once per replica per shard.
-pub const OUTCOME_BOOTSTRAPPED: &str = "bootstrapped";
-/// This broker discarded its copy of a shard at the leader's request.
-pub const OUTCOME_REBUILT: &str = "rebuilt";
 
 pub fn record_replicated(outcome: &'static str) {
     metrics::counter!(REPLICATED_TOTAL, "outcome" => outcome).increment(1);
