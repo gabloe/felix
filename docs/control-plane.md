@@ -181,7 +181,7 @@ explain each one's placement standing:
 
 ```json
 { "node": { "node_id": "broker-1", "spec": { ... }, "status": { ... } },
-  "placement": { "eligible": false, "heartbeat_age_ms": 41200,
+  "placement": { "eligible": false, "routable": false, "heartbeat_age_ms": 41200,
                  "reasons": ["last heartbeat was 41200ms ago, past the 15000ms timeout; expiry has not run yet"] } }
 ```
 
@@ -190,6 +190,12 @@ landing on it" is otherwise answered by reading a lifecycle string and doing
 heartbeat arithmetic by hand. It reports a stale heartbeat separately from the
 lifecycle, so the window between a heartbeat lapsing and the sweep noticing —
 where a node still reads `live` — is visible rather than inferred.
+
+`placement.routable` is what brokers read to decide whether they may forward
+to a node: true while it is live or draining and its heartbeat is inside the
+window. A draining broker is not eligible for new placement but still serves
+the shards it has not handed off yet, and writes for them are forwarded to it
+until each one moves.
 
 Filters intersect, and an absent filter matches everything:
 
@@ -509,9 +515,10 @@ the successor is a candidate like any other replica. An ephemeral stream has
 no log to hand off and is reassigned as it always was.
 
 Between the fence and the new owner opening, nobody serves the shard. A
-publish that arrives then is held by the broker it reached and forwarded once
-its routes show the new owner, so the client sees a slower acknowledgement,
-not an error; cache, counter and group writes are refused and retried. The
+publish, cache write or counter add that arrives then is held by the broker
+it reached and forwarded once its routes show the new owner, so the client
+sees a slower answer, not an error; a consumer-group operation is held the
+same way and then redirected to the new owner. The
 broker long-polls the assignment feed, so the window is tens of milliseconds
 locally rather than a sync interval. Subscriptions on the old leader end with
 `shard_moved` and follow the shard (see

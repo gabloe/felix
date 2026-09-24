@@ -247,6 +247,12 @@ pub struct NodeRegistrationResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct NodePlacement {
     pub eligible: bool,
+    /// Whether other brokers may send it requests for the shards it leads:
+    /// live or draining, with its heartbeat inside the window. A draining
+    /// node takes no new placement but serves each shard until the shard is
+    /// handed off.
+    #[serde(default)]
+    pub routable: bool,
     /// Empty when eligible. One entry per reason it is not.
     pub reasons: Vec<String>,
     /// How long since the last accepted heartbeat, against the control plane's

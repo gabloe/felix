@@ -149,6 +149,12 @@ fn placement_for(node: &Node, now_millis: u64, expiry_timeout_ms: u64) -> NodePl
     // wrapped enormous one.
     let heartbeat_age_ms = now_millis.saturating_sub(node.status.last_heartbeat_at_millis);
     let mut reasons = Vec::new();
+    let heartbeat_fresh = heartbeat_age_ms <= expiry_timeout_ms;
+    let routable = heartbeat_fresh
+        && matches!(
+            node.status.lifecycle,
+            NodeLifecycle::Live | NodeLifecycle::Draining
+        );
 
     match node.status.lifecycle {
         NodeLifecycle::Live => {}
@@ -162,7 +168,7 @@ fn placement_for(node: &Node, now_millis: u64, expiry_timeout_ms: u64) -> NodePl
     // Reported separately from the lifecycle: between a heartbeat lapsing and
     // the sweep noticing, a node still reads `live` while already being past
     // its window, and that gap is exactly what an operator is trying to see.
-    if heartbeat_age_ms > expiry_timeout_ms
+    if !heartbeat_fresh
         && matches!(
             node.status.lifecycle,
             NodeLifecycle::Live | NodeLifecycle::Draining
@@ -182,6 +188,7 @@ fn placement_for(node: &Node, now_millis: u64, expiry_timeout_ms: u64) -> NodePl
 
     NodePlacement {
         eligible: reasons.is_empty(),
+        routable,
         reasons,
         heartbeat_age_ms,
     }

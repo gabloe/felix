@@ -119,12 +119,14 @@ Authorization: Bearer <felix-token>
 ```
 
 Filters intersect, and repeating `label` requires all of them. Each entry pairs
-the node record with why it is or is not a placement candidate:
+the node record with why it is or is not a placement candidate. `routable`
+says whether brokers may still send it requests for the shards it leads: true
+for a live or draining node whose heartbeat is inside the window.
 
 ```json
 { "items": [ { "node": { "node_id": "broker-1", "spec": { "advertise_addr": "10.0.0.4:7000", "region": "us-west-2" },
                          "status": { "lifecycle": "live", "incarnation": 3 } },
-               "placement": { "eligible": false, "heartbeat_age_ms": 41200,
+               "placement": { "eligible": false, "routable": false, "heartbeat_age_ms": 41200,
                               "reasons": ["last heartbeat was 41200ms ago, past the 15000ms timeout; expiry has not run yet"] } } ] }
 ```
 
