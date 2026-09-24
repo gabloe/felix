@@ -136,6 +136,8 @@ impl Cluster {
             shard: u32,
             leader: String,
             generation: u64,
+            #[serde(default)]
+            replicas: Vec<String>,
         }
 
         let response: Response = self
@@ -156,6 +158,7 @@ impl Cluster {
                     Assignment {
                         leader: row.leader,
                         generation: row.generation,
+                        replicas: row.replicas,
                     },
                 )
             })
@@ -284,9 +287,10 @@ impl Cluster {
     }
 }
 
-/// Who leads a shard, and at which generation.
+/// Who leads a shard, at which generation, and who follows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assignment {
     pub leader: String,
     pub generation: u64,
+    pub replicas: Vec<String>,
 }

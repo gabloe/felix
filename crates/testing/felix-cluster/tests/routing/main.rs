@@ -7,6 +7,7 @@
 
 mod cross_broker;
 mod moved_readers;
+mod operator_moves;
 mod publish_routing;
 mod rebalance;
 mod redirect;
