@@ -35,6 +35,7 @@
 mod authz;
 mod group;
 mod responder;
+mod session;
 
 use anyhow::{Context, Result};
 use bytes::BytesMut;
@@ -88,8 +89,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     config: BrokerConfig,
     auth: Arc<BrokerAuth>,
     publish_ctx: PublishContext,
-    mut stream_cache: StreamHandleCache,
-    mut stream_cache_key: String,
+    stream_cache: StreamHandleCache,
+    stream_cache_key: String,
     out_ack_tx: mpsc::Sender<Outgoing>,
     out_ack_depth: Arc<AtomicUsize>,
     ack_throttle_rx: watch::Receiver<bool>,
@@ -105,13 +106,13 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // If we observe EOF from the peer (source returns None), we treat it as a graceful close.
     // Otherwise, we will cancel downstream tasks and tear down the connection cooperatively.
     let mut graceful_close = false;
-    let mut auth_ctx: Option<AuthContext> = None;
-    // Frame-flag bits the client understands. Narrowed to the pre-negotiation
-    // set until an `Auth` says otherwise.
-    let mut peer_flags = felix_wire::ORIGINAL_V1_FLAGS;
-    // Optional messages this client understands. Nothing until an `Auth` says
-    // otherwise.
-    let mut peer_features = 0u32;
+    let mut session = Session {
+        auth_ctx: None,
+        peer_flags: felix_wire::ORIGINAL_V1_FLAGS,
+        peer_features: 0,
+        stream_cache,
+        stream_cache_key,
+    };
     let authz_ctx = Responder {
         out_ack_tx: &out_ack_tx,
         out_ack_depth: &out_ack_depth,
@@ -173,7 +174,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
         // Fast-path: binary publish batch frames avoid JSON decode/allocations.
         if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_BATCH != 0 {
             let acked = frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACKED != 0;
-            if auth_ctx.is_none() {
+            if session.auth_ctx.is_none() {
                 send_control_error(
                     &out_ack_tx,
                     &out_ack_depth,
@@ -188,11 +189,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             if acked {
                 handle_acked_binary_publish_batch_control(
                     &broker,
-                    &mut stream_cache,
-                    &mut stream_cache_key,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
                     &publish_ctx,
                     &frame,
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     throttled,
                     config.ack_on_commit,
                     sample,
@@ -203,17 +204,17 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &cancel_tx,
                     &ack_waiters,
                     &ack_waiter_tx,
-                    peer_flags,
+                    session.peer_flags,
                 )
                 .await?;
             } else {
                 handle_binary_publish_batch_control(
                     &broker,
-                    &mut stream_cache,
-                    &mut stream_cache_key,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
                     &publish_ctx,
                     &frame,
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     sample,
                     &cancel_tx,
                 )
@@ -243,6 +244,17 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             timings::record_decode_ns(decode_ns);
             t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
         }
+        let cx = Ctx {
+            broker: &broker,
+            config: &config,
+            auth: &auth,
+            publish_ctx: &publish_ctx,
+            out_ack_tx: &out_ack_tx,
+            out_ack_depth: &out_ack_depth,
+            ack_throttle_tx: &ack_throttle_tx,
+            ack_timeout_state: &ack_timeout_state,
+            cancel_tx: &cancel_tx,
+        };
         // Dispatch by message type. Most handlers are responsible for enqueuing responses into
         // `out_ack_tx` rather than writing directly to the network.
         match message {
@@ -252,144 +264,17 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 client_flags,
                 client_features,
             } => {
-                if auth_ctx.is_some() {
-                    send_control_error(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        &ack_throttle_tx,
-                        &ack_timeout_state,
-                        &cancel_tx,
-                        "auth already established",
-                    )
-                    .await?;
-                    return Ok(false);
-                }
-                match auth.authenticate(&tenant_id, &token).await {
-                    Ok(ctx) => {
-                        auth_ctx = Some(ctx);
-                        // Remembered, not just answered: delivery paths need to
-                        // know which optional frame shapes this client can read.
-                        // Absent means a pre-negotiation client, and the only
-                        // safe reading of that silence is the original bits.
-                        peer_flags = client_flags.unwrap_or(felix_wire::ORIGINAL_V1_FLAGS);
-                        // Which optional messages this client can decode.
-                        // Absent means none: a broker that guessed would send a
-                        // frame the client cannot parse, and an undecodable
-                        // frame costs the connection.
-                        peer_features = client_features.unwrap_or(0);
-                        // Advertise our flag set only to a client that offered its
-                        // own. A client that sent no `client_flags` predates
-                        // negotiation and would not understand `AuthOk`, so it must
-                        // keep receiving the plain `Ok` it expects.
-                        let response = match client_flags {
-                            Some(_) => Message::AuthOk {
-                                server_flags: felix_wire::KNOWN_FLAGS,
-                                // Only what this broker can actually answer.
-                                //
-                                // The cluster-shaped features are gated on there
-                                // being a cluster: a broker with no topology to
-                                // report would have to refuse the question it
-                                // had invited. Cache delete is not one of those
-                                // -- it works the same on a single node -- so
-                                // gating it too would leave every standalone
-                                // broker unable to offer a request it can serve.
-                                server_features: Some(
-                                    felix_wire::FEATURE_CACHE_DELETE
-                                        // Only when the cache store can observe
-                                        // its writes. A watch's contract is
-                                        // built on log offsets, so a broker
-                                        // whose cache has no log has nothing to
-                                        // anchor a resume to and must not
-                                        // invite one. Retained delivery rides
-                                        // the same machinery — the snapshot is
-                                        // the index the log already maintains —
-                                        // so the two bits travel together here.
-                                        | match broker.cache_watches() {
-                                            Some(_) => {
-                                                felix_wire::FEATURE_CACHE_WATCH
-                                                    | felix_wire::FEATURE_CACHE_WATCH_RETAINED
-                                            }
-                                            None => 0,
-                                        }
-                                        | match publish_ctx.client_endpoints {
-                                            Some(_) => {
-                                                felix_wire::FEATURE_TOPOLOGY
-                                                    | felix_wire::FEATURE_REDIRECT
-                                            }
-                                            None => 0,
-                                        }
-                                        // Only when there is somewhere to keep a
-                                        // group's position. Without durable
-                                        // storage a group would restart from the
-                                        // beginning on every reconnect, so
-                                        // offering the feature would invite work
-                                        // this broker cannot do.
-                                        | match broker.group_reader() {
-                                            Some(_) => {
-                                                felix_wire::FEATURE_CONSUMER_GROUP
-                                                    | felix_wire::FEATURE_GROUP_DEAD_LETTERS
-                                            }
-                                            None => 0,
-                                        }
-                                        // Only when there is somewhere to write
-                                        // the counter log. A sum any restart
-                                        // resets is worse than refusing to
-                                        // count at all.
-                                        | match broker.counters() {
-                                            Some(_) => felix_wire::FEATURE_COUNTERS,
-                                            None => 0,
-                                        }
-                                        // Advertised unconditionally. A broker
-                                        // with no routing snapshot answers 1,
-                                        // which is the truth for a single-node
-                                        // deployment rather than a guess.
-                                        | felix_wire::FEATURE_STREAM_SHARDS
-                                        | felix_wire::FEATURE_CACHE_SHARDS
-                                        // Advertised unconditionally: the
-                                        // sequences live with the shard's
-                                        // leader, which every broker is for
-                                        // the shards it leads.
-                                        | felix_wire::FEATURE_IDEMPOTENT_PRODUCER,
-                                ),
-                                // Only when there is more than one. A single
-                                // listener is the default, and saying so
-                                // explicitly would change the bytes every
-                                // existing deployment puts on the wire to say
-                                // nothing a client does not already know.
-                                listener_ports: (config.quic_listeners > 1).then(|| {
-                                    config.quic_binds().iter().map(|a| a.port()).collect()
-                                }),
-                            },
-                            None => Message::Ok,
-                        };
-                        handle_ack_enqueue_result(
-                            send_outgoing_critical(
-                                &out_ack_tx,
-                                &out_ack_depth,
-                                "felix_broker_out_ack_depth",
-                                &ack_throttle_tx,
-                                Outgoing::Message(response),
-                            )
-                            .await,
-                            &ack_timeout_state,
-                            &ack_throttle_tx,
-                            &cancel_tx,
-                        )
-                        .await?;
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "auth failed");
-                        send_control_error(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            &ack_throttle_tx,
-                            &ack_timeout_state,
-                            &cancel_tx,
-                            "auth failed",
-                        )
-                        .await?;
-                        return Ok(false);
-                    }
+                if let Step::Close(graceful) = session::authenticate(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    token,
+                    client_flags,
+                    client_features,
+                )
+                .await?
+                {
+                    return Ok(graceful);
                 }
             }
             Message::Publish {
@@ -402,7 +287,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 ack,
             } => {
                 if !authorize_stream(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamPublish,
                     &namespace,
@@ -417,8 +302,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 handle_publish_message(
                     &broker,
                     &publish_ctx,
-                    &mut stream_cache,
-                    &mut stream_cache_key,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
                     throttled,
                     config.ack_on_commit,
                     &out_ack_tx,
@@ -437,7 +322,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                     ack,
                     sample,
-                    auth_ctx
+                    session
+                        .auth_ctx
                         .as_ref()
                         .map_or_else(String::new, |ctx| ctx.token.clone()),
                 )
@@ -453,7 +339,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 ack,
             } => {
                 if !authorize_stream(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamPublish,
                     &namespace,
@@ -466,11 +352,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     return Ok(false);
                 }
                 handle_publish_batch_message(
-                    peer_flags,
+                    session.peer_flags,
                     &broker,
                     &publish_ctx,
-                    &mut stream_cache,
-                    &mut stream_cache_key,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
                     throttled,
                     config.ack_on_commit,
                     AckEncoding::Json,
@@ -489,7 +375,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     request_id,
                     ack,
                     sample,
-                    auth_ctx
+                    session
+                        .auth_ctx
                         .as_ref()
                         .map_or_else(String::new, |ctx| ctx.token.clone()),
                     None,
@@ -507,7 +394,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 sequence,
             } => {
                 if !authorize_stream(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamPublish,
                     &namespace,
@@ -520,11 +407,11 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     return Ok(false);
                 }
                 handle_publish_batch_message(
-                    peer_flags,
+                    session.peer_flags,
                     &broker,
                     &publish_ctx,
-                    &mut stream_cache,
-                    &mut stream_cache_key,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
                     throttled,
                     config.ack_on_commit,
                     AckEncoding::Idempotent,
@@ -545,7 +432,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     // answer cannot know what to send next.
                     Some(felix_wire::AckMode::PerBatch),
                     sample,
-                    auth_ctx
+                    session
+                        .auth_ctx
                         .as_ref()
                         .map_or_else(String::new, |ctx| ctx.token.clone()),
                     Some((producer_id, sequence)),
@@ -556,7 +444,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // Authenticated like everything else on this stream. The id
                 // itself carries no authority: a batch under it is authorised
                 // against the stream it names, like any other.
-                if auth_ctx.is_none() {
+                if session.auth_ctx.is_none() {
                     send_control_error(
                         &out_ack_tx,
                         &out_ack_depth,
@@ -590,7 +478,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // Authenticated like everything else on this stream: the
                 // addresses are not secret, but who may ask a broker anything
                 // at all is still the tenant boundary.
-                if auth_ctx.is_none() {
+                if session.auth_ctx.is_none() {
                     send_control_error(
                         &out_ack_tx,
                         &out_ack_depth,
@@ -630,7 +518,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             } => {
                 // Authenticated, and scoped: a client may ask about the shape
                 // of streams in its own tenant, not another's.
-                let Some(ctx) = auth_ctx.as_ref() else {
+                let Some(ctx) = session.auth_ctx.as_ref() else {
                     send_control_error(
                         &out_ack_tx,
                         &out_ack_depth,
@@ -694,7 +582,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 cache,
                 request_id,
             } => {
-                let Some(ctx) = auth_ctx.as_ref() else {
+                let Some(ctx) = session.auth_ctx.as_ref() else {
                     send_control_error(
                         &out_ack_tx,
                         &out_ack_depth,
@@ -757,7 +645,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 shard,
             } => {
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -787,7 +675,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     // can have different owners.
                     shard.unwrap_or(0),
                     crate::shards::ShardKind::Stream,
-                    peer_features,
+                    session.peer_features,
                 ) {
                     handle_ack_enqueue_result(
                         send_outgoing_critical(
@@ -824,7 +712,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     subscription_id,
                     start,
                     shard,
-                    peer_flags,
+                    session.peer_flags,
                 )
                 .await?;
                 if done {
@@ -854,7 +742,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 ttl_ms,
             } => {
                 if !authorize_cache(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::CacheWrite,
                     &namespace,
@@ -909,7 +797,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
-                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
+                    session
+                        .auth_ctx
+                        .as_ref()
+                        .map_or("", |ctx| ctx.token.as_str()),
                     tenant_id.as_str(),
                     namespace.as_str(),
                     cache.as_str(),
@@ -983,7 +874,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_cache(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::CacheRead,
                     &namespace,
@@ -1034,7 +925,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
-                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
+                    session
+                        .auth_ctx
+                        .as_ref()
+                        .map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -1115,7 +1009,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             } => {
                 // A watch is a read of the cache, and is authorized as one.
                 if !authorize_cache(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::CacheRead,
                     &namespace,
@@ -1149,7 +1043,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         retained,
                         subscription_id,
                     },
-                    peer_features,
+                    session.peer_features,
                 )
                 .await?;
             }
@@ -1163,7 +1057,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             } => {
                 // An add is a write, authorized as one.
                 if !authorize_cache(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::CacheWrite,
                     &namespace,
@@ -1199,7 +1093,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &broker,
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
-                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
+                    session
+                        .auth_ctx
+                        .as_ref()
+                        .map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -1252,7 +1149,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_cache(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::CacheRead,
                     &namespace,
@@ -1288,7 +1185,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &broker,
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
-                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
+                    session
+                        .auth_ctx
+                        .as_ref()
+                        .map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -1349,7 +1249,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // A group is a read position over a stream, so it is authorized
                 // as a read of that stream.
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -1362,7 +1262,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 if let Some(answer) = group_redirect(
                     &publish_ctx,
-                    peer_features,
+                    session.peer_features,
                     &tenant_id,
                     &namespace,
                     &stream,
@@ -1446,7 +1346,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -1459,7 +1359,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 if let Some(answer) = group_redirect(
                     &publish_ctx,
-                    peer_features,
+                    session.peer_features,
                     &tenant_id,
                     &namespace,
                     &stream,
@@ -1532,7 +1432,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -1545,7 +1445,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 if let Some(answer) = group_redirect(
                     &publish_ctx,
-                    peer_features,
+                    session.peer_features,
                     &tenant_id,
                     &namespace,
                     &stream,
@@ -1617,7 +1517,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -1630,7 +1530,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 if let Some(answer) = group_redirect(
                     &publish_ctx,
-                    peer_features,
+                    session.peer_features,
                     &tenant_id,
                     &namespace,
                     &stream,
@@ -1710,7 +1610,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -1723,7 +1623,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 if let Some(answer) = group_redirect(
                     &publish_ctx,
-                    peer_features,
+                    session.peer_features,
                     &tenant_id,
                     &namespace,
                     &stream,
@@ -1796,7 +1696,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
             } => {
                 if !authorize_stream_simple(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::StreamSubscribe,
                     &namespace,
@@ -1809,7 +1709,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 }
                 if let Some(answer) = group_redirect(
                     &publish_ctx,
-                    peer_features,
+                    session.peer_features,
                     &tenant_id,
                     &namespace,
                     &stream,
@@ -1883,7 +1783,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 // through on `CacheRead` would make read-only credentials able
                 // to destroy data.
                 if !authorize_cache(
-                    auth_ctx.as_ref(),
+                    session.auth_ctx.as_ref(),
                     &tenant_id,
                     Action::CacheWrite,
                     &namespace,
@@ -1924,7 +1824,10 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
                     publish_ctx.ingress.as_deref(),
                     publish_ctx.peers.as_deref(),
-                    auth_ctx.as_ref().map_or("", |ctx| ctx.token.as_str()),
+                    session
+                        .auth_ctx
+                        .as_ref()
+                        .map_or("", |ctx| ctx.token.as_str()),
                     &tenant_id,
                     &namespace,
                     &cache,
@@ -2039,4 +1942,40 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // `graceful_close` only tracks EOF from the peer. Any other early-exit path returns false
     // (protocol error) or Err (hard failure).
     Ok(graceful_close)
+}
+
+/// What an arm tells the loop to do next.
+enum Step {
+    /// Read the next frame.
+    Next,
+    /// End the stream; `true` is a graceful close, as `run_control_loop` returns.
+    Close(bool),
+}
+
+/// The per-stream state the arms change.
+struct Session {
+    auth_ctx: Option<AuthContext>,
+    /// Frame-flag bits the client understands. Narrowed to the pre-negotiation
+    /// set until an `Auth` says otherwise.
+    peer_flags: u16,
+    /// Optional messages this client understands. Nothing until an `Auth` says
+    /// otherwise.
+    peer_features: u32,
+    stream_cache: StreamHandleCache,
+    stream_cache_key: String,
+}
+
+/// What every arm reads: the connection's shared handles and this frame's
+/// sampling state.
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
+    broker: &'a Arc<Broker>,
+    config: &'a BrokerConfig,
+    auth: &'a Arc<BrokerAuth>,
+    publish_ctx: &'a PublishContext,
+    out_ack_tx: &'a mpsc::Sender<Outgoing>,
+    out_ack_depth: &'a Arc<AtomicUsize>,
+    ack_throttle_tx: &'a watch::Sender<bool>,
+    ack_timeout_state: &'a Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &'a watch::Sender<bool>,
 }

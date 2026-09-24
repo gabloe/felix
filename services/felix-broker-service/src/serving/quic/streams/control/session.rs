@@ -1,0 +1,172 @@
+//! Authenticating the control stream, and agreeing what the client understands.
+
+use anyhow::Result;
+use felix_wire::Message;
+
+use crate::serving::quic::handlers::publish::{
+    Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
+};
+
+use super::responder::send_control_error;
+use super::{Ctx, Session, Step};
+
+pub(super) async fn authenticate(
+    cx: &Ctx<'_>,
+    session: &mut Session,
+    tenant_id: String,
+    token: String,
+    client_flags: Option<u16>,
+    client_features: Option<u32>,
+) -> Result<Step> {
+    let Ctx {
+        broker,
+        config,
+        auth,
+        publish_ctx,
+        out_ack_tx,
+        out_ack_depth,
+        ack_throttle_tx,
+        ack_timeout_state,
+        cancel_tx,
+        ..
+    } = *cx;
+    if session.auth_ctx.is_some() {
+        send_control_error(
+            out_ack_tx,
+            out_ack_depth,
+            ack_throttle_tx,
+            ack_timeout_state,
+            cancel_tx,
+            "auth already established",
+        )
+        .await?;
+        return Ok(Step::Close(false));
+    }
+    match auth.authenticate(&tenant_id, &token).await {
+        Ok(ctx) => {
+            session.auth_ctx = Some(ctx);
+            // Remembered, not just answered: delivery paths need to
+            // know which optional frame shapes this client can read.
+            // Absent means a pre-negotiation client, and the only
+            // safe reading of that silence is the original bits.
+            session.peer_flags = client_flags.unwrap_or(felix_wire::ORIGINAL_V1_FLAGS);
+            // Which optional messages this client can decode.
+            // Absent means none: a broker that guessed would send a
+            // frame the client cannot parse, and an undecodable
+            // frame costs the connection.
+            session.peer_features = client_features.unwrap_or(0);
+            // Advertise our flag set only to a client that offered its
+            // own. A client that sent no `client_flags` predates
+            // negotiation and would not understand `AuthOk`, so it must
+            // keep receiving the plain `Ok` it expects.
+            let response = match client_flags {
+                Some(_) => Message::AuthOk {
+                    server_flags: felix_wire::KNOWN_FLAGS,
+                    // Only what this broker can actually answer.
+                    //
+                    // The cluster-shaped features are gated on there
+                    // being a cluster: a broker with no topology to
+                    // report would have to refuse the question it
+                    // had invited. Cache delete is not one of those
+                    // -- it works the same on a single node -- so
+                    // gating it too would leave every standalone
+                    // broker unable to offer a request it can serve.
+                    server_features: Some(
+                        felix_wire::FEATURE_CACHE_DELETE
+                            // Only when the cache store can observe
+                            // its writes. A watch's contract is
+                            // built on log offsets, so a broker
+                            // whose cache has no log has nothing to
+                            // anchor a resume to and must not
+                            // invite one. Retained delivery rides
+                            // the same machinery — the snapshot is
+                            // the index the log already maintains —
+                            // so the two bits travel together here.
+                            | match broker.cache_watches() {
+                                Some(_) => {
+                                    felix_wire::FEATURE_CACHE_WATCH
+                                        | felix_wire::FEATURE_CACHE_WATCH_RETAINED
+                                }
+                                None => 0,
+                            }
+                            | match publish_ctx.client_endpoints {
+                                Some(_) => {
+                                    felix_wire::FEATURE_TOPOLOGY
+                                        | felix_wire::FEATURE_REDIRECT
+                                }
+                                None => 0,
+                            }
+                            // Only when there is somewhere to keep a
+                            // group's position. Without durable
+                            // storage a group would restart from the
+                            // beginning on every reconnect, so
+                            // offering the feature would invite work
+                            // this broker cannot do.
+                            | match broker.group_reader() {
+                                Some(_) => {
+                                    felix_wire::FEATURE_CONSUMER_GROUP
+                                        | felix_wire::FEATURE_GROUP_DEAD_LETTERS
+                                }
+                                None => 0,
+                            }
+                            // Only when there is somewhere to write
+                            // the counter log. A sum any restart
+                            // resets is worse than refusing to
+                            // count at all.
+                            | match broker.counters() {
+                                Some(_) => felix_wire::FEATURE_COUNTERS,
+                                None => 0,
+                            }
+                            // Advertised unconditionally. A broker
+                            // with no routing snapshot answers 1,
+                            // which is the truth for a single-node
+                            // deployment rather than a guess.
+                            | felix_wire::FEATURE_STREAM_SHARDS
+                            | felix_wire::FEATURE_CACHE_SHARDS
+                            // Advertised unconditionally: the
+                            // sequences live with the shard's
+                            // leader, which every broker is for
+                            // the shards it leads.
+                            | felix_wire::FEATURE_IDEMPOTENT_PRODUCER,
+                    ),
+                    // Only when there is more than one. A single
+                    // listener is the default, and saying so
+                    // explicitly would change the bytes every
+                    // existing deployment puts on the wire to say
+                    // nothing a client does not already know.
+                    listener_ports: (config.quic_listeners > 1)
+                        .then(|| config.quic_binds().iter().map(|a| a.port()).collect()),
+                },
+                None => Message::Ok,
+            };
+            handle_ack_enqueue_result(
+                send_outgoing_critical(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(response),
+                )
+                .await,
+                ack_timeout_state,
+                ack_throttle_tx,
+                cancel_tx,
+            )
+            .await?;
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "auth failed");
+            send_control_error(
+                out_ack_tx,
+                out_ack_depth,
+                ack_throttle_tx,
+                ack_timeout_state,
+                cancel_tx,
+                "auth failed",
+            )
+            .await?;
+            return Ok(Step::Close(false));
+        }
+    }
+    Ok(Step::Next)
+}
