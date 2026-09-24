@@ -650,9 +650,10 @@ generation, and before the new servable set is published. A write that
 reaches its claim after that is refused, the same way a publish to a shard
 this broker does not serve is refused. A publish acknowledged when it is
 queued rather than when it is written — the default, `ack_on_commit` off —
-cannot be refused later, because the client already holds the ack. It enters
-the fence when it is queued instead and holds it until it is written, so the
-move waits for it rather than losing it. The leader reports `drained` when the
+cannot be refused later, because the client already holds the ack. So a
+publish enters the fence earlier still, when it is routed, and holds its place
+until it is written: the move waits for it rather than losing it, whichever
+ack it asked for. The leader reports `drained` when the
 fence is closed with nothing inside it, and reads the tail it reports only
 after seeing that, so the tail is final. The fence lives in
 `shards/lifecycle/fence.rs`.
@@ -687,11 +688,39 @@ So the ordering is the same shape as report-before-mark. The successor is
 staged as a replica and caught up *before* the fence; the leader stops
 *before* it reports; the control plane names the successor *after* the
 report; and every step is an assignment the next pass reads back, so a
-control-plane restart resumes the move where it was. What a client sees is a
-window between the fence and the successor opening in which the shard's
-publishes are refused. That window is the cost of the fence, the same way
-the safety interval is the cost of the lease, and it is a refusal rather than
-an acknowledgement nobody can honour.
+control-plane restart resumes the move where it was. Between the fence and
+the successor opening, nobody serves the shard. That window is the cost of the
+fence, the same way the safety interval is the cost of the lease.
+
+A publish that lands in the window is held rather than refused. Routing sees
+the shard's leader fenced — this broker, or the one it would forward to — and
+waits, before admitting the publish, for the routes to change; then it
+dispatches again, to the new owner. A publish routed a moment before the fence
+closed finds the fence shut when it tries to enter and waits the same way. A
+forwarded publish that reaches the old leader, or reaches the new one before
+its own routes have caught up with the requester's, waits on that broker until
+they settle, and is then applied or redirected. Nothing held has been
+acknowledged, so a hold that runs out (`FELIX_SHARD_MOVE_HOLD_MS`, 2 s) or
+finds too many already waiting (`FELIX_SHARD_MOVE_HOLD_MAX`) is a plain refusal,
+`shard_unavailable` with reason `moving`, and the client retries. Holding lives
+in `shards/routing/hold.rs`. Only publishes are held; cache writes, counter adds
+and group writes are refused through the window as before.
+
+While it copies, the destination is not counted toward the quorum. A leader
+that saw the destination added to the replica set — it was not a follower of
+the previous generation — computes the quorum mark over the set without it,
+the set the stream asked for. Counting it made every `Quorum` publish on a
+one-replica stream wait for the whole copy, and made one on a larger stream
+wait for it whenever a replica was down. Leaving it out loses nothing: a
+promotion picks only a replica the last report names caught up, and the
+cut-over waits for the destination to be level. A destination that was
+already a replica keeps counting, and a leader with no earlier pass to compare
+against counts it too — slower, never weaker. The copy is also shipped in
+slices of 50 ms per pass, with the next pass run at once, because a pass ends
+with its slowest follower and the next mark waits for the next pass.
+`FelixShardStagedMoveVotes` in `docs/formal/` shows the wait without this, and
+`FelixShardStagedMove` and `FelixShardStagedMoveSingle` that safety holds with
+it.
 
 The window is kept short by waking each step rather than polling for it. The
 broker long-polls the assignment feed, so the fence and the cut-over reach it
@@ -720,6 +749,14 @@ than the report said, because the report is the only input either reads.
 > `a_drained_broker_hands_its_shard_over_with_every_record` — an unreplicated
 > durable shard moves off a draining broker and every record acknowledged
 > before the drain is readable from the new owner.
+>
+> `continuous_publishing_through_a_move_is_never_refused` — two publishers,
+> one through the old owner and one through the destination, run through a
+> whole move: none is refused, and every acknowledged record is on the new
+> owner exactly once.
+>
+> `a_quorum_publish_during_a_copy_is_not_held_by_it` — a one-replica `Quorum`
+> stream keeps acknowledging while its destination is stalled mid-copy.
 >
 > `records_acknowledged_during_a_move_survive_it` — publishes arriving through
 > the staging, fence and cut-over are either acknowledged and on the new owner,

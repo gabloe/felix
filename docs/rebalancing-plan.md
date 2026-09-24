@@ -61,9 +61,9 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 
 | Phase | What it does | Status |
 | --- | --- | --- |
-| 0 | Correctness: the write fence, waiting for group state and counters, conditional assignment writes, ending readers on a moved shard | in progress |
+| 0 | Correctness: the write fence, waiting for group state and counters, conditional assignment writes, ending readers on a moved shard | done |
 | 1 | Fast switch-over: wake the loops instead of polling, long-poll the assignment feed, run placement when a report arrives, warm the destination, publish routes and servable shards together | done |
-| 2 | No refused publishes: hold a publish to a moving shard briefly and forward it, a typed "shard moving" refusal the client retries, the destination not counted toward quorum while it copies | planned |
+| 2 | No refused publishes: hold a publish to a moving shard briefly and forward it, a typed "shard moving" refusal the client retries, the destination not counted toward quorum while it copies | done |
 | 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | done |
 | 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | planned |
 | 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | planned |
@@ -79,16 +79,16 @@ work with its own status row.
   if the assignment is still at the generation it was planned from, in memory,
   Postgres and Raft. `FelixShardStalePlanner` and `FelixShardStalePromotion`
   show the race without the check.
-- **Readers end when their shard moves.** A broker ends a shard's subscriptions
+- **Readers end when their shard moves** (merged, #664). A broker ends a shard's subscriptions
   and cache watches whenever it stops serving it, after what was already queued
   for them.
-- **The write fence.** Every write enters a per-shard fence right before it
+- **The write fence** (merged, #664). Every write enters a per-shard fence right before it
   claims its place in the log and stays counted until it is durable. The fence
   closes when the broker stops serving the shard, and a write reaching it after
   that is refused with the refusal its path already had. The drained report
   waits for the fence to be closed and empty, so it is exact.
   `FelixShardHandoffNoClaimFence` loses an acknowledged write without it.
-- **Group state and counters.** The drained report also waits until the
+- **Group state and counters** (merged, #665). The drained report also waits until the
   group-cursor, dead-letter and counter logs are level on the destination.
 
 ### Phase 1: fast switch-over
@@ -123,6 +123,37 @@ Progress:
   `a_move_switches_over_in_well_under_a_second` measures fence to first
   accepted publish with every broker on the 2 s default interval: about
   90 ms on a local debug build, against 8 s before.
+
+### Phase 2: no refused publishes
+
+- **Hold and forward.** A publish that reaches any broker while its shard is
+  between the fence and the cut-over waits, before it is accepted, until the
+  broker's routes show the new owner, then goes there. A forwarded publish
+  that reaches the old leader, or a new leader whose routes are behind the
+  requester's, waits there the same way. A publish now takes its place in the
+  write fence when it is routed rather than when it is claimed, so one routed
+  just before the fence lands and the move waits for it, instead of being
+  refused at its claim. Bounded by `FELIX_SHARD_MOVE_HOLD_MS` (2 s) and
+  `FELIX_SHARD_MOVE_HOLD_MAX` (1024 waiting). Only publishes are held; cache,
+  counter and group writes are refused through the switch-over as before.
+- **A typed refusal.** Past either bound the publish is refused with
+  `shard_unavailable`, reason `moving`, retry class `retry` and a
+  `retry_after_ms` hint. There is no separate feature bit: `moving` is a new
+  reason under an existing code, and a client that does not know it still
+  reads the retry class. A client without error codes gets the refusal it
+  always did.
+- **The destination does not count toward the quorum while it copies.** A
+  leader that saw the destination added leaves it out of the quorum mark, and
+  ships the copy in 50 ms slices so a pass never waits for the whole copy.
+  `FelixShardStagedMove` and `FelixShardStagedMoveSingle` pass;
+  `FelixShardStagedMoveVotes`, which counts it, finds a `Quorum` write held on
+  the stream's own majority and waiting for the copy.
+- A `Quorum` stream placed with one replica is acknowledged by its leader.
+  Nothing ships for such a shard, so the quorum wait used to read the missing
+  mark as a lost leadership and refuse every publish.
+
+`continuous_publishing_through_a_move_is_never_refused` runs two publishers
+through a move and sees no refusal and no record lost or stored twice.
 
 ### Phase 3: subscriptions follow the shard
 
