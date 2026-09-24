@@ -46,6 +46,7 @@ pub(crate) async fn write(args: WriteArgs) -> Result<(), Failure> {
                     args.payload_bytes,
                 )),
                 timestamp_micros: now_micros(),
+                mark: Default::default(),
             })
             .collect();
 
@@ -238,6 +239,7 @@ async fn run_load(
                             payload_bytes,
                         )),
                         timestamp_micros: now_micros(),
+                        mark: Default::default(),
                     })
                     .collect();
                 let started = Instant::now();

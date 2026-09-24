@@ -173,3 +173,210 @@ async fn racing_re_sends_append_once() {
         "a second copy was delivered"
     );
 }
+
+mod durable {
+    //! On a durable stream the sequences come from the log, so a broker that
+    //! did not take the original -- restarted, or a replica shipped the
+    //! records -- answers a re-send the same way.
+
+    use bytes::Bytes;
+    use felix_storage::EphemeralCache;
+    use felix_storage::log::{FsyncMode, LogConfig};
+
+    use crate::durable::StreamLog;
+    use crate::error::BrokerError;
+    use crate::{Broker, DurableStorage, StreamHandle, StreamMetadata};
+
+    async fn open(dir: &std::path::Path) -> (Broker, StreamHandle, DurableStorage) {
+        let config = LogConfig {
+            fsync_mode: FsyncMode::OnCommit,
+            preallocate_segments: false,
+            ..LogConfig::default()
+        };
+        let storage = DurableStorage::open(dir, config).expect("storage");
+        let broker =
+            Broker::new(EphemeralCache::new().into()).with_durable_storage(storage.clone());
+        broker.register_tenant("t1").await.expect("tenant");
+        broker
+            .register_namespace("t1", "default")
+            .await
+            .expect("namespace");
+        broker
+            .register_stream(
+                "t1",
+                "default",
+                "orders",
+                StreamMetadata {
+                    durable: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("register");
+        let handle = broker
+            .resolve_stream_handle("t1", "default", "orders", 0)
+            .await
+            .expect("handle");
+        (broker, handle, storage)
+    }
+
+    fn log(handle: &StreamHandle) -> &StreamLog {
+        handle.state.durable.as_ref().expect("durable")
+    }
+
+    fn bytes(values: &[&'static str]) -> Vec<Bytes> {
+        values
+            .iter()
+            .map(|v| Bytes::from_static(v.as_bytes()))
+            .collect()
+    }
+
+    async fn stored(handle: &StreamHandle) -> Vec<Bytes> {
+        log(handle)
+            .read_from(0, usize::MAX)
+            .await
+            .expect("read")
+            .into_iter()
+            .map(|record| record.payload)
+            .collect()
+    }
+
+    /// Ship `leader`'s log from `from` to `follower` the way replication does,
+    /// stopping after `count` records.
+    async fn ship(
+        leader: &StreamHandle,
+        broker: &Broker,
+        follower: &StreamHandle,
+        from: u64,
+        count: usize,
+    ) {
+        let records: Vec<_> = log(leader)
+            .read_from(from, usize::MAX)
+            .await
+            .expect("read")
+            .into_iter()
+            .take(count)
+            .collect();
+        let payloads: Vec<Bytes> = records.iter().map(|r| r.payload.clone()).collect();
+        let marks: Vec<_> = records
+            .iter()
+            .map(|r| crate::replication::mark_to_wire(r.mark))
+            .collect();
+        let checksum = felix_wire::internal::batch_checksum(&payloads, &marks);
+        let applied = crate::replication::apply(log(follower), from, checksum, &payloads, &marks)
+            .await
+            .expect("apply")
+            .expect("in order");
+        broker
+            .adopt_replicated("t1", "default", "orders", 0, applied.durable_offset)
+            .await
+            .expect("adopt");
+    }
+
+    #[tokio::test]
+    async fn a_restarted_leader_answers_a_re_send_from_its_log() {
+        let dir = tempfile::tempdir().expect("dir");
+        let first = {
+            let (broker, handle, storage) = open(dir.path()).await;
+            broker
+                .publish_batch_idempotent(&handle, 7, 0, &bytes(&["a"]))
+                .await
+                .expect("0");
+            let first = broker
+                .publish_batch_idempotent(&handle, 7, 1, &bytes(&["b", "c"]))
+                .await
+                .expect("1");
+            storage.shutdown().await.expect("shutdown");
+            first
+        };
+
+        let (broker, handle, _storage) = open(dir.path()).await;
+        let again = broker
+            .publish_batch_idempotent(&handle, 7, 1, &bytes(&["b", "c"]))
+            .await
+            .expect("re-send");
+        assert!(again.duplicate, "the re-send was appended again");
+        assert_eq!(again.outcome.offsets, first.outcome.offsets);
+
+        let next = broker
+            .publish_batch_idempotent(&handle, 7, 2, &bytes(&["d"]))
+            .await
+            .expect("next");
+        assert!(!next.duplicate);
+        assert_eq!(stored(&handle).await, bytes(&["a", "b", "c", "d"]));
+    }
+
+    /// A promoted replica, or a move's destination, holds only what it was
+    /// shipped, and that is enough.
+    #[tokio::test]
+    async fn a_replica_answers_a_re_send_of_what_it_was_shipped() {
+        let leader_dir = tempfile::tempdir().expect("dir");
+        let follower_dir = tempfile::tempdir().expect("dir");
+        let (leader, on_leader, _l) = open(leader_dir.path()).await;
+        let (follower, on_follower, _f) = open(follower_dir.path()).await;
+
+        for (sequence, batch) in [["a", "b"], ["c", "d"]].iter().enumerate() {
+            leader
+                .publish_batch_idempotent(&on_leader, 7, sequence as u64, &bytes(batch))
+                .await
+                .expect("publish");
+        }
+        ship(&on_leader, &follower, &on_follower, 0, usize::MAX).await;
+
+        let again = follower
+            .publish_batch_idempotent(&on_follower, 7, 1, &bytes(&["c", "d"]))
+            .await
+            .expect("re-send");
+        assert!(again.duplicate, "the replica appended the re-send");
+        assert_eq!(again.outcome.offsets, Some((2, 3)));
+        let next = follower
+            .publish_batch_idempotent(&on_follower, 7, 2, &bytes(&["e"]))
+            .await
+            .expect("the producer carries on");
+        assert!(!next.duplicate);
+        assert_eq!(
+            stored(&on_follower).await,
+            bytes(&["a", "b", "c", "d", "e"])
+        );
+
+        let err = follower
+            .publish_batch_idempotent(&on_follower, 8, 3, &bytes(&["x"]))
+            .await
+            .expect_err("a producer the log never saw may not start mid-way");
+        assert!(matches!(
+            err,
+            BrokerError::UnknownProducer { producer_id: 8 }
+        ));
+    }
+
+    /// A replica promoted with only the start of a batch -- its leader died
+    /// mid-shipment -- finishes the batch on the re-send instead of writing
+    /// the start a second time.
+    #[tokio::test]
+    async fn a_batch_cut_short_is_finished_not_repeated() {
+        let leader_dir = tempfile::tempdir().expect("dir");
+        let follower_dir = tempfile::tempdir().expect("dir");
+        let (leader, on_leader, _l) = open(leader_dir.path()).await;
+        let (follower, on_follower, _f) = open(follower_dir.path()).await;
+
+        leader
+            .publish_batch_idempotent(&on_leader, 7, 0, &bytes(&["x", "y", "z"]))
+            .await
+            .expect("publish");
+        ship(&on_leader, &follower, &on_follower, 0, 1).await;
+
+        let resent = follower
+            .publish_batch_idempotent(&on_follower, 7, 0, &bytes(&["x", "y", "z"]))
+            .await
+            .expect("re-send");
+        assert!(!resent.duplicate, "part of it was new");
+        assert_eq!(resent.outcome.offsets, Some((0, 2)));
+        assert_eq!(stored(&on_follower).await, bytes(&["x", "y", "z"]));
+
+        let again = follower
+            .publish_batch_idempotent(&on_follower, 7, 0, &bytes(&["x", "y", "z"]))
+            .await
+            .expect("re-send");
+        assert!(again.duplicate);
+    }
+}

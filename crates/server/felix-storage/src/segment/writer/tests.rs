@@ -8,6 +8,7 @@ fn record(payload: &str) -> AppendRecord {
     AppendRecord {
         payload: Bytes::copy_from_slice(payload.as_bytes()),
         timestamp_micros: 42,
+        mark: Default::default(),
     }
 }
 
@@ -117,6 +118,7 @@ fn an_oversized_payload_is_rejected_without_writing() {
     let huge = AppendRecord {
         payload: Bytes::from(vec![0u8; MAX_PAYLOAD_BYTES as usize + 1]),
         timestamp_micros: 0,
+        mark: Default::default(),
     };
     assert!(matches!(
         writer.append(&[huge]).expect_err("oversized"),
@@ -135,6 +137,7 @@ fn a_rejected_batch_leaves_no_partial_records() {
         AppendRecord {
             payload: Bytes::from(vec![0u8; MAX_PAYLOAD_BYTES as usize + 1]),
             timestamp_micros: 0,
+            mark: Default::default(),
         },
     ];
     assert!(writer.append(&batch).is_err());
@@ -176,6 +179,7 @@ fn reopen_resumes_appending_where_recovery_left_off() {
             next_offset: outcome.next_offset,
             record_count: outcome.record_count,
             index: outcome.index,
+            holds_marks: true,
         },
         4096,
     )
@@ -218,6 +222,7 @@ fn reopen_truncates_a_torn_tail_off_the_file() {
             next_offset: outcome.next_offset,
             record_count: outcome.record_count,
             index: outcome.index,
+            holds_marks: true,
         },
         4096,
     )

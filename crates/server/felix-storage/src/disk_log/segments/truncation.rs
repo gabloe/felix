@@ -4,11 +4,11 @@
 use super::{SealedEntry, SegmentSet};
 use crate::disk_log::now_micros;
 use crate::log::{Offset, SegmentId};
-use crate::segment::format::{RECORD_HEADER_LEN, SEGMENT_HEADER_LEN};
+use crate::segment::format::{SEGMENT_HEADER_LEN, record_len};
 use crate::segment::writer::ResumeState;
 use crate::segment::{
     ReadBudget, ScanStart, SegmentReader, SegmentWriter, SparseIndex, index_file_name,
-    scan_segment, segment_file_name,
+    read_segment_header, scan_segment, segment_file_name,
 };
 use crate::{Result, metrics_names};
 
@@ -94,6 +94,7 @@ impl SegmentSet {
                 next_offset: outcome.next_offset,
                 record_count: outcome.record_count,
                 index: outcome.index,
+                holds_marks: outcome.header.holds_marks(),
             },
             self.config.index_spacing_bytes,
         )?;
@@ -131,7 +132,7 @@ impl SegmentSet {
             + kept
                 .iter()
                 .take(keep_count)
-                .map(|record| RECORD_HEADER_LEN + record.payload.len() as u64)
+                .map(|record| record_len(record.payload.len(), &record.mark))
                 .sum::<u64>();
 
         let id = self.active.id();
@@ -164,6 +165,7 @@ impl SegmentSet {
                     // A truncation invalidates every index entry past the cut;
                     // rebuild from the surviving prefix rather than trusting it.
                     index: rebuild_index_prefix(index, valid_bytes),
+                    holds_marks: read_segment_header(&path, id, &self.label)?.holds_marks(),
                 },
                 self.config.index_spacing_bytes,
             )?

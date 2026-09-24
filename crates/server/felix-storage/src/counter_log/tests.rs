@@ -150,6 +150,7 @@ async fn the_fold_catches_up_with_records_appended_behind_it() {
         }
         .encode(),
         timestamp_micros: 1,
+        mark: Default::default(),
     }])
     .await
     .expect("append behind the fold");

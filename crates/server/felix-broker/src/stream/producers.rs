@@ -8,12 +8,15 @@
 //! is the whole mechanism, and it is what turns "the acknowledgement never
 //! arrived" from a duplicate-or-loss coin toss into a safe re-send.
 //!
-//! The state is the leader's and in memory. It survives everything but the
-//! leader itself: a new leader knows no producers, answers `UnknownProducer`,
-//! and the producer starts again under a new id rather than being told a
-//! batch landed that nobody can vouch for. Persisting sequences through
-//! replication is what would make a re-send safe across a failover too, and
-//! is deliberately not attempted here.
+//! On a durable stream the sequences are the log's: each batch is stored with
+//! its producer and sequence, and the log keeps every producer's place (see
+//! `felix-storage`'s `disk_log/producers.rs`). They replicate with the
+//! records, so a promoted leader, a move's destination and a restarted broker
+//! answer a re-send as the leader that took it would have. This table then
+//! only serialises each producer's batches.
+//!
+//! An in-memory stream has no log to keep them in, so this table keeps them,
+//! and they last as long as the leader does.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -51,15 +54,21 @@ impl ProducerTable {
         producer_id: u64,
         sequence: u64,
     ) -> Result<Arc<tokio::sync::Mutex<()>>, BrokerError> {
+        if sequence != 0 && !self.inner.lock().producers.contains_key(&producer_id) {
+            return Err(BrokerError::UnknownProducer { producer_id });
+        }
+        Ok(self.serialise(producer_id))
+    }
+
+    /// The lock that serialises `producer_id`'s batches, with no say over its
+    /// sequence. For a durable stream, whose log keeps the sequences.
+    pub(crate) fn serialise(&self, producer_id: u64) -> Arc<tokio::sync::Mutex<()>> {
         let mut table = self.inner.lock();
         table.clock += 1;
         let clock = table.clock;
         if let Some(producer) = table.producers.get_mut(&producer_id) {
             producer.last_used = clock;
-            return Ok(Arc::clone(&producer.turn));
-        }
-        if sequence != 0 {
-            return Err(BrokerError::UnknownProducer { producer_id });
+            return Arc::clone(&producer.turn);
         }
         if table.producers.len() >= MAX_PRODUCERS
             && let Some(coldest) = table
@@ -80,7 +89,7 @@ impl ProducerTable {
                 turn: Arc::clone(&turn),
             },
         );
-        Ok(turn)
+        turn
     }
 
     /// Classify a batch. Called holding the producer's turn, so the answer

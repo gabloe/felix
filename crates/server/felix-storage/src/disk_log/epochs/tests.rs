@@ -209,6 +209,7 @@ mod through_the_log {
             log.append(&[crate::log::AppendRecord {
                 payload: Bytes::from((*value).to_string()),
                 timestamp_micros: 0,
+                mark: Default::default(),
             }])
             .await
             .expect("append");

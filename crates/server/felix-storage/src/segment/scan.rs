@@ -7,7 +7,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use crate::log::{Offset, SegmentId};
+use crate::log::{Offset, RecordMark, SegmentId};
 use crate::segment::cursor::SegmentCursor;
 use crate::segment::format::{
     IndexEntry, RECORD_HEADER_LEN, RecordHeader, SEGMENT_HEADER_LEN, SegmentHeader,
@@ -42,6 +42,9 @@ pub struct ScanOutcome {
     pub index: SparseIndex,
     /// `Some` when the tail was damaged and must be truncated to `valid_bytes`.
     pub torn_tail: Option<TornTail>,
+    /// The producer marks of the records scanned, in order. Collected here so
+    /// rebuilding producer state costs no second pass over the segment.
+    pub marks: Vec<(Offset, RecordMark)>,
 }
 
 impl ScanOutcome {
@@ -73,6 +76,7 @@ struct ScanState {
     spacing: u64,
     rebuild_index: bool,
     repair_checksum_tail: bool,
+    marks: Vec<(Offset, RecordMark)>,
 }
 
 impl ScanState {
@@ -84,6 +88,7 @@ impl ScanState {
             record_count: self.record_count,
             index: self.index,
             torn_tail,
+            marks: self.marks,
         }
     }
 
@@ -195,6 +200,7 @@ pub fn scan_segment(
         },
         rebuild_index,
         repair_checksum_tail,
+        marks: Vec::new(),
     };
 
     while state.position < file_len {
@@ -248,6 +254,9 @@ pub fn scan_segment(
         }
 
         state.observe(decoded.header.offset, position, total_len);
+        if decoded.mark != RecordMark::None {
+            state.marks.push((decoded.header.offset, decoded.mark));
+        }
         state.position += total_len;
         state.next_offset = decoded.header.offset + 1;
         state.record_count += 1;

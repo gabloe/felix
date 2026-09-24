@@ -104,6 +104,7 @@ impl LogCache {
                 .append_pending(&[AppendRecord {
                     payload,
                     timestamp_micros: now_millis() * 1000,
+                    mark: Default::default(),
                 }])
                 .await?;
             // Claimed the moment the offsets are consumed. The guard releases
@@ -201,6 +202,7 @@ impl LogCache {
                 .append_pending(&[AppendRecord {
                     payload,
                     timestamp_micros: now_millis() * 1000,
+                    mark: Default::default(),
                 }])
                 .await?;
             let turn = shard

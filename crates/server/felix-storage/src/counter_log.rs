@@ -316,6 +316,7 @@ impl CounterShard {
             .append(&[AppendRecord {
                 payload,
                 timestamp_micros: now_micros(),
+                mark: Default::default(),
             }])
             .await?;
         state.index.log_bytes += bytes;
@@ -367,6 +368,7 @@ impl CounterShard {
                 .append(&[AppendRecord {
                     payload,
                     timestamp_micros: now_micros(),
+                    mark: Default::default(),
                 }])
                 .await?;
             index.entries.insert(

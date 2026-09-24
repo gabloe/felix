@@ -36,7 +36,7 @@ use std::path::Path;
 use super::now_micros;
 use super::segments::SealedEntry;
 use crate::io::sync_dir;
-use crate::log::{LogConfig, Offset, SegmentDescriptor, SegmentId};
+use crate::log::{LogConfig, Offset, RecordMark, SegmentDescriptor, SegmentId};
 use crate::segment::format::SEGMENT_HEADER_LEN;
 use crate::segment::writer::ResumeState;
 use crate::segment::{
@@ -54,6 +54,8 @@ pub(super) struct Recovered {
     pub truncated_bytes: u64,
     /// Indexes that had to be rebuilt.
     pub index_rebuilds: usize,
+    /// Producer marks in the active segment, from its full scan.
+    pub active_marks: Vec<(Offset, RecordMark)>,
 }
 
 struct OpenedSealed {
@@ -90,6 +92,7 @@ pub(super) fn recover_shard(dir: &Path, label: &str, config: &LogConfig) -> Resu
             )?,
             truncated_bytes: 0,
             index_rebuilds: 0,
+            active_marks: Vec::new(),
         },
         Some((active_id, sealed_ids)) => {
             recover_existing(dir, label, config, sealed_ids, *active_id)?
@@ -316,7 +319,7 @@ fn recover_existing(
     // The newest segment is the only one that can have been mid-write when the
     // process died, so it always gets a full scan.
     let active_path = dir.join(segment_file_name(active_id));
-    let outcome = scan_segment(
+    let mut outcome = scan_segment(
         &active_path,
         active_id,
         label,
@@ -351,6 +354,7 @@ fn recover_existing(
         );
     }
 
+    let active_marks = std::mem::take(&mut outcome.marks);
     // `reopen` applies the truncation and positions the write cursor, which is
     // what makes recovery idempotent: a second open finds nothing to repair.
     let active = SegmentWriter::reopen(
@@ -362,6 +366,7 @@ fn recover_existing(
             next_offset: outcome.next_offset,
             record_count: outcome.record_count,
             index: outcome.index,
+            holds_marks: outcome.header.holds_marks(),
         },
         config.index_spacing_bytes,
     )?;
@@ -374,6 +379,7 @@ fn recover_existing(
         active,
         truncated_bytes,
         index_rebuilds,
+        active_marks,
     })
 }
 

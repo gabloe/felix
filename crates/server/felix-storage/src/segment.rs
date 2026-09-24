@@ -17,8 +17,9 @@ mod cursor;
 mod test_support;
 
 pub use format::{
-    DecodedRecord, FORMAT_VERSION, IndexEntry, IndexHeader, MAX_PAYLOAD_BYTES, RECORD_HEADER_LEN,
-    RecordHeader, SEGMENT_HEADER_LEN, SegmentHeader,
+    DecodedRecord, FORMAT_VERSION, IndexEntry, IndexHeader, MAX_PAYLOAD_BYTES,
+    OLDEST_READABLE_VERSION, PRODUCER_TAG_LEN, RECORD_HEADER_LEN, RecordHeader, SEGMENT_HEADER_LEN,
+    SegmentHeader, record_len,
 };
 pub use index::{IndexWriter, SparseIndex};
 pub use reader::{ReadBudget, SegmentReader};

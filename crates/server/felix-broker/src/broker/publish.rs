@@ -10,6 +10,9 @@ use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
 
+use felix_storage::disk_log::ProducerSequence;
+use felix_storage::log::RecordMark;
+
 use super::Broker;
 use super::shards::StreamHandle;
 use crate::error::{BrokerError, Result};
@@ -103,6 +106,20 @@ impl Broker {
         handle: &StreamHandle,
         payloads: &[Bytes],
     ) -> Result<ClaimedPublish> {
+        Ok(self
+            .claim(handle, payloads, Append::Plain)
+            .await?
+            .expect("a plain append always claims"))
+    }
+
+    /// [`Broker::claim_publish`], writing the records as `append` says. `None`
+    /// only for [`Append::Continuing`] whose batch is no longer open.
+    async fn claim(
+        &self,
+        handle: &StreamHandle,
+        payloads: &[Bytes],
+        append: Append<'_>,
+    ) -> Result<Option<ClaimedPublish>> {
         if !handle.state.active.load(Ordering::Acquire) {
             return Err(BrokerError::StreamHandleInactive(handle.id()));
         }
@@ -115,7 +132,7 @@ impl Broker {
             sample,
         };
         if payloads.is_empty() {
-            return Ok(claimed);
+            return Ok(Some(claimed));
         }
 
         if let Some(durable) = &handle.state.durable {
@@ -127,7 +144,20 @@ impl Broker {
             // *successful* wait stranded the stream: a failed or cancelled
             // publish abandoned its range, and every later publish waited
             // on a turn that could never arrive.
-            let pending = durable.begin_append(payloads).await?;
+            let pending = match append {
+                Append::Plain => durable.begin_append(payloads).await?,
+                Append::Marked(marks) => durable.begin_append_marked(payloads, marks).await?,
+                Append::Continuing {
+                    producer_id,
+                    sequence,
+                } => match durable
+                    .continue_batch(producer_id, sequence, payloads)
+                    .await?
+                {
+                    Some(pending) => pending,
+                    None => return Ok(None),
+                },
+            };
             let turn = handle
                 .state
                 .commit_sequencer
@@ -138,7 +168,7 @@ impl Broker {
                 durable_start,
             });
         }
-        Ok(claimed)
+        Ok(Some(claimed))
     }
 
     /// Make a [`ClaimedPublish`] durable, then append and fan it out.
@@ -360,11 +390,13 @@ impl Broker {
     /// Publish a batch that is appended once however many times it arrives.
     ///
     /// `sequence` is this producer's count of batches on this shard, from
-    /// zero. The next expected is appended and remembered; one already
-    /// appended is answered with its original outcome and nothing is written;
-    /// a gap, a producer this broker does not know, or a sequence older than
-    /// it remembers is refused with the matching [`BrokerError`], and nothing
-    /// is written then either. See `stream/producers.rs`.
+    /// zero. The next expected is appended; one already appended is answered
+    /// with where it landed and nothing is written; a gap, a producer this
+    /// shard does not know, or a sequence older than it remembers is refused
+    /// with the matching [`BrokerError`], and nothing is written then either.
+    ///
+    /// On a durable stream the log is what knows, so the answer is the same
+    /// on any replica that holds the batch. See `stream/producers.rs`.
     pub async fn publish_batch_idempotent(
         &self,
         handle: &StreamHandle,
@@ -372,10 +404,95 @@ impl Broker {
         sequence: u64,
         payloads: &[Bytes],
     ) -> Result<IdempotentOutcome> {
-        let producers = &handle.state.producers;
+        let Some(log) = &handle.state.durable else {
+            return self
+                .publish_idempotent_in_memory(handle, producer_id, sequence, payloads)
+                .await;
+        };
         // The turn serialises this producer's batches, so two re-sends of one
-        // sequence cannot both find it unappended. Taken before classifying,
-        // and held across the append and the remembering, for that reason.
+        // sequence cannot both find it unwritten. Held across the append for
+        // that reason; the log sees the batch the moment it is written.
+        let turn = handle.state.producers.serialise(producer_id);
+        let _turn = turn.lock().await;
+        loop {
+            match log.producer_sequence(producer_id, sequence) {
+                ProducerSequence::Held { first, last } => {
+                    // Its writer may have been cancelled before waiting, or
+                    // be a leader that is gone: vouch for it only once it is
+                    // as durable here as a fresh append would be.
+                    log.wait_durable(last + 1).await?;
+                    return Ok(IdempotentOutcome {
+                        outcome: PublishOutcome {
+                            subscribers: 0,
+                            offsets: Some((first, last)),
+                        },
+                        duplicate: true,
+                    });
+                }
+                ProducerSequence::Unknown if sequence != 0 => {
+                    return Err(BrokerError::UnknownProducer { producer_id });
+                }
+                ProducerSequence::Unknown | ProducerSequence::Next => {
+                    let marks: Vec<RecordMark> =
+                        RecordMark::for_batch(producer_id, sequence, payloads.len()).collect();
+                    let claimed = self
+                        .claim(handle, payloads, Append::Marked(&marks))
+                        .await?
+                        .expect("a marked append always claims");
+                    let outcome = self.complete_publish(claimed).await?;
+                    return Ok(IdempotentOutcome {
+                        outcome,
+                        duplicate: false,
+                    });
+                }
+                // The log holds the start of this batch and nothing after it:
+                // its leader stopped partway. Writing the rest finishes it
+                // without writing the start twice.
+                ProducerSequence::Partial { first, held, len } => {
+                    if payloads.len() != len as usize {
+                        return Err(BrokerError::SequenceExpired { sequence });
+                    }
+                    let append = Append::Continuing {
+                        producer_id,
+                        sequence,
+                    };
+                    let Some(claimed) = self
+                        .claim(handle, &payloads[held as usize..], append)
+                        .await?
+                    else {
+                        // Something landed after it since it was classified,
+                        // so it can no longer be finished; ask again.
+                        continue;
+                    };
+                    let outcome = self.complete_publish(claimed).await?;
+                    return Ok(IdempotentOutcome {
+                        outcome: PublishOutcome {
+                            subscribers: outcome.subscribers,
+                            offsets: Some((first, first + u64::from(len) - 1)),
+                        },
+                        duplicate: false,
+                    });
+                }
+                ProducerSequence::Gap { expected } => {
+                    return Err(BrokerError::SequenceGap { expected });
+                }
+                ProducerSequence::Expired => {
+                    return Err(BrokerError::SequenceExpired { sequence });
+                }
+            }
+        }
+    }
+
+    /// The same contract for a stream with no log: the sequences are kept in
+    /// memory, and last as long as this leader does.
+    async fn publish_idempotent_in_memory(
+        &self,
+        handle: &StreamHandle,
+        producer_id: u64,
+        sequence: u64,
+        payloads: &[Bytes],
+    ) -> Result<IdempotentOutcome> {
+        let producers = &handle.state.producers;
         let turn = producers.turn(producer_id, sequence)?;
         let _turn = turn.lock().await;
         match producers.classify(producer_id, sequence)? {
@@ -393,6 +510,18 @@ impl Broker {
             }
         }
     }
+}
+
+/// How [`Broker::claim`] writes a batch to a durable log.
+enum Append<'a> {
+    Plain,
+    /// With a producer mark per record.
+    Marked(&'a [RecordMark]),
+    /// The rest of a producer batch the log holds the start of.
+    Continuing {
+        producer_id: u64,
+        sequence: u64,
+    },
 }
 
 /// What a publish did.

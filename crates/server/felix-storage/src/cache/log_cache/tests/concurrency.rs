@@ -98,6 +98,7 @@ async fn stage_without_committing(
         .append_pending(&[AppendRecord {
             payload: op.encode(),
             timestamp_micros: now_millis() * 1000,
+            mark: Default::default(),
         }])
         .await
         .expect("stage");

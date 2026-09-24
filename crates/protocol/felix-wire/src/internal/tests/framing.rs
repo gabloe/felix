@@ -118,6 +118,7 @@ fn every_body_begins_with_its_correlation_id() {
             first_offset: 10,
             checksum: 7,
             payloads: vec![Bytes::from_static(b"r")],
+            marks: Vec::new(),
         }),
         InternalMessage::ReplicateOk(ReplicateOk {
             correlation_id: id,

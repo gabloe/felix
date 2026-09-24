@@ -53,6 +53,9 @@ pub enum InternalMessage {
     ReplicateCounterRecords(ReplicateRecords),
     ReplicateCounterBootstrap(ReplicateBootstrap),
     ReplicateRebuild(ReplicateRebuild),
+    /// A stream shard's records with their producer marks. The body is
+    /// `ReplicateRecords` followed by one mark per record.
+    ReplicateMarkedRecords(ReplicateRecords),
 }
 
 impl InternalMessage {
@@ -85,6 +88,7 @@ impl InternalMessage {
             Self::ReplicateCounterRecords(_) => Kind::ReplicateCounterRecords,
             Self::ReplicateCounterBootstrap(_) => Kind::ReplicateCounterBootstrap,
             Self::ReplicateRebuild(_) => Kind::ReplicateRebuild,
+            Self::ReplicateMarkedRecords(_) => Kind::ReplicateMarkedRecords,
         }
     }
 
@@ -117,6 +121,7 @@ impl InternalMessage {
             Self::ReplicateCounterRecords(m) => m.correlation_id,
             Self::ReplicateCounterBootstrap(m) => m.correlation_id,
             Self::ReplicateRebuild(m) => m.correlation_id,
+            Self::ReplicateMarkedRecords(m) => m.correlation_id,
         }
     }
 }

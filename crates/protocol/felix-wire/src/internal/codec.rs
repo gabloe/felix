@@ -3,6 +3,7 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
+use super::replicate::{ProducerMark, put_marks, take_marks};
 use super::{
     AckMode, CacheOpKind, ErrorCode, ForwardCacheError, ForwardCacheOk, ForwardCacheOp,
     ForwardPublish, ForwardPublishError, ForwardPublishOk, Hello, HelloOk, InternalHeader,
@@ -71,7 +72,8 @@ impl InternalMessage {
             | Self::ReplicateCacheRecords(m)
             | Self::ReplicateGroupRecords(m)
             | Self::ReplicateDeadLetterRecords(m)
-            | Self::ReplicateCounterRecords(m) => {
+            | Self::ReplicateCounterRecords(m)
+            | Self::ReplicateMarkedRecords(m) => {
                 body.put_u64(m.correlation_id);
                 put_str(&mut body, &m.shard.tenant_id)?;
                 put_str(&mut body, &m.shard.namespace)?;
@@ -87,6 +89,19 @@ impl InternalMessage {
                 for payload in &m.payloads {
                     body.put_u32(u32::try_from(payload.len()).map_err(|_| Error::FrameTooLarge)?);
                     body.extend_from_slice(payload);
+                }
+                // Only the marked kind has the section, and it has one mark
+                // per record however many are unmarked; the other kinds'
+                // layout is frozen and cannot carry any.
+                if let Self::ReplicateMarkedRecords(m) = self {
+                    let mut marks = m.marks.clone();
+                    marks.resize(m.payloads.len(), ProducerMark::None);
+                    put_marks(&mut body, &marks);
+                } else {
+                    debug_assert!(
+                        m.marks.iter().all(|mark| *mark == ProducerMark::None),
+                        "producer marks travel only as ReplicateMarkedRecords",
+                    );
                 }
             }
             Self::ReplicateOk(m) => {
@@ -285,7 +300,8 @@ impl InternalMessage {
             | Kind::ReplicateCacheRecords
             | Kind::ReplicateGroupRecords
             | Kind::ReplicateDeadLetterRecords
-            | Kind::ReplicateCounterRecords => {
+            | Kind::ReplicateCounterRecords
+            | Kind::ReplicateMarkedRecords => {
                 let correlation_id = take_u64(&mut body)?;
                 let tenant_id = take_str(&mut body)?;
                 let namespace = take_str(&mut body)?;
@@ -309,6 +325,11 @@ impl InternalMessage {
                     }
                     payloads.push(body.split_to(len));
                 }
+                let marks = if header.kind == Kind::ReplicateMarkedRecords {
+                    take_marks(&mut body, payloads.len())?
+                } else {
+                    Vec::new()
+                };
                 expect_empty(&body)?;
 
                 let message = ReplicateRecords {
@@ -323,12 +344,14 @@ impl InternalMessage {
                     first_offset,
                     checksum,
                     payloads,
+                    marks,
                 };
                 Ok(match header.kind {
                     Kind::ReplicateCacheRecords => Self::ReplicateCacheRecords(message),
                     Kind::ReplicateGroupRecords => Self::ReplicateGroupRecords(message),
                     Kind::ReplicateDeadLetterRecords => Self::ReplicateDeadLetterRecords(message),
                     Kind::ReplicateCounterRecords => Self::ReplicateCounterRecords(message),
+                    Kind::ReplicateMarkedRecords => Self::ReplicateMarkedRecords(message),
                     _ => Self::ReplicateRecords(message),
                 })
             }

@@ -3,8 +3,11 @@
 //! The broker hands out a producer id; the producer numbers its batches on
 //! each stream from zero and sends the number with the batch. The shard's
 //! leader appends the number it expects and answers a re-send of one it
-//! already holds from memory, so a batch the producer never got an answer
-//! for can be sent again without a second copy landing. That is the whole
+//! already holds, so a batch the producer never got an answer for can be
+//! sent again without a second copy landing. On a durable stream the numbers
+//! are stored in the shard's log, so that holds across a failover or a move
+//! too: the producer keeps re-sending through the leader change and the new
+//! leader answers from the records it holds. That is the whole
 //! contract, and it is what `retry.ambiguous_outcomes_are_not_silently_retried`
 //! could not offer: with a sequence the ambiguous outcome is not ambiguous
 //! any more.
@@ -13,7 +16,9 @@
 //! for any reason but a typed refusal leaves it where it was, so the next
 //! call re-sends the same batch under the same number; and a typed refusal
 //! ends the producer on that stream, because a gap or a forgotten producer
-//! is not something a re-send can mend.
+//! is not something a re-send can mend. A forgotten producer is not started
+//! again under a new id here: whether its last batch landed is exactly what
+//! the shard can no longer say, so the caller has to decide.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

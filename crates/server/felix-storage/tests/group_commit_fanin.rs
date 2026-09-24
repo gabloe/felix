@@ -52,6 +52,7 @@ fn batch() -> Vec<AppendRecord> {
         .map(|_| AppendRecord {
             payload: vec![b'x'; PAYLOAD].into(),
             timestamp_micros: 0,
+            mark: Default::default(),
         })
         .collect()
 }

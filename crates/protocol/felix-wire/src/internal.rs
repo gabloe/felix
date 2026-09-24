@@ -31,7 +31,7 @@ pub use header::{
 };
 pub use message::{InternalMessage, ShardRef};
 pub use replicate::{
-    ReplicaLog, ReplicateBootstrap, ReplicateError, ReplicateOk, ReplicateRebuild,
+    ProducerMark, ReplicaLog, ReplicateBootstrap, ReplicateError, ReplicateOk, ReplicateRebuild,
     ReplicateRecords, batch_checksum,
 };
 

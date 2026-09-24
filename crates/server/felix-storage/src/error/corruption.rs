@@ -127,6 +127,10 @@ pub enum CorruptionKind {
         payload_len: u32,
         limit: u32,
     },
+    /// A record both opening a producer batch and continuing one.
+    RecordFlags {
+        found: u32,
+    },
     /// Offsets must ascend by exactly one across a segment; a gap means a record
     /// was lost or the file was spliced.
     OffsetOutOfOrder {
@@ -194,6 +198,9 @@ impl fmt::Display for CorruptionKind {
                 f,
                 "record checksum mismatch (expected {expected:#010x}, found {found:#010x})"
             ),
+            CorruptionKind::RecordFlags { found } => {
+                write!(f, "impossible record flags {found:#010x}")
+            }
             CorruptionKind::RecordHeaderChecksum { expected, found } => write!(
                 f,
                 "record header checksum mismatch (expected {expected:#010x}, found {found:#010x})"

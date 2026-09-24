@@ -8,6 +8,7 @@
 //! * `sync`      — fsync policy and group commit.
 //! * `retention` — deleting the oldest segments once a bound is exceeded.
 //! * `epochs`    — where each leadership generation began.
+//! * `producers` — each idempotent producer's place, derived from the records.
 //! * `append`    — the append path, and the rollover it may have to start.
 //! * `flush`     — making the active segment durable.
 //! * `provider`  — one log per shard under a common root.
@@ -38,12 +39,14 @@ pub mod layout;
 mod append;
 mod epochs;
 mod flush;
+mod producers;
 mod provider;
 mod recovery;
 mod retention;
 mod segments;
 mod sync;
 
+pub use producers::ProducerSequence;
 pub use provider::DiskLogProvider;
 pub use segments::RetentionOutcome;
 
@@ -54,11 +57,12 @@ use std::sync::atomic::AtomicU8;
 use parking_lot::{Mutex, RwLock};
 
 use self::append::RollState;
+use self::producers::ProducerState;
 use self::segments::SegmentSet;
 use self::sync::{Durability, PeriodicSyncer};
 use crate::log::{
     AppendOnlyLog, AppendRecord, AppendResult, BoxFuture, Epoch, FsyncMode, LogConfig, LogRecord,
-    Offset, ReadRange, SealedSegment, SegmentDescriptor,
+    Offset, ReadRange, RecordMark, SealedSegment, SegmentDescriptor,
 };
 use crate::segment::ReadBudget;
 use crate::{Result, StorageError, metrics_names};
@@ -159,6 +163,14 @@ impl DiskLog {
         self.inner.segments.read().descriptors()
     }
 
+    /// Where `producer_id`'s batch `sequence` stands in this log.
+    ///
+    /// Reflects every batch written so far, durable or not, so a caller that
+    /// serialises a producer's batches sees each one as soon as it is written.
+    pub fn producer_sequence(&self, producer_id: u64, sequence: u64) -> ProducerSequence {
+        self.inner.producers.lock().classify(producer_id, sequence)
+    }
+
     /// Assign offsets and write `records`, without waiting for durability.
     ///
     /// Split out of [`AppendOnlyLog::append`] so a caller can learn the offsets
@@ -175,7 +187,38 @@ impl DiskLog {
     pub async fn append_pending(&self, records: &[AppendRecord]) -> Result<PendingAppend> {
         let records = records.to_vec();
         let inner = Arc::clone(&self.inner);
-        Self::write_batch(inner, records).await
+        Self::write_batch(inner, records, None)
+            .await
+            .map(|pending| pending.expect("an unconditional write is always written"))
+    }
+
+    /// Write the rest of `producer_id`'s batch `sequence`, which the log holds
+    /// only part of ([`ProducerSequence::Partial`]), without waiting for
+    /// durability. `records` must be marked [`RecordMark::Continues`].
+    ///
+    /// `None`, and nothing written, when the batch is no longer open at the
+    /// tail: something else was appended after its first part, so its rest can
+    /// never follow it.
+    pub async fn continue_pending(
+        &self,
+        producer_id: u64,
+        sequence: u64,
+        records: &[AppendRecord],
+    ) -> Result<Option<PendingAppend>> {
+        debug_assert!(records.iter().all(|r| r.mark == RecordMark::Continues));
+        let inner = Arc::clone(&self.inner);
+        Self::write_batch(inner, records.to_vec(), Some((producer_id, sequence))).await
+    }
+
+    /// Wait until every record below `offset` satisfies the configured fsync
+    /// policy. For a batch this log already held when asked about it, whose
+    /// writer may not have waited.
+    pub async fn wait_durable(&self, offset: Offset) -> Result<()> {
+        if self.inner.durability.acknowledges_before_sync() {
+            return Ok(());
+        }
+        self.inner.ensure_durable(offset).await?;
+        self.inner.check_roll_state()
     }
 
     /// Wait until a [`PendingAppend`] satisfies the configured fsync policy.
@@ -227,6 +270,7 @@ impl DiskLog {
             let mut epochs = operation.epochs.lock();
             *epochs = epochs::EpochMap::default();
             epochs::store(&operation.dir, &epochs)?;
+            operation.reset_producers(&segments)?;
             Ok(())
         })
         .await
@@ -291,6 +335,10 @@ impl DiskLog {
             recovered.sealed,
             recovered.active,
         )?;
+        // Before the log is usable, so no append can be accepted against a
+        // producer state that does not yet include what is already on disk.
+        let producer_state =
+            producers::rebuild(&epochs_dir, &segments, Some(&recovered.active_marks))?;
 
         // Everything that survived recovery is on disk, so the durable bound
         // starts at the recovered tail.
@@ -304,6 +352,8 @@ impl DiskLog {
             syncer: Mutex::new(None),
             retention: Mutex::new(None),
             epochs: Mutex::new(epochs),
+            batch_open: std::sync::atomic::AtomicBool::new(producer_state.is_open()),
+            producers: Mutex::new(producer_state),
             dir: epochs_dir,
             roll_state: AtomicU8::new(RollState::Idle as u8),
             roll_failure: Mutex::new(None),
@@ -362,7 +412,9 @@ impl AppendOnlyLog for DiskLog {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
             let started = std::time::Instant::now();
-            let pending = Self::write_batch(Arc::clone(&inner), records).await?;
+            let pending = Self::write_batch(Arc::clone(&inner), records, None)
+                .await?
+                .expect("an unconditional write is always written");
 
             // `OnCommit` is the only policy that makes the caller wait. The
             // others acknowledge once the bytes are in the page cache and rely
@@ -451,6 +503,7 @@ impl AppendOnlyLog for DiskLog {
                 let mut epochs = operation.epochs.lock();
                 epochs.truncate_from(offset);
                 epochs::store(&operation.dir, &epochs)?;
+                operation.reset_producers(&segments)?;
                 Ok(())
             })
             .await
@@ -524,6 +577,12 @@ struct LogInner {
     /// on the replication path, not the append path, and the append path is
     /// where lock contention costs something.
     epochs: Mutex<epochs::EpochMap>,
+    /// Each idempotent producer's place in the log. Written only under the
+    /// `segments` write lock, in offset order, so it always matches the tail.
+    producers: Mutex<producers::ProducerState>,
+    /// Mirrors `ProducerState::is_open`, so an unmarked append can skip the
+    /// lock in the common case of no batch waiting for records.
+    batch_open: std::sync::atomic::AtomicBool,
     /// Where `epochs` is persisted, kept because the log needs it on truncation
     /// and nothing else hands it a directory.
     dir: PathBuf,
@@ -582,6 +641,70 @@ impl std::fmt::Debug for LogInner {
 }
 
 /// Micros since the Unix epoch, matching `AppendRecord::timestamp_micros`.
+impl LogInner {
+    /// Account for a batch just written at `first_offset`. Called holding the
+    /// `segments` write lock the batch was written under.
+    fn observe_marks(&self, first_offset: Offset, records: &[AppendRecord]) {
+        use std::sync::atomic::Ordering;
+        let marked = records.iter().any(|record| record.mark != RecordMark::None);
+        if !marked && !self.batch_open.load(Ordering::Acquire) {
+            return;
+        }
+        let mut producers = self.producers.lock();
+        for (offset, record) in (first_offset..).zip(records) {
+            producers.observe(offset, record.mark);
+        }
+        self.batch_open
+            .store(producers.is_open(), Ordering::Release);
+    }
+
+    /// Whether `producer_id`'s batch `sequence` is open with its next record
+    /// due at the tail. Called holding the `segments` write lock.
+    fn batch_open_at_tail(&self, segments: &SegmentSet, producer_id: u64, sequence: u64) -> bool {
+        matches!(
+            self.producers.lock().classify(producer_id, sequence),
+            ProducerSequence::Partial { first, held, .. }
+                if first + u64::from(held) == segments.tail_offset()
+        )
+    }
+
+    /// The producer state as of the tail, for the snapshot taken at a
+    /// rollover. Called holding the `segments` write lock. `None` when no
+    /// producer has written here, which is almost every log.
+    fn producer_snapshot(&self, segments: &SegmentSet) -> Option<(Offset, ProducerState)> {
+        let producers = self.producers.lock();
+        (!producers.is_empty()).then(|| (segments.tail_offset(), producers.clone()))
+    }
+
+    /// Save a snapshot taken by [`Self::producer_snapshot`]. Failing costs a
+    /// longer open later, so it is logged rather than returned.
+    fn store_producer_snapshot(&self, snapshot: Option<(Offset, ProducerState)>) {
+        if let Some((as_of, state)) = snapshot
+            && let Err(err) = producers::store(&self.dir, &state, as_of)
+        {
+            tracing::warn!(
+                shard = %self.label,
+                error = %err,
+                "could not save the producer snapshot; the next open reads further back",
+            );
+        }
+    }
+
+    /// Rebuild producer state after the log was cut back. The snapshot may
+    /// describe records that are gone, so it is removed first, durably: one
+    /// that came back after a crash would be read as describing the records
+    /// that replaced them.
+    fn reset_producers(&self, segments: &SegmentSet) -> Result<()> {
+        producers::discard(&self.dir).map_err(StorageError::Io)?;
+        crate::io::sync_dir(&self.dir).map_err(StorageError::Io)?;
+        let state = producers::rebuild(&self.dir, segments, None)?;
+        self.batch_open
+            .store(state.is_open(), std::sync::atomic::Ordering::Release);
+        *self.producers.lock() = state;
+        Ok(())
+    }
+}
+
 fn now_micros() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

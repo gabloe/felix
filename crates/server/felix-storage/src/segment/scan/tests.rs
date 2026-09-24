@@ -43,8 +43,8 @@ fn truncation_at_every_byte_of_the_tail_record_is_repairable() {
     let full = write_segment(&path, 0, 3);
 
     let mut prefix = SegmentHeader::new(0, 1).encode().to_vec();
-    encode_record(&mut prefix, 0, 100, b"payload-0");
-    encode_record(&mut prefix, 1, 101, b"payload-1");
+    encode_record(&mut prefix, 0, 100, b"payload-0", &Default::default());
+    encode_record(&mut prefix, 1, 101, b"payload-1", &Default::default());
     let third_start = prefix.len() as u64;
 
     // Start one byte in: cutting exactly at the boundary leaves a healthy
@@ -100,9 +100,9 @@ fn an_offset_gap_in_committed_data_is_a_hard_error() {
     let dir = tempdir().expect("dir");
     let path = dir.path().join("a.log");
     let mut bytes = SegmentHeader::new(0, 1).encode().to_vec();
-    encode_record(&mut bytes, 0, 1, b"a");
-    encode_record(&mut bytes, 5, 2, b"b");
-    encode_record(&mut bytes, 6, 3, b"c");
+    encode_record(&mut bytes, 0, 1, b"a", &Default::default());
+    encode_record(&mut bytes, 5, 2, b"b", &Default::default());
+    encode_record(&mut bytes, 6, 3, b"c", &Default::default());
     std::fs::write(&path, &bytes).expect("write");
 
     let err = scan(&path).expect_err("offset gap");
@@ -234,8 +234,8 @@ fn scan_reads_records_larger_than_the_read_ahead_window() {
     let path = dir.path().join("a.log");
     let big = vec![7u8; READ_CHUNK_BYTES * 2 + 11];
     let mut bytes = SegmentHeader::new(0, 1).encode().to_vec();
-    encode_record(&mut bytes, 0, 1, &big);
-    encode_record(&mut bytes, 1, 2, b"small");
+    encode_record(&mut bytes, 0, 1, &big, &Default::default());
+    encode_record(&mut bytes, 1, 2, b"small", &Default::default());
     std::fs::write(&path, &bytes).expect("write");
 
     let outcome = scan(&path).expect("scan");

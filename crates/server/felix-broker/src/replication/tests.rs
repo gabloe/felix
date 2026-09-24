@@ -49,8 +49,8 @@ async fn ship(
     values: &[&str],
 ) -> std::result::Result<Applied, Divergence> {
     let payloads = batch(values);
-    let checksum = felix_wire::internal::batch_checksum(&payloads);
-    apply(log, first_offset, checksum, &payloads)
+    let checksum = felix_wire::internal::batch_checksum(&payloads, &[]);
+    apply(log, first_offset, checksum, &payloads, &[])
         .await
         .expect("apply")
 }
@@ -173,7 +173,7 @@ async fn a_batch_that_did_not_survive_the_trip_is_refused() {
     let (log, _dir) = follower().await;
     let payloads = batch(&["a", "b"]);
 
-    let divergence = apply(&log, 0, 0xdead_beef, &payloads)
+    let divergence = apply(&log, 0, 0xdead_beef, &payloads, &[])
         .await
         .expect("apply")
         .expect_err("should be corrupt");
@@ -191,8 +191,8 @@ async fn a_batch_that_did_not_survive_the_trip_is_refused() {
 /// to catch.
 #[test]
 fn the_checksum_separates_records_that_concatenate_alike() {
-    let one = felix_wire::internal::batch_checksum(&batch(&["ab", "c"]));
-    let other = felix_wire::internal::batch_checksum(&batch(&["a", "bc"]));
+    let one = felix_wire::internal::batch_checksum(&batch(&["ab", "c"]), &[]);
+    let other = felix_wire::internal::batch_checksum(&batch(&["a", "bc"]), &[]);
 
     assert_ne!(one, other);
 }

@@ -63,6 +63,44 @@ pub trait LogProvider: Send + Sync {
 pub struct AppendRecord {
     pub payload: Bytes,
     pub timestamp_micros: u64,
+    pub mark: RecordMark,
+}
+
+/// Which idempotent producer's batch a record belongs to, if any.
+///
+/// Stored with the record, so every copy of the log carries it and a replica
+/// promoted to leader knows each producer's sequence from the records it
+/// holds. See `docs/storage-format.md`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RecordMark {
+    #[default]
+    None,
+    /// The first record of a producer's batch.
+    Opens(ProducerBatch),
+    /// A later record of the batch the record before it belongs to.
+    Continues,
+}
+
+/// An idempotent producer's batch, as its first record describes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProducerBatch {
+    pub producer_id: u64,
+    pub sequence: u64,
+    /// Records in the batch, this one included.
+    pub len: u32,
+}
+
+impl RecordMark {
+    /// The marks for a batch of `len` records: the first opens it, the rest
+    /// continue it.
+    pub fn for_batch(producer_id: u64, sequence: u64, len: usize) -> impl Iterator<Item = Self> {
+        let opens = Self::Opens(ProducerBatch {
+            producer_id,
+            sequence,
+            len: len as u32,
+        });
+        std::iter::once(opens).chain(std::iter::repeat_n(Self::Continues, len.saturating_sub(1)))
+    }
 }
 
 /// The offsets an append was given, first and last inclusive.
@@ -86,6 +124,7 @@ pub struct LogRecord {
     pub timestamp_micros: u64,
     pub checksum: u32,
     pub payload: Bytes,
+    pub mark: RecordMark,
 }
 
 /// One leadership generation, and the offset its first record took.

@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use super::{SealedEntry, SegmentSet};
 use crate::Result;
 use crate::disk_log::now_micros;
-use crate::log::{AppendRecord, SegmentId};
+use crate::log::{AppendRecord, RecordMark, SegmentId};
 use crate::segment::writer::BlankSegment;
 use crate::segment::{SegmentReader, SegmentWriter, index_file_name};
 use crate::{StorageError, metrics_names};
@@ -39,9 +39,14 @@ impl SegmentSet {
     /// segment is the one scanned in full at startup. Past the bound, appends
     /// roll inline and take the latency hit, which is the correct trade when the
     /// alternative is an unboundedly large segment to re-scan after a crash.
+    ///
+    /// A marked record also rolls a v2 active segment, left over from a build
+    /// that could not write marks, so marks only ever land in v3 segments.
     pub(crate) fn would_roll_within(&self, records: &[AppendRecord], roll_pending: bool) -> bool {
-        self.active.projected_size(records) > self.size_ceiling(roll_pending)
-            && self.active.record_count() > 0
+        let full = self.active.projected_size(records) > self.size_ceiling(roll_pending)
+            && self.active.record_count() > 0;
+        full || (!self.active.holds_marks()
+            && records.iter().any(|record| record.mark != RecordMark::None))
     }
 
     /// Whether appending `records` would first require a rollover.

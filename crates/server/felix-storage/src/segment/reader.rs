@@ -94,6 +94,7 @@ impl SegmentReader {
                 timestamp_micros: decoded.header.timestamp_micros,
                 checksum: decoded.header.checksum,
                 payload: decoded.payload,
+                mark: decoded.mark,
             });
             position += total_len;
         }

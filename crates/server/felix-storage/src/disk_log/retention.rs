@@ -113,7 +113,12 @@ impl LogInner {
         let inner = Arc::clone(&self);
         tokio::task::spawn_blocking(move || {
             let now = now_micros();
-            inner.segments.write().enforce_retention(now)
+            let mut segments = inner.segments.write();
+            let outcome = segments.enforce_retention(now)?;
+            if outcome.segments_deleted > 0 {
+                inner.producers.lock().prune(segments.base_offset());
+            }
+            Ok(outcome)
         })
         .await
         .map_err(|err| StorageError::Io(std::io::Error::other(err)))?

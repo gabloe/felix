@@ -29,6 +29,7 @@ fuzz_target!(|data: &[u8]| {
             decoded.header.offset,
             decoded.header.timestamp_micros,
             &decoded.payload,
+            &Default::default(),
         );
         assert_eq!(re_encoded.as_slice(), &data[..consumed as usize]);
     }

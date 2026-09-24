@@ -34,7 +34,8 @@ impl PeerRequestHandler for BrokerPeerHandler {
         match request {
             InternalMessage::ForwardPublish(publish) => self.forwarding.apply(publish).await,
             InternalMessage::ForwardCacheOp(op) => self.forwarding.apply_cache_op(op).await,
-            InternalMessage::ReplicateRecords(batch) => {
+            InternalMessage::ReplicateRecords(batch)
+            | InternalMessage::ReplicateMarkedRecords(batch) => {
                 self.replica
                     .apply(batch, felix_broker::LogKind::Stream)
                     .await
