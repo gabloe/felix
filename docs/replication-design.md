@@ -140,6 +140,13 @@ queue, a slow fsync, a VM pause — and a lease that was valid on admission may
 have expired by the time the bytes reach the disk. Fencing only at the routing
 boundary leaves exactly the window this design exists to close.
 
+The commit check refuses a publish even when it was acknowledged on enqueue
+(`ack_on_commit` off), since writing it would be the split brain. So admission
+reads the clock for such a publish and, with little lease left, waits for the
+write instead of acknowledging the enqueue. A pause after the ack can still
+strand one; it is counted in `felix_broker_acked_publishes_dropped_total`. See
+`docs/semantics.md`, "Consistency".
+
 ### Failover
 
 1. The lease lapses (no renewal within `L`).

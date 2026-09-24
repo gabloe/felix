@@ -163,8 +163,16 @@ ack_on_commit: true
 ```
 
 **Trade-offs**:
-- **`false`**: Lower latency, fire-and-forget semantics
-- **`true`**: Higher latency, explicit acknowledgement
+- **`false`**: Lower latency. The ack is sent when the publish is queued, before
+  it is written, so an acknowledged record can still be lost: if the broker
+  crashes before the write, or if a pause outlasts the broker's cluster lease
+  (the write is then refused, since another broker may lead the shard). Near
+  the end of the lease a publish waits for its write anyway, so a lapse is
+  reported rather than lost. Losses after an ack are counted in
+  `felix_broker_acked_publishes_dropped_total`.
+- **`true`**: Higher latency. The ack means the write happened, under the
+  stream's fsync policy. `Quorum` streams and forwarded or idempotent publishes
+  always wait for the write, whatever this says.
 
 ### `max_frame_bytes`
 
