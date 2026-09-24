@@ -47,6 +47,9 @@ const KEY_COMMITTED: &str = "committed";
 const KEY_LAST_PURGED: &str = "last_purged";
 const KEY_SNAPSHOT_META: &str = "snapshot_meta";
 const KEY_SNAPSHOT_DATA: &str = "snapshot_data";
+/// Set while this member must not vote: from the moment it started empty
+/// until it has formed the group or caught up with it (`super::join`).
+const KEY_VOTE_WITHHELD: &str = "vote_withheld";
 
 /// The committed index this store had persisted when it last ran — what a
 /// restarting node must re-apply before it is fit to serve.
@@ -56,6 +59,36 @@ pub(super) fn persisted_committed_index(db: &Database) -> Option<u64> {
         .flatten()
         .flatten()
         .map(|log_id| log_id.index)
+}
+
+/// Whether this store holds any consensus state: a vote, a log entry, or a
+/// snapshot. An empty one is a first boot or a wiped volume.
+pub(super) fn holds_state(db: &Database) -> Result<bool> {
+    let txn = db.begin_read().context("read raft store")?;
+    let logs = txn.open_table(LOGS).context("open log table")?;
+    if logs.first().context("read log table")?.is_some() {
+        return Ok(true);
+    }
+    let meta = txn.open_table(META).context("open meta table")?;
+    for key in [KEY_VOTE, KEY_COMMITTED, KEY_LAST_PURGED, KEY_SNAPSHOT_META] {
+        if meta.get(key).context("read raft meta")?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub(super) fn vote_withheld(db: &Database) -> Result<bool> {
+    Ok(read_meta::<bool>(db, KEY_VOTE_WITHHELD)
+        .map_err(|err| anyhow::anyhow!("read vote flag: {err}"))?
+        .unwrap_or(false))
+}
+
+/// Durable before it returns, so a crash never forgets that a half-filled
+/// log is not yet fit to vote.
+pub(super) fn set_vote_withheld(db: &Database, withheld: bool) -> Result<()> {
+    write_meta(db, KEY_VOTE_WITHHELD, &withheld)
+        .map_err(|err| anyhow::anyhow!("write vote flag: {err}"))
 }
 
 /// Open (or create) the store file and make sure both tables exist, so

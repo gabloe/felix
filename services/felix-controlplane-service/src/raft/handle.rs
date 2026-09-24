@@ -2,6 +2,7 @@
 //! and stopping it.
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -22,6 +23,12 @@ pub struct RaftHandle {
     /// Kept past construction only for [`AppStateMachine::restamp`], which
     /// runs on the proposal path rather than the apply loop.
     pub(super) app: Arc<dyn AppStateMachine>,
+    /// Weak so that a stopped node releases its store even while clones of
+    /// the handle live on, and a restart in the same process can reopen it.
+    pub(super) db: std::sync::Weak<redb::Database>,
+    /// False while this member withholds its vote (`super::join`): vote
+    /// requests are refused and it does not stand for election.
+    pub(super) may_vote: Arc<AtomicBool>,
 }
 
 impl RaftHandle {
@@ -29,10 +36,16 @@ impl RaftHandle {
     /// `settings.data_dir` and start the node.
     ///
     /// Starting is not joining: a fresh node idles until either
-    /// [`RaftHandle::initialize`] forms a new group or an existing leader
-    /// adds it as a learner. A node with prior state on disk resumes its
-    /// membership without ceremony — that is the point of the data dir.
+    /// [`RaftHandle::initialize`] forms a new group, an existing leader
+    /// adds it as a learner, or [`RaftHandle::enter_group`] decides which.
+    /// A node with prior state on disk resumes its membership without
+    /// ceremony — that is the point of the data dir — unless it was still
+    /// catching up after starting empty, in which case it keeps withholding
+    /// its vote.
     pub async fn start(settings: RaftSettings, app: Arc<dyn AppStateMachine>) -> Result<Self> {
+        std::fs::create_dir_all(&settings.data_dir).context("create raft data dir")?;
+        let db = store::open(&settings.data_dir.join("raft.redb"))?;
+        let may_vote = !store::vote_withheld(&db)?;
         let config = openraft::Config {
             cluster_name: "felix-metadata".to_string(),
             heartbeat_interval: settings.heartbeat_interval.as_millis() as u64,
@@ -42,18 +55,21 @@ impl RaftHandle {
                 settings.snapshot_logs_since_last,
             ),
             max_in_snapshot_log_to_keep: settings.logs_kept_behind_snapshot,
+            // Set at construction, not after: a member resuming a half-filled
+            // log already knows a membership that lists it as a voter, and
+            // its election timer starts with the node.
+            enable_elect: may_vote,
             ..Default::default()
         };
         let config = Arc::new(config.validate().context("raft config")?);
 
-        std::fs::create_dir_all(&settings.data_dir).context("create raft data dir")?;
-        let db = store::open(&settings.data_dir.join("raft.redb"))?;
         // What this node had committed before it stopped: the floor its
         // state machine must be replayed back to before anything serves
         // from it. Read before the node starts, because the node moves it.
         let committed_floor = store::persisted_committed_index(&db);
         let log_store = store::LogStore::new(Arc::clone(&db));
-        let state_machine = store::StateMachineStore::open(db, Arc::clone(&app)).await?;
+        let state_machine =
+            store::StateMachineStore::open(Arc::clone(&db), Arc::clone(&app)).await?;
 
         let raft = Raft::new(
             settings.node_id,
@@ -102,6 +118,8 @@ impl RaftHandle {
                 .build()
                 .context("build forwarding client")?,
             app,
+            db: Arc::downgrade(&db),
+            may_vote: Arc::new(AtomicBool::new(may_vote)),
         })
     }
 
