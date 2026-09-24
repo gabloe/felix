@@ -651,3 +651,93 @@ fn a_drain_with_no_destination_waits() {
         &Decision::Waiting(Blocked::NoDestination)
     );
 }
+
+/// Four shards on two brokers, with shard 0 fenced on its way from
+/// `broker-a` to `broker-b` and every other shard led by `leaders[i - 1]`.
+fn one_fenced_move(leaders: [&str; 3]) -> Vec<ShardAssignment> {
+    let mut fenced = pinned("orders", 0, "broker-a");
+    fenced.replicas = vec!["broker-b".to_string()];
+    fenced.successor = Some("broker-b".to_string());
+    fenced.state = ShardState::Draining;
+    let mut existing = vec![fenced];
+    for (shard, leader) in (1..).zip(leaders) {
+        existing.push(pinned("orders", shard, leader));
+    }
+    existing
+}
+
+/// Two moves to one destination, the second cut over a pass before the
+/// first. The fenced shard was already counted toward `broker-b`, so cutting
+/// it over must not count it again: `broker-b` is at its share, and the
+/// shard it just took stays put.
+#[test]
+fn a_cut_over_counts_its_leadership_once() {
+    let streams = vec![stream("orders", 4)];
+    let existing = one_fenced_move(["broker-b", "broker-a", "broker-a"]);
+
+    let plan = plan_with(
+        &streams,
+        &[],
+        &live(&["broker-a", "broker-b"]),
+        &existing,
+        &Reported::caught_up(&["broker-b"]).drained_at(3),
+        MovePolicy { max_concurrent: 2 },
+    );
+
+    let steps: Vec<_> = plan
+        .moves()
+        .map(|(key, step, _)| (key.shard, step.clone()))
+        .collect();
+    assert_eq!(
+        steps,
+        vec![(
+            0,
+            MoveStep::CutOver {
+                from: "broker-a".to_string(),
+                to: "broker-b".to_string(),
+            }
+        )],
+        "only the fenced shard moves"
+    );
+}
+
+/// A fenced shard whose successor never caught up goes back to its old
+/// leader. The count it held for the successor moves with it, so the old
+/// leader is seen over its share and a shard is staged off it again.
+#[test]
+fn a_take_back_returns_the_leadership_it_counted_for_the_successor() {
+    let streams = vec![stream("orders", 4)];
+    let existing = one_fenced_move(["broker-a", "broker-a", "broker-b"]);
+
+    let plan = plan_with(
+        &streams,
+        &[],
+        &live(&["broker-a", "broker-b"]),
+        &existing,
+        &Reported::caught_up(&[]).drained_at(3),
+        MovePolicy { max_concurrent: 2 },
+    );
+
+    let steps: Vec<_> = plan
+        .moves()
+        .map(|(key, step, _)| (key.shard, step.clone()))
+        .collect();
+    assert_eq!(
+        steps[0],
+        (
+            0,
+            MoveStep::CutOver {
+                from: "broker-a".to_string(),
+                to: "broker-a".to_string(),
+            }
+        ),
+        "nothing else holds the log"
+    );
+    assert!(
+        steps[1..].iter().any(|(_, step)| *step
+            == MoveStep::Stage {
+                successor: "broker-b".to_string()
+            }),
+        "broker-a leads three of four and should give one up: {steps:?}"
+    );
+}
