@@ -129,3 +129,125 @@ async fn an_empty_cluster_places_nothing_and_says_so() {
             .is_empty()
     );
 }
+
+fn shard_zero() -> ShardKey {
+    ShardKey {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        kind: ShardKind::Stream,
+    }
+}
+
+async fn report(store: &InMemoryStore, generation: u64, caught_up: &[&str], drained: bool) {
+    store
+        .record_replica_report(crate::model::ReplicaReport {
+            key: shard_zero(),
+            generation,
+            caught_up: caught_up.iter().map(|id| id.to_string()).collect(),
+            offsets: Default::default(),
+            reported_at_millis: store.now_millis().await.expect("clock"),
+            drained,
+        })
+        .await
+        .expect("report");
+}
+
+/// Two instances run placement over one store. One plans a fence from a
+/// snapshot, then stalls; the other fences and cuts over. The stalled plan
+/// must not land: it would hand the shard back to the old leader after the
+/// new one may already have acknowledged writes the old one never saw.
+#[tokio::test]
+async fn a_fence_planned_before_a_cut_over_is_not_written_after_it() {
+    let store = cluster(&["broker-x", "broker-y"]).await;
+    store
+        .delete_stream(&crate::model::StreamKey {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+        })
+        .await
+        .expect("drop the three-shard stream");
+    store
+        .create_stream(stream("orders", 1))
+        .await
+        .expect("stream");
+    let staged = store
+        .put_shard_assignment(ShardAssignment {
+            key: shard_zero(),
+            leader: "broker-x".to_string(),
+            replicas: vec!["broker-y".to_string()],
+            generation: 0,
+            state: ShardState::Active,
+            successor: Some("broker-y".to_string()),
+        })
+        .await
+        .expect("staged move");
+    report(&store, staged.generation, &["broker-y"], false).await;
+
+    let liveness = Default::default();
+    let stale = super::super::reconciler::plan_pass(&store, &liveness, MovePolicy::default())
+        .await
+        .expect("plan");
+    assert!(
+        stale
+            .plan()
+            .moves()
+            .any(|(_, step, _)| *step == MoveStep::Fence),
+        "the stalled instance plans a fence",
+    );
+
+    let fenced = reconcile_once(&store, &liveness, MovePolicy::default()).await;
+    assert_eq!(fenced.moved, 1);
+    let draining = store
+        .get_shard_assignment(&shard_zero())
+        .await
+        .expect("get");
+    assert_eq!(draining.state, ShardState::Draining);
+    report(&store, draining.generation, &["broker-y"], true).await;
+    let cut = reconcile_once(&store, &liveness, MovePolicy::default()).await;
+    assert_eq!(cut.moved, 1);
+    let cut_over = store
+        .get_shard_assignment(&shard_zero())
+        .await
+        .expect("get");
+    assert_eq!(cut_over.leader, "broker-y");
+
+    let late = super::super::reconciler::apply_pass(&store, &stale).await;
+    assert_eq!(late.moved, 0);
+    assert_eq!(late.conflicts, 1);
+    assert_eq!(
+        store
+            .get_shard_assignment(&shard_zero())
+            .await
+            .expect("get"),
+        cut_over,
+        "the cut-over stands",
+    );
+}
+
+/// Two instances placing the same new shard: the second finds it placed.
+#[tokio::test]
+async fn a_placement_planned_against_no_assignment_does_not_overwrite_one() {
+    let store = cluster(&["broker-a", "broker-b", "broker-c"]).await;
+    let liveness = Default::default();
+    let first = super::super::reconciler::plan_pass(&store, &liveness, MovePolicy::default())
+        .await
+        .expect("plan");
+    let second = super::super::reconciler::plan_pass(&store, &liveness, MovePolicy::default())
+        .await
+        .expect("plan");
+
+    assert_eq!(
+        super::super::reconciler::apply_pass(&store, &first)
+            .await
+            .placed,
+        3
+    );
+    let placed = store.list_shard_assignments().await.expect("list");
+    let late = super::super::reconciler::apply_pass(&store, &second).await;
+    assert_eq!(late.placed, 0);
+    assert_eq!(late.conflicts, 3);
+    assert_eq!(store.list_shard_assignments().await.expect("list"), placed);
+}
