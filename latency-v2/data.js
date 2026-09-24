@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790279751626,
+  "lastUpdate": 1790279930159,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19074,6 +19074,72 @@ window.BENCHMARK_DATA = {
             "range": "50.62",
             "unit": "us",
             "extra": "trials: 5\nmedian: 564.00\nmean: 585.60\nstdev: 50.62\ncv: 8.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b57f770a5a7b2888e43691ddd9cee0b72b2dafa",
+          "message": "Replayed history is never dropped from a subscription's queues (#677)\n\n* feat(wire): read an event batch's base offset without decoding it\n\nA subscription's read loop decides how to queue a frame before it decodes\none, and replayed history has to be queued differently from live records.\n\n* fix(client): never drop replayed history from a subscription's queues\n\nA subscription resumed from an early offset lost records even when the\napplication read every event as it arrived. The broker writes history as\nfast as it can read it, and the client's read loop drained the stream\ninto two bounded queues under the default drop_new policy, so a replay\nlonger than the queue overflowed it. Losing the tail of a replay looked\nlike a stall: nothing more arrived until the next live publish.\n\nHistory is now queued with backpressure whatever the policy: a record\nbelow the subscription's live_offset waits for room, which stops reading\nthe stream and paces the broker's disk reads to the application. The\npolicy still governs live records, where it protects publishers from a\nslow reader.\n\n* docs: replayed history is never dropped; the overflow policy covers live records",
+          "timestamp": "2026-09-24T12:53:19-07:00",
+          "tree_id": "e279cc19443093eeacd20a7a3a71c6ca80ebd4c9",
+          "url": "https://github.com/gabloe/felix/commit/5b57f770a5a7b2888e43691ddd9cee0b72b2dafa"
+        },
+        "date": 1790279928158,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 174,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 174.00\nmean: 173.80\nstdev: 1.10\ncv: 0.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 212,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 212.00\nmean: 212.80\nstdev: 2.77\ncv: 1.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 239,
+            "range": "16.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 239.00\nmean: 241.40\nstdev: 16.26\ncv: 6.73%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 206,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 206.20\nstdev: 0.84\ncv: 0.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 415,
+            "range": "6.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 415.00\nmean: 413.20\nstdev: 6.26\ncv: 1.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 633,
+            "range": "69.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 633.00\nmean: 631.40\nstdev: 69.55\ncv: 11.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
