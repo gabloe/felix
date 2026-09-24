@@ -26,7 +26,7 @@ fn config() -> ControlPlaneConfig {
             tls: None,
         },
         node_liveness: NodeLivenessConfig::default(),
-        max_concurrent_shard_moves: placement::DEFAULT_MAX_CONCURRENT_MOVES,
+        shard_moves: placement::MovePolicy::default(),
         shutdown_drain_timeout_ms: 25_000,
         shutdown_predrain_ms: 0,
         readiness_timeout_ms: DEFAULT_READINESS_TIMEOUT_MS,

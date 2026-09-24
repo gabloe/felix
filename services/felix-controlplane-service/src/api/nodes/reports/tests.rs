@@ -24,24 +24,79 @@ fn assignment(state: ShardState, successor: Option<&str>) -> ShardAssignment {
     }
 }
 
+/// A report from the leader at `generation`: who is level, and, when it
+/// says its tail, how far behind broker-y is.
+fn status(
+    generation: u64,
+    level: &[&str],
+    drained: bool,
+    y_behind: Option<u64>,
+) -> felix_common::membership::ShardReplicaStatus {
+    felix_common::membership::ShardReplicaStatus {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        kind: Default::default(),
+        generation,
+        caught_up: level.iter().map(|n| n.to_string()).collect(),
+        replica_offsets: y_behind
+            .map(|_| felix_common::membership::ReplicaOffset {
+                node_id: "broker-y".to_string(),
+                durable_offset: 100,
+            })
+            .into_iter()
+            .collect(),
+        drained,
+        leader_offset: y_behind.map(|behind| 100 + behind),
+    }
+}
+
 #[test]
 fn only_the_report_a_move_waits_for_wakes_placement() {
-    let y = ["broker-y".to_string()];
+    let y = ["broker-y"];
     let staged = assignment(ShardState::Active, Some("broker-y"));
     let fenced = assignment(ShardState::Draining, Some("broker-y"));
     let settled = assignment(ShardState::Active, None);
+    let mut joining = assignment(ShardState::Active, None);
+    joining.joining = Some("broker-y".to_string());
+    let lag = 10;
 
-    assert!(advances_move(&staged, 4, false, &y), "successor caught up");
-    assert!(advances_move(&fenced, 4, true, &y), "leader drained");
-
-    assert!(!advances_move(&staged, 4, false, &[]), "still catching up");
-    assert!(!advances_move(&fenced, 4, false, &y), "fenced, not drained");
     assert!(
-        !advances_move(&settled, 4, false, &y),
+        advances_move(&staged, &status(4, &y, false, None), lag),
+        "successor caught up"
+    );
+    assert!(
+        advances_move(&staged, &status(4, &[], false, Some(lag)), lag),
+        "successor within the lag bound"
+    );
+    assert!(
+        advances_move(&joining, &status(4, &[], false, Some(lag)), lag),
+        "replacement within the lag bound"
+    );
+    assert!(
+        advances_move(&fenced, &status(4, &y, true, None), lag),
+        "leader drained"
+    );
+
+    assert!(
+        !advances_move(&staged, &status(4, &[], false, None), lag),
+        "still catching up"
+    );
+    assert!(
+        !advances_move(&staged, &status(4, &[], false, Some(lag + 1)), lag),
+        "outside the lag bound"
+    );
+    assert!(
+        !advances_move(&fenced, &status(4, &y, false, None), lag),
+        "fenced, not drained"
+    );
+    assert!(
+        !advances_move(&settled, &status(4, &y, false, None), lag),
         "no move in progress"
     );
     assert!(
-        !advances_move(&fenced, 3, true, &y),
+        !advances_move(&fenced, &status(3, &y, true, None), lag),
         "drained at an old generation"
     );
 }

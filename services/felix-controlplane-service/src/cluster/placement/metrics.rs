@@ -105,12 +105,12 @@ impl MoveClock {
                     fenced: now.saturating_duration_since(held.fenced?),
                 })
             }
-            MoveStep::Abandon { .. } => {
+            MoveStep::Abandon { .. } | MoveStep::TimedOut { .. } => {
                 self.moves.remove(key);
                 None
             }
             // Replaces a follower; not a leadership move.
-            MoveStep::Reseat { .. } => None,
+            MoveStep::Reseat { .. } | MoveStep::Seat { .. } => None,
         }
     }
 }

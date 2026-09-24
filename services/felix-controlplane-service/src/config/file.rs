@@ -29,6 +29,9 @@ pub(super) struct ControlPlaneConfigOverride {
     bootstrap: Option<BootstrapOverride>,
     node_liveness: Option<NodeLivenessOverride>,
     max_concurrent_shard_moves: Option<usize>,
+    max_shard_moves_per_node: Option<usize>,
+    shard_move_fence_max_lag_records: Option<u64>,
+    shard_move_timeout_ms: Option<u64>,
     shutdown_drain_timeout_ms: Option<u64>,
     shutdown_predrain_ms: Option<u64>,
 }
@@ -106,7 +109,16 @@ impl ControlPlaneConfig {
             }
         }
         if let Some(value) = override_cfg.max_concurrent_shard_moves {
-            config.max_concurrent_shard_moves = value;
+            config.shard_moves.max_concurrent = value;
+        }
+        if let Some(value) = override_cfg.max_shard_moves_per_node {
+            config.shard_moves.max_per_node = (value > 0).then_some(value);
+        }
+        if let Some(value) = override_cfg.shard_move_fence_max_lag_records {
+            config.shard_moves.fence_max_lag_records = value;
+        }
+        if let Some(value) = override_cfg.shard_move_timeout_ms {
+            config.shard_moves.timeout_millis = (value > 0).then_some(value);
         }
         if let Some(value) = override_cfg.shutdown_drain_timeout_ms
             && value > 0

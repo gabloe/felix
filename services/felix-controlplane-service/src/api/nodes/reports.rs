@@ -116,9 +116,9 @@ pub(crate) async fn report_replica_status(
 
     for shard in request.shards {
         let key = crate::model::ShardKey {
-            tenant_id: shard.tenant_id,
-            namespace: shard.namespace,
-            stream: shard.stream,
+            tenant_id: shard.tenant_id.clone(),
+            namespace: shard.namespace.clone(),
+            stream: shard.stream.clone(),
             shard: shard.shard,
             kind: shard.kind.into(),
         };
@@ -163,9 +163,8 @@ pub(crate) async fn report_replica_status(
 
         let advances = advances_move(
             &assignment,
-            shard.generation,
-            shard.drained,
-            &shard.caught_up,
+            &shard,
+            state.placement_wakes.fence_max_lag_records(),
         );
         match state
             .store
@@ -197,25 +196,37 @@ pub(crate) async fn report_replica_status(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// Whether a report is the one a move in progress is waiting for: a caught-up
-/// successor lets it fence, a drained leader lets it cut over.
+/// Whether a report is the one a move in progress is waiting for: a
+/// successor close enough lets it fence, a drained leader lets it cut over,
+/// and a follower copied in close enough lets it be seated.
 ///
 /// Only a hint for when placement runs. The pass judges the report itself,
 /// so a wrong answer here costs a pass or some latency, never a decision.
 fn advances_move(
     assignment: &crate::model::ShardAssignment,
-    generation: u64,
-    drained: bool,
-    caught_up: &[String],
+    report: &felix_common::membership::ShardReplicaStatus,
+    fence_max_lag_records: u64,
 ) -> bool {
-    if generation != assignment.generation {
+    if report.generation != assignment.generation {
         return false;
     }
-    match (&assignment.state, &assignment.successor) {
-        (crate::model::ShardState::Draining, _) => drained,
-        (_, Some(successor)) => caught_up.contains(successor),
-        (_, None) => false,
+    let close_enough = |node: &str| {
+        report.caught_up.iter().any(|level| level == node)
+            || report.leader_offset.is_some_and(|tail| {
+                report.replica_offsets.iter().any(|replica| {
+                    replica.node_id == node
+                        && tail.saturating_sub(replica.durable_offset) <= fence_max_lag_records
+                })
+            })
+    };
+    if assignment.state == crate::model::ShardState::Draining {
+        return report.drained;
     }
+    assignment
+        .successor
+        .iter()
+        .chain(assignment.joining.iter())
+        .any(|node| close_enough(node))
 }
 
 #[cfg(test)]

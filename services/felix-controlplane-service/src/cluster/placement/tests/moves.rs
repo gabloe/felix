@@ -438,7 +438,10 @@ fn moves_are_bounded_by_the_policy() {
         &draining_cluster(),
         &existing,
         &NothingCaughtUp,
-        MovePolicy { max_concurrent: 2 },
+        MovePolicy {
+            max_concurrent: 2,
+            ..MovePolicy::default()
+        },
     );
     assert_eq!(plan.moves().count(), 2);
     assert_eq!(
@@ -458,7 +461,10 @@ fn moves_are_bounded_by_the_policy() {
         &draining_cluster(),
         &existing,
         &NothingCaughtUp,
-        MovePolicy { max_concurrent: 1 },
+        MovePolicy {
+            max_concurrent: 1,
+            ..MovePolicy::default()
+        },
     );
     assert_eq!(plan.moves().count(), 0);
     assert_eq!(plan.waiting().count(), 4);
@@ -470,7 +476,10 @@ fn moves_are_bounded_by_the_policy() {
         &draining_cluster(),
         &existing[1..],
         &NothingCaughtUp,
-        MovePolicy { max_concurrent: 0 },
+        MovePolicy {
+            max_concurrent: 0,
+            ..MovePolicy::default()
+        },
     );
     assert_eq!(plan.moves().count(), 0);
 }
@@ -538,7 +547,10 @@ fn an_overloaded_node_gives_shards_to_an_idle_one_until_balanced() {
             &nodes,
             &existing,
             &reported,
-            MovePolicy { max_concurrent: 1 },
+            MovePolicy {
+                max_concurrent: 1,
+                ..MovePolicy::default()
+            },
         );
         let mut wrote = false;
         for (key, _, next) in plan.moves() {
@@ -623,7 +635,9 @@ fn a_follower_on_a_draining_node_is_reseated() {
         Decision::Move(MoveStep::Reseat { from, to }, next) => {
             assert_eq!((from.as_str(), to.as_str()), ("broker-b", "broker-c"));
             assert_eq!(next.leader, "broker-a");
-            assert_eq!(next.replicas, vec!["broker-c".to_string()]);
+            // Beside the follower it replaces, until it has caught up.
+            assert_eq!(next.replicas, vec!["broker-b", "broker-c"]);
+            assert_eq!(next.joining.as_deref(), Some("broker-c"));
         }
         other => panic!("expected a reseat, got {other:?}"),
     }
@@ -681,7 +695,10 @@ fn a_cut_over_counts_its_leadership_once() {
         &live(&["broker-a", "broker-b"]),
         &existing,
         &Reported::caught_up(&["broker-b"]).drained_at(3),
-        MovePolicy { max_concurrent: 2 },
+        MovePolicy {
+            max_concurrent: 2,
+            ..MovePolicy::default()
+        },
     );
 
     let steps: Vec<_> = plan
@@ -715,7 +732,10 @@ fn a_take_back_returns_the_leadership_it_counted_for_the_successor() {
         &live(&["broker-a", "broker-b"]),
         &existing,
         &Reported::caught_up(&[]).drained_at(3),
-        MovePolicy { max_concurrent: 2 },
+        MovePolicy {
+            max_concurrent: 2,
+            ..MovePolicy::default()
+        },
     );
 
     let steps: Vec<_> = plan

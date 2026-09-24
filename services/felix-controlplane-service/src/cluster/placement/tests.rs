@@ -3,6 +3,7 @@
 mod caches;
 mod failover;
 mod moves;
+mod pacing;
 mod reconciler;
 mod rendezvous;
 mod replicas;

@@ -75,9 +75,8 @@ pub struct ControlPlaneConfig {
     pub oidc_allowed_algorithms: Vec<Algorithm>,
     pub bootstrap: BootstrapConfig,
     pub node_liveness: NodeLivenessConfig,
-    /// Shard moves in progress at once, across the cluster. See
-    /// `placement::MovePolicy`.
-    pub max_concurrent_shard_moves: usize,
+    /// How shard moves are paced. See `placement::MovePolicy`.
+    pub shard_moves: crate::cluster::placement::MovePolicy,
     /// Total budget for draining in-flight requests after SIGTERM/SIGINT before
     /// remaining tasks are force-cancelled.
     pub shutdown_drain_timeout_ms: u64,

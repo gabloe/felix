@@ -24,6 +24,12 @@ pub trait CaughtUp {
         None
     }
 
+    /// How many records `node_id` was behind the leader's tail, as last
+    /// reported. `None` when the leader did not say what its tail was.
+    fn lag_records(&self, _key: &ShardKey, _node_id: &str) -> Option<u64> {
+        None
+    }
+
     /// Whether the leader of `key` has reported, at exactly `generation`, that
     /// it has stopped serving and its log will not grow. A report from an
     /// earlier generation describes a leader that was still writing.
@@ -34,6 +40,13 @@ pub trait CaughtUp {
     /// The generation the report for `key` was made at, if there is a fresh
     /// one.
     fn reported_generation(&self, _key: &ShardKey) -> Option<u64> {
+        None
+    }
+
+    /// The store's clock these reports are read as of. Move timeouts are
+    /// measured on it, the clock a move's start is stamped with; without it
+    /// no move times out.
+    fn as_of_millis(&self) -> Option<u64> {
         None
     }
 }

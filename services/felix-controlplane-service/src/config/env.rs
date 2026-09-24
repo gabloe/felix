@@ -49,11 +49,7 @@ impl ControlPlaneConfig {
             shard_reconcile_interval_ms: parse_positive_env("FELIX_SHARD_RECONCILE_INTERVAL_MS")
                 .unwrap_or(DEFAULT_SHARD_RECONCILE_INTERVAL_MS),
         };
-        // Zero is meaningful: it holds every move.
-        let max_concurrent_shard_moves = std::env::var("FELIX_SHARD_MOVES_MAX_CONCURRENT")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(crate::cluster::placement::DEFAULT_MAX_CONCURRENT_MOVES);
+        let shard_moves = shard_moves_from_env();
         let readiness_timeout_ms = parse_positive_env("FELIX_READINESS_TIMEOUT_MS")
             .unwrap_or(DEFAULT_READINESS_TIMEOUT_MS);
         let readiness_cache_ttl_ms = parse_positive_env("FELIX_READINESS_CACHE_TTL_MS")
@@ -133,7 +129,7 @@ impl ControlPlaneConfig {
                 tls: bootstrap_tls_from_env()?,
             },
             node_liveness,
-            max_concurrent_shard_moves,
+            shard_moves,
             shutdown_drain_timeout_ms,
             shutdown_predrain_ms,
             readiness_timeout_ms,
@@ -141,5 +137,33 @@ impl ControlPlaneConfig {
         };
         config.validate()?;
         Ok(config)
+    }
+}
+
+/// How shard moves are paced, from the environment.
+fn shard_moves_from_env() -> crate::cluster::placement::MovePolicy {
+    let parse = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+    };
+    let defaults = crate::cluster::placement::MovePolicy::default();
+    crate::cluster::placement::MovePolicy {
+        // Zero is meaningful: it holds every move.
+        max_concurrent: parse("FELIX_SHARD_MOVES_MAX_CONCURRENT")
+            .map_or(defaults.max_concurrent, |value| value as usize),
+        // Unset or zero is no per-node limit; a limit of zero would only
+        // repeat what the cluster-wide one already says.
+        max_per_node: parse("FELIX_SHARD_MOVES_MAX_PER_NODE")
+            .filter(|value| *value > 0)
+            .map(|value| value as usize),
+        fence_max_lag_records: parse("FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS")
+            .unwrap_or(defaults.fence_max_lag_records),
+        // Zero never gives up.
+        timeout_millis: match parse("FELIX_SHARD_MOVE_TIMEOUT_MS") {
+            Some(0) => None,
+            Some(millis) => Some(millis),
+            None => defaults.timeout_millis,
+        },
     }
 }

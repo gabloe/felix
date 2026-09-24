@@ -120,8 +120,18 @@ impl CaughtUp for ReplicaPositions {
         self.fresh(key)?.offsets.get(node_id).copied()
     }
 
+    fn lag_records(&self, key: &ShardKey, node_id: &str) -> Option<u64> {
+        let report = self.fresh(key)?;
+        let tail = report.leader_offset?;
+        Some(tail.saturating_sub(*report.offsets.get(node_id)?))
+    }
+
     fn reported_generation(&self, key: &ShardKey) -> Option<u64> {
         self.fresh(key).map(|report| report.generation)
+    }
+
+    fn as_of_millis(&self) -> Option<u64> {
+        Some(self.now_millis)
     }
 
     fn is_drained(&self, key: &ShardKey, generation: u64) -> bool {

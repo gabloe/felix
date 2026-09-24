@@ -90,9 +90,7 @@ where
     let reconcile_task = placement::spawn_reconciler(
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
         state.node_liveness.clone(),
-        placement::MovePolicy {
-            max_concurrent: config.max_concurrent_shard_moves,
-        },
+        config.shard_moves,
         Duration::from_millis(state.node_liveness.shard_reconcile_interval_ms),
         leadership,
         Arc::clone(&state.placement_wakes),

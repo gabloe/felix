@@ -245,3 +245,25 @@ fn a_drained_report_is_believed_at_its_generation_while_fresh() {
     let not_drained = at(vec![report("orders", &["broker-b"], 1_000)], 1_000);
     assert!(!not_drained.is_drained(&key("orders"), drained.generation));
 }
+
+/// How far behind a follower is, measured against the tail the leader
+/// reported beside it; nothing without that tail or once the report is
+/// stale.
+#[test]
+fn lag_is_measured_against_the_reported_tail() {
+    let mut with_tail = report("orders", &["broker-b"], 1_000);
+    with_tail.leader_offset = Some(25);
+    let view = at(vec![with_tail.clone()], 1_000);
+    assert_eq!(view.lag_records(&key("orders"), "broker-b"), Some(15));
+    assert_eq!(view.lag_records(&key("orders"), "broker-c"), None);
+    assert_eq!(view.as_of_millis(), Some(1_000));
+
+    let view = at(vec![report("orders", &["broker-b"], 1_000)], 1_000);
+    assert_eq!(view.lag_records(&key("orders"), "broker-b"), None);
+
+    let stale = 1_000 + report_ttl_millis(&liveness()) + 1;
+    assert_eq!(
+        at(vec![with_tail], stale).lag_records(&key("orders"), "broker-b"),
+        None
+    );
+}

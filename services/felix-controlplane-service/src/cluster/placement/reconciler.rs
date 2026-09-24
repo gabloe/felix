@@ -20,6 +20,11 @@ pub const RECONCILE_FAILURES_TOTAL: &str = "felix_shard_reconcile_failures_total
 /// Move steps written, by step.
 pub const SHARD_MOVE_STEPS_TOTAL: &str = "felix_shard_move_steps_total";
 
+/// Moves and follower replacements given up because they did not get close
+/// enough to the leader within the move timeout. Each one gave its slot to
+/// the next move; a steady count means a copy that cannot finish.
+pub const SHARD_MOVES_TIMED_OUT_TOTAL: &str = "felix_shard_moves_timed_out_total";
+
 /// Moves that could not advance in the last pass.
 pub const SHARD_MOVES_WAITING: &str = "felix_shard_moves_waiting";
 
@@ -171,6 +176,16 @@ pub(super) async fn apply_pass(
                     super::metrics::record(times);
                 }
                 metrics::counter!(SHARD_MOVE_STEPS_TOTAL, "step" => step.label()).increment(1);
+                if let super::MoveStep::TimedOut { successor } = step {
+                    metrics::counter!(SHARD_MOVES_TIMED_OUT_TOTAL).increment(1);
+                    tracing::warn!(
+                        kind = %key.kind,
+                        name = %key.stream,
+                        shard = key.shard,
+                        destination = %successor,
+                        "a shard move ran past its timeout and was abandoned",
+                    );
+                }
                 tracing::info!(
                     kind = %key.kind,
                     name = %key.stream,

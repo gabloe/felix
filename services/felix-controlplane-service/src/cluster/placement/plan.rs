@@ -128,8 +128,9 @@ pub fn plan_with(
     // node stages more moves than it needs and the destination ends up over.
     let mut leaders: HashMap<&str, u32> = HashMap::new();
     for assignment in existing {
-        if is_live(&assignment.leader) {
-            *load.entry(assignment.leader.as_str()).or_default() += 1;
+        // Every role, followers too: `max_shards` caps roles.
+        for node in assignment.nodes().filter(|node| is_live(node)) {
+            *load.entry(node.as_str()).or_default() += 1;
         }
         let will_lead = assignment
             .successor
@@ -182,13 +183,21 @@ pub fn plan_with(
         (keys.len() as u32).div_ceil(eligible.len() as u32).max(1)
     };
 
-    let mut moves = Moves {
-        in_flight: existing
-            .iter()
-            .filter(|a| a.successor.is_some() || a.state == ShardState::Draining)
-            .count(),
-        policy,
+    let mut moves = Moves::counting(existing, policy);
+
+    // Slots go to drains first, then to rebalancing, and last to shards whose
+    // previous move timed out; see `start_order`. Planned in that order, and
+    // listed in key order.
+    let class = |key: &ShardKey| {
+        current
+            .get(key)
+            .map_or(0, |existing| start_order(existing, &is_live, &is_draining))
     };
+    keys.sort_by(|a, b| {
+        class(a)
+            .cmp(&class(b))
+            .then_with(|| order(a).cmp(&order(b)))
+    });
 
     let mut shards = Vec::with_capacity(keys.len());
     for key in keys {
@@ -217,6 +226,15 @@ pub fn plan_with(
             );
             shards.push(ShardPlan { key, decision });
             continue;
+        }
+
+        // Replaced below, so its roles are not the ones that will exist.
+        if let Some(previous) = current.get(&key) {
+            for node in previous.nodes() {
+                if let Some(count) = load.get_mut(node.as_str()) {
+                    *count = count.saturating_sub(1);
+                }
+            }
         }
 
         // The leader is gone. Prefer one of its followers -- but only one that
@@ -282,6 +300,7 @@ pub fn plan_with(
         shards.push(ShardPlan { key, decision });
     }
 
+    shards.sort_by(|a, b| order(&a.key).cmp(&order(&b.key)));
     Plan { shards }
 }
 
@@ -299,6 +318,34 @@ pub fn assignment_for(key: &ShardKey, leader: &str, replicas: Vec<String>) -> Sh
         successor: None,
         joining: None,
         move_started_at_millis: None,
+    }
+}
+
+/// Which shards get a move slot first. Only matters for shards that may
+/// start a move; one already moving holds its slot whatever its class.
+///
+/// A draining node is waiting to leave, where an imbalance only costs
+/// evenness, so drains go before rebalancing. A shard whose last move timed
+/// out goes behind both, or the one move that keeps failing takes the slot
+/// every time.
+fn start_order(
+    existing: &ShardAssignment,
+    is_live: &dyn Fn(&str) -> bool,
+    is_draining: &dyn Fn(&str) -> bool,
+) -> u8 {
+    let moving = existing.successor.is_some()
+        || existing.joining.is_some()
+        || existing.state == ShardState::Draining;
+    if moving {
+        return 0;
+    }
+    let draining =
+        !is_live(&existing.leader) || existing.replicas.iter().any(|replica| is_draining(replica));
+    let class = if draining { 0 } else { 1 };
+    if existing.move_started_at_millis.is_some() {
+        class + 2
+    } else {
+        class
     }
 }
 
