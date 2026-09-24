@@ -60,7 +60,7 @@ async fn publish_errors(
 fn code_of(message: &Message) -> (Option<ErrorCode>, Option<RetryClass>) {
     match message {
         Message::PublishError { code, retry, .. } => (code.clone(), *retry),
-        other => panic!("expected publish_error, got {other:?}"),
+        _ => panic!("expected publish_error"),
     }
 }
 
@@ -69,7 +69,7 @@ async fn a_negotiated_client_is_told_forbidden() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", vec![]);
     let errors = publish_errors(broker, &auth, Some(felix_wire::FEATURE_ERROR_CODES)).await?;
-    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors.len(), 1);
     assert_eq!(
         code_of(&errors[0]),
         (Some(ErrorCode::Forbidden), Some(RetryClass::Fatal))
@@ -82,7 +82,7 @@ async fn a_negotiated_client_is_told_not_found() -> Result<()> {
     let broker = Arc::new(Broker::new(EphemeralCache::new().into()));
     let auth = auth_fixture("t1", default_perms());
     let errors = publish_errors(broker, &auth, Some(felix_wire::FEATURE_ERROR_CODES)).await?;
-    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors.len(), 1);
     assert_eq!(
         code_of(&errors[0]),
         (Some(ErrorCode::NotFound), Some(RetryClass::RetryAfter))
@@ -90,7 +90,7 @@ async fn a_negotiated_client_is_told_not_found() -> Result<()> {
     let Message::PublishError { message, .. } = &errors[0] else {
         unreachable!()
     };
-    assert!(message.starts_with("stream not found"), "{message}");
+    assert!(message.starts_with("stream not found"));
     Ok(())
 }
 
