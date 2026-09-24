@@ -677,7 +677,7 @@ where
                     // see `replication::reporter`.
                     config.membership.as_ref().map(|membership| {
                         let (reporter, _task) = replication::reporter::Reporter::spawn(
-                            replication::driver::ReportTo {
+                            replication::reporter::ReportTo {
                                 client: membership_client.clone(),
                                 base_url: base_url.clone(),
                                 node_id: membership.node_id.clone(),

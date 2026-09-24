@@ -17,7 +17,12 @@
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::driver::{ReportTo, ShardReport, send_reports};
+use felix_common::membership::{
+    ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
+};
+use felix_router::ShardKey;
+
+use super::{FollowerCursor, caught_up};
 
 /// Most reports in one request.
 ///
@@ -109,6 +114,123 @@ async fn flush_loop(to: ReportTo, mut rx: mpsc::Receiver<Pending>, shutdown: Can
     rx.close();
     while let Ok(pending) = rx.try_recv() {
         let _ = pending.landed.send(false);
+    }
+}
+
+/// Where a leader sends its replica reports.
+///
+/// Optional: a broker with no control plane has nobody to tell, and the reports
+/// are only ever read by one.
+pub struct ReportTo {
+    pub client: reqwest::Client,
+    pub base_url: String,
+    pub node_id: String,
+    /// Held, not copied: this reports for the life of the process, across
+    /// however many access tokens that spans.
+    pub token: Option<crate::cluster::credential::NodeCredential>,
+    pub incarnation: u64,
+}
+
+/// One shard's replicas, as this leader currently sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardReport {
+    pub key: ShardKey,
+    pub generation: u64,
+    pub caught_up: Vec<String>,
+    /// How far each follower had got. Sent as well as `caught_up` because
+    /// "caught up" is only true of the tail it was measured against, and a
+    /// leader that reports and then writes more before dying leaves a report
+    /// that says every replica was level without saying level with what.
+    pub offsets: Vec<(String, u64)>,
+    /// This broker has stopped serving the shard and its log will not grow,
+    /// so `caught_up` is measured against the final tail.
+    pub drained: bool,
+}
+
+/// Who could take this shard over, as of `tail`.
+pub(super) fn shard_report(
+    key: &ShardKey,
+    generation: u64,
+    tail: u64,
+    followers: &[FollowerCursor],
+    drained: bool,
+) -> ShardReport {
+    ShardReport {
+        key: key.clone(),
+        generation,
+        caught_up: caught_up(tail, followers),
+        offsets: followers
+            .iter()
+            .filter(|follower| follower.halted.is_none())
+            .map(|follower| (follower.node_id.clone(), follower.next_offset))
+            .collect(),
+        drained,
+    }
+}
+
+/// Tell the control plane which replicas could take each shard over, and say
+/// whether it took the report.
+///
+/// Not retried here: the next pass sends a fresher one, and a queue of stale
+/// reports is worse than none, since promotion is gated on *recent* positions.
+/// The answer instead gates the quorum mark, so "could not tell" reads as
+/// false — see the caller.
+async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
+    if reports.is_empty() {
+        return true;
+    }
+    // The shared type, not a `json!` literal: the control plane parses this
+    // same definition, so a field renamed on one side stops compiling instead
+    // of quietly arriving as a missing one.
+    let body = ReplicaStatusRequest {
+        incarnation: to.incarnation,
+        shards: reports
+            .iter()
+            .map(|report| ShardReplicaStatus {
+                tenant_id: report.key.tenant_id.clone(),
+                namespace: report.key.namespace.clone(),
+                stream: report.key.stream.clone(),
+                shard: report.key.shard,
+                // Without the kind the control plane files a cache's report
+                // under the stream of the same name, so placement finds no
+                // caught-up replica for the cache and its shard is never
+                // promoted -- the contents are unreachable after a failover.
+                kind: match report.key.kind {
+                    felix_router::ShardKind::Cache => WireShardKind::Cache,
+                    felix_router::ShardKind::Stream => WireShardKind::Stream,
+                },
+                generation: report.generation,
+                caught_up: report.caught_up.to_vec(),
+                drained: report.drained,
+                replica_offsets: report
+                    .offsets
+                    .iter()
+                    .map(|(node_id, durable_offset)| ReplicaOffset {
+                        node_id: node_id.clone(),
+                        durable_offset: *durable_offset,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    let url = format!("{}/v1/nodes/{}/replica-status", to.base_url, to.node_id);
+    let mut request = to.client.post(&url).json(&body);
+    if let Some(token) = &to.token {
+        request = request.bearer_auth(token.bearer());
+    }
+    match request.send().await {
+        Ok(response) if response.status().is_success() => true,
+        Ok(response) => {
+            tracing::warn!(
+                status = %response.status(),
+                "the control plane refused a replica report",
+            );
+            false
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "could not send a replica report");
+            false
+        }
     }
 }
 
