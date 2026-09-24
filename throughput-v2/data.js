@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790292106824,
+  "lastUpdate": 1790294256315,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15236,6 +15236,58 @@ window.BENCHMARK_DATA = {
             "range": "46877.29",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 938441.25\nmean: 917273.69\nstdev: 46877.29\ncv: 5.11%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68a959476c3165130060a6c3d43e6424c626ac5d",
+          "message": "A stopping broker hands its shards to other brokers (#684)\n\n* fix(placement): move a draining broker's leaders before its followers\n\nBoth used to share the first move slot, in key order, so with the default\nlimit of one a follower replacement (a full copy) could hold the slot while\nthe draining broker's leaderships waited. Clients feel the leader, and a\nbroker stopping for a restart waits only until it leads nothing.\n\nSpec-Unaffected: only the order in which shards are offered a move slot changes; the pacing model's limits and the move protocol are the same.\n\n* feat(broker): hand shards to other brokers before shutting down\n\nOn SIGTERM a clustered broker now turns readiness off, asks the control\nplane to drain it and keeps serving until it leads no shard, for up to\nFELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS (default 30 s, 0 turns it off), and only\nthen closes its listener and drains as before. Each shard is moved rather\nthan failed over, so a rolling restart refuses no publish and subscriptions\nfollow the shard.\n\nThe handoff is skipped when the broker leads nothing, when no other broker\nis eligible, and when the control plane cannot be reached within 5 s; a\nsecond signal ends the wait. Shards still led at the timeout fail over as\nbefore. The drain does not outlive the process: registering again sets the\nnode live.\n\nThe cluster harness can now SIGTERM a broker, wait for it to exit and start\nit again under the same identity. The Helm chart passes the timeout and\ncounts it in the derived grace period.\n\n* docs: a stopping broker hands its shards off\n\nThe graceful-shutdown page gains the handoff step, a diagram, its metrics\nand the grace-period budget that now includes it; the env reference gains\nFELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS; the scaling page and the status row stop\ntelling operators to drain before a restart; the rebalancing plan records\nthe handoff and the leaders-first slot order.",
+          "timestamp": "2026-09-24T16:54:38-07:00",
+          "tree_id": "1003ee864cf438b291a156a5518a588aa325c6f6",
+          "url": "https://github.com/gabloe/felix/commit/68a959476c3165130060a6c3d43e6424c626ac5d"
+        },
+        "date": 1790294255669,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 399917.2,
+            "range": "15945.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 399917.20\nmean: 402051.17\nstdev: 15945.40\ncv: 3.97%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 399917.2,
+            "range": "15945.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 399917.20\nmean: 402051.17\nstdev: 15945.40\ncv: 3.97%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94473.18,
+            "range": "544.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94473.18\nmean: 94310.85\nstdev: 544.90\ncv: 0.58%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 944731.79,
+            "range": "5448.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 944731.79\nmean: 943108.50\nstdev: 5448.97\ncv: 0.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
