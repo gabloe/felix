@@ -7,7 +7,7 @@ use crate::model::{
     ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
     ShardKind, ShardState, ShardValidationError,
 };
-use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
+use crate::store::{AssignmentWrite, ChangeSet, Snapshot, StoreError, StoreResult};
 
 #[derive(Debug, Clone, FromRow)]
 struct DbShardAssignment {
@@ -53,6 +53,27 @@ pub(super) async fn put_shard_assignment(
     store: &PostgresStore,
     assignment: ShardAssignment,
 ) -> StoreResult<ShardAssignment> {
+    match write_shard_assignment(store, assignment, None).await? {
+        AssignmentWrite::Written(stored) => Ok(stored),
+        AssignmentWrite::Stale { .. } => unreachable!("an unconditional write is never stale"),
+    }
+}
+
+pub(super) async fn put_shard_assignment_if(
+    store: &PostgresStore,
+    assignment: ShardAssignment,
+    expected_generation: Option<u64>,
+) -> StoreResult<AssignmentWrite> {
+    write_shard_assignment(store, assignment, Some(expected_generation)).await
+}
+
+/// `expected`: `None` writes unconditionally, `Some(generation)` only over
+/// that generation (`Some(None)`: only where there is no assignment).
+async fn write_shard_assignment(
+    store: &PostgresStore,
+    assignment: ShardAssignment,
+    expected: Option<Option<u64>>,
+) -> StoreResult<AssignmentWrite> {
     assignment.validate().map_err(invalid_shard)?;
     let mut tx = store.pool.begin().await?;
 
@@ -110,6 +131,15 @@ pub(super) async fn put_shard_assignment(
     .map(shard_from_db)
     .transpose()?;
 
+    // The lock makes this check-then-write safe for a row that exists. One
+    // that does not exist has no row to lock; the insert below covers that.
+    let current = existing.as_ref().map(|a| a.generation);
+    if let Some(expected) = expected
+        && expected != current
+    {
+        return Ok(AssignmentWrite::Stale { current });
+    }
+
     let (op, generation) = match &existing {
         Some(existing) => {
             if !existing.state.can_transition_to(assignment.state) {
@@ -133,7 +163,13 @@ pub(super) async fn put_shard_assignment(
         ..assignment
     };
 
-    sqlx::query(
+    // A write that expects no assignment must not replace one another writer
+    // inserted since the read above.
+    let insert = if expected == Some(None) {
+        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO NOTHING"#
+    } else {
         r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE SET
@@ -142,26 +178,39 @@ pub(super) async fn put_shard_assignment(
                  generation = EXCLUDED.generation,
                  state = EXCLUDED.state,
                  successor = EXCLUDED.successor,
-                 updated_at = now()"#,
-    )
-    .bind(&stored.key.tenant_id)
-    .bind(&stored.key.namespace)
-    .bind(&stored.key.stream)
-    .bind(stored.key.shard as i32)
-    .bind(stored.key.kind.as_str())
-    .bind(&stored.leader)
-    .bind(serde_json::to_value(&stored.replicas)?)
-    .bind(stored.generation as i64)
-    .bind(shard_state_to_str(stored.state))
-    .bind(&stored.successor)
-    .execute(&mut *tx)
-    .await?;
+                 updated_at = now()"#
+    };
+    let written = sqlx::query(insert)
+        .bind(&stored.key.tenant_id)
+        .bind(&stored.key.namespace)
+        .bind(&stored.key.stream)
+        .bind(stored.key.shard as i32)
+        .bind(stored.key.kind.as_str())
+        .bind(&stored.leader)
+        .bind(serde_json::to_value(&stored.replicas)?)
+        .bind(stored.generation as i64)
+        .bind(shard_state_to_str(stored.state))
+        .bind(&stored.successor)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if written == 0 {
+        drop(tx);
+        let current = get_shard_assignment(store, &stored.key)
+            .await
+            .map(|a| Some(a.generation))
+            .or_else(|err| match err {
+                StoreError::NotFound(_) => Ok(None),
+                err => Err(err),
+            })?;
+        return Ok(AssignmentWrite::Stale { current });
+    }
 
     record_shard_change(&mut tx, op, &stored.key, Some(&stored)).await?;
     tx.commit().await?;
     metrics::counter!("felix_shard_assignment_changes_total", "op" => shard_op_to_str(op))
         .increment(1);
-    Ok(stored)
+    Ok(AssignmentWrite::Written(stored))
 }
 
 pub(super) async fn get_shard_assignment(

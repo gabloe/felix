@@ -131,6 +131,12 @@ Metrics on the control plane:
 | --- | --- |
 | `felix_shard_move_steps_total{step}` | steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
+| `felix_shard_assignment_write_conflicts_total` | steps not written because another control-plane instance changed the shard after this pass read it |
+
+Every step is written only if the shard is still at the generation the pass
+planned from, so two control-plane instances running placement at once
+cannot undo each other's steps. A conflict is skipped and re-planned on the
+next pass; an occasional one is normal with several instances.
 
 `felix_shard_moves_waiting` sitting above zero for longer than a couple of
 placement intervals means a successor is not catching up (check the leader's

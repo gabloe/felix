@@ -36,6 +36,58 @@ async fn a_heartbeat_command_publishes_no_change() {
     );
 }
 
+/// A conditional assignment write that finds another generation answers
+/// stale through the byte layer and changes nothing.
+#[tokio::test]
+async fn a_stale_conditional_assignment_write_is_answered_not_applied() {
+    let machine = machine();
+    for command in [
+        MetaCommand::CreateTenant {
+            tenant: tenant("t1"),
+        },
+        MetaCommand::CreateNamespace {
+            namespace: namespace("t1", "ns"),
+        },
+        MetaCommand::CreateStream {
+            stream: stream("t1", "ns", "orders"),
+        },
+        MetaCommand::RegisterNode {
+            node: node("broker-1", 7_001),
+        },
+        MetaCommand::RegisterNode {
+            node: node("broker-2", 7_002),
+        },
+    ] {
+        machine.dispatch(command).await.expect("setup");
+    }
+    let first = shard_assignment("t1", "ns", "orders", "broker-1");
+    machine
+        .dispatch(MetaCommand::PutShardAssignmentIf {
+            assignment: first.clone(),
+            expected_generation: None,
+        })
+        .await
+        .expect("create");
+
+    let late = MetaCommand::PutShardAssignmentIf {
+        assignment: shard_assignment("t1", "ns", "orders", "broker-2"),
+        expected_generation: None,
+    };
+    let response = crate::raft::AppStateMachine::apply(&machine, &encode_command(&late)).await;
+    assert!(matches!(
+        decode_result(&response).expect("decodes"),
+        Ok(MetaResponse::StaleAssignment {
+            current_generation: Some(0)
+        })
+    ));
+    let stored = machine
+        .store()
+        .get_shard_assignment(&first.key)
+        .await
+        .expect("get");
+    assert_eq!(stored.leader, "broker-1");
+}
+
 /// A command from a newer build is refused loudly and identically on every
 /// replica — never skipped, which would fork state.
 #[tokio::test]

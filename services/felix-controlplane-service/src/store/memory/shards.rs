@@ -4,12 +4,33 @@ use crate::model::{
     CacheKey, ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp,
     ShardKey, ShardKind, StreamKey,
 };
-use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
+use crate::store::{AssignmentWrite, ChangeSet, Snapshot, StoreError, StoreResult};
 
 pub(super) async fn put_shard_assignment(
     store: &InMemoryStore,
     assignment: ShardAssignment,
 ) -> StoreResult<ShardAssignment> {
+    match write_shard_assignment(store, assignment, None).await? {
+        AssignmentWrite::Written(stored) => Ok(stored),
+        AssignmentWrite::Stale { .. } => unreachable!("an unconditional write is never stale"),
+    }
+}
+
+pub(super) async fn put_shard_assignment_if(
+    store: &InMemoryStore,
+    assignment: ShardAssignment,
+    expected_generation: Option<u64>,
+) -> StoreResult<AssignmentWrite> {
+    write_shard_assignment(store, assignment, Some(expected_generation)).await
+}
+
+/// `expected`: `None` writes unconditionally, `Some(generation)` only over
+/// that generation (`Some(None)`: only where there is no assignment).
+async fn write_shard_assignment(
+    store: &InMemoryStore,
+    assignment: ShardAssignment,
+    expected: Option<Option<u64>>,
+) -> StoreResult<AssignmentWrite> {
     assignment.validate().map_err(invalid_shard)?;
 
     // The stream or cache bounds the shard number, and it has to exist at
@@ -54,6 +75,12 @@ pub(super) async fn put_shard_assignment(
     }
 
     let mut state = store.shards.write().await;
+    let current = state.records.get(&assignment.key).map(|a| a.generation);
+    if let Some(expected) = expected
+        && expected != current
+    {
+        return Ok(AssignmentWrite::Stale { current });
+    }
     let (op, generation) = match state.records.get(&assignment.key) {
         Some(existing) => {
             if !existing.state.can_transition_to(assignment.state) {
@@ -86,7 +113,7 @@ pub(super) async fn put_shard_assignment(
         ShardAssignmentChangeOp::Unassigned => "unassigned",
     })
     .increment(1);
-    Ok(stored)
+    Ok(AssignmentWrite::Written(stored))
 }
 
 pub(super) async fn get_shard_assignment(

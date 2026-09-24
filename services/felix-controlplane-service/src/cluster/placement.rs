@@ -38,8 +38,9 @@ pub use decision::{Blocked, Decision, MoveStep, Unplaceable};
 pub use moves::{DEFAULT_MAX_CONCURRENT_MOVES, MovePolicy};
 pub use plan::{Plan, ShardPlan, assignment_for, plan, plan_with};
 pub use reconciler::{
-    RECONCILE_FAILURES_TOTAL, ReconcileOutcome, SHARD_MOVE_STEPS_TOTAL, SHARD_MOVES_WAITING,
-    SHARDS_PLACED_TOTAL, SHARDS_UNPLACEABLE, reconcile_once, spawn_reconciler,
+    RECONCILE_FAILURES_TOTAL, ReconcileOutcome, SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL,
+    SHARD_MOVE_STEPS_TOTAL, SHARD_MOVES_WAITING, SHARDS_PLACED_TOTAL, SHARDS_UNPLACEABLE,
+    reconcile_once, spawn_reconciler,
 };
 pub use replica_positions::ReplicaPositions;
 

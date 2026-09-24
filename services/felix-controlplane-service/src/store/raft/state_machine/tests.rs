@@ -102,6 +102,28 @@ fn node(id: &str, port: u16) -> Node {
 /// Deterministic key material: the fixture stands where propose-time
 /// generation stands in production, which is the point — randomness enters
 /// through the command, never inside apply.
+fn shard_assignment(
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    leader: &str,
+) -> crate::model::ShardAssignment {
+    crate::model::ShardAssignment {
+        key: crate::model::ShardKey {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            shard: 0,
+            kind: crate::model::ShardKind::Stream,
+        },
+        leader: leader.to_string(),
+        replicas: Vec::new(),
+        generation: 0,
+        state: crate::model::ShardState::Assigning,
+        successor: None,
+    }
+}
+
 fn fixed_keys(seed: u8) -> crate::auth::felix_token::TenantSigningKeys {
     let private = [seed; 32];
     let signing = ed25519_dalek::SigningKey::from_bytes(&private);
@@ -157,6 +179,18 @@ fn script() -> Vec<MetaCommand> {
         node_id: "broker-1".to_string(),
         lifecycle: NodeLifecycle::Draining,
     });
+    // Conditional assignment writes, one of them stale: whether it lands is
+    // decided by prior state alone, so every replica decides the same.
+    for (leader, expected_generation) in [
+        ("broker-0", None),
+        ("broker-2", None),
+        ("broker-2", Some(0)),
+    ] {
+        commands.push(MetaCommand::PutShardAssignmentIf {
+            assignment: shard_assignment("t-a", "ns-1", "orders", leader),
+            expected_generation,
+        });
+    }
     commands.push(MetaCommand::UpsertIdpIssuer {
         tenant_id: "t-a".to_string(),
         issuer: IdpIssuerConfig {

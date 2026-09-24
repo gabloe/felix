@@ -68,6 +68,10 @@ expectations=(
   "FelixShard pass"
   "FelixShardHandoff pass"
   "FelixShardHandoffNoWait violates AtMostOneServing"
+  "FelixShardStalePlannerCas pass"
+  "FelixShardStalePlanner violates AtMostOneServing"
+  "FelixShardStalePromotionCas pass"
+  "FelixShardStalePromotion violates AtMostOneServing"
 )
 
 fetch_tools
