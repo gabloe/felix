@@ -1,7 +1,6 @@
-use super::keys::expected_key_algorithm;
-use super::*;
-use crate::auth::idp_registry::ClaimMappings;
-use crate::auth::idp_registry::IdpIssuerConfig;
+use std::net::SocketAddr;
+use std::time::Duration;
+
 use axum::{Json, Router, routing::get};
 use base64::Engine;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
@@ -9,10 +8,13 @@ use ed25519_dalek::pkcs8::EncodePrivateKey;
 use jsonwebtoken::jwk::KeyAlgorithm;
 use jsonwebtoken::{EncodingKey, Header};
 use serde_json::{Value, json};
-use std::net::SocketAddr;
-use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+
+use super::keys::expected_key_algorithm;
+use super::*;
+use crate::auth::idp_registry::ClaimMappings;
+use crate::auth::idp_registry::IdpIssuerConfig;
 
 const TEST_EC_PRIVATE_KEY_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgkcZLhh5bmc6yfv8ZrDxWybm+E+aoz2euIJD3fM73VSyhRANCAAQRkD6ZJEwqBms4JDddpbTjl4Ro49h8WRoNVnEcR/Tp6LhwGGZ8Ku1Gw9spY/BCsiW+5AqIqVlNVgGgJFMRbR1V";
 const TEST_EC_JWK_X: &str = "EZA-mSRMKgZrOCQ3XaW045eEaOPYfFkaDVZxHEf06eg";

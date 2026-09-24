@@ -2,6 +2,13 @@
 //!
 //! Implements the initial tenant bootstrap flow that seeds auth configuration,
 //! RBAC policies, and signing keys for a newly created tenant.
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+use casbin::function_map::key_match2;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
 use crate::api::AppState;
 use crate::api::error::{
     ApiError, api_conflict, api_internal, api_internal_message, api_not_enabled, api_unauthorized,
@@ -10,12 +17,6 @@ use crate::api::error::{
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::model::Tenant;
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
-use casbin::function_map::key_match2;
-use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 #[derive(Debug, Deserialize, Serialize, ToSchema, Clone)]
 pub struct BootstrapInitializeRequest {

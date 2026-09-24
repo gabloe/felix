@@ -2,11 +2,13 @@
 //! principal holds, then expand the implied hierarchy (tenant admin implies
 //! namespace/stream/cache rights). Expansion must stay conservative — it only
 //! ever adds what the hierarchy implies, never more.
+use std::collections::HashSet;
+
+use casbin::{Enforcer, RbacApi};
+
 use crate::auth::rbac::authorize::{
     ACTION_CACHE_READ, ACTION_CACHE_WRITE, ACTION_NS_MANAGE, ACTION_TENANT_MANAGE, canonical_action,
 };
-use casbin::{Enforcer, RbacApi};
-use std::collections::HashSet;
 
 /// Flatten a principal's permissions in a domain into deduplicated
 /// `action:object` strings, with the implied hierarchy expanded — the shape

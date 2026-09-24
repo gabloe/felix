@@ -4,14 +4,15 @@
 //! clients can verify Felix tokens. Only Ed25519 public keys are exported —
 //! private material never crosses this interface — and both current and
 //! previous keys are served so verification keeps working through rotation.
-use crate::api::AppState;
-use crate::api::error::{ApiError, api_internal, api_not_found};
 use axum::Json;
 use axum::extract::{Path, State};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 use utoipa::ToSchema;
+
+use crate::api::AppState;
+use crate::api::error::{ApiError, api_internal, api_not_found};
 
 /// Serve the JWKS for a tenant's current and previous signing keys.
 ///

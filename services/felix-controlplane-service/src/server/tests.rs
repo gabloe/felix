@@ -1,9 +1,10 @@
+use serial_test::serial;
+
 use super::*;
 use crate::config::{
     BootstrapConfig, DEFAULT_READINESS_CACHE_TTL_MS, DEFAULT_READINESS_TIMEOUT_MS,
     NodeLivenessConfig, PostgresConfig, StorageBackend,
 };
-use serial_test::serial;
 
 /// Memory-backed, bootstrap off, every port ephemeral.
 fn config() -> ControlPlaneConfig {

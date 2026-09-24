@@ -1,5 +1,8 @@
 //! Operator-facing node listing and detail.
-use crate::common::read_json;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
@@ -15,10 +18,9 @@ use felix_controlplane_service::store::memory::InMemoryStore;
 use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig,
 };
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
 use tower::ServiceExt;
+
+use crate::common::read_json;
 
 const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
     heartbeat_interval_ms: 5_000,

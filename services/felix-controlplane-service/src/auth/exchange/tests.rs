@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use axum::http::HeaderValue;
+use axum::http::header::AUTHORIZATION;
+use base64::Engine;
+use serde_json::json;
+
 use super::*;
 use crate::api::AppState;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::config::{DEFAULT_CHANGE_RETENTION_MAX_ROWS, DEFAULT_CHANGES_LIMIT};
 use crate::store::memory::InMemoryStore;
 use crate::store::{AuthStore, ControlPlaneStore, StoreConfig};
-use anyhow::Result;
-use axum::http::HeaderValue;
-use axum::http::header::AUTHORIZATION;
-use base64::Engine;
-use serde_json::json;
-use std::sync::Arc;
 
 #[test]
 fn filters_by_requested_actions() {

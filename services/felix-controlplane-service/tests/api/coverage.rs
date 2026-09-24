@@ -1,13 +1,15 @@
-use crate::common::read_json;
-use crate::common::{Credentials, json_request_as, seed_credentials};
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use felix_controlplane_service::api::types::FeatureFlags;
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::model::{RetentionPolicy, StreamKind};
 use felix_controlplane_service::store::{ControlPlaneStore, StoreConfig};
-use std::sync::Arc;
 use tower::ServiceExt;
+
+use crate::common::read_json;
+use crate::common::{Credentials, json_request_as, seed_credentials};
 
 struct Harness {
     app: axum::routing::RouterIntoService<Body, ()>,

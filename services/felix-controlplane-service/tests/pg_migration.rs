@@ -24,9 +24,9 @@ use felix_controlplane_service::store::raft::state_machine::MetadataStateMachine
 use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig,
 };
+use testcontainers::clients::Cli;
 
 mod common;
-use testcontainers::clients::Cli;
 
 fn docker_available() -> bool {
     std::process::Command::new("docker")

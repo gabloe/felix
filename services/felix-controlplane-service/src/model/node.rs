@@ -122,6 +122,15 @@ impl Default for NodeCapacity {
     }
 }
 
+impl NodeCapacity {
+    pub fn validate(&self) -> Result<(), NodeValidationError> {
+        if self.max_shards == Some(0) {
+            return Err(NodeValidationError::ZeroMaxShards);
+        }
+        Ok(())
+    }
+}
+
 fn default_weight() -> u32 {
     1
 }
@@ -153,6 +162,20 @@ pub struct NodeSpec {
     pub labels: BTreeMap<String, String>,
     #[serde(default)]
     pub capacity: NodeCapacity,
+}
+
+impl NodeSpec {
+    pub fn validate(&self) -> Result<(), NodeValidationError> {
+        if self.region.trim().is_empty() {
+            return Err(NodeValidationError::EmptyRegion);
+        }
+        validate_advertise_addr(&self.advertise_addr)?;
+        if let Some(client_addr) = &self.client_addr {
+            validate_client_addr(client_addr)?;
+        }
+        validate_labels(&self.labels)?;
+        self.capacity.validate()
+    }
 }
 
 /// What the cluster has observed about a node.
@@ -192,29 +215,6 @@ impl Node {
     pub fn validate(&self) -> Result<(), NodeValidationError> {
         validate_node_id(&self.node_id)?;
         self.spec.validate()
-    }
-}
-
-impl NodeSpec {
-    pub fn validate(&self) -> Result<(), NodeValidationError> {
-        if self.region.trim().is_empty() {
-            return Err(NodeValidationError::EmptyRegion);
-        }
-        validate_advertise_addr(&self.advertise_addr)?;
-        if let Some(client_addr) = &self.client_addr {
-            validate_client_addr(client_addr)?;
-        }
-        validate_labels(&self.labels)?;
-        self.capacity.validate()
-    }
-}
-
-impl NodeCapacity {
-    pub fn validate(&self) -> Result<(), NodeValidationError> {
-        if self.max_shards == Some(0) {
-            return Err(NodeValidationError::ZeroMaxShards);
-        }
-        Ok(())
     }
 }
 

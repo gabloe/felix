@@ -1,13 +1,14 @@
 //! Per-tenant auth: IdP issuers, RBAC rules, signing keys and bootstrap.
+use anyhow::anyhow;
+use jsonwebtoken::Algorithm;
+use serde_json::Value;
+use sqlx::FromRow;
+
 use super::PostgresStore;
 use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
 use crate::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::store::{AuthStore, StoreError, StoreResult};
-use anyhow::anyhow;
-use jsonwebtoken::Algorithm;
-use serde_json::Value;
-use sqlx::FromRow;
 
 #[derive(Debug, Clone, FromRow)]
 struct DbIdpIssuer {

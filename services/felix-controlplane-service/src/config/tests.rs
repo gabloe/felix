@@ -1,8 +1,10 @@
-use super::*;
-use serial_test::serial;
 use std::env;
 use std::fs;
+
+use serial_test::serial;
 use tempfile::TempDir;
+
+use super::*;
 
 /// Names the pg-test harness uses to find its database.
 ///

@@ -1,6 +1,8 @@
 //! HTTP behaviour of the broker heartbeat endpoint.
-use crate::common::json_request;
-use crate::common::read_json;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use felix_controlplane_service::api::types::FeatureFlags;
@@ -9,10 +11,10 @@ use felix_controlplane_service::config::NodeLivenessConfig;
 use felix_controlplane_service::model::{Node, NodeCapacity, NodeLifecycle, NodeSpec, NodeStatus};
 use felix_controlplane_service::store::memory::InMemoryStore;
 use felix_controlplane_service::store::{AuthStore, ControlPlaneStore, StoreConfig};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
 use tower::ServiceExt;
+
+use crate::common::json_request;
+use crate::common::read_json;
 
 const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {
     heartbeat_interval_ms: 2_000,

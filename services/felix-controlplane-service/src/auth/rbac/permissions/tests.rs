@@ -1,7 +1,8 @@
+use std::collections::HashSet;
+
 use super::*;
 use crate::auth::rbac::enforcer::build_enforcer;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
-use std::collections::HashSet;
 
 #[tokio::test]
 async fn ns_manage_implies_stream_and_cache() {

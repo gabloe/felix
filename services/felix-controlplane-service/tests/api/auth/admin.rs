@@ -1,6 +1,6 @@
-use crate::common::json_request;
-use crate::common::read_json;
-use crate::common::{json_request_as, seed_credentials};
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
@@ -13,9 +13,11 @@ use felix_controlplane_service::auth::rbac::policy_store::{GroupingRule, PolicyR
 use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, StoreConfig, memory::InMemoryStore,
 };
-use std::sync::Arc;
-use std::time::Duration;
 use tower::ServiceExt;
+
+use crate::common::json_request;
+use crate::common::read_json;
+use crate::common::{json_request_as, seed_credentials};
 
 fn build_state(store: Arc<InMemoryStore>) -> AppState {
     let state_store: Arc<dyn ControlPlaneAuthStore + Send + Sync> = store;

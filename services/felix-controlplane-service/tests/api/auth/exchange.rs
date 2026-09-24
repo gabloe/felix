@@ -14,7 +14,9 @@
 //! - Async ordering is controlled by awaiting server bind before requests.
 //!
 //! Run with `cargo test -p felix-controlplane-service auth_exchange` to execute these tests.
-use crate::common::read_json;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::Engine;
@@ -33,9 +35,9 @@ use felix_controlplane_service::store::{
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde_json::json;
-use std::net::SocketAddr;
-use std::sync::Arc;
 use tower::ServiceExt;
+
+use crate::common::read_json;
 
 // RSA private key for the upstream IdP used in tests.
 // This is a test-only fixture and must never be used for Felix-issued tokens.

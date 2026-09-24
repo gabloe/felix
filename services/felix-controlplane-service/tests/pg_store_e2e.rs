@@ -25,10 +25,12 @@
 
 mod common;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::read_json;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_controlplane_service::api;
 use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
@@ -47,12 +49,12 @@ use sqlx::AssertSqlSafe;
 use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
-use std::sync::Arc;
-use std::time::Duration;
 use testcontainers::clients::Cli;
 use testcontainers::core::Container;
 use testcontainers_modules::postgres::Postgres;
 use tower::ServiceExt;
+
+use common::read_json;
 
 fn docker_available() -> bool {
     // Detect docker so we can skip tests instead of failing in CI.

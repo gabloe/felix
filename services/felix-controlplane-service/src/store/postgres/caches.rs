@@ -1,10 +1,11 @@
 //! Caches and their change log.
+use serde_json::Value;
+use sqlx::FromRow;
+
 use super::codec::{DbCache, consistency_to_str, parse_consistency};
 use super::{PostgresStore, is_unique_violation};
 use crate::model::{Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest};
 use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
-use serde_json::Value;
-use sqlx::FromRow;
 
 /// Row shape for the `cache_changes` table.
 #[derive(Debug, Clone, FromRow)]

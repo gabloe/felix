@@ -1,5 +1,7 @@
 mod database;
 
+use jsonwebtoken::Algorithm;
+
 use super::auth::{algorithm_to_str, decode_key, parse_algorithm};
 use super::codec::{
     DbStream, consistency_to_str, delivery_to_str, parse_consistency, parse_delivery,
@@ -7,7 +9,6 @@ use super::codec::{
 };
 use super::*;
 use crate::model::StreamKind;
-use jsonwebtoken::Algorithm;
 
 #[test]
 fn unique_violation_detects_only_db_codes() {

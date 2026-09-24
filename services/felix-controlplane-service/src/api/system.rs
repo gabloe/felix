@@ -1,11 +1,12 @@
 //! System metadata and health/liveness/readiness endpoints. Probes must stay
 //! fast and side-effect free; see the per-endpoint docs for why liveness and
 //! readiness deliberately answer different questions.
+use axum::Json;
+use axum::extract::State;
+
 use crate::api::AppState;
 use crate::api::error::ApiError;
 use crate::api::types::{HealthStatus, SystemInfo};
-use axum::Json;
-use axum::extract::State;
 
 #[utoipa::path(
     get,

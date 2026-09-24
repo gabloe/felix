@@ -10,11 +10,12 @@
 //! cache lookup, and is not a secret. Private material must never be
 //! serialized or logged outside the control-plane store; only public keys
 //! cross the boundary, via JWKS.
-use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
 use anyhow::Result;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use jsonwebtoken::Algorithm;
 use rand::Rng;
+
+use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
 
 /// Generate a fresh Ed25519 key set for a tenant: one current key, no
 /// previous keys. Call during provisioning or rotation and persist the result.

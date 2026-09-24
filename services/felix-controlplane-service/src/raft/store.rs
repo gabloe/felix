@@ -26,14 +26,13 @@ use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
 use anyhow::{Context, Result};
 use openraft::storage::{
     LogFlushed, LogState, RaftLogStorage, RaftSnapshotBuilder, RaftStateMachine,
 };
 use openraft::{AnyError, ErrorSubject, ErrorVerb, RaftLogReader, StorageIOError};
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+use tokio::sync::Mutex;
 
 use super::AppStateMachine;
 use super::types::{
@@ -331,43 +330,6 @@ impl StateMachineStore {
     }
 }
 
-pub(super) struct SnapshotBuilder {
-    inner: Arc<SmInner>,
-}
-
-impl RaftSnapshotBuilder<TypeConfig> for SnapshotBuilder {
-    async fn build_snapshot(&mut self) -> Result<Snapshot, StorageError> {
-        let (data, meta) = {
-            let applied = self.inner.applied.lock().await;
-            let data = self.inner.app.snapshot().await;
-            let snapshot_id = format!(
-                "{}-{}",
-                applied.last_applied.map(|id| id.index).unwrap_or(0),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos()
-            );
-            let meta = SnapshotMeta {
-                last_log_id: applied.last_applied,
-                last_membership: applied.membership.clone(),
-                snapshot_id,
-            };
-            (data, meta)
-        };
-
-        let store = StateMachineStore {
-            inner: Arc::clone(&self.inner),
-        };
-        store.persist_snapshot(&meta, &data)?;
-
-        Ok(Snapshot {
-            meta,
-            snapshot: Box::new(Cursor::new(data)),
-        })
-    }
-}
-
 impl RaftStateMachine<TypeConfig> for StateMachineStore {
     type SnapshotBuilder = SnapshotBuilder;
 
@@ -439,6 +401,43 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
             meta,
             snapshot: Box::new(Cursor::new(data)),
         }))
+    }
+}
+
+pub(super) struct SnapshotBuilder {
+    inner: Arc<SmInner>,
+}
+
+impl RaftSnapshotBuilder<TypeConfig> for SnapshotBuilder {
+    async fn build_snapshot(&mut self) -> Result<Snapshot, StorageError> {
+        let (data, meta) = {
+            let applied = self.inner.applied.lock().await;
+            let data = self.inner.app.snapshot().await;
+            let snapshot_id = format!(
+                "{}-{}",
+                applied.last_applied.map(|id| id.index).unwrap_or(0),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            let meta = SnapshotMeta {
+                last_log_id: applied.last_applied,
+                last_membership: applied.membership.clone(),
+                snapshot_id,
+            };
+            (data, meta)
+        };
+
+        let store = StateMachineStore {
+            inner: Arc::clone(&self.inner),
+        };
+        store.persist_snapshot(&meta, &data)?;
+
+        Ok(Snapshot {
+            meta,
+            snapshot: Box::new(Cursor::new(data)),
+        })
     }
 }
 

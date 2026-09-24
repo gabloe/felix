@@ -1,12 +1,13 @@
 //! Streams and their change log.
+use serde_json::Value;
+use sqlx::FromRow;
+
 use super::codec::{
     DbStream, consistency_to_str, delivery_to_str, stream_from_db, stream_kind_to_str,
 };
 use super::{PostgresStore, is_unique_violation};
 use crate::model::{Stream, StreamChange, StreamChangeOp, StreamKey, StreamPatchRequest};
 use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
-use serde_json::Value;
-use sqlx::FromRow;
 
 /// Row shape for the `stream_changes` table.
 #[derive(Debug, Clone, FromRow)]

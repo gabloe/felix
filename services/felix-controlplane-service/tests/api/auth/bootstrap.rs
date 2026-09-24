@@ -1,4 +1,5 @@
-use crate::common::read_json;
+use std::sync::Arc;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
@@ -9,8 +10,9 @@ use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore,
 };
 use serde_json::json;
-use std::sync::Arc;
 use tower::ServiceExt;
+
+use crate::common::read_json;
 
 fn bootstrap_state(enabled: bool, tokens: Vec<String>) -> (Arc<InMemoryStore>, AppState) {
     let store = Arc::new(InMemoryStore::new(StoreConfig {

@@ -1,5 +1,7 @@
 #![cfg(feature = "pg-tests")]
 
+use std::sync::Arc;
+
 use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use felix_controlplane_service::auth::keys::generate_signing_keys;
 use felix_controlplane_service::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -14,7 +16,6 @@ use sqlx::AssertSqlSafe;
 use sqlx::Connection;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
-use std::sync::Arc;
 
 mod common;
 

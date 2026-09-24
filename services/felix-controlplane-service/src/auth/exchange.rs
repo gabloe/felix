@@ -5,6 +5,15 @@
 //! issuers, RBAC decides the effective permissions, and the result is a Felix
 //! EdDSA token for the broker. The request body can narrow those permissions
 //! but can never widen them.
+use std::time::Duration;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+use casbin::function_map::key_match2;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
 use crate::api::AppState;
 use crate::api::error::{
     ApiError, api_forbidden, api_internal, api_internal_message, api_unauthorized,
@@ -15,13 +24,6 @@ use crate::auth::principal;
 use crate::auth::rbac::enforcer::build_enforcer;
 use crate::auth::rbac::permissions::effective_permissions;
 use crate::auth::rbac::policy_store::GroupingRule;
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
-use casbin::function_map::key_match2;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use utoipa::ToSchema;
 
 /// Optional narrowing filter: keep only these actions and/or resources out of
 /// what RBAC already granted. Never widens scope.

@@ -11,17 +11,19 @@
 //! the next refresh rather than whenever the caller happens to re-exchange. A
 //! refresh that froze its grants would turn a short access TTL into a long one
 //! for authorization purposes, which is most of what the short TTL was for.
+use std::time::Duration;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_internal_message};
 use crate::auth::felix_token::mint_token;
 use crate::auth::rbac::enforcer::build_enforcer;
 use crate::auth::rbac::permissions::effective_permissions;
 use crate::auth::refresh_token::{self, RefreshToken, RefreshTokenTake};
-use axum::Json;
-use axum::extract::{Path, State};
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use utoipa::ToSchema;
 
 /// How long a refresh token is good for.
 ///

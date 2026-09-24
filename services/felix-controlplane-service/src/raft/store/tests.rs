@@ -1,5 +1,6 @@
-use super::*;
 use openraft::testing::{StoreBuilder, Suite};
+
+use super::*;
 
 /// A state machine that remembers nothing; the storage suite never
 /// applies app commands (openraft cannot construct a `C::D`), it

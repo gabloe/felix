@@ -1,5 +1,6 @@
-use super::*;
 use std::error::Error;
+
+use super::*;
 
 const TEST_PRIVATE_KEY: [u8; 32] = [5u8; 32];
 

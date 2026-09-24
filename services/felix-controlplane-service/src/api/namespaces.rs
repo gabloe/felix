@@ -7,6 +7,13 @@
 //! a token minted for the tenant in the path; the feeds require
 //! `node.view:cluster:*`. The credential is checked before existence, so an
 //! unauthenticated caller cannot learn what exists by asking.
+use std::collections::HashMap;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+
 use crate::api::AppState;
 use crate::api::ensure_tenant_exists;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
@@ -20,11 +27,6 @@ use crate::auth::rbac::authorize::{
 };
 use crate::model::{Namespace, NamespaceKey};
 use crate::store::StoreError;
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
-use std::collections::HashMap;
 
 #[utoipa::path(
     get,

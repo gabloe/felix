@@ -1,5 +1,6 @@
-use super::*;
 use opentelemetry::trace::{TraceContextExt, TraceId};
+
+use super::*;
 
 #[test]
 fn header_extractor_reads_values() {

@@ -17,6 +17,10 @@
 pub(crate) mod listing;
 pub(crate) mod reports;
 
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
 use crate::api::types::{NodeRegistrationRequest, NodeRegistrationResponse};
@@ -27,9 +31,6 @@ use crate::auth::rbac::authorize::{
 use crate::clock::now_millis;
 use crate::model::{Node, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
 use crate::store::StoreError;
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
 
 #[utoipa::path(
     post,

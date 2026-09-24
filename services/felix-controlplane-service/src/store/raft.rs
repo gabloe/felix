@@ -67,15 +67,6 @@ impl RaftStore {
     }
 }
 
-/// The command answered with a payload its own definition rules out — a
-/// version-skew bug between proposer and applier, worth a loud error over a
-/// quiet wrong answer.
-fn unexpected_shape(what: &'static str) -> StoreError {
-    StoreError::Unexpected(anyhow::anyhow!(
-        "raft response did not carry the expected {what}"
-    ))
-}
-
 #[async_trait]
 impl ControlPlaneStore for RaftStore {
     async fn list_tenants(&self) -> StoreResult<Vec<Tenant>> {
@@ -604,6 +595,15 @@ impl AuthStore for RaftStore {
             _ => Err(unexpected_shape("count")),
         }
     }
+}
+
+/// The command answered with a payload its own definition rules out — a
+/// version-skew bug between proposer and applier, worth a loud error over a
+/// quiet wrong answer.
+fn unexpected_shape(what: &'static str) -> StoreError {
+    StoreError::Unexpected(anyhow::anyhow!(
+        "raft response did not carry the expected {what}"
+    ))
 }
 
 #[cfg(test)]

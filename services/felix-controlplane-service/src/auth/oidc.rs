@@ -18,16 +18,17 @@
 //! [`UpstreamOidcValidator::validate`].
 mod keys;
 
-use crate::auth::idp_registry::IdpIssuerConfig;
+use std::sync::Arc;
+use std::time::Duration;
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use dashmap::DashMap;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::Value;
-use std::sync::Arc;
-use std::time::Duration;
 
+use crate::auth::idp_registry::IdpIssuerConfig;
 use keys::{CachedDiscovery, CachedJwks, ensure_jwk_matches_algorithm, find_jwk};
 
 /// Validates upstream OIDC bearer tokens, with cached discovery documents and

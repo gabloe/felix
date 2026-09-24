@@ -7,6 +7,8 @@ mod reconciler;
 mod rendezvous;
 mod replicas;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::rendezvous::score;
 use super::*;
 use crate::model::{
@@ -14,7 +16,6 @@ use crate::model::{
     NodeStatus, RetentionPolicy, ShardAssignment, ShardKey, ShardKind, ShardState, Stream,
     StreamKind,
 };
-use std::collections::{BTreeMap, BTreeSet};
 
 fn stream(name: &str, shards: u32) -> Stream {
     replicated_stream(name, shards, 1)

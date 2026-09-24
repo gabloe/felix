@@ -12,7 +12,6 @@
 //! - Uses in-memory store for deterministic, race-free behavior.
 //!
 //! Run with `cargo test -p felix-controlplane-service auth_jwks` to execute these tests.
-use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::Engine;
@@ -25,6 +24,8 @@ use felix_controlplane_service::store::{
     AuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore,
 };
 use tower::ServiceExt;
+
+use crate::common::read_json;
 
 #[tokio::test]
 async fn jwks_endpoint_returns_keys_for_tenant() {

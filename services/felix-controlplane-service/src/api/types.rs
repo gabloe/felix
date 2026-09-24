@@ -2,14 +2,24 @@
 //!
 //! Defines shared payload shapes for the control-plane REST API and OpenAPI
 //! schema generation.
-use crate::model::{
-    Cache, CacheChange, Namespace, NamespaceChange, Stream, StreamChange, Tenant, TenantChange,
-};
-use crate::model::{
-    ConsistencyLevel, DeliveryGuarantee, NodeLifecycle, RetentionPolicy, StreamKind,
-};
+// A leader's account of which replicas hold a shard's log.
+//
+// The shapes a broker sends live in felix-common, so a field renamed here and
+// not there cannot be a silent mismatch — both sides compile against one
+// definition. Re-exported rather than mirrored, for the same reason.
+//
+// A report is sent by the shard's *leader*, because it is the only party that
+// knows both ends of the comparison: its own tail, and how far each follower
+// has acknowledged. A follower knows where it is, not whether that is caught up.
+pub use felix_common::membership::{ReplicaOffset, ReplicaStatusRequest, ShardReplicaStatus};
+
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use crate::model::{
+    Cache, CacheChange, ConsistencyLevel, DeliveryGuarantee, Namespace, NamespaceChange,
+    NodeLifecycle, RetentionPolicy, Stream, StreamChange, StreamKind, Tenant, TenantChange,
+};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct FeatureFlags {
@@ -182,17 +192,6 @@ pub struct NodeHeartbeatRequest {
     /// rather than counted for the process that replaced it.
     pub incarnation: u64,
 }
-
-// A leader's account of which replicas hold a shard's log.
-//
-// The shapes a broker sends live in felix-common, so a field renamed here and
-// not there cannot be a silent mismatch — both sides compile against one
-// definition. Re-exported rather than mirrored, for the same reason.
-//
-// A report is sent by the shard's *leader*, because it is the only party that
-// knows both ends of the comparison: its own tail, and how far each follower
-// has acknowledged. A follower knows where it is, not whether that is caught up.
-pub use felix_common::membership::{ReplicaOffset, ReplicaStatusRequest, ShardReplicaStatus};
 
 /// What the control plane tells a broker in return.
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

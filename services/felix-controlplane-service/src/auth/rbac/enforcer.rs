@@ -1,9 +1,10 @@
 //! Builds the in-memory Casbin enforcer used by token exchange and admin
 //! flows. Every rule is inserted with the tenant domain, so cross-tenant
 //! matches are impossible by construction.
+use casbin::{CoreApi, DefaultModel, Enforcer, MemoryAdapter, MgmtApi, Result};
+
 use crate::auth::rbac::MODEL_CONF;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
-use casbin::{CoreApi, DefaultModel, Enforcer, MemoryAdapter, MgmtApi, Result};
 
 /// Build a per-tenant enforcer from the embedded model plus the tenant's
 /// policy and grouping rules.

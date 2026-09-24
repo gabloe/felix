@@ -19,6 +19,17 @@
 //! `postgres.rs` implementation without inflating that file's line counts.
 #![cfg(feature = "pg-tests")]
 
+use std::time::Duration;
+
+use serial_test::serial;
+use sqlx::AssertSqlSafe;
+use sqlx::Connection;
+use sqlx::migrate::Migrator;
+use sqlx::postgres::PgPoolOptions;
+use testcontainers::clients::Cli;
+use testcontainers::core::Container;
+use testcontainers_modules::postgres::Postgres;
+
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::keys::generate_signing_keys;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -29,15 +40,6 @@ use crate::model::{
 };
 use crate::store::postgres::PostgresStore;
 use crate::store::{AuthStore, ControlPlaneStore, StoreConfig};
-use serial_test::serial;
-use sqlx::AssertSqlSafe;
-use sqlx::Connection;
-use sqlx::migrate::Migrator;
-use sqlx::postgres::PgPoolOptions;
-use std::time::Duration;
-use testcontainers::clients::Cli;
-use testcontainers::core::Container;
-use testcontainers_modules::postgres::Postgres;
 
 struct PgContainer {
     url: String,

@@ -1,6 +1,8 @@
 //! The OpenAPI document. Every public route and schema must be registered
 //! here by hand — an endpoint left out is invisible to docs and generated
 //! clients, and nothing else in the build notices.
+use utoipa::OpenApi;
+
 use crate::api::{
     caches, namespaces, nodes, regions, shard_assignments, streams, system, tenants,
     types::{
@@ -29,7 +31,6 @@ use crate::model::{
     ShardState, Stream, StreamChange, StreamChangeOp, StreamKey, StreamKind, StreamPatchRequest,
     Tenant, TenantChange, TenantChangeOp,
 };
-use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(

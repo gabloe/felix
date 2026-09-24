@@ -1,4 +1,10 @@
 //! Reading the node catalog, with each node's placement standing explained.
+use std::collections::HashMap;
+
+use axum::Json;
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
+
 use super::require_cluster_node_view;
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_internal, api_not_found};
@@ -6,10 +12,6 @@ use crate::api::types::{NodeListResponse, NodePlacement, NodeView};
 use crate::clock::now_millis;
 use crate::model::{Node, NodeLifecycle};
 use crate::store::StoreError;
-use axum::Json;
-use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
-use std::collections::HashMap;
 
 #[utoipa::path(
     get,

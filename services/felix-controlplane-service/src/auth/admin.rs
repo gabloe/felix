@@ -11,6 +11,15 @@
 //! permissions. Scope checks happen server-side before store writes, and the
 //! credential is checked before the tenant's existence, so an unauthenticated
 //! caller cannot probe for tenants.
+use std::collections::HashSet;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+use axum::http::StatusCode;
+use serde::Deserialize;
+use utoipa::ToSchema;
+
 use crate::api::AppState;
 use crate::api::ensure_tenant_exists;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_validation_error};
@@ -22,13 +31,6 @@ use crate::auth::rbac::authorize::{
     validate_assignment_allowed, validate_new_rule_allowed,
 };
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
-use axum::http::StatusCode;
-use serde::Deserialize;
-use std::collections::HashSet;
-use utoipa::ToSchema;
 
 #[derive(Debug, Deserialize, ToSchema, Clone)]
 pub struct PolicyRequest {

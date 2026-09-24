@@ -1,4 +1,7 @@
 //! Namespaces, and the cascade that deleting one sets off.
+use serde_json::Value;
+use sqlx::FromRow;
+
 use super::codec::{
     DbCache, DbNamespace, DbStream, parse_consistency, parse_delivery, parse_stream_kind,
 };
@@ -8,8 +11,6 @@ use crate::model::{
     Stream, StreamKey,
 };
 use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
-use serde_json::Value;
-use sqlx::FromRow;
 
 /// Row shape for the `namespace_changes` table.
 #[derive(Debug, Clone, FromRow)]

@@ -6,7 +6,9 @@
 //! it stood when the token was minted.
 //! The store's own guarantees have their own suite
 //! (`src/store/contract/refresh_tokens.rs`, run against memory and Postgres alike).
-use crate::common::read_json;
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
@@ -21,9 +23,9 @@ use felix_controlplane_service::store::{
     AuthStore, ControlPlaneStore, StoreConfig, memory::InMemoryStore,
 };
 use jsonwebtoken::Algorithm;
-use std::sync::Arc;
-use std::time::Duration;
 use tower::ServiceExt;
+
+use crate::common::read_json;
 
 const TENANT: &str = "t1";
 const PRINCIPAL: &str = "oidc:https://idp.example#user-1";

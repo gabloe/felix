@@ -1,8 +1,9 @@
 //! Rows shared across aggregates, and the enum encodings stored in text columns.
-use crate::model::{RetentionPolicy, Stream, StreamKind};
-use crate::store::{StoreError, StoreResult};
 use anyhow::anyhow;
 use sqlx::FromRow;
+
+use crate::model::{RetentionPolicy, Stream, StreamKind};
+use crate::store::{StoreError, StoreResult};
 
 /// Row shape for the `streams` authoritative table.
 ///

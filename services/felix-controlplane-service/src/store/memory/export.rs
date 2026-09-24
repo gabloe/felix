@@ -1,11 +1,12 @@
 //! Exporting and importing the whole store, for Raft snapshots and `migrate`.
+use std::collections::HashMap;
+
 use super::{InMemoryStore, NodeState, ShardState};
 use crate::model::{
     Cache, CacheKey, Namespace, NamespaceKey, ShardAssignment, ShardKey, Stream, StreamKey,
 };
 use crate::store::export::{EXPORTED_STATE_VERSION, ExportedLog, ExportedState};
 use crate::store::{StoreError, StoreResult};
-use std::collections::HashMap;
 
 impl InMemoryStore {
     /// Serialize the entire store, deterministically.

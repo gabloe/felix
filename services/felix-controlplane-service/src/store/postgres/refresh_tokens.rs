@@ -1,8 +1,9 @@
 //! Refresh tokens, spent and revoked in single statements.
+use sqlx::Row;
+
 use super::PostgresStore;
 use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::store::StoreResult;
-use sqlx::Row;
 
 impl PostgresStore {
     /// Build a [`RefreshToken`] from a row, with the two flags supplied.

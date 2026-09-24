@@ -1,8 +1,9 @@
 //! Node store behaviour every backend must satisfy.
-use crate::model::{Node, NodeCapacity, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
-use crate::store::{ControlPlaneStore, StoreError};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+use crate::model::{Node, NodeCapacity, NodeLifecycle, NodePatchRequest, NodeSpec, NodeStatus};
+use crate::store::{ControlPlaneStore, StoreError};
 
 pub(crate) fn node(node_id: &str, port: u16) -> Node {
     Node {

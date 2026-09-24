@@ -1,8 +1,10 @@
-use super::*;
-use serial_test::serial;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+
+use serial_test::serial;
 use tokio::sync::oneshot;
+
+use super::*;
 
 struct EnvGuard {
     key: &'static str,

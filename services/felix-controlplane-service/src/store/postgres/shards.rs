@@ -1,12 +1,13 @@
 //! Shard assignments, and what leaders report about their replicas.
+use anyhow::anyhow;
+use sqlx::FromRow;
+
 use super::{PostgresStore, begin_consistent_read};
 use crate::model::{
     ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey,
     ShardKind, ShardState, ShardValidationError,
 };
 use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
-use anyhow::anyhow;
-use sqlx::FromRow;
 
 #[derive(Debug, Clone, FromRow)]
 struct DbShardAssignment {

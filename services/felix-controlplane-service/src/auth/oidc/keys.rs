@@ -1,11 +1,13 @@
 //! Finding the key a token was signed with: discovery, the JWKS behind it,
 //! both cached with a TTL, and the checks that the key fits the algorithm.
-use super::{OidcError, UpstreamOidcValidator};
-use crate::auth::idp_registry::IdpIssuerConfig;
+use std::time::Instant;
+
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet, KeyAlgorithm};
 use serde::Deserialize;
-use std::time::Instant;
+
+use super::{OidcError, UpstreamOidcValidator};
+use crate::auth::idp_registry::IdpIssuerConfig;
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedJwks {

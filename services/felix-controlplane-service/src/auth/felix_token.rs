@@ -36,15 +36,16 @@
 //! };
 //! let _ = mint_token(&keys, "tenant-a", "principal", vec![], Duration::from_secs(60));
 //! ```
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use ed25519_dalek::pkcs8::EncodePrivateKey;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ED25519_KEY_LEN: usize = 32;
 
@@ -73,6 +74,31 @@ pub struct SigningKey {
     pub public_key: [u8; ED25519_KEY_LEN],
 }
 
+impl SigningKey {
+    /// Check that the key is EdDSA and that the stored public key matches the
+    /// seed — the mismatch guards against corrupted storage or botched
+    /// rotation data.
+    ///
+    /// # Errors
+    /// `TokenError::Key` on either failure.
+    pub fn validate(&self) -> Result<(), TokenError> {
+        if self.alg != Algorithm::EdDSA {
+            return Err(TokenError::Key(format!(
+                "invalid Felix signing algorithm: {:?}",
+                self.alg
+            )));
+        }
+        let signing_key = Ed25519SigningKey::from_bytes(&self.private_key);
+        let expected = signing_key.verifying_key().to_bytes();
+        if expected != self.public_key {
+            return Err(TokenError::Key(
+                "Ed25519 public key does not match private seed".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// A tenant's current signing key plus previous keys that still verify
 /// in-flight tokens after rotation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -98,31 +124,6 @@ impl TenantSigningKeys {
     /// All keys, current first — the order verification tries them in.
     pub fn all_keys(&self) -> impl Iterator<Item = &SigningKey> {
         std::iter::once(&self.current).chain(self.previous.iter())
-    }
-}
-
-impl SigningKey {
-    /// Check that the key is EdDSA and that the stored public key matches the
-    /// seed — the mismatch guards against corrupted storage or botched
-    /// rotation data.
-    ///
-    /// # Errors
-    /// `TokenError::Key` on either failure.
-    pub fn validate(&self) -> Result<(), TokenError> {
-        if self.alg != Algorithm::EdDSA {
-            return Err(TokenError::Key(format!(
-                "invalid Felix signing algorithm: {:?}",
-                self.alg
-            )));
-        }
-        let signing_key = Ed25519SigningKey::from_bytes(&self.private_key);
-        let expected = signing_key.verifying_key().to_bytes();
-        if expected != self.public_key {
-            return Err(TokenError::Key(
-                "Ed25519 public key does not match private seed".to_string(),
-            ));
-        }
-        Ok(())
     }
 }
 

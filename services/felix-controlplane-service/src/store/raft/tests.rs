@@ -3,10 +3,10 @@
 //! A single-member group needs no network, so these run as plain unit tests:
 //! the node elects itself, and every write still travels the full path —
 //! encode, propose, commit, apply, decode — that a three-member group uses.
-use super::*;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use super::*;
 use crate::raft::{AppStateMachine, RaftHandle, RaftSettings};
 use crate::store::StoreConfig;
 

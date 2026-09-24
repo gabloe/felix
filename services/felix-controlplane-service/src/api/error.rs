@@ -2,11 +2,12 @@
 //! stable `code` plus a human-readable `message`; internal failures are
 //! logged server-side and returned as generic messages so store details never
 //! leak to clients.
-use crate::api::types::ErrorResponse;
-use crate::store::StoreError;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+
+use crate::api::types::ErrorResponse;
+use crate::store::StoreError;
 
 /// An HTTP status paired with the JSON error body.
 #[derive(Debug)]

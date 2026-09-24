@@ -41,6 +41,12 @@ mod shards;
 mod streams;
 mod tenants;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use tokio::sync::RwLock;
+
 use super::{AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreResult};
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
@@ -52,11 +58,6 @@ use crate::model::{
     ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind, Stream,
     StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
-use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-
 use change_log::ChangeLog;
 
 /// In-memory control-plane store.

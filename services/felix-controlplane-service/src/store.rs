@@ -13,6 +13,9 @@ pub mod raft;
 #[cfg(test)]
 pub(crate) mod contract;
 
+use async_trait::async_trait;
+use thiserror::Error;
+
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -22,8 +25,6 @@ use crate::model::{
     Node, NodeChange, NodePatchRequest, ReplicaReport, ShardAssignment, ShardAssignmentChange,
     ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
-use async_trait::async_trait;
-use thiserror::Error;
 
 /// Tenants, namespaces, streams, caches, nodes and shard assignments: every
 /// operation the API and the background loops need.

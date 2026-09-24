@@ -1,13 +1,14 @@
 //! What brokers report about themselves: liveness, and their replicas'
 //! positions.
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+
 use super::require_node_manage;
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
 use crate::api::types::{NodeHeartbeatRequest, NodeHeartbeatResponse, ReplicaStatusRequest};
 use crate::store::StoreError;
-use axum::Json;
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
 
 #[utoipa::path(
     post,

@@ -1,8 +1,7 @@
 //! Readiness: what it answers, how often it asks, and what it costs.
-use super::*;
-
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use super::*;
 use crate::store::StoreError;
 
 /// A backend that answers on command and counts how often it is asked.

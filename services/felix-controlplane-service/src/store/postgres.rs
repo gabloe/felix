@@ -32,6 +32,14 @@ mod shards;
 mod streams;
 mod tenants;
 
+use std::str::FromStr;
+use std::time::Duration;
+
+use anyhow::anyhow;
+use async_trait::async_trait;
+use sqlx::PgPool;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+
 use super::{
     AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreError, StoreResult,
 };
@@ -46,12 +54,6 @@ use crate::model::{
     ShardAssignmentChange, ShardKey, Stream, StreamChange, StreamKey, StreamPatchRequest, Tenant,
     TenantChange,
 };
-use anyhow::anyhow;
-use async_trait::async_trait;
-use sqlx::PgPool;
-use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use std::str::FromStr;
-use std::time::Duration;
 
 #[cfg(feature = "pg-tests")]
 const RETENTION_TICK: Duration = Duration::from_secs(1);

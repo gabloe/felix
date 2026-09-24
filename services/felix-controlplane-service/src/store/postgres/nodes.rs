@@ -1,12 +1,13 @@
 //! The node catalog: registration, heartbeats, expiry and lifecycle moves.
+use anyhow::anyhow;
+use sqlx::FromRow;
+
 use super::{PostgresStore, begin_consistent_read, is_unique_violation};
 use crate::model::{
     Node, NodeCapacity, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, NodeSpec,
     NodeStatus, NodeValidationError,
 };
 use crate::store::{ChangeSet, Snapshot, StoreError, StoreResult};
-use anyhow::anyhow;
-use sqlx::FromRow;
 
 const NODE_SELECT_ALL: &str = r#"SELECT node_id, advertise_addr, client_addr, region, labels, capacity_max_shards, capacity_weight, lifecycle, last_heartbeat_at_millis, registered_at_millis, incarnation FROM nodes ORDER BY node_id"#;
 

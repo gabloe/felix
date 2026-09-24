@@ -14,6 +14,8 @@
 //! Every refusal goes through [`refused`], so a credential that was presented
 //! and turned away is counted and logged: an unauthorized attempt is something
 //! an operator gets to see, not only something the caller gets told.
+use axum::http::HeaderMap;
+
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_forbidden, api_internal, api_unauthorized};
 use crate::auth::felix_token::{FelixClaims, verify_token};
@@ -21,7 +23,6 @@ use crate::auth::rbac::authorize::{
     ParsedObject, ParsedPermission, object_within_scope, parse_permission,
 };
 use crate::store::StoreError;
-use axum::http::HeaderMap;
 
 /// Clock skew tolerated when checking `exp`, in seconds.
 const LEEWAY_SECS: u64 = 5;

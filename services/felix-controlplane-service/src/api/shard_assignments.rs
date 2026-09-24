@@ -1,14 +1,16 @@
 //! Which broker leads each shard, as operators and brokers read it.
+use std::collections::HashMap;
+
+use axum::Json;
+use axum::extract::{Query, State};
+use axum::http::HeaderMap;
+
 use crate::api::AppState;
 use crate::api::error::{ApiError, api_internal};
 use crate::api::nodes::require_cluster_node_view;
 use crate::api::types::{
     ShardAssignmentChangesResponse, ShardAssignmentListResponse, ShardAssignmentSnapshotResponse,
 };
-use axum::Json;
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
-use std::collections::HashMap;
 
 #[utoipa::path(
     get,

@@ -1,7 +1,8 @@
+use std::sync::Arc;
+
 use super::*;
 use crate::store::StoreConfig;
 use crate::store::memory::InMemoryStore;
-use std::sync::Arc;
 
 fn test_state() -> AppState {
     let store = InMemoryStore::new(StoreConfig {

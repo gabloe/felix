@@ -1,7 +1,8 @@
 //! Metric shape: bounded labels, and a census that matches the node listing.
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::model::{Node, NodeCapacity, NodeSpec, NodeStatus};
-use std::collections::BTreeMap;
 
 fn node(node_id: &str, region: &str, lifecycle: NodeLifecycle) -> Node {
     Node {

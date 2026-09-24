@@ -1,4 +1,7 @@
 //! Tenants, and the cascade that deleting one sets off.
+use serde_json::Value;
+use sqlx::FromRow;
+
 use super::codec::{
     DbCache, DbNamespace, DbStream, parse_consistency, parse_delivery, parse_stream_kind,
 };
@@ -8,8 +11,6 @@ use crate::model::{
     TenantChange, TenantChangeOp,
 };
 use crate::store::{ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult};
-use serde_json::Value;
-use sqlx::FromRow;
 
 /// Row shape for `tenants` table (minimal mapping needed by the API).
 #[derive(Debug, Clone, FromRow)]

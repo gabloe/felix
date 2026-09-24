@@ -1,8 +1,9 @@
+use std::sync::Arc;
+
 use super::*;
 use crate::api::readiness::HealthProbe;
 use crate::store::StoreConfig;
 use crate::store::memory::InMemoryStore;
-use std::sync::Arc;
 
 /// A store that is up but holds nothing the group holds -- a member whose
 /// volume was replaced and has not caught up.
