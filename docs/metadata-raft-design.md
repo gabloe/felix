@@ -203,8 +203,9 @@ reports again after one reporting interval.
 
 State is small, so snapshots are cheap: serialize the whole store at a log
 threshold, truncate the log behind it. An instance that lost its volume
-rejoins empty and is caught up by snapshot install plus log replay — the
-Raft-native answer to the question backup/restore answers for Postgres. For
+rejoins empty and is caught up by snapshot install plus log replay, without
+a vote until it has (see [Rejoining after a lost volume](#rejoining-after-a-lost-volume))
+— the Raft-native answer to the question backup/restore answers for Postgres. For
 disaster recovery beyond quorum loss, the same snapshot format doubles as an
 export: the import path below reads either a Postgres database or a snapshot
 file.
@@ -218,6 +219,41 @@ learner-first: a new instance joins as a non-voting learner, catches up by
 snapshot, and is promoted; shrinking is the reverse. A single-member group
 serves development with no ceremony, replacing the in-memory backend's role
 without its amnesia.
+
+### Rejoining after a lost volume
+
+Raft is only safe if a voter never forgets its vote or its log, and openraft
+will grant a vote from an empty log. So a wiped member that simply came back
+as a voter could lose acknowledged writes: with the leader wiped and the only
+other holder of a write frozen, the member that missed the write wins on the
+wiped member's vote, and truncates the write from the frozen member when it
+returns. `tests/raft_chaos.rs` reproduces exactly that.
+
+A member that starts with no Raft state therefore withholds its vote: it
+refuses vote requests and does not stand for election. It asks its peers
+(`GET /internal/raft/standing`) which case it is in:
+
+- **The group exists** — some peer's log is past the initial membership
+  entry. The member follows the leader like a learner: it takes the log or a
+  snapshot but has no vote. It asks the leader for its last log index
+  (`GET /internal/raft/catch-up-target`, answered only after a read-index
+  round confirms the leadership) and votes again once it has applied that
+  far. Readiness keeps it out of rotation until then.
+- **First boot** — a majority, this member included, answers and is empty.
+  Each such member initializes the configured group, which openraft allows.
+  A single-member group decides this alone.
+- **Neither** — it waits and asks again, so a lone wiped member never forms a
+  group of its own.
+
+The withheld vote is written to the member's store before any of this, so a
+crash half-way through catching up restarts still withholding it, not as a
+voter with half a log. Membership never changes: a demote-and-promote would
+need every remaining voter for the joint configuration, so one other member
+being down would stall writes until it came back.
+
+Losing a majority's volumes at once is out of scope. Two empty members of
+three that can reach each other but not the third will form a new group;
+that is quorum loss, and the snapshot restore path is the answer.
 
 ### Migration from Postgres
 
@@ -315,7 +351,7 @@ are rare, and one less listener is one less thing to secure in M8.
 | Failure | Behaviour |
 | --- | --- |
 | One instance of three dies | Leader (if it was the leader) re-elected in one election timeout; writes pause for that long, reads keep serving; M7 signal holds |
-| Instance loses its volume | Rejoins empty, snapshot-installed, promoted back; no operator data surgery |
+| Instance loses its volume | Rejoins without a vote, catches up by log or snapshot, then votes again ([above](#rejoining-after-a-lost-volume)); no operator data surgery |
 | Network partition, leader in minority | Old leader steps down (cannot commit), majority elects; minority instances fail readiness rather than serve writes that cannot commit |
 | Quorum lost (2 of 3 down) | Writes and readiness fail on survivors; brokers keep serving on catalogs and leases as during any control-plane outage; recovery = restore instances, or restore-from-snapshot ceremony documented with appropriately loud warnings |
 | Clock skew between instances | Irrelevant to Raft safety (term-based). Liveness expiry does not depend on it either: heartbeats are stamped and judged by one clock — the store's, which under Postgres is `clock_timestamp()` — so two instances comparing their own `SystemTime` is not a thing that can happen |
@@ -369,7 +405,7 @@ is the umbrella.
 | Store backend, forwarding, read semantics | [#339](https://github.com/gabloe/felix/issues/339) | **Landed** — `store/raft.rs` (`RaftStore`), the third backend behind the store traits: reads from local applied state, writes proposed through the seam with follower→leader forwarding inside it, sweep and placement gated to the leader by a linearizable read-index check, and `StorageBackend::Raft` selectable via `FELIX_RAFT_NODE_ID` / `FELIX_RAFT_DATA_DIR` / `FELIX_RAFT_PEERS`. Passes the same node/shard contract suites as memory and Postgres; a binary-level test serves the HTTP API with no database and keeps its metadata across a restart. Finding recorded below. Probes are minimal (leader-known) until #341. |
 | Migration from Postgres | [#340](https://github.com/gabloe/felix/issues/340) | **Landed** — `felix-controlplane migrate export-postgres/import`, the generic trait-level export (works against any backend, doubling as the DR artifact), the `ImportState` command with its used-store guard and `--overwrite` restore path, and the ceremony above. The pg-tests E2E migrates a populated Postgres into a Raft group over the real propose route and verifies records, sequence heads, generations, and auth state; a broker at the head continues without a resnapshot. |
 | Probes, packaging, configuration | [#341](https://github.com/gabloe/felix/issues/341) | **Landed** — readiness answers from consensus state (leader known, apply-lag bounded, and a leader counts only while a quorum has acknowledged it within 5s — a quorumless leader leaves rotation, proven by test); liveness stays process-local. Timings are tunable (`FELIX_RAFT_HEARTBEAT_MS`, `FELIX_RAFT_ELECTION_TIMEOUT_MIN/MAX_MS`, snapshot/write knobs) with unworkable combinations refused at startup. Consensus position ships as `felix_meta_raft_*` gauges plus forwarded-proposal and write-timeout counters. Kubernetes shape documented on the docs-site page. Known fact below. |
-| Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | **Landed** — `tests/raft_chaos.rs`: three real binaries, no database, broker-shaped traffic and metadata writes flowing while every member is SIGTERM-restarted, the leader is SIGKILLed, the leader is frozen (SIGSTOP) past several elections and thawed, and a follower's volume is wiped. Verdict per run: zero failed calls, election gaps bounded, and **every acknowledged write present on every member** — the milestone's completion signal, met. It caught four real bugs before landing (below). |
+| Chaos and conformance | [#342](https://github.com/gabloe/felix/issues/342) | **Landed** — `tests/raft_chaos.rs`: three real binaries, no database, broker-shaped traffic and metadata writes flowing while every member is SIGTERM-restarted, the leader is SIGKILLed, the leader is frozen (SIGSTOP) past several elections and thawed, and a follower's volume is wiped. Verdict per run: zero failed calls, election gaps bounded, and **every acknowledged write present on every member** once each has applied a later marker write — the milestone's completion signal, met. It caught four real bugs before landing (below). A second test wipes the *leader* while the only other holder of a write is frozen, the case in which a wiped member voting from an empty log loses that write ([above](#rejoining-after-a-lost-volume)). |
 
 One deliberate deviation from the sketch above, made while landing #337: the
 Raft log lives in **redb** (an embedded, crash-safe, single-file ACID store)
