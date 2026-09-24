@@ -206,9 +206,11 @@ how-to; this is the contract.
 - It asks a broker which other brokers exist and **adds** them to what it will
   try. The configured seeds are never removed, so a wrong or stale answer cannot
   leave a client with fewer ways in than it started with.
-- `publish` reconnects but does **not** resend. `publish_at_least_once`
-  resends, and can therefore duplicate a record whose failure it could not prove
-  was not applied. The names are the contract.
+- `publish` reconnects but does **not** resend anything that may have landed.
+  Its one re-send is after a cached shard owner answered that it applied
+  nothing, and goes to the entry broker. `publish_at_least_once` resends, and
+  can therefore duplicate a record whose failure it could not prove was not
+  applied. The names are the contract.
 - **Retries are bounded by an attempt count and a jittered exponential
   backoff**, and optionally by a deadline across every attempt and sleep. The
   deadline is off by default: one shorter than a single attempt's own timeout
@@ -217,18 +219,30 @@ how-to; this is the contract.
 - **The backoff is full jitter** — uniform over `[0, ceiling]`, not the ceiling.
   Every client notices a failover at the same moment, and an unjittered backoff
   sends all of them at the freshly promoted broker in step.
-- **A failure that cannot succeed on another attempt is not retried.** That is
-  a short list: a credential without the permission, and an offset retention has
-  passed. Everything else is retried, *including errors nobody has classified* —
-  the client protocol carries an error as prose with no code, so this is string
-  matching, and a wasted attempt is a cheaper mistake than a lost operation.
+- **The broker's retry class decides what happens next.** `fatal` is returned
+  at once. `outcome_unknown` is returned by `publish` and never re-sent;
+  `publish_at_least_once` and the idempotent producer send it again, the first
+  because that is what it promises and the second because its sequence makes
+  the re-send land once. `retry` and `redirect` from a cached owner drop that
+  owner and go straight to the entry broker, since a fenced or draining owner
+  will not start serving the shard again; from the entry broker they back off.
+  `retry_after` backs off for at least as long as the broker asked.
 
-  **"Not found" is retried**, and deliberately. A broker learns its streams from
-  the control plane and opens a shard only once it is given one, so a broker
-  promoted a moment ago reports the stream it is about to serve as missing.
-  Being named leader and being ready to serve are different moments.
+  **"Not found" is retried, for 5 s from the first one.** A broker learns its
+  streams from the control plane and opens a shard only once it is given one,
+  so a broker promoted a moment ago reports the stream it is about to serve as
+  missing. Being named leader and being ready to serve are different moments;
+  past a couple of control-plane syncs, the stream really is missing.
+
+  A broker that predates error codes sends prose, and then only a credential
+  failure and an offset retention has passed are terminal. Everything else is
+  retried, *including errors nobody has classified*, because a wasted attempt
+  is a cheaper mistake than a lost operation.
 
 > `a_forbidden_publish_fails_fast_instead_of_retrying`,
+> `a_fenced_owner_is_forgotten_and_the_publish_rerouted`,
+> `an_outcome_unknown_publish_is_surfaced`,
+> `not_found_stops_being_retried_after_its_grace`,
 > `a_client_given_one_seed_learns_the_other_brokers`,
 > `the_configured_seed_is_never_dropped`,
 > `a_client_given_one_seed_survives_losing_it`,

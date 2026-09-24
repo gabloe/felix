@@ -259,17 +259,42 @@ by a deadline.
   attempt's own timeout prevents any retry at all: the first attempt spends the
   budget and the loop exits having tried once. Set it from your own latency
   budget, above the client's publish timeout, or leave it off.
-- **Only a credential failure is terminal.** A token without the permission
-  fails the same way on every broker and returns immediately.
 
-Everything else is retried, **including "not found"**. A broker learns its
-streams from the control plane and opens a shard only when it is given one, so a
-broker promoted a moment ago reports the stream it is about to serve as missing.
-Being named leader and being ready to serve are different moments.
+What happens after a failure is decided by the retry class the broker sent with
+it (see "Error codes" in `docs/protocol.md`):
 
-Errors the client has never seen before are also retried: the protocol carries
-an error as prose with no code, so classification is string matching, and a
-wasted attempt is a cheaper mistake than a lost operation.
+| Class | Codes (usually) | `publish_at_least_once`, idempotent producer | `publish` |
+| --- | --- | --- | --- |
+| `fatal` | `unauthenticated`, `forbidden`, `invalid_request`, `limit_exceeded` | Returned at once, marked "not retried" | Returned |
+| `retry`, `redirect` | `shard_unavailable`, `draining`, `not_leader` | From a cached owner or leader: forget it and go again at once through the entry broker. From the entry broker: back off and retry | From a cached owner: forget it and send once through the entry broker. Otherwise returned |
+| `retry_after` | `overloaded`, `not_found` | Back off, at least `retry_after_ms` when the broker gave one. `not_found` only for 5 s from the first one | Returned |
+| `outcome_unknown` | `quorum_timeout`, `leadership_lost`, `unacknowledged`, `internal`, `storage` | Sent again: that is what at-least-once means, and the idempotent producer's sequence makes it safe | **Returned, never sent again** |
+
+- **A cached route is dropped as soon as it answers "nothing applied".** An
+  owner that was fenced mid-move, or is draining, will not start serving the
+  shard again, so backing off and asking it again only delays the publish. The
+  entry broker routes by the current assignment.
+- **`not_found` is retried, but only for 5 s.** A broker learns its streams from
+  the control plane (every 2 s by default), so one promoted a moment ago
+  reports the stream it is about to serve as missing. Past a couple of syncs the
+  stream really is missing, and a large attempt budget should not hide that.
+- **`publish` reconnects only when the broker is going away.** A coded answer
+  means the broker is up; only `draining`, or no answer at all, replaces the
+  client.
+- A subscribe, cache watch or group request whose redirect target answers
+  `shard_unavailable` or `draining` goes back to the entry broker once.
+
+A broker that predates error codes sends prose, and the client falls back to
+what it did before codes: only a credential failure (and a subscribe offset
+retention has passed) is terminal, and everything else is retried, **including
+"not found"** and errors it has never seen, because a wasted attempt is a
+cheaper mistake than a lost operation. Such a peer never triggers the immediate
+reroute.
+
+One imprecision: a publish that the entry broker forwarded to an owner that was
+fenced comes back as `shard_unavailable` with reason `not_ready`, not `fenced`,
+because the broker-to-broker answer does not say which. The class, `retry`, is
+right either way.
 
 ## Consistency, from the client's side
 
@@ -279,10 +304,11 @@ Set per stream on the control plane, not on the client.
   loses whatever it had not yet replicated if that broker's storage is lost. The
   window is the broker's `felix_broker_replication_lag_records`.
 - **`Quorum`** — acknowledged once a majority of the replica set holds it. A
-  publish that cannot reach a majority is **refused**, with an error saying this
-  broker cannot vouch for the write. That is not the same as "it failed": the
-  record may be on disk and may yet reach a majority. Treat it as unknown, and
-  let `publish_at_least_once` resend if duplicates are acceptable.
+  publish that cannot reach a majority comes back as `quorum_timeout`, retry
+  class `outcome_unknown`. That is not the same as "it failed": the record may
+  be on disk and may yet reach a majority. `publish` returns it; let
+  `publish_at_least_once` resend if duplicates are acceptable, or use an
+  idempotent producer, which resends without the duplicate.
 
 **`DeliveryGuarantee` (`AtMostOnce` / `AtLeastOnce`) is declared on a stream and
 not enforced by any broker.** Do not rely on it. What you get is what this page
@@ -292,9 +318,10 @@ and `semantics.md` describe.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| `forbidden` | The token lacks the permission | Fix the credential. Not retried |
-| `stream not found` | This broker does not know it *yet* | Retried for you |
-| `cannot vouch for the write` | `Quorum` could not reach a majority in time | Unknown, not failed. Resend only if duplicates are acceptable |
+| `BrokerError` with `forbidden` | The token lacks the permission | Fix the credential. Not retried |
+| `BrokerError` with `not_found` | This broker does not know it *yet*, or at all | Retried for you for 5 s |
+| `BrokerError` with `quorum_timeout` (`outcome_unknown`) | `Quorum` could not reach a majority in time | Unknown, not failed. Resend only if duplicates are acceptable, or use an idempotent producer |
+| `BrokerError` with `shard_unavailable` | The shard is between owners, or its owner is not ready | Retried for you; a cached owner is dropped at once |
 | `no eligible leader` / owner unavailable | No replica holds the log, so the shard is unavailable rather than served empty | Wait; this resolves or needs an operator |
 | `shard is owned by …` (`NotLeaderError`) | You used `Client`, not `ClusterClient` | Follow it, or use `ClusterClient::subscribe` |
 | `gave up after … attempts` | Every endpoint failed | The cluster is unreachable, not merely rebalancing |

@@ -37,6 +37,22 @@ for what the current release actually guarantees.
   client offers it and exposes the code on `felix_client::BrokerError`. See
   "Error codes" in `docs/protocol.md`.
 
+- **The Rust `ClusterClient` acts on the broker's error codes.** Retry,
+  reroute or fail is decided by the retry class instead of by matching the
+  message. A cached shard owner that answers `shard_unavailable` (including
+  `fenced`), `draining` or `not_leader` is forgotten and the publish goes to
+  the entry broker at once, from `publish` too, since nothing was applied.
+  `outcome_unknown` is never re-sent by `publish`; `publish_at_least_once` and
+  the idempotent producer re-send it. `retry_after` honours `retry_after_ms`,
+  and `not_found` is retried for 5 s from the first one rather than for the
+  whole attempt budget. A fatal code such as `invalid_request` is no longer
+  retried. `publish` reconnects only on `draining` or a dead connection, not on
+  every coded refusal. A subscribe or cache-watch refusal is now a typed
+  `BrokerError` (it was the debug text of the frame), and a subscribe, cache
+  watch or group request whose redirect target answers `shard_unavailable`
+  goes back to the entry broker once. Peers that did not negotiate codes get
+  the old handling.
+
 - **Python and TypeScript errors carry the broker's error code.** Both have
   `code`, `retry` and `detail`. The class is chosen from the code when
   the broker sent one, and from the message only when it did not. New classes:
