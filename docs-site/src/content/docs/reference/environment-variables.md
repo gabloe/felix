@@ -1164,6 +1164,36 @@ listener closes. It is spent *inside* the platform's kill deadline, so
 `terminationGracePeriodSeconds` must cover this plus
 `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`. A second SIGTERM ends the wait early.
 
+### `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`
+
+**Description**: How long a clustered broker spends handing its shards to other
+brokers after SIGTERM, before it closes its listener and drains. With readiness
+already off, it asks the control plane to drain it and keeps serving until it leads
+no shard, so each shard is moved rather than failed over and a rolling restart
+refuses no publish. Skipped when the broker leads nothing, when no other broker can
+take its shards, or when the control plane does not answer within 5 s; a second
+SIGTERM ends the wait. Shards still led when it expires fail over as they would
+without it.
+
+**Applies to**: Broker, when it is a cluster member (`FELIX_CONTROLPLANE_URL` and
+membership configured).
+
+**Type**: Non-negative integer (milliseconds); `0` turns the handoff off.
+
+**Default**: `30000`
+
+**Example**:
+```bash
+export FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS="30000"
+export FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS="120000"  # Brokers leading many shards
+export FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS="0"       # Fail over instead, e.g. a single broker
+```
+
+**Note**: Spent before `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS`, and inside the platform's
+kill deadline, so `terminationGracePeriodSeconds` must cover both. Moves are paced by
+`FELIX_SHARD_MOVES_MAX_CONCURRENT` and `FELIX_SHARD_MOVES_MAX_PER_NODE` like any
+other. See [Graceful Shutdown](/felix/deployment/graceful-shutdown/#handing-shards-off).
+
 ### `FELIX_INTERNAL_MAX_INBOUND_CONNECTIONS`
 
 **Description**: Inbound peer connections this broker holds at once, across all
@@ -1673,6 +1703,7 @@ absent; they are listed in that script rather than here.
 | `FELIX_SHARD_MOVE_HOLD_MS` | `2000` | How long a publish to a shard that is moving waits for the move to cut over before it is refused with `shard_unavailable` / `moving`. The wait happens before the publish is accepted, so nothing held is acknowledged. `0` refuses at once. |
 | `FELIX_SHARD_MOVE_HOLD_MAX` | `1024` | How many publishes may wait on moving shards at once. Each keeps its payload in memory; beyond this, a publish to a moving shard is refused at once. |
 | `FELIX_SHARD_MOVE_BYTES_PER_SEC` | `0` | Bytes per second this broker ships to move destinations, across every shard it leads. Only a destination the quorum does not need is held to it, so a `Quorum` publish never waits on it; the remainder after the fence is not. `0` is unlimited. |
+| `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` | `30000` | How long a stopping broker waits for its shards to move to other brokers before it closes its listener and drains. Shards still led when it expires fail over. `0` turns the handoff off. |
 
 ### Consumer groups
 

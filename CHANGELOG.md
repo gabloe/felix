@@ -13,6 +13,19 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **A broker hands its shards off before it stops.** On SIGTERM a
+  clustered broker turns readiness off, drains itself through the control
+  plane and keeps serving until it leads no shard, then shuts down as
+  before, so a rolling restart moves shards instead of failing them over: no
+  publish is refused and subscriptions follow the shard. Bounded by
+  `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` (default 30 s, `0` turns it off);
+  skipped when there is nobody to hand to or the control plane does not
+  answer, and ended early by a second signal. Metrics:
+  `felix_broker_shutdown_handoffs_total{outcome}`,
+  `felix_broker_shutdown_handoff_shards_total`,
+  `felix_broker_shutdown_handoff_duration_ms`. The Helm chart adds
+  `broker.shutdown.handoffTimeoutMs` and counts it in the derived grace
+  period; a grace period set by hand must now cover it too.
 - **Idempotent producers keep their sequences across a leader change**
   (#608). On a durable stream each record of a producer's batch is now stored
   with its producer id and sequence, and replicated with them, so a leader
@@ -187,6 +200,10 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **A drain moves leaders before it replaces followers.** Move slots on a
+  draining broker go to the shards it leads first, then to its follower
+  copies, so with the default limit of one a follower's copy no longer holds
+  the slot while the broker's leaderships wait.
 - **Online rebalancing is marked done** on the status page. The row now
   cites the tests behind each claim and names what is left: cache, counter
   and group writes are refused briefly during a switch-over, the move limits

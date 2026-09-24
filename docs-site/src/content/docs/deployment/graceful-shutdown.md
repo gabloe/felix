@@ -24,18 +24,21 @@ The order matters more than the individual steps.
    balancers and the Kubernetes endpoints controller stop routing new traffic here
    while the process can still serve it, so clients are steered away from a healthy
    instance rather than discovering a broken one.
-2. **Keep serving while that propagates.** The control plane waits
+2. **A clustered broker hands its shards off.** See
+   [Handing shards off](#handing-shards-off) below. It keeps accepting and
+   serving throughout.
+3. **Keep serving while that propagates.** The control plane waits
    `FELIX_SHUTDOWN_PREDRAIN_MS` (default `5000`) before it stops accepting, still
    answering normally the whole time. Without this the listener closes in the same
    breath as the readiness flip, and a load balancer that has not polled yet is
    still sending requests to a socket that has gone away. A second SIGTERM ends the
    wait early. The broker has the same hold-off but defaults it to off — see below.
-3. **Stop admitting new work.** The broker cancels its QUIC accept loop; the
+4. **Stop admitting new work.** The broker cancels its QUIC accept loop; the
    control plane stops accepting new HTTP connections. Already-accepted work is
    untouched.
-4. **Drain, bounded by a deadline.** In-flight connections and requests finish on
+5. **Drain, bounded by a deadline.** In-flight connections and requests finish on
    their own.
-5. **Force-cancel the remainder and name it.** Anything still running when the
+6. **Force-cancel the remainder and name it.** Anything still running when the
    deadline expires is aborted and logged by name at WARN.
 
 A broker that rotates its credential also waits, inside the same deadline, for a
@@ -48,15 +51,82 @@ the control plane would revoke the whole chain.
 failing liveness would make Kubernetes restart a pod that is shutting down exactly
 as intended.
 
-Shutting a broker down does not hand its shards to another broker. The shards
-it leads fail over to caught-up replicas, and one with no replica waits for it
-to come back. To move them without a failover, drain the broker first and stop
-it once it leads nothing (see
-[Adding, draining and removing brokers](/felix/deployment/scaling/#draining-a-broker)).
-
 Metrics are torn down **last**, after everything else has drained, so `/metrics`
 and `/ready` remain scrapeable for the whole shutdown window. That window is the
 only chance an operator has to see what the process was doing while it stopped.
+
+## Handing shards off
+
+A broker that simply stopped would leave every shard it leads to fail over:
+publishes to those shards are refused until the control plane notices and
+promotes a follower, and a shard with no follower waits for the broker to come
+back. So a clustered broker first gives its shards away, the same way
+[draining a broker](/felix/deployment/scaling/#draining-a-broker) does:
+
+1. With readiness already off, it asks the control plane to drain it
+   (`POST /v1/nodes/{id}/drain`, with its own credential). Placement stops
+   giving it shards and moves each one it leads to a broker that is staying.
+2. It keeps accepting and serving while they move. Each move is planned:
+   publishes during the switch-over are held and forwarded, and subscriptions
+   are told `shard_moved` and resume on the new owner at the offset they had
+   reached.
+3. Once it leads no shard, or after `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`
+   (default `30000`), it carries on with the shutdown above: the listener
+   closes, connections drain, and it deregisters.
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant B as Stopping broker
+    participant CP as Control plane
+    participant D as Other brokers
+    O->>B: SIGTERM
+    Note over B: readiness off, still accepting and serving
+    B->>CP: drain this broker
+    loop each shard it leads, paced by the move limits
+        CP->>D: stage, fence, cut over
+        B-->>D: held publishes forwarded, subscribers resume there
+    end
+    Note over B: leads nothing, or the timeout passed
+    B->>B: close listener, drain connections
+    B->>CP: deregister
+```
+
+The handoff is best effort and never blocks the shutdown for longer than its
+timeout. It is skipped when the broker leads nothing, when no other broker is
+eligible (a single-node cluster, say), and when the control plane does not
+answer within 5 s. A second SIGTERM stops the wait. A shard still led here when
+the wait ends fails over, exactly as it did without a handoff. `0` turns the
+handoff off.
+
+Moves run under the same limits as any other
+(see [Tuning](/felix/deployment/scaling/#tuning)). With the default
+`FELIX_SHARD_MOVES_MAX_CONCURRENT=1` they go one at a time. A move whose
+destination is already a caught-up follower copies nothing, only fences and
+cuts over, so replicated shards go quickly; watch
+`felix_broker_shutdown_handoff_duration_ms` and size the timeout from it. A
+drain's leaderships are moved
+before its follower copies are replaced, so those copies do not hold the slots
+the leaders need. A shard with no follower has its whole log copied first;
+raise the timeout if brokers lead large unreplicated shards, or accept that
+those fail over.
+
+The drain does not outlive the process. A broker that starts again registers
+as live, and placement gives it back its share of shards as it would any
+broker that joins.
+
+Rolling restarts need nothing else: restart brokers one at a time, and each
+hands its shards to the others before it stops. Draining a broker by hand is
+still the way to remove one for good.
+
+| Metric | Meaning |
+| --- | --- |
+| `felix_broker_shutdown_handoffs_total{outcome}` | `completed`, `timed_out`, `interrupted` or `skipped` |
+| `felix_broker_shutdown_handoff_shards_total` | shards led elsewhere by the time the handoff ended |
+| `felix_broker_shutdown_handoff_duration_ms` | how long the last handoff took |
+
+The log says the same thing on one line: `handed every shard off`, or a WARN
+naming how many shards were left to fail over.
 
 ## The drain deadline
 
@@ -115,11 +185,13 @@ The example below uses `preStop`, so it turns the in-process hold-off off:
 
 ```yaml
 spec:
-  terminationGracePeriodSeconds: 30
+  # preStop 5s + handoff 30s + drain 20s, with headroom.
+  terminationGracePeriodSeconds: 60
   containers:
     - name: felix-broker
       env:
-        # Leaves ~15s of headroom under the 30s grace period, after the preStop sleep.
+        - name: FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS
+          value: "30000"
         - name: FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS
           value: "20000"
         # preStop already covers propagation; waiting twice only shortens the drain.
@@ -142,9 +214,12 @@ spec:
           port: 9090
 ```
 
-Budget the total: `preStop` sleep + `FELIX_SHUTDOWN_PREDRAIN_MS` +
-`FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` must fit inside `terminationGracePeriodSeconds`, or SIGKILL arrives mid-drain and you are
-back to dropping in-flight work.
+Budget the total: `preStop` sleep + `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` +
+`FELIX_SHUTDOWN_PREDRAIN_MS` + `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` must fit inside
+`terminationGracePeriodSeconds`, or SIGKILL arrives mid-handoff or mid-drain and
+you are back to failovers and dropped in-flight work. Kubernetes' default of 30 s
+does not fit the broker's defaults once the handoff runs, so raise it, as above.
+The Helm chart derives it from all three (`broker.shutdown.handoffTimeoutMs`).
 
 ## What is not covered yet
 
@@ -158,11 +233,15 @@ Tracked under [#139](https://github.com/gabloe/felix/issues/139):
 - Subscription streams are not flushed or closed according to their delivery
   contract; they end when their connection task ends.
 - The "an acknowledged publish is never lost solely because SIGTERM arrived"
-  guarantee is not yet verified by a test.
-- Broker coverage is at the accept-loop and readiness level
-  (`services/felix-broker-service/tests/graceful_shutdown.rs`). There is no process-level test
-  that spawns the real broker binary, sends it SIGTERM under active
-  publish/subscribe traffic, and asserts a bounded clean exit. The control plane
+  guarantee is verified only for a clustered broker that hands its shards off:
+  `a_stopping_broker_hands_its_shard_over_under_load`
+  (`crates/testing/felix-cluster/tests/routing/shutdown_handoff.rs`) sends the
+  real broker binary SIGTERM under publish and subscribe traffic and asserts a
+  clean, bounded exit, no publish refused, and every acknowledged record
+  delivered once and in order. A lone broker, or one whose handoff times out, is
+  not covered by a test.
+- Otherwise broker coverage is at the accept-loop and readiness level
+  (`services/felix-broker-service/tests/graceful_shutdown.rs`). The control plane
   has both halves: `services/felix-controlplane-service/tests/main_runtime.rs` sends the real
   binary a SIGTERM and asserts the ordering above, and
   `services/felix-controlplane-service/tests/rolling_restart.rs` restarts every instance of a
