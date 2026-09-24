@@ -1644,7 +1644,10 @@ absent; they are listed in that script rather than here.
 | `FELIX_NODE_EXPIRY_TIMEOUT_MS` | `15000` | Silence after which a node is considered gone. Placement will not promote a replica whose last report is older than roughly twice this. |
 | `FELIX_NODE_EXPIRY_SWEEP_INTERVAL_MS` | `2000` | How often expiry is evaluated. |
 | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement re-plans. Bounds how quickly a failover happens, and how quickly a shard move advances a step. |
-| `FELIX_SHARD_MOVES_MAX_CONCURRENT` | `1` | Shard moves in flight across the cluster — a drain or a rebalance moves this many shards at once. Each is a full copy of a shard's log. `0` holds every move. |
+| `FELIX_SHARD_MOVES_MAX_CONCURRENT` | `1` | Copies in flight across the cluster — shard moves, and followers being replaced on a draining broker. Each is a full copy of a shard's log. `0` holds every move. |
+| `FELIX_SHARD_MOVES_MAX_PER_NODE` | unset | Copies in flight into or out of any one broker. Unset or `0` is no limit beyond the cluster-wide one. |
+| `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS` | `1000` | How far behind the leader's tail a move's destination may be when the leader is fenced. The rest is copied before the cut-over, so this bounds the switch-over, not what is lost. |
+| `FELIX_SHARD_MOVE_TIMEOUT_MS` | `1800000` | A move that has not reached its fence, or a follower replacement that has not caught up, this long after it started is abandoned and its slot goes to the next move. A fenced move is always finished. `0` never gives up. |
 | `FELIX_CP_URL`, `FELIX_CP_SYNC_INTERVAL_MS` | — | Short aliases used by the demos and cluster harness. |
 
 ### Peer protocol, between brokers
@@ -1668,6 +1671,7 @@ absent; they are listed in that script rather than here.
 | `FELIX_REPLICATION_REBUILD_BYTES_PER_SEC` | `0` | Bytes per second a rebuilding follower is shipped at. `0` is unlimited. |
 | `FELIX_SHARD_MOVE_HOLD_MS` | `2000` | How long a publish to a shard that is moving waits for the move to cut over before it is refused with `shard_unavailable` / `moving`. The wait happens before the publish is accepted, so nothing held is acknowledged. `0` refuses at once. |
 | `FELIX_SHARD_MOVE_HOLD_MAX` | `1024` | How many publishes may wait on moving shards at once. Each keeps its payload in memory; beyond this, a publish to a moving shard is refused at once. |
+| `FELIX_SHARD_MOVE_BYTES_PER_SEC` | `0` | Bytes per second this broker ships to move destinations, across every shard it leads. Only a destination the quorum does not need is held to it, so a `Quorum` publish never waits on it; the remainder after the fence is not. `0` is unlimited. |
 
 ### Consumer groups
 

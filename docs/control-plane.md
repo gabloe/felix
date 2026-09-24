@@ -410,8 +410,9 @@ fixes.
 
 **A pass also runs as soon as a move can advance**, not only on the timer. When
 an instance records a replica report that is exactly what a move is waiting
-for — a leader reporting `drained` at a fenced generation, or a report listing
-the staged successor as caught up — it wakes its own reconciler. Wakes
+for — a leader reporting `drained` at a fenced generation, or a report putting
+the staged successor, or a follower being copied in, within the fence's lag
+bound — it wakes its own reconciler. Wakes
 coalesce: however many arrive while a pass is pending or running, one more
 pass follows, and only one pass is ever in flight. The wake changes when a pass
 runs, never what it decides; the pass reads the store and judges the report
@@ -422,6 +423,9 @@ does not run placement (a Raft follower) waits for the leader's next tick.
 | --- | --- | --- |
 | `node_liveness.shard_reconcile_interval_ms` | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | 5000 |
 | `max_concurrent_shard_moves` | `FELIX_SHARD_MOVES_MAX_CONCURRENT` | 1 |
+| `max_shard_moves_per_node` | `FELIX_SHARD_MOVES_MAX_PER_NODE` | unset (no per-node limit) |
+| `shard_move_fence_max_lag_records` | `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS` | 1000 |
+| `shard_move_timeout_ms` | `FELIX_SHARD_MOVE_TIMEOUT_MS` | 1800000 (30 min); `0` never gives up |
 
 #### Moving a shard
 
@@ -431,13 +435,22 @@ writes, each at a new generation and each resumable from the store by
 whichever instance runs the next pass:
 
 1. **Stage.** The destination joins `replicas` and is recorded as
-   `successor`. The leader ships it the log like any other follower.
-2. **Fence.** Once the leader's replica report lists the successor as caught
-   up, the assignment goes `draining`. The leader closes the shard's write
+   `successor`, with the store's clock as `move_started_at_millis`. The
+   leader ships it the log like any other follower.
+2. **Fence.** Once the leader's replica report puts the successor within
+   `shard_move_fence_max_lag_records` of the leader's tail, the assignment
+   goes `draining`. Exactly level is not required: a busy shard's
+   destination is almost never level at the instant a report is made, and a
+   move that waited for it could wait forever. The report carries the
+   leader's tail (`leader_offset`) for this; from a broker that does not send
+   it, only exactly level fences. A follower the leader cannot reach is left
+   out of the report's offsets, so an unreachable destination is never
+   fenced on a stale position. The leader closes the shard's write
    fence, so a write that has not yet claimed its place in the log is
    refused, lets the writes already inside land, keeps shipping, and reports
-   `drained: true` once the fence is empty — with `caught_up` measured
-   against that final tail.
+   `drained: true` once the fence is empty and the successor holds everything
+   up to that final tail. The lag bound therefore limits how long the
+   switch-over waits on the copy, not what can be lost.
 3. **Cut over.** On a drained report at the fenced generation, the successor
    is named leader in a fresh `assigning` assignment. The old leader keeps a
    follower's seat if it is staying and the replication factor wants one;
@@ -446,7 +459,11 @@ whichever instance runs the next pass:
 Two things start a move. A **draining node** (`POST /v1/nodes/{id}/drain`)
 gives up everything it leads, one shard per free move slot, preferring a
 caught-up live replica under its share as the destination; a follower it
-holds for some other shard is reseated onto a node that is staying. A
+holds for some other shard is replaced by one on a node that is staying. The
+replacement is copied in beside it, named in the assignment as `joining`
+(`reseat`), and the departing follower leaves only once the replacement is
+within the lag bound (`seat`), so the shard never has fewer copies than it
+asked for while the new one fills. A
 **live node over its share** of leadership — more than `ceil(shards /
 live nodes)` — gives a shard to a node under its share. Moves in flight are
 counted as complete for the share calculation, so a node never stages more
@@ -467,20 +484,54 @@ refused rather than accepted somewhere the successor cannot see — the client
 sees an error, never a silent drop. Locally that window is under a second;
 in a deployment it is a few control-plane sync intervals.
 
-`max_concurrent_shard_moves` bounds moves in flight across the cluster,
-one by default, because each is a full copy of a shard's log. `0` starts
-nothing: a drain waits and an imbalance stays, both visibly.
+#### Pacing moves
+
+Every copy holds a **move slot** from when it starts until it is finished:
+a move from its stage to its cut-over, a follower replacement until it is
+seated. `max_concurrent_shard_moves` bounds them across the cluster, one by
+default, because each is a full copy of a shard's log. `0` starts nothing: a
+drain waits and an imbalance stays, both visibly. `max_shard_moves_per_node`
+bounds the copies going into or out of any one broker, counting the leader
+that ships and the node that receives; unset, only the cluster-wide limit
+applies. Slots go to drains before rebalancing, since a draining broker is
+waiting to leave while an imbalance only costs evenness.
+
+The limits are enforced by one planner. Each write is conditional on its own
+shard's generation, not on the count, so with several Postgres instances
+running placement at the same instant each may start a move.
+
+A move or replacement that has not reached its fence within
+`shard_move_timeout_ms` of starting is **abandoned** (`timed_out`): the
+destination is dropped from the replica set, unless the stream already had it
+as a follower, and the slot goes to the next move. The start time stays on
+the assignment, which puts that shard behind every other waiting for a slot,
+so one copy that keeps failing cannot hold up the rest of a drain. Set the
+timeout well above the time the largest shard takes to copy at the
+bandwidth limit below.
+
+A move that has been fenced is not timed out. The leader has stopped
+serving; going back means a new generation and every client following the
+shard twice, while going on waits for at most the lag bound's worth of copy.
+A destination that stops being live after the fence is handled as before.
+
+The copy's bandwidth is limited on the broker that ships it: see
+`FELIX_SHARD_MOVE_BYTES_PER_SEC` in the broker configuration. It applies
+only to a destination the quorum does not need, so a `Quorum` publish never
+waits on it, and not to the remainder
+after the fence.
 
 | Metric | Meaning |
 | --- | --- |
-| `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
-| `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or the move limit holding a drain back |
+| `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `timed_out`, `reseat`, `seat` |
+| `felix_shard_moves_timed_out_total` | moves and follower replacements abandoned at the move timeout; a steady count means a copy that cannot finish |
+| `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or a move limit holding a drain back |
 | `felix_shard_assignment_write_conflicts_total` | placements and move steps not written because another instance changed the shard after this pass read it; the next pass re-plans |
 | `felix_shard_move_duration_seconds` | histogram: from a move's first step (the stage, or the fence when the destination was already caught up) to its cut-over |
 | `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over — the window in which the shard is not served |
 
 The two histograms are **per-instance observations**, timed from the steps
-the instance itself wrote; assignments carry no timestamps. A move is observed
+the instance itself wrote; the start an assignment carries is for the move
+timeout, not for these. A move is observed
 only by the instance that wrote both its fence and its cut-over, and its full
 duration only if that instance staged it too. With a single placement writer
 (one instance, or the Raft leader) that is every move; with several instances
@@ -701,6 +752,7 @@ Control plane:
 | `felix_shards_placed_total` | shards given a leader by reconciliation |
 | `felix_shards_unplaceable` | shards with no eligible leader right now; non-zero needs attention |
 | `felix_shard_move_steps_total{step}` | planned-move steps written |
+| `felix_shard_moves_timed_out_total` | moves and follower replacements abandoned at the move timeout |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_assignment_write_conflicts_total` | placement writes skipped because the shard changed after the pass read it |
 | `felix_shard_move_duration_seconds` | histogram: stage (or fence) to cut-over, as this instance observed it |
