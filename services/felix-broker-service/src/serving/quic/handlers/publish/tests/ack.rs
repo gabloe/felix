@@ -43,6 +43,7 @@ async fn send_outgoing_critical_increments_depth() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn send_outgoing_critical_triggers_throttle_at_hi_water() {
     reset_global_ack_depth();
     let depth = Arc::new(AtomicUsize::new(ACK_HI_WATER.saturating_sub(1)));
@@ -65,6 +66,7 @@ async fn send_outgoing_critical_triggers_throttle_at_hi_water() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn send_outgoing_best_effort_reports_full() {
     reset_global_ack_depth();
     let depth = Arc::new(AtomicUsize::new(0));
@@ -90,6 +92,7 @@ async fn send_outgoing_best_effort_reports_full() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn send_outgoing_best_effort_triggers_throttle_at_hi_water() {
     reset_global_ack_depth();
     let depth = Arc::new(AtomicUsize::new(ACK_HI_WATER.saturating_sub(1)));
@@ -109,6 +112,7 @@ async fn send_outgoing_best_effort_triggers_throttle_at_hi_water() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn send_outgoing_best_effort_reports_closed() {
     reset_global_ack_depth();
     let depth = Arc::new(AtomicUsize::new(0));
