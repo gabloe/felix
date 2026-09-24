@@ -83,6 +83,7 @@ implements. A few, so the flavour is clear:
 | `retry.ambiguous_outcomes_are_not_silently_retried` | Re-sending a publish that may already have been applied duplicates it, and nothing downstream can tell the copies apart — the delivery guarantee changes without anyone choosing it. |
 | `retry.idempotent_producers_re_send_ambiguous_outcomes` | With a producer id and a sequence the broker can tell the copies apart, so the producer must re-send under the same sequence — and a client that advances the sequence on a failure, or re-sends after a refusal, turns the guarantee back into a guess. |
 | `error.unauthorized_is_typed` | An application that cannot tell "not permitted" from "unreachable" retries the one that will never succeed. |
+| `error.quorum_timeout_is_outcome_unknown` | A write that may have survived, reported as a plain failure, gets resent and duplicated; reported as success, it may be lost. |
 
 Each scenario has a stable id. A client's test suite tags its tests with those
 ids, emits a results document, and `verify` reports any **required** scenario

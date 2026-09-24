@@ -196,24 +196,49 @@ errors: the recovery differs, so the identity has to.
 ```python
 try:
     client.publish("t1", "default", "orders", payload)
+except felix.ShardUnavailableError:
+    retry()          # the shard is moving; nothing was written
+except felix.OutcomeUnknownError:
+    reconcile()      # it may have been written; resend only if idempotent
 except felix.ConnectionError:
     retry()          # worth another attempt, against another broker
 except felix.AuthError:
     give_up()        # no amount of retrying grants a permission
 except felix.NotFoundError:
-    create_stream()  # the stream will not start existing because you retried
+    create_stream()  # or wait: a broker promoted a moment ago may not know it yet
 ```
 
 | Exception | What it means | Retry? |
 | --- | --- | --- |
-| `ConnectionError` | broker unreachable, or the connection died mid-call | yes, elsewhere |
-| `AuthError` | token rejected, or missing the permission | no |
-| `NotFoundError` | no such tenant, namespace, stream or cache | no |
+| `ConnectionError` | broker unreachable, the connection died mid-call, or the broker is shutting down (`draining`) | yes, elsewhere |
+| `ShardUnavailableError` | nobody can serve the shard right now, usually because it is moving (`shard_unavailable`), or another broker owns it (`not_leader`); nothing was written | yes |
+| `OverloadedError` | the broker is shedding load (`overloaded`); nothing was written | yes, after a pause |
+| `OutcomeUnknownError` | the write may or may not have happened (`quorum_timeout`, `leadership_lost`, `unacknowledged`, or any error sent as `outcome_unknown`) | only if idempotent |
+| `AuthError` | token rejected, or missing the permission (`unauthenticated`, `forbidden`) | no |
+| `NotFoundError` | no such tenant, namespace, stream or cache (`not_found`) | see `retry` |
 | `CursorError` | the start offset is gone; retention discarded it | no — restart at `earliest` |
-| `FelixError` | the base, and anything unclassified | judge by case |
+| `FelixError` | the base, and anything else (`invalid_request`, `limit_exceeded`, a code this client does not know) | see `retry` |
+
+Every exception carries three attributes from the broker:
+
+- `code`: the broker's [error code](https://github.com/gabloe/felix/blob/main/docs/protocol.md#error-codes),
+  such as `"shard_unavailable"` or `"quorum_timeout"`.
+- `retry`: what you may do about it: `"retry"`, `"retry_after"`,
+  `"redirect"`, `"outcome_unknown"` or `"fatal"`.
+- `detail`: a dict of extra facts, such as `{"reason": "fenced"}` for an
+  unavailable shard or `retry_after_ms`, or `None`.
+
+The class is picked from `code`, except that an `outcome_unknown` retry class
+always makes an `OutcomeUnknownError`: whatever went wrong, "this may have been
+written" decides what you do next. When the two disagree, act on `retry`. A
+code this client does not know still carries a retry class.
+
+All three are `None` when the broker predates error codes, or when the failure
+happened in the client (a lost connection, say). Then the class is chosen from
+the message, the way older versions of this client always did.
 
 Never match on the message. It is prose and it will be reworded; that is
-exactly what the exception types exist to spare you.
+exactly what the exception types and `code` exist to spare you.
 
 ## Queues
 
