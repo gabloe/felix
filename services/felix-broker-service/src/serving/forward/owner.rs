@@ -134,16 +134,10 @@ impl ForwardingHandler {
         let fenced = match self.ingress.fence().admit(&key, publish.shard.generation) {
             Ok(fenced) => fenced,
             Err(refused) => {
-                // The shard stopped serving here since the check above. Wait
-                // for the routes that say where it went, so the requester is
-                // sent there instead of refused.
-                self.ingress
-                    .settle(&key, publish.shard.generation.saturating_add(1))
-                    .await;
-                return match self.check_ownership(correlation_id, &key, publish.shard.generation) {
-                    Some(denial) => denial.into_publish_answer(correlation_id),
-                    None => self.fenced(refused).into_publish_answer(correlation_id),
-                };
+                return self
+                    .fenced(correlation_id, &key, publish.shard.generation, refused)
+                    .await
+                    .into_publish_answer(correlation_id);
             }
         };
         let published = self
@@ -208,6 +202,8 @@ impl ForwardingHandler {
             kind: ShardKind::Cache,
         };
 
+        // The same wait a forwarded publish makes, for the same reason.
+        self.ingress.settle(&key, op.shard.generation).await;
         if let Some(denial) = self.check_ownership(correlation_id, &key, op.shard.generation) {
             return denial.into_cache_answer(correlation_id);
         }
@@ -238,7 +234,12 @@ impl ForwardingHandler {
         let fenced = if writes {
             match self.ingress.fence().admit(&key, op.shard.generation) {
                 Ok(fenced) => Some(fenced),
-                Err(refused) => return self.fenced(refused).into_cache_answer(correlation_id),
+                Err(refused) => {
+                    return self
+                        .fenced(correlation_id, &key, op.shard.generation, refused)
+                        .await
+                        .into_cache_answer(correlation_id);
+                }
             }
         } else {
             None
@@ -437,8 +438,20 @@ impl ForwardingHandler {
 
     /// A write that passed the ownership check and was then refused by the
     /// fence: the shard stopped serving here while the request was on its way
-    /// in. Answered like any other refusal, so the requester retries.
-    fn fenced(&self, refused: Fenced) -> Denial {
+    /// in. Waits for the routes that say where it went, so the requester is
+    /// sent there; refused, and retried by the requester, only if the move
+    /// has not cut over within the hold.
+    async fn fenced(
+        &self,
+        correlation_id: u64,
+        key: &ShardKey,
+        generation: u64,
+        refused: Fenced,
+    ) -> Denial {
+        self.ingress.settle(key, generation.saturating_add(1)).await;
+        if let Some(denial) = self.check_ownership(correlation_id, key, generation) {
+            return denial;
+        }
         metrics::record_served(metrics::OUTCOME_REFUSED);
         Denial::Refused {
             code: ErrorCode::Unavailable,
@@ -475,7 +488,10 @@ impl ForwardingHandler {
                 let _fenced = match self.ingress.fence().admit(key, op.shard.generation) {
                     Ok(fenced) => fenced,
                     Err(refused) => {
-                        return self.fenced(refused).into_cache_answer(correlation_id);
+                        return self
+                            .fenced(correlation_id, key, op.shard.generation, refused)
+                            .await
+                            .into_cache_answer(correlation_id);
                     }
                 };
                 counters

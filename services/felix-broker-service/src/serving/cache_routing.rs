@@ -8,15 +8,21 @@ use bytes::Bytes;
 
 use crate::serving::forward::{CacheRequest, ForwardKey, ForwardTarget};
 use crate::serving::quic::client_error::ClientError;
-use crate::shards::lifecycle::fence;
-use crate::shards::routing::{Dispatch, IngressRouter, dispatch, shard_for};
+use crate::shards::lifecycle::fence::{self, FenceGuard};
+use crate::shards::routing::{Dispatch, IngressRouter, dispatch_write, shard_for};
 use crate::shards::{ShardKey, ShardKind};
 
 /// Where one cache operation belongs.
 #[derive(Debug)]
 pub(crate) enum CacheRoute {
     /// This broker owns the shard the key falls in, at `generation`.
-    Local { shard: u32, generation: u64 },
+    /// `fenced` is the operation's place in the shard's write fence, on a
+    /// cluster member whose fence was open.
+    Local {
+        shard: u32,
+        generation: u64,
+        fenced: Option<FenceGuard>,
+    },
     /// Another broker owns it.
     Forward {
         key: ForwardKey,
@@ -29,8 +35,10 @@ pub(crate) enum CacheRoute {
 /// Resolve a cache key to the broker that owns it.
 ///
 /// A single-node broker has no ingress router and takes everything locally,
-/// which is what an unsharded cache always did.
-pub(crate) fn resolve_cache_route(
+/// which is what an unsharded cache always did. On a cluster member an
+/// operation on a shard that is mid-move waits for the cut-over and then goes
+/// to the new owner, as a publish does, rather than being refused.
+pub(crate) async fn resolve_cache_route(
     ingress: Option<&IngressRouter>,
     tenant_id: &str,
     namespace: &str,
@@ -41,6 +49,7 @@ pub(crate) fn resolve_cache_route(
         return CacheRoute::Local {
             shard: 0,
             generation: 0,
+            fenced: None,
         };
     };
 
@@ -56,8 +65,13 @@ pub(crate) fn resolve_cache_route(
         kind: ShardKind::Cache,
     };
 
-    match dispatch(Some(router), &shard_key) {
-        Dispatch::Local { generation } => CacheRoute::Local { shard, generation },
+    let (dispatched, fenced) = dispatch_write(Some(router), &shard_key).await;
+    match dispatched {
+        Dispatch::Local { generation } => CacheRoute::Local {
+            shard,
+            generation,
+            fenced,
+        },
         Dispatch::Forward {
             node_id,
             advertise_addr,
@@ -110,8 +124,12 @@ pub(crate) async fn apply_cache_op(
     key: &str,
     request: CacheRequest,
 ) -> anyhow::Result<Option<Bytes>> {
-    match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
-        CacheRoute::Local { shard, generation } => {
+    match resolve_cache_route(ingress, tenant_id, namespace, cache, key).await {
+        CacheRoute::Local {
+            shard,
+            generation,
+            mut fenced,
+        } => {
             let cache_store = broker.cache();
             let written = ShardKey {
                 tenant_id: tenant_id.to_string(),
@@ -124,8 +142,9 @@ pub(crate) async fn apply_cache_op(
             Ok(match request {
                 CacheRequest::Put { value, ttl_ms } => {
                     let ttl = (ttl_ms > 0).then(|| std::time::Duration::from_millis(ttl_ms));
-                    let fenced = fence::enter(ingress, Some(&written), generation)
-                        .map_err(ClientError::from)?;
+                    let fenced =
+                        fence::enter_or_keep(&mut fenced, ingress, Some(&written), generation)
+                            .map_err(ClientError::from)?;
                     cache_store
                         .put(tenant_id, namespace, cache, shard, key, value, ttl)
                         .await;
@@ -141,13 +160,16 @@ pub(crate) async fn apply_cache_op(
                     None
                 }
                 CacheRequest::Get => {
+                    // A read does not hold the fence.
+                    drop(fenced);
                     cache_store
                         .get(tenant_id, namespace, cache, shard, key)
                         .await
                 }
                 CacheRequest::Delete => {
-                    let fenced = fence::enter(ingress, Some(&written), generation)
-                        .map_err(ClientError::from)?;
+                    let fenced =
+                        fence::enter_or_keep(&mut fenced, ingress, Some(&written), generation)
+                            .map_err(ClientError::from)?;
                     let removed = cache_store
                         .delete(tenant_id, namespace, cache, shard, key)
                         .await;
@@ -222,8 +244,12 @@ pub(crate) async fn apply_counter_op(
     key: &str,
     request: CacheRequest,
 ) -> anyhow::Result<Option<i64>> {
-    match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
-        CacheRoute::Local { shard, generation } => {
+    match resolve_cache_route(ingress, tenant_id, namespace, cache, key).await {
+        CacheRoute::Local {
+            shard,
+            generation,
+            mut fenced,
+        } => {
             let Some(counters) = broker.counters() else {
                 return Err(ClientError::internal(
                     "this broker has no durable storage for counters",
@@ -241,18 +267,22 @@ pub(crate) async fn apply_counter_op(
                         shard,
                         kind: ShardKind::Cache,
                     };
-                    let _fenced = fence::enter(ingress, Some(&shard_key), generation)
-                        .map_err(ClientError::from)?;
+                    let _fenced =
+                        fence::enter_or_keep(&mut fenced, ingress, Some(&shard_key), generation)
+                            .map_err(ClientError::from)?;
                     counters
                         .add(tenant_id, namespace, cache, shard, key, delta)
                         .await
                         .map(|(sum, _)| Some(sum))
                         .map_err(storage)
                 }
-                CacheRequest::CounterGet => counters
-                    .get(tenant_id, namespace, cache, shard, key)
-                    .await
-                    .map_err(storage),
+                CacheRequest::CounterGet => {
+                    drop(fenced);
+                    counters
+                        .get(tenant_id, namespace, cache, shard, key)
+                        .await
+                        .map_err(storage)
+                }
                 // The counter path never builds these; reaching here is a bug
                 // in this file, not in the caller.
                 other => {

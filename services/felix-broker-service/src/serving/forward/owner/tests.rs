@@ -638,4 +638,50 @@ mod fence {
             other => panic!("read failed: {other:?}"),
         }
     }
+
+    /// A forwarded counter add that meets the fence is held until the move
+    /// cuts over, then sends the requester to the new owner rather than being
+    /// refused. Nothing is counted here.
+    #[tokio::test]
+    async fn a_forwarded_write_during_a_move_is_sent_to_the_new_owner() {
+        let hold = crate::shards::routing::hold::MoveHold::new(Duration::from_secs(5), 16);
+        let mut leader = Leader::start_holding(hold).await;
+        let credentials = Credentials::new();
+        let handler = Arc::new(owner(&leader, &credentials));
+        let writer =
+            credentials.token(&[&format!("cache.write:cache:{TENANT}/{NAMESPACE}/{CACHE}")]);
+        leader.fence_move(&leader::cache_key());
+
+        let add = tokio::spawn({
+            let handler = Arc::clone(&handler);
+            async move {
+                handler
+                    .apply_cache_op(cache_op(
+                        &writer,
+                        CacheOpKind::CounterAdd,
+                        felix_storage::counter_log::encode_sum(5),
+                    ))
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!add.is_finished(), "the add is held while the shard moves");
+
+        leader.cut_over(&leader::cache_key());
+        match add.await.expect("add") {
+            InternalMessage::NotLeader(moved) => {
+                assert_eq!(moved.node_id, leader::SUCCESSOR);
+                assert_eq!(moved.generation, GENERATION + 1);
+            }
+            other => panic!("expected the new owner, got {other:?}"),
+        }
+        let counted = leader
+            .broker
+            .counters()
+            .expect("counters")
+            .get(TENANT, NAMESPACE, CACHE, 0, "session:abc")
+            .await
+            .expect("read");
+        assert_eq!(counted, None, "the held add was applied on the old owner");
+    }
 }
