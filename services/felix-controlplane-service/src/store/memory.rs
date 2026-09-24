@@ -30,130 +30,34 @@
 //! # Metrics
 //! This store updates a small set of gauges/counters to keep observability behavior consistent with
 //! durable backends.
-use super::export::{EXPORTED_STATE_VERSION, ExportedLog, ExportedState};
-use super::{
-    AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreError, StoreResult,
-};
+mod auth;
+mod caches;
+mod change_log;
+mod export;
+mod namespaces;
+mod nodes;
+mod refresh_tokens;
+mod shards;
+mod streams;
+mod tenants;
+
+use super::{AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreConfig, StoreResult};
 use crate::auth::felix_token::TenantSigningKeys;
 use crate::auth::idp_registry::IdpIssuerConfig;
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
 use crate::auth::refresh_token::{RefreshToken, RefreshTokenTake};
 use crate::model::{
-    Cache, CacheChange, CacheChangeOp, CacheKey, CachePatchRequest, Namespace, NamespaceChange,
-    NamespaceChangeOp, NamespaceKey, Node, NodeChange, NodeChangeOp, NodeLifecycle,
-    NodePatchRequest, ReplicaReport, ShardAssignment, ShardAssignmentChange,
-    ShardAssignmentChangeOp, ShardKey, ShardKind, Stream, StreamChange, StreamChangeOp, StreamKey,
-    StreamPatchRequest, Tenant, TenantChange, TenantChangeOp,
+    Cache, CacheChange, CacheKey, CachePatchRequest, Namespace, NamespaceChange, NamespaceKey,
+    Node, NodeChange, NodeChangeOp, NodeLifecycle, NodePatchRequest, ReplicaReport,
+    ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp, ShardKey, ShardKind, Stream,
+    StreamChange, StreamKey, StreamPatchRequest, Tenant, TenantChange,
 };
 use async_trait::async_trait;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Bounded, in-memory append-only log of changes for a single entity type.
-///
-/// The log is keyed by a monotonically increasing `seq` that is assigned by this process.
-/// - `record()` assigns the next sequence number, appends the change, and evicts older items when
-///   the configured capacity is exceeded.
-/// - Eviction means a consumer may miss changes if it polls too slowly; in that case it must
-///   re-bootstrap by calling the corresponding `*_snapshot()` API.
-///
-/// This structure is intentionally simple. Unlike the Postgres backend:
-/// - There is no transactional coupling between authoritative state and the change log.
-/// - Atomicity is achieved by sequencing operations under locks.
-#[derive(Debug)]
-struct ChangeLog<T> {
-    next_seq: u64,
-    capacity: usize,
-    items: VecDeque<T>,
-}
-
-impl<T> ChangeLog<T> {
-    fn new(capacity: usize) -> Self {
-        // Pre-allocate the deque to the configured capacity to reduce reallocations.
-        Self {
-            next_seq: 0,
-            capacity,
-            items: VecDeque::with_capacity(capacity),
-        }
-    }
-
-    fn record(&mut self, item: impl FnOnce(u64) -> T) -> u64 {
-        // Assign a strictly increasing sequence number for this change stream.
-        // Consumers use `since` checkpoints to resume from a known position.
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.items.push_back(item(seq));
-        // Enforce a fixed retention window: keep only the most recent `capacity` changes.
-        while self.items.len() > self.capacity {
-            self.items.pop_front();
-        }
-        seq
-    }
-}
-
-/// A model rejection is the caller's fault, so it surfaces as a conflict
-/// rather than an internal error.
-fn invalid_node(err: crate::model::NodeValidationError) -> StoreError {
-    StoreError::Conflict(err.to_string())
-}
-
-fn invalid_shard(err: crate::model::ShardValidationError) -> StoreError {
-    StoreError::Conflict(err.to_string())
-}
-
-/// Sort key giving a stable stream-then-shard order.
-fn shard_order(key: &ShardKey) -> (&str, &str, &str, u32) {
-    (&key.tenant_id, &key.namespace, &key.stream, key.shard)
-}
-
-fn invalid_transition(from: NodeLifecycle, to: NodeLifecycle) -> StoreError {
-    invalid_node(crate::model::NodeValidationError::UnsupportedTransition { from, to })
-}
-
-/// Node records and their change log under one lock.
-///
-/// Kept together so a snapshot cannot observe a record set and a `next_seq`
-/// that disagree.
-#[derive(Debug)]
-struct NodeState {
-    records: HashMap<String, Node>,
-    changes: ChangeLog<NodeChange>,
-}
-
-impl NodeState {
-    fn record(&mut self, op: NodeChangeOp, node_id: &str, node: Option<Node>) {
-        self.changes.record(|seq| NodeChange {
-            seq,
-            op,
-            node_id: node_id.to_string(),
-            node,
-        });
-    }
-}
-
-/// Shard assignments and their change log under one lock.
-#[derive(Debug)]
-struct ShardState {
-    records: HashMap<ShardKey, ShardAssignment>,
-    changes: ChangeLog<ShardAssignmentChange>,
-}
-
-impl ShardState {
-    fn record(
-        &mut self,
-        op: ShardAssignmentChangeOp,
-        key: &ShardKey,
-        assignment: Option<ShardAssignment>,
-    ) {
-        self.changes.record(|seq| ShardAssignmentChange {
-            seq,
-            op,
-            key: key.clone(),
-            assignment,
-        });
-    }
-}
+use change_log::ChangeLog;
 
 /// In-memory control-plane store.
 ///
@@ -235,38 +139,6 @@ pub struct InMemoryStore {
 }
 
 impl InMemoryStore {
-    /// Forget every shard assignment belonging to a stream or cache that has
-    /// just been deleted.
-    ///
-    /// Postgres does this with `ON DELETE CASCADE`, and the reason is in the
-    /// migration: ownership records for shards that no longer exist leave
-    /// placement chasing ghosts. Doing it only there would be the more
-    /// dangerous divergence of the two — a suite running in memory would see
-    /// stale assignments the deployed system never produces, so a placement bug
-    /// that needs orphaned rows is invisible in memory and real in Postgres.
-    ///
-    /// No change-log entry, deliberately, because Postgres writes none either:
-    /// a cascade happens inside the database and never reaches the code that
-    /// records unassignments. The delete is already announced on the stream or
-    /// cache change log, and a consumer that has been told the stream is gone
-    /// does not need to be told separately about the shards of a stream that no
-    /// longer exists.
-    async fn drop_shard_assignments_for(
-        &self,
-        kind: ShardKind,
-        tenant_id: &str,
-        namespace: &str,
-        name: &str,
-    ) {
-        let mut state = self.shards.write().await;
-        state.records.retain(|key, _| {
-            !(key.kind == kind
-                && key.tenant_id == tenant_id
-                && key.namespace == namespace
-                && key.stream == name)
-        });
-    }
-
     pub fn new(config: StoreConfig) -> Self {
         let capacity = config.change_window();
         // The change window is a retention bound for incremental sync consumers.
@@ -300,6 +172,38 @@ impl InMemoryStore {
         }
     }
 
+    /// Forget every shard assignment belonging to a stream or cache that has
+    /// just been deleted.
+    ///
+    /// Postgres does this with `ON DELETE CASCADE`, and the reason is in the
+    /// migration: ownership records for shards that no longer exist leave
+    /// placement chasing ghosts. Doing it only there would be the more
+    /// dangerous divergence of the two — a suite running in memory would see
+    /// stale assignments the deployed system never produces, so a placement bug
+    /// that needs orphaned rows is invisible in memory and real in Postgres.
+    ///
+    /// No change-log entry, deliberately, because Postgres writes none either:
+    /// a cascade happens inside the database and never reaches the code that
+    /// records unassignments. The delete is already announced on the stream or
+    /// cache change log, and a consumer that has been told the stream is gone
+    /// does not need to be told separately about the shards of a stream that no
+    /// longer exists.
+    async fn drop_shard_assignments_for(
+        &self,
+        kind: ShardKind,
+        tenant_id: &str,
+        namespace: &str,
+        name: &str,
+    ) {
+        let mut state = self.shards.write().await;
+        state.records.retain(|key, _| {
+            !(key.kind == kind
+                && key.tenant_id == tenant_id
+                && key.namespace == namespace
+                && key.stream == name)
+        });
+    }
+
     fn limit(&self) -> usize {
         // Max number of changes returned per `*_changes()` call.
         // This prevents unbounded responses and keeps polling predictable.
@@ -310,336 +214,55 @@ impl InMemoryStore {
 #[async_trait]
 impl ControlPlaneStore for InMemoryStore {
     async fn list_tenants(&self) -> StoreResult<Vec<Tenant>> {
-        Ok(self.tenants.read().await.values().cloned().collect())
+        tenants::list_tenants(self).await
     }
 
     async fn create_tenant(&self, tenant: Tenant) -> StoreResult<Tenant> {
-        // Create is a pure in-memory upsert with conflict detection.
-        // We also append a change-log entry so watchers can incrementally sync.
-        let mut tenants = self.tenants.write().await;
-        if tenants.contains_key(&tenant.tenant_id) {
-            return Err(StoreError::Conflict("tenant exists".into()));
-        }
-        tenants.insert(tenant.tenant_id.clone(), tenant.clone());
-        self.tenant_changes
-            .write()
-            .await
-            .record(|seq| TenantChange {
-                seq,
-                op: TenantChangeOp::Created,
-                tenant_id: tenant.tenant_id.clone(),
-                tenant: Some(tenant.clone()),
-            });
-        Ok(tenant)
+        tenants::create_tenant(self, tenant).await
     }
 
     async fn delete_tenant(&self, tenant_id: &str) -> StoreResult<()> {
-        let mut tenants = self.tenants.write().await;
-        if tenants.remove(tenant_id).is_none() {
-            return Err(StoreError::NotFound("tenant".into()));
-        }
-        drop(tenants);
-        self.idp_issuers.write().await.remove(tenant_id);
-        self.tenant_signing_keys.write().await.remove(tenant_id);
-        self.rbac_policies.write().await.remove(tenant_id);
-        self.rbac_groupings.write().await.remove(tenant_id);
-        self.auth_bootstrapped.write().await.remove(tenant_id);
-        // Cascading delete: remove dependent namespaces, streams, and caches.
-        // We emit delete changes for dependents so incremental consumers can evict their caches.
-        let mut namespaces = self.namespaces.write().await;
-        let mut ns_keys: Vec<_> = namespaces
-            .keys()
-            .filter(|k| k.tenant_id == tenant_id)
-            .cloned()
-            .collect();
-        // Sorted before publishing: cascade events take sequence numbers in
-        // this order, and a Raft replica applying the same command must
-        // assign the same seq to the same event — HashMap order would not.
-        ns_keys.sort_by(|a, b| (&a.tenant_id, &a.namespace).cmp(&(&b.tenant_id, &b.namespace)));
-        for key in &ns_keys {
-            if let Some(ns) = namespaces.remove(key) {
-                self.namespace_changes
-                    .write()
-                    .await
-                    .record(|seq| NamespaceChange {
-                        seq,
-                        op: NamespaceChangeOp::Deleted,
-                        key: key.clone(),
-                        namespace: Some(ns),
-                    });
-            }
-        }
-        drop(namespaces);
-
-        let mut streams = self.streams.write().await;
-        let mut stream_keys: Vec<_> = streams
-            .keys()
-            .filter(|k| k.tenant_id == tenant_id)
-            .cloned()
-            .collect();
-        stream_keys.sort_by(|a, b| {
-            (&a.tenant_id, &a.namespace, &a.stream).cmp(&(&b.tenant_id, &b.namespace, &b.stream))
-        });
-        for key in &stream_keys {
-            if let Some(stream) = streams.remove(key) {
-                self.stream_changes
-                    .write()
-                    .await
-                    .record(|seq| StreamChange {
-                        seq,
-                        op: StreamChangeOp::Deleted,
-                        key: key.clone(),
-                        stream: Some(stream),
-                    });
-            }
-        }
-        metrics::gauge!("felix_streams_total").set(streams.len() as f64);
-        drop(streams);
-
-        let mut caches = self.caches.write().await;
-        let mut cache_keys: Vec<_> = caches
-            .keys()
-            .filter(|k| k.tenant_id == tenant_id)
-            .cloned()
-            .collect();
-        cache_keys.sort_by(|a, b| {
-            (&a.tenant_id, &a.namespace, &a.cache).cmp(&(&b.tenant_id, &b.namespace, &b.cache))
-        });
-        for key in &cache_keys {
-            if let Some(cache) = caches.remove(key) {
-                self.cache_changes.write().await.record(|seq| CacheChange {
-                    seq,
-                    op: CacheChangeOp::Deleted,
-                    key: key.clone(),
-                    cache: Some(cache),
-                });
-            }
-        }
-        metrics::gauge!("felix_caches_total").set(caches.len() as f64);
-
-        self.tenant_changes
-            .write()
-            .await
-            .record(|seq| TenantChange {
-                seq,
-                op: TenantChangeOp::Deleted,
-                tenant_id: tenant_id.to_string(),
-                tenant: None,
-            });
-        Ok(())
+        tenants::delete_tenant(self, tenant_id).await
     }
 
     async fn tenant_snapshot(&self) -> StoreResult<Snapshot<Tenant>> {
-        // `next_seq` is the checkpoint a consumer should use as `since` on its first changes poll.
-        let items = self.tenants.read().await.values().cloned().collect();
-        let next_seq = self.tenant_changes.read().await.next_seq;
-        Ok(Snapshot { items, next_seq })
+        tenants::tenant_snapshot(self).await
     }
 
     async fn tenant_changes(&self, since: u64) -> StoreResult<ChangeSet<TenantChange>> {
-        // We filter by `seq >= since` (inclusive) and apply a page limit.
-        // If the caller's `since` is older than the retained window, it will receive a partial
-        // history and should fall back to `*_snapshot()` to re-bootstrap.
-        let guard = self.tenant_changes.read().await;
-        let items = guard
-            .items
-            .iter()
-            .filter(|item| item.seq >= since)
-            .take(self.limit())
-            .cloned()
-            .collect();
-        Ok(ChangeSet {
-            items,
-            next_seq: guard.next_seq,
-        })
+        tenants::tenant_changes(self, since).await
     }
 
     async fn list_namespaces(&self, tenant_id: &str) -> StoreResult<Vec<Namespace>> {
-        let items = self
-            .namespaces
-            .read()
-            .await
-            .values()
-            .filter(|ns| ns.tenant_id == tenant_id)
-            .cloned()
-            .collect();
-        Ok(items)
+        namespaces::list_namespaces(self, tenant_id).await
     }
 
     async fn create_namespace(&self, namespace: Namespace) -> StoreResult<Namespace> {
-        // Namespaces are scoped to a tenant; we reject creation if the parent tenant doesn't exist.
-        if !self.tenant_exists(&namespace.tenant_id).await? {
-            return Err(StoreError::NotFound("tenant".into()));
-        }
-        let key = NamespaceKey {
-            tenant_id: namespace.tenant_id.clone(),
-            namespace: namespace.namespace.clone(),
-        };
-        let mut namespaces = self.namespaces.write().await;
-        if namespaces.contains_key(&key) {
-            return Err(StoreError::Conflict("namespace exists".into()));
-        }
-        namespaces.insert(key.clone(), namespace.clone());
-        self.namespace_changes
-            .write()
-            .await
-            .record(|seq| NamespaceChange {
-                seq,
-                op: NamespaceChangeOp::Created,
-                key,
-                namespace: Some(namespace.clone()),
-            });
-        Ok(namespace)
+        namespaces::create_namespace(self, namespace).await
     }
 
     async fn delete_namespace(&self, key: &NamespaceKey) -> StoreResult<()> {
-        if !self.tenant_exists(&key.tenant_id).await? {
-            return Err(StoreError::NotFound("tenant".into()));
-        }
-        let mut namespaces = self.namespaces.write().await;
-        let removed = namespaces.remove(key);
-        drop(namespaces);
-        if removed.is_none() {
-            return Err(StoreError::NotFound("namespace".into()));
-        }
-        self.namespace_changes
-            .write()
-            .await
-            .record(|seq| NamespaceChange {
-                seq,
-                op: NamespaceChangeOp::Deleted,
-                key: key.clone(),
-                namespace: None,
-            });
-        // Cascading delete: removing a namespace also removes its streams and caches.
-        let mut streams = self.streams.write().await;
-        let mut stream_keys: Vec<_> = streams
-            .keys()
-            .filter(|k| k.tenant_id == key.tenant_id && k.namespace == key.namespace)
-            .cloned()
-            .collect();
-        // Sorted for the same reason as the tenant cascade: identical seq
-        // assignment on every Raft replica.
-        stream_keys.sort_by(|a, b| {
-            (&a.tenant_id, &a.namespace, &a.stream).cmp(&(&b.tenant_id, &b.namespace, &b.stream))
-        });
-        for stream_key in &stream_keys {
-            if let Some(stream) = streams.remove(stream_key) {
-                self.stream_changes
-                    .write()
-                    .await
-                    .record(|seq| StreamChange {
-                        seq,
-                        op: StreamChangeOp::Deleted,
-                        key: stream_key.clone(),
-                        stream: Some(stream),
-                    });
-            }
-        }
-        metrics::gauge!("felix_streams_total").set(streams.len() as f64);
-
-        let mut caches = self.caches.write().await;
-        let mut cache_keys: Vec<_> = caches
-            .keys()
-            .filter(|k| k.tenant_id == key.tenant_id && k.namespace == key.namespace)
-            .cloned()
-            .collect();
-        cache_keys.sort_by(|a, b| {
-            (&a.tenant_id, &a.namespace, &a.cache).cmp(&(&b.tenant_id, &b.namespace, &b.cache))
-        });
-        for cache_key in &cache_keys {
-            if let Some(cache) = caches.remove(cache_key) {
-                self.cache_changes.write().await.record(|seq| CacheChange {
-                    seq,
-                    op: CacheChangeOp::Deleted,
-                    key: cache_key.clone(),
-                    cache: Some(cache),
-                });
-            }
-        }
-        metrics::gauge!("felix_caches_total").set(caches.len() as f64);
-        Ok(())
+        namespaces::delete_namespace(self, key).await
     }
 
     async fn namespace_snapshot(&self) -> StoreResult<Snapshot<Namespace>> {
-        // `next_seq` is the checkpoint a consumer should use as `since` on its first changes poll.
-        let items = self.namespaces.read().await.values().cloned().collect();
-        let next_seq = self.namespace_changes.read().await.next_seq;
-        Ok(Snapshot { items, next_seq })
+        namespaces::namespace_snapshot(self).await
     }
 
     async fn namespace_changes(&self, since: u64) -> StoreResult<ChangeSet<NamespaceChange>> {
-        // We filter by `seq >= since` (inclusive) and apply a page limit.
-        // If the caller's `since` is older than the retained window, it will receive a partial
-        // history and should fall back to `*_snapshot()` to re-bootstrap.
-        let guard = self.namespace_changes.read().await;
-        let items = guard
-            .items
-            .iter()
-            .filter(|item| item.seq >= since)
-            .take(self.limit())
-            .cloned()
-            .collect();
-        Ok(ChangeSet {
-            items,
-            next_seq: guard.next_seq,
-        })
+        namespaces::namespace_changes(self, since).await
     }
 
     async fn list_streams(&self, tenant_id: &str, namespace: &str) -> StoreResult<Vec<Stream>> {
-        let items = self
-            .streams
-            .read()
-            .await
-            .values()
-            .filter(|stream| stream.tenant_id == tenant_id && stream.namespace == namespace)
-            .cloned()
-            .collect();
-        Ok(items)
+        streams::list_streams(self, tenant_id, namespace).await
     }
 
     async fn get_stream(&self, key: &StreamKey) -> StoreResult<Stream> {
-        self.streams
-            .read()
-            .await
-            .get(key)
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound("stream".into()))
+        streams::get_stream(self, key).await
     }
 
     async fn create_stream(&self, stream: Stream) -> StoreResult<Stream> {
-        // Streams are scoped to a namespace; we reject creation if the parent namespace doesn't exist.
-        if !self
-            .namespace_exists(&NamespaceKey {
-                tenant_id: stream.tenant_id.clone(),
-                namespace: stream.namespace.clone(),
-            })
-            .await?
-        {
-            return Err(StoreError::NotFound("namespace".into()));
-        }
-        let key = StreamKey {
-            tenant_id: stream.tenant_id.clone(),
-            namespace: stream.namespace.clone(),
-            stream: stream.stream.clone(),
-        };
-        let mut streams = self.streams.write().await;
-        if streams.contains_key(&key) {
-            return Err(StoreError::Conflict("stream exists".into()));
-        }
-        streams.insert(key.clone(), stream.clone());
-        self.stream_changes
-            .write()
-            .await
-            .record(|seq| StreamChange {
-                seq,
-                op: StreamChangeOp::Created,
-                key,
-                stream: Some(stream.clone()),
-            });
-        metrics::counter!("felix_stream_changes_total", "op" => "created").increment(1);
-        metrics::gauge!("felix_streams_total").set(streams.len() as f64);
-        Ok(stream)
+        streams::create_stream(self, stream).await
     }
 
     async fn patch_stream(
@@ -647,329 +270,67 @@ impl ControlPlaneStore for InMemoryStore {
         key: &StreamKey,
         patch: StreamPatchRequest,
     ) -> StoreResult<Stream> {
-        let mut streams = self.streams.write().await;
-        let stream = streams
-            .get_mut(key)
-            .ok_or_else(|| StoreError::NotFound("stream".into()))?;
-        if let Some(retention) = patch.retention {
-            stream.retention = retention;
-        }
-        if let Some(consistency) = patch.consistency {
-            stream.consistency = consistency;
-        }
-        if let Some(delivery) = patch.delivery {
-            stream.delivery = delivery;
-        }
-        if let Some(durable) = patch.durable {
-            stream.durable = durable;
-        }
-        // After applying the patch, we emit an `Updated` change so watchers can reconcile.
-        let updated = stream.clone();
-        self.stream_changes
-            .write()
-            .await
-            .record(|seq| StreamChange {
-                seq,
-                op: StreamChangeOp::Updated,
-                key: key.clone(),
-                stream: Some(updated.clone()),
-            });
-        metrics::counter!("felix_stream_changes_total", "op" => "updated").increment(1);
-        Ok(updated)
+        streams::patch_stream(self, key, patch).await
     }
 
     async fn delete_stream(&self, key: &StreamKey) -> StoreResult<()> {
-        let mut streams = self.streams.write().await;
-        let removed = streams.remove(key);
-        if removed.is_none() {
-            return Err(StoreError::NotFound("stream".into()));
-        }
-        self.drop_shard_assignments_for(
-            ShardKind::Stream,
-            &key.tenant_id,
-            &key.namespace,
-            &key.stream,
-        )
-        .await;
-        self.stream_changes
-            .write()
-            .await
-            .record(|seq| StreamChange {
-                seq,
-                op: StreamChangeOp::Deleted,
-                key: key.clone(),
-                stream: None,
-            });
-        metrics::counter!("felix_stream_changes_total", "op" => "deleted").increment(1);
-        metrics::gauge!("felix_streams_total").set(streams.len() as f64);
-        Ok(())
+        streams::delete_stream(self, key).await
     }
 
     async fn stream_snapshot(&self) -> StoreResult<Snapshot<Stream>> {
-        // `next_seq` is the checkpoint a consumer should use as `since` on its first changes poll.
-        let items = self.streams.read().await.values().cloned().collect();
-        let next_seq = self.stream_changes.read().await.next_seq;
-        Ok(Snapshot { items, next_seq })
+        streams::stream_snapshot(self).await
     }
 
     async fn stream_changes(&self, since: u64) -> StoreResult<ChangeSet<StreamChange>> {
-        // We filter by `seq >= since` (inclusive) and apply a page limit.
-        // If the caller's `since` is older than the retained window, it will receive a partial
-        // history and should fall back to `*_snapshot()` to re-bootstrap.
-        let guard = self.stream_changes.read().await;
-        let items = guard
-            .items
-            .iter()
-            .filter(|item| item.seq >= since)
-            .take(self.limit())
-            .cloned()
-            .collect();
-        Ok(ChangeSet {
-            items,
-            next_seq: guard.next_seq,
-        })
+        streams::stream_changes(self, since).await
     }
 
     async fn list_caches(&self, tenant_id: &str, namespace: &str) -> StoreResult<Vec<Cache>> {
-        let items = self
-            .caches
-            .read()
-            .await
-            .values()
-            .filter(|cache| cache.tenant_id == tenant_id && cache.namespace == namespace)
-            .cloned()
-            .collect();
-        Ok(items)
+        caches::list_caches(self, tenant_id, namespace).await
     }
 
     async fn get_cache(&self, key: &CacheKey) -> StoreResult<Cache> {
-        self.caches
-            .read()
-            .await
-            .get(key)
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound("cache".into()))
+        caches::get_cache(self, key).await
     }
 
     async fn create_cache(&self, cache: Cache) -> StoreResult<Cache> {
-        // Caches are scoped to a namespace; we reject creation if the parent namespace doesn't exist.
-        if !self
-            .namespace_exists(&NamespaceKey {
-                tenant_id: cache.tenant_id.clone(),
-                namespace: cache.namespace.clone(),
-            })
-            .await?
-        {
-            return Err(StoreError::NotFound("namespace".into()));
-        }
-        let key = CacheKey {
-            tenant_id: cache.tenant_id.clone(),
-            namespace: cache.namespace.clone(),
-            cache: cache.cache.clone(),
-        };
-        let mut caches = self.caches.write().await;
-        if caches.contains_key(&key) {
-            return Err(StoreError::Conflict("cache exists".into()));
-        }
-        caches.insert(key.clone(), cache.clone());
-        self.cache_changes.write().await.record(|seq| CacheChange {
-            seq,
-            op: CacheChangeOp::Created,
-            key,
-            cache: Some(cache.clone()),
-        });
-        metrics::counter!("felix_cache_changes_total", "op" => "created").increment(1);
-        metrics::gauge!("felix_caches_total").set(caches.len() as f64);
-        Ok(cache)
+        caches::create_cache(self, cache).await
     }
 
     async fn patch_cache(&self, key: &CacheKey, patch: CachePatchRequest) -> StoreResult<Cache> {
-        let mut caches = self.caches.write().await;
-        let cache = caches
-            .get_mut(key)
-            .ok_or_else(|| StoreError::NotFound("cache".into()))?;
-        if let Some(display_name) = patch.display_name {
-            cache.display_name = display_name;
-        }
-        // After applying the patch, we emit an `Updated` change so watchers can reconcile.
-        let updated = cache.clone();
-        self.cache_changes.write().await.record(|seq| CacheChange {
-            seq,
-            op: CacheChangeOp::Updated,
-            key: key.clone(),
-            cache: Some(updated.clone()),
-        });
-        metrics::counter!("felix_cache_changes_total", "op" => "updated").increment(1);
-        Ok(updated)
+        caches::patch_cache(self, key, patch).await
     }
 
     async fn delete_cache(&self, key: &CacheKey) -> StoreResult<()> {
-        let mut caches = self.caches.write().await;
-        let removed = caches.remove(key);
-        if removed.is_none() {
-            return Err(StoreError::NotFound("cache".into()));
-        }
-        self.drop_shard_assignments_for(
-            ShardKind::Cache,
-            &key.tenant_id,
-            &key.namespace,
-            &key.cache,
-        )
-        .await;
-        self.cache_changes.write().await.record(|seq| CacheChange {
-            seq,
-            op: CacheChangeOp::Deleted,
-            key: key.clone(),
-            cache: None,
-        });
-        metrics::counter!("felix_cache_changes_total", "op" => "deleted").increment(1);
-        metrics::gauge!("felix_caches_total").set(caches.len() as f64);
-        Ok(())
+        caches::delete_cache(self, key).await
     }
 
     async fn cache_snapshot(&self) -> StoreResult<Snapshot<Cache>> {
-        // `next_seq` is the checkpoint a consumer should use as `since` on its first changes poll.
-        let items = self.caches.read().await.values().cloned().collect();
-        let next_seq = self.cache_changes.read().await.next_seq;
-        Ok(Snapshot { items, next_seq })
+        caches::cache_snapshot(self).await
     }
 
     async fn cache_changes(&self, since: u64) -> StoreResult<ChangeSet<CacheChange>> {
-        // We filter by `seq >= since` (inclusive) and apply a page limit.
-        // If the caller's `since` is older than the retained window, it will receive a partial
-        // history and should fall back to `*_snapshot()` to re-bootstrap.
-        let guard = self.cache_changes.read().await;
-        let items = guard
-            .items
-            .iter()
-            .filter(|item| item.seq >= since)
-            .take(self.limit())
-            .cloned()
-            .collect();
-        Ok(ChangeSet {
-            items,
-            next_seq: guard.next_seq,
-        })
+        caches::cache_changes(self, since).await
     }
 
     async fn register_node(&self, node: Node) -> StoreResult<Node> {
-        node.validate().map_err(invalid_node)?;
-        let mut state = self.nodes.write().await;
-
-        if let Some((holder, _)) = state.records.iter().find(|(id, existing)| {
-            existing.spec.advertise_addr == node.spec.advertise_addr && *id != &node.node_id
-        }) {
-            return Err(StoreError::Conflict(format!(
-                "advertise_addr {} is already registered to node {holder}",
-                node.spec.advertise_addr
-            )));
-        }
-
-        let stored = match state.records.get(&node.node_id) {
-            Some(existing) => {
-                if !existing
-                    .status
-                    .lifecycle
-                    .can_transition_to(node.status.lifecycle)
-                {
-                    return Err(invalid_transition(
-                        existing.status.lifecycle,
-                        node.status.lifecycle,
-                    ));
-                }
-                Node {
-                    status: crate::model::NodeStatus {
-                        // The identity outlives the process, so its first
-                        // registration is what dates it.
-                        registered_at_millis: existing.status.registered_at_millis,
-                        incarnation: existing.status.incarnation + 1,
-                        ..node.status
-                    },
-                    ..node
-                }
-            }
-            None => Node {
-                status: crate::model::NodeStatus {
-                    incarnation: 0,
-                    ..node.status
-                },
-                ..node
-            },
-        };
-
-        state.records.insert(stored.node_id.clone(), stored.clone());
-        state.record(
-            NodeChangeOp::Registered,
-            &stored.node_id,
-            Some(stored.clone()),
-        );
-        metrics::counter!("felix_node_changes_total", "op" => "registered").increment(1);
-        Ok(stored)
+        nodes::register_node(self, node).await
     }
 
     async fn get_node(&self, node_id: &str) -> StoreResult<Node> {
-        self.nodes
-            .read()
-            .await
-            .records
-            .get(node_id)
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound("node".into()))
+        nodes::get_node(self, node_id).await
     }
 
     async fn list_nodes(&self) -> StoreResult<Vec<Node>> {
-        let mut items: Vec<Node> = self.nodes.read().await.records.values().cloned().collect();
-        items.sort_by(|a, b| a.node_id.cmp(&b.node_id));
-        Ok(items)
+        nodes::list_nodes(self).await
     }
 
     async fn patch_node(&self, node_id: &str, patch: NodePatchRequest) -> StoreResult<Node> {
-        let mut state = self.nodes.write().await;
-        let existing = state
-            .records
-            .get(node_id)
-            .ok_or_else(|| StoreError::NotFound("node".into()))?;
-        let patched = patch.apply(existing).map_err(invalid_node)?;
-
-        if let Some((holder, _)) = state.records.iter().find(|(id, other)| {
-            other.spec.advertise_addr == patched.spec.advertise_addr && *id != node_id
-        }) {
-            return Err(StoreError::Conflict(format!(
-                "advertise_addr {} is already registered to node {holder}",
-                patched.spec.advertise_addr
-            )));
-        }
-
-        state.records.insert(node_id.to_string(), patched.clone());
-        state.record(NodeChangeOp::Updated, node_id, Some(patched.clone()));
-        metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
-        Ok(patched)
+        nodes::patch_node(self, node_id, patch).await
     }
 
     async fn delete_node(&self, node_id: &str) -> StoreResult<()> {
-        // Refused rather than cascaded: deleting the assignment would erase the
-        // only record of where that shard's data lives.
-        let led = self
-            .shards
-            .read()
-            .await
-            .records
-            .values()
-            .filter(|assignment| assignment.leader == node_id)
-            .count();
-        if led > 0 {
-            return Err(StoreError::Conflict(format!(
-                "node {node_id} still leads {led} shard(s); reassign them first"
-            )));
-        }
-
-        let mut state = self.nodes.write().await;
-        if state.records.remove(node_id).is_none() {
-            return Err(StoreError::NotFound("node".into()));
-        }
-        state.record(NodeChangeOp::Deregistered, node_id, None);
-        metrics::counter!("felix_node_changes_total", "op" => "deregistered").increment(1);
-        Ok(())
+        nodes::delete_node(self, node_id).await
     }
 
     async fn record_node_heartbeat(
@@ -978,55 +339,11 @@ impl ControlPlaneStore for InMemoryStore {
         incarnation: u64,
         at_millis: u64,
     ) -> StoreResult<Node> {
-        let mut state = self.nodes.write().await;
-        let node = state
-            .records
-            .get_mut(node_id)
-            .ok_or_else(|| StoreError::NotFound("node".into()))?;
-        if incarnation < node.status.incarnation {
-            return Err(StoreError::Conflict(format!(
-                "heartbeat for incarnation {incarnation} of {node_id}, which is now at {}",
-                node.status.incarnation
-            )));
-        }
-        // Never moves backwards: heartbeats from two connections can arrive out
-        // of order, and the newest observation is the one that matters.
-        node.status.last_heartbeat_at_millis = node.status.last_heartbeat_at_millis.max(at_millis);
-        Ok(node.clone())
+        nodes::record_node_heartbeat(self, node_id, incarnation, at_millis).await
     }
 
     async fn expire_stale_nodes(&self, expiry_before_millis: u64) -> StoreResult<Vec<Node>> {
-        let mut state = self.nodes.write().await;
-        let mut stale: Vec<String> = state
-            .records
-            .values()
-            .filter(|node| {
-                matches!(
-                    node.status.lifecycle,
-                    NodeLifecycle::Live | NodeLifecycle::Draining
-                ) && node.status.last_heartbeat_at_millis < expiry_before_millis
-            })
-            .map(|node| node.node_id.clone())
-            .collect();
-        // Sorted before publishing, not after returning: each expiry takes a
-        // change-log seq here, and a Raft replica applying this command must
-        // hand the same node the same seq — HashMap order would not.
-        stale.sort();
-
-        let mut expired = Vec::with_capacity(stale.len());
-        for node_id in stale {
-            let node = state.records.get_mut(&node_id).expect("just listed");
-            crate::cluster::membership::metrics::record_transition(
-                node.status.lifecycle,
-                NodeLifecycle::Down,
-            );
-            node.status.lifecycle = NodeLifecycle::Down;
-            let moved = node.clone();
-            state.record(NodeChangeOp::Updated, &node_id, Some(moved.clone()));
-            metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
-            expired.push(moved);
-        }
-        Ok(expired)
+        nodes::expire_stale_nodes(self, expiry_before_millis).await
     }
 
     async fn set_node_lifecycle(
@@ -1034,247 +351,68 @@ impl ControlPlaneStore for InMemoryStore {
         node_id: &str,
         lifecycle: NodeLifecycle,
     ) -> StoreResult<Option<Node>> {
-        let mut state = self.nodes.write().await;
-        let node = state
-            .records
-            .get_mut(node_id)
-            .ok_or_else(|| StoreError::NotFound("node".into()))?;
-        if node.status.lifecycle == lifecycle {
-            return Ok(None);
-        }
-        if !node.status.lifecycle.can_transition_to(lifecycle) {
-            return Err(invalid_transition(node.status.lifecycle, lifecycle));
-        }
-        let previous = node.status.lifecycle;
-        node.status.lifecycle = lifecycle;
-        let updated = node.clone();
-        crate::cluster::membership::metrics::record_transition(previous, lifecycle);
-        state.record(NodeChangeOp::Updated, node_id, Some(updated.clone()));
-        metrics::counter!("felix_node_changes_total", "op" => "updated").increment(1);
-        Ok(Some(updated))
+        nodes::set_node_lifecycle(self, node_id, lifecycle).await
     }
 
     async fn node_snapshot(&self) -> StoreResult<Snapshot<Node>> {
-        // One guard, so `items` and `next_seq` describe the same instant.
-        let state = self.nodes.read().await;
-        let mut items: Vec<Node> = state.records.values().cloned().collect();
-        items.sort_by(|a, b| a.node_id.cmp(&b.node_id));
-        Ok(Snapshot {
-            items,
-            next_seq: state.changes.next_seq,
-        })
+        nodes::node_snapshot(self).await
     }
 
     async fn node_changes(&self, since: u64) -> StoreResult<ChangeSet<NodeChange>> {
-        let state = self.nodes.read().await;
-        let items = state
-            .changes
-            .items
-            .iter()
-            .filter(|item| item.seq >= since)
-            .take(self.limit())
-            .cloned()
-            .collect();
-        Ok(ChangeSet {
-            items,
-            next_seq: state.changes.next_seq,
-        })
+        nodes::node_changes(self, since).await
     }
 
     async fn put_shard_assignment(
         &self,
         assignment: ShardAssignment,
     ) -> StoreResult<ShardAssignment> {
-        assignment.validate().map_err(invalid_shard)?;
-
-        // The stream or cache bounds the shard number, and it has to exist at
-        // all. Which of the two is decided by the key's kind, not by looking in
-        // both: a cache and a stream may share a name, and falling back from one
-        // to the other would let a shard of the wrong thing validate.
-        let shards = match assignment.key.kind {
-            ShardKind::Stream => self
-                .streams
-                .read()
-                .await
-                .get(&StreamKey {
-                    tenant_id: assignment.key.tenant_id.clone(),
-                    namespace: assignment.key.namespace.clone(),
-                    stream: assignment.key.stream.clone(),
-                })
-                .map(|stream| stream.shards)
-                .ok_or_else(|| StoreError::NotFound("stream".into()))?,
-            ShardKind::Cache => self
-                .caches
-                .read()
-                .await
-                .get(&CacheKey {
-                    tenant_id: assignment.key.tenant_id.clone(),
-                    namespace: assignment.key.namespace.clone(),
-                    cache: assignment.key.stream.clone(),
-                })
-                .map(|cache| cache.shards)
-                .ok_or_else(|| StoreError::NotFound("cache".into()))?,
-        };
-        assignment.validate_within(shards).map_err(invalid_shard)?;
-
-        // Checked here rather than by a foreign key: the node reference has none
-        // deliberately, so that deleting a node cannot cascade an assignment away.
-        {
-            let nodes = self.nodes.read().await;
-            for node_id in assignment.nodes() {
-                if !nodes.records.contains_key(node_id) {
-                    return Err(StoreError::NotFound(format!("node {node_id}")));
-                }
-            }
-        }
-
-        let mut state = self.shards.write().await;
-        let (op, generation) = match state.records.get(&assignment.key) {
-            Some(existing) => {
-                if !existing.state.can_transition_to(assignment.state) {
-                    return Err(invalid_shard(
-                        crate::model::ShardValidationError::UnsupportedTransition {
-                            from: existing.state,
-                            to: assignment.state,
-                        },
-                    ));
-                }
-                (
-                    ShardAssignmentChangeOp::Updated,
-                    existing.generation.saturating_add(1),
-                )
-            }
-            None => (ShardAssignmentChangeOp::Assigned, 0),
-        };
-
-        // Store-owned, so a caller cannot pin a generation and make its own
-        // stale report look current.
-        let stored = ShardAssignment {
-            generation,
-            ..assignment
-        };
-        state.records.insert(stored.key.clone(), stored.clone());
-        state.record(op, &stored.key, Some(stored.clone()));
-        metrics::counter!("felix_shard_assignment_changes_total", "op" => match op {
-            ShardAssignmentChangeOp::Assigned => "assigned",
-            ShardAssignmentChangeOp::Updated => "updated",
-            ShardAssignmentChangeOp::Unassigned => "unassigned",
-        })
-        .increment(1);
-        Ok(stored)
+        shards::put_shard_assignment(self, assignment).await
     }
 
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
-        self.shards
-            .read()
-            .await
-            .records
-            .get(key)
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound("shard assignment".into()))
+        shards::get_shard_assignment(self, key).await
     }
 
     async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>> {
-        let mut items: Vec<ShardAssignment> =
-            self.shards.read().await.records.values().cloned().collect();
-        items.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
-        Ok(items)
+        shards::list_shard_assignments(self).await
     }
 
     async fn list_shard_assignments_for_node(
         &self,
         node_id: &str,
     ) -> StoreResult<Vec<ShardAssignment>> {
-        let mut items: Vec<ShardAssignment> = self
-            .shards
-            .read()
-            .await
-            .records
-            .values()
-            .filter(|assignment| assignment.leader == node_id)
-            .cloned()
-            .collect();
-        items.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
-        Ok(items)
+        shards::list_shard_assignments_for_node(self, node_id).await
     }
 
     async fn delete_shard_assignment(&self, key: &ShardKey) -> StoreResult<()> {
-        let mut state = self.shards.write().await;
-        if state.records.remove(key).is_none() {
-            return Err(StoreError::NotFound("shard assignment".into()));
-        }
-        state.record(ShardAssignmentChangeOp::Unassigned, key, None);
-        // Taken under the assignment lock, so a report cannot slip in between.
-        self.replica_reports.write().await.remove(key);
-        metrics::counter!("felix_shard_assignment_changes_total", "op" => "unassigned")
-            .increment(1);
-        Ok(())
-    }
-
-    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
-        // Held across the existence check so a concurrent delete either sees
-        // the report and removes it, or runs after this and finds nothing.
-        let shards = self.shards.read().await;
-        if !shards.records.contains_key(&report.key) {
-            return Err(StoreError::NotFound("shard assignment".into()));
-        }
-        let mut reports = self.replica_reports.write().await;
-        if let Some(held) = reports.get(&report.key)
-            && held.generation > report.generation
-        {
-            return Ok(());
-        }
-        reports.insert(report.key.clone(), report);
-        Ok(())
-    }
-
-    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
-        let mut reports: Vec<ReplicaReport> = self
-            .replica_reports
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect();
-        reports.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
-        Ok(reports)
+        shards::delete_shard_assignment(self, key).await
     }
 
     async fn shard_assignment_snapshot(&self) -> StoreResult<Snapshot<ShardAssignment>> {
-        let state = self.shards.read().await;
-        let mut items: Vec<ShardAssignment> = state.records.values().cloned().collect();
-        items.sort_by(|a, b| shard_order(&a.key).cmp(&shard_order(&b.key)));
-        Ok(Snapshot {
-            items,
-            next_seq: state.changes.next_seq,
-        })
+        shards::shard_assignment_snapshot(self).await
     }
 
     async fn shard_assignment_changes(
         &self,
         since: u64,
     ) -> StoreResult<ChangeSet<ShardAssignmentChange>> {
-        let state = self.shards.read().await;
-        let items = state
-            .changes
-            .items
-            .iter()
-            .filter(|item| item.seq >= since)
-            .take(self.limit())
-            .cloned()
-            .collect();
-        Ok(ChangeSet {
-            items,
-            next_seq: state.changes.next_seq,
-        })
+        shards::shard_assignment_changes(self, since).await
+    }
+
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
+        shards::record_replica_report(self, report).await
+    }
+
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
+        shards::list_replica_reports(self).await
     }
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
-        Ok(self.tenants.read().await.contains_key(tenant_id))
+        tenants::tenant_exists(self, tenant_id).await
     }
 
     async fn namespace_exists(&self, key: &NamespaceKey) -> StoreResult<bool> {
-        Ok(self.namespaces.read().await.contains_key(key))
+        namespaces::namespace_exists(self, key).await
     }
 
     async fn health_check(&self) -> StoreResult<()> {
@@ -1299,81 +437,35 @@ impl ControlPlaneStore for InMemoryStore {
 #[async_trait]
 impl AuthStore for InMemoryStore {
     async fn list_idp_issuers(&self, tenant_id: &str) -> StoreResult<Vec<IdpIssuerConfig>> {
-        Ok(self
-            .idp_issuers
-            .read()
-            .await
-            .get(tenant_id)
-            .cloned()
-            .unwrap_or_default())
+        auth::list_idp_issuers(self, tenant_id).await
     }
 
     async fn upsert_idp_issuer(&self, tenant_id: &str, issuer: IdpIssuerConfig) -> StoreResult<()> {
-        let mut issuers = self.idp_issuers.write().await;
-        let entries = issuers.entry(tenant_id.to_string()).or_default();
-        if let Some(existing) = entries.iter_mut().find(|item| item.issuer == issuer.issuer) {
-            *existing = issuer;
-        } else {
-            entries.push(issuer);
-        }
-        Ok(())
+        auth::upsert_idp_issuer(self, tenant_id, issuer).await
     }
 
     async fn delete_idp_issuer(&self, tenant_id: &str, issuer: &str) -> StoreResult<()> {
-        let mut issuers = self.idp_issuers.write().await;
-        if let Some(entries) = issuers.get_mut(tenant_id) {
-            entries.retain(|item| item.issuer != issuer);
-        }
-        Ok(())
+        auth::delete_idp_issuer(self, tenant_id, issuer).await
     }
 
     async fn list_rbac_policies(&self, tenant_id: &str) -> StoreResult<Vec<PolicyRule>> {
-        Ok(self
-            .rbac_policies
-            .read()
-            .await
-            .get(tenant_id)
-            .cloned()
-            .unwrap_or_default())
+        auth::list_rbac_policies(self, tenant_id).await
     }
 
     async fn list_rbac_groupings(&self, tenant_id: &str) -> StoreResult<Vec<GroupingRule>> {
-        Ok(self
-            .rbac_groupings
-            .read()
-            .await
-            .get(tenant_id)
-            .cloned()
-            .unwrap_or_default())
+        auth::list_rbac_groupings(self, tenant_id).await
     }
 
     async fn add_rbac_policy(&self, tenant_id: &str, policy: PolicyRule) -> StoreResult<()> {
-        self.rbac_policies
-            .write()
-            .await
-            .entry(tenant_id.to_string())
-            .or_default()
-            .push(policy);
-        Ok(())
+        auth::add_rbac_policy(self, tenant_id, policy).await
     }
 
     async fn add_rbac_grouping(&self, tenant_id: &str, grouping: GroupingRule) -> StoreResult<()> {
-        self.rbac_groupings
-            .write()
-            .await
-            .entry(tenant_id.to_string())
-            .or_default()
-            .push(grouping);
-        Ok(())
+        auth::add_rbac_grouping(self, tenant_id, grouping).await
     }
 
     async fn get_tenant_signing_keys(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
-        self.tenant_signing_keys
-            .read()
-            .await
-            .get(tenant_id)
-            .cloned()
-            .ok_or_else(|| StoreError::NotFound("signing keys".into()))
+        auth::get_tenant_signing_keys(self, tenant_id).await
     }
 
     async fn set_tenant_signing_keys(
@@ -1381,22 +473,11 @@ impl AuthStore for InMemoryStore {
         tenant_id: &str,
         keys: TenantSigningKeys,
     ) -> StoreResult<()> {
-        self.tenant_signing_keys
-            .write()
-            .await
-            .insert(tenant_id.to_string(), keys);
-        crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
-        Ok(())
+        auth::set_tenant_signing_keys(self, tenant_id, keys).await
     }
 
     async fn tenant_auth_is_bootstrapped(&self, tenant_id: &str) -> StoreResult<bool> {
-        Ok(self
-            .auth_bootstrapped
-            .read()
-            .await
-            .get(tenant_id)
-            .copied()
-            .unwrap_or(false))
+        auth::tenant_auth_is_bootstrapped(self, tenant_id).await
     }
 
     async fn set_tenant_auth_bootstrapped(
@@ -1404,30 +485,11 @@ impl AuthStore for InMemoryStore {
         tenant_id: &str,
         bootstrapped: bool,
     ) -> StoreResult<()> {
-        self.auth_bootstrapped
-            .write()
-            .await
-            .insert(tenant_id.to_string(), bootstrapped);
-        Ok(())
+        auth::set_tenant_auth_bootstrapped(self, tenant_id, bootstrapped).await
     }
 
     async fn ensure_signing_key_current(&self, tenant_id: &str) -> StoreResult<TenantSigningKeys> {
-        if let Some(keys) = self
-            .tenant_signing_keys
-            .read()
-            .await
-            .get(tenant_id)
-            .cloned()
-        {
-            return Ok(keys);
-        }
-        let keys = crate::auth::keys::generate_signing_keys().map_err(StoreError::Unexpected)?;
-        self.tenant_signing_keys
-            .write()
-            .await
-            .insert(tenant_id.to_string(), keys.clone());
-        crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
-        Ok(keys)
+        auth::ensure_signing_key_current(self, tenant_id).await
     }
 
     async fn seed_rbac_policies_and_groupings(
@@ -1436,25 +498,7 @@ impl AuthStore for InMemoryStore {
         policies: Vec<PolicyRule>,
         groupings: Vec<GroupingRule>,
     ) -> StoreResult<()> {
-        {
-            let mut existing = self.rbac_policies.write().await;
-            let entry = existing.entry(tenant_id.to_string()).or_default();
-            for policy in policies {
-                if !entry.contains(&policy) {
-                    entry.push(policy);
-                }
-            }
-        }
-        {
-            let mut existing = self.rbac_groupings.write().await;
-            let entry = existing.entry(tenant_id.to_string()).or_default();
-            for grouping in groupings {
-                if !entry.contains(&grouping) {
-                    entry.push(grouping);
-                }
-            }
-        }
-        Ok(())
+        auth::seed_rbac_policies_and_groupings(self, tenant_id, policies, groupings).await
     }
 
     async fn bootstrap_tenant_auth(
@@ -1462,53 +506,11 @@ impl AuthStore for InMemoryStore {
         tenant_id: &str,
         seed: crate::store::TenantAuthSeed,
     ) -> StoreResult<TenantSigningKeys> {
-        let _serial = self.bootstrap_serial.lock().await;
-
-        if !self.tenants.read().await.contains_key(tenant_id) {
-            return Err(StoreError::NotFound("tenant".into()));
-        }
-        if self
-            .auth_bootstrapped
-            .read()
-            .await
-            .get(tenant_id)
-            .copied()
-            .unwrap_or(false)
-        {
-            return Err(StoreError::Conflict("tenant already initialized".into()));
-        }
-
-        // Install the caller's keys only when none exist: the seed's keys are
-        // the propose-time randomness, and existing keys always win so a
-        // replayed or raced bootstrap cannot rotate a tenant's keys.
-        let keys = match self.get_tenant_signing_keys(tenant_id).await {
-            Ok(existing) => existing,
-            Err(StoreError::NotFound(_)) => {
-                self.set_tenant_signing_keys(tenant_id, seed.signing_keys.clone())
-                    .await?;
-                seed.signing_keys.clone()
-            }
-            Err(err) => return Err(err),
-        };
-        for issuer in seed.issuers {
-            self.upsert_idp_issuer(tenant_id, issuer).await?;
-        }
-        self.seed_rbac_policies_and_groupings(tenant_id, seed.policies, seed.groupings)
-            .await?;
-        // Last, so a failure above leaves the tenant retryable rather than
-        // half-initialized and claimed.
-        self.auth_bootstrapped
-            .write()
-            .await
-            .insert(tenant_id.to_string(), true);
-        Ok(keys)
+        auth::bootstrap_tenant_auth(self, tenant_id, seed).await
     }
+
     async fn insert_refresh_token(&self, token: RefreshToken) -> StoreResult<()> {
-        self.refresh_tokens
-            .write()
-            .await
-            .insert((token.tenant_id.clone(), token.token_id.clone()), token);
-        Ok(())
+        refresh_tokens::insert_refresh_token(self, token).await
     }
 
     async fn take_refresh_token(
@@ -1517,34 +519,11 @@ impl AuthStore for InMemoryStore {
         token_id: &str,
         now_secs: i64,
     ) -> StoreResult<RefreshTokenTake> {
-        // The write lock is taken for the read as well, which is the point:
-        // read-then-write under separate locks lets two refreshes both find the
-        // token live and both spend it.
-        let mut tokens = self.refresh_tokens.write().await;
-        let key = (tenant_id.to_string(), token_id.to_string());
-        let Some(token) = tokens.get_mut(&key) else {
-            return Ok(RefreshTokenTake::Unusable);
-        };
-        if token.used {
-            return Ok(RefreshTokenTake::Replayed(Box::new(token.clone())));
-        }
-        if !token.is_live(now_secs) {
-            return Ok(RefreshTokenTake::Unusable);
-        }
-        token.used = true;
-        Ok(RefreshTokenTake::Taken(Box::new(token.clone())))
+        refresh_tokens::take_refresh_token(self, tenant_id, token_id, now_secs).await
     }
 
     async fn revoke_refresh_family(&self, tenant_id: &str, family_id: &str) -> StoreResult<u64> {
-        let mut tokens = self.refresh_tokens.write().await;
-        let mut revoked = 0;
-        for token in tokens.values_mut() {
-            if token.tenant_id == tenant_id && token.family_id == family_id && !token.revoked {
-                token.revoked = true;
-                revoked += 1;
-            }
-        }
-        Ok(revoked)
+        refresh_tokens::revoke_refresh_family(self, tenant_id, family_id).await
     }
 
     async fn revoke_refresh_tokens_for_principal(
@@ -1552,215 +531,55 @@ impl AuthStore for InMemoryStore {
         tenant_id: &str,
         principal_id: &str,
     ) -> StoreResult<u64> {
-        let mut tokens = self.refresh_tokens.write().await;
-        let mut revoked = 0;
-        for token in tokens.values_mut() {
-            if token.tenant_id == tenant_id && token.principal_id == principal_id && !token.revoked
-            {
-                token.revoked = true;
-                revoked += 1;
-            }
-        }
-        Ok(revoked)
+        refresh_tokens::revoke_refresh_tokens_for_principal(self, tenant_id, principal_id).await
     }
 
     async fn purge_expired_refresh_tokens(&self, before_secs: i64) -> StoreResult<u64> {
-        let mut tokens = self.refresh_tokens.write().await;
-        let before = tokens.len();
-        tokens.retain(|_, token| token.expires_at_secs >= before_secs);
-        Ok((before - tokens.len()) as u64)
+        refresh_tokens::purge_expired_refresh_tokens(self, before_secs).await
     }
 }
 
-impl<T> ExportedLog<T> {
-    fn from_log(log: &ChangeLog<T>) -> Self
-    where
-        T: Clone,
-    {
-        Self {
-            next_seq: log.next_seq,
-            items: log.items.iter().cloned().collect(),
-        }
-    }
+/// Node records and their change log under one lock.
+///
+/// Kept together so a snapshot cannot observe a record set and a `next_seq`
+/// that disagree.
+#[derive(Debug)]
+struct NodeState {
+    records: HashMap<String, Node>,
+    changes: ChangeLog<NodeChange>,
+}
 
-    fn into_log(self, capacity: usize) -> ChangeLog<T> {
-        ChangeLog {
-            next_seq: self.next_seq,
-            capacity,
-            items: self.items.into(),
-        }
+impl NodeState {
+    fn record(&mut self, op: NodeChangeOp, node_id: &str, node: Option<Node>) {
+        self.changes.record(|seq| NodeChange {
+            seq,
+            op,
+            node_id: node_id.to_string(),
+            node,
+        });
     }
 }
 
-fn sorted_by_string_key<V: Clone>(map: &HashMap<String, V>) -> Vec<(String, V)> {
-    let mut entries: Vec<(String, V)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    entries
+/// Shard assignments and their change log under one lock.
+#[derive(Debug)]
+struct ShardState {
+    records: HashMap<ShardKey, ShardAssignment>,
+    changes: ChangeLog<ShardAssignmentChange>,
 }
 
-impl InMemoryStore {
-    /// Serialize the entire store, deterministically.
-    pub async fn export_state(&self) -> ExportedState {
-        let mut namespaces: Vec<(NamespaceKey, Namespace)> = self
-            .namespaces
-            .read()
-            .await
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        namespaces.sort_by(|a, b| {
-            (&a.0.tenant_id, &a.0.namespace).cmp(&(&b.0.tenant_id, &b.0.namespace))
+impl ShardState {
+    fn record(
+        &mut self,
+        op: ShardAssignmentChangeOp,
+        key: &ShardKey,
+        assignment: Option<ShardAssignment>,
+    ) {
+        self.changes.record(|seq| ShardAssignmentChange {
+            seq,
+            op,
+            key: key.clone(),
+            assignment,
         });
-
-        let mut streams: Vec<(StreamKey, Stream)> = self
-            .streams
-            .read()
-            .await
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        streams.sort_by(|a, b| {
-            (&a.0.tenant_id, &a.0.namespace, &a.0.stream).cmp(&(
-                &b.0.tenant_id,
-                &b.0.namespace,
-                &b.0.stream,
-            ))
-        });
-
-        let mut caches: Vec<(CacheKey, Cache)> = self
-            .caches
-            .read()
-            .await
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        caches.sort_by(|a, b| {
-            (&a.0.tenant_id, &a.0.namespace, &a.0.cache).cmp(&(
-                &b.0.tenant_id,
-                &b.0.namespace,
-                &b.0.cache,
-            ))
-        });
-
-        let (nodes, node_changes) = {
-            let state = self.nodes.read().await;
-            (
-                sorted_by_string_key(&state.records),
-                ExportedLog::from_log(&state.changes),
-            )
-        };
-
-        let (shards, shard_changes) = {
-            let state = self.shards.read().await;
-            let mut records: Vec<(ShardKey, ShardAssignment)> = state
-                .records
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            records.sort_by(|a, b| {
-                (
-                    &a.0.tenant_id,
-                    &a.0.namespace,
-                    a.0.kind,
-                    &a.0.stream,
-                    a.0.shard,
-                )
-                    .cmp(&(
-                        &b.0.tenant_id,
-                        &b.0.namespace,
-                        b.0.kind,
-                        &b.0.stream,
-                        b.0.shard,
-                    ))
-            });
-            (records, ExportedLog::from_log(&state.changes))
-        };
-
-        ExportedState {
-            v: EXPORTED_STATE_VERSION,
-            tenants: sorted_by_string_key(&*self.tenants.read().await),
-            namespaces,
-            streams,
-            caches,
-            nodes,
-            node_changes,
-            shards,
-            shard_changes,
-            tenant_changes: ExportedLog::from_log(&*self.tenant_changes.read().await),
-            namespace_changes: ExportedLog::from_log(&*self.namespace_changes.read().await),
-            stream_changes: ExportedLog::from_log(&*self.stream_changes.read().await),
-            cache_changes: ExportedLog::from_log(&*self.cache_changes.read().await),
-            idp_issuers: sorted_by_string_key(&*self.idp_issuers.read().await),
-            tenant_signing_keys: sorted_by_string_key(&*self.tenant_signing_keys.read().await),
-            rbac_policies: sorted_by_string_key(&*self.rbac_policies.read().await),
-            rbac_groupings: sorted_by_string_key(&*self.rbac_groupings.read().await),
-            auth_bootstrapped: sorted_by_string_key(&*self.auth_bootstrapped.read().await),
-        }
-    }
-
-    /// Replace the entire store with a previously exported state.
-    ///
-    /// Sequence numbers and retained change windows come back exactly, so a
-    /// consumer polling `changes(since)` across a restore sees the same
-    /// answers — including the same "your checkpoint is too old, resnapshot"
-    /// signals — as it would have from the original.
-    pub async fn import_state(&self, state: ExportedState) -> StoreResult<()> {
-        if state.v > EXPORTED_STATE_VERSION {
-            return Err(StoreError::Unexpected(anyhow::anyhow!(
-                "exported state version {} is newer than this build's {}",
-                state.v,
-                EXPORTED_STATE_VERSION
-            )));
-        }
-        let capacity = self.config.change_window();
-
-        *self.tenants.write().await = state.tenants.into_iter().collect();
-        *self.namespaces.write().await = state.namespaces.into_iter().collect();
-        *self.streams.write().await = state.streams.into_iter().collect();
-        *self.caches.write().await = state.caches.into_iter().collect();
-        *self.nodes.write().await = NodeState {
-            records: state.nodes.into_iter().collect(),
-            changes: state.node_changes.into_log(capacity),
-        };
-        *self.shards.write().await = ShardState {
-            records: state.shards.into_iter().collect(),
-            changes: state.shard_changes.into_log(capacity),
-        };
-        *self.tenant_changes.write().await = state.tenant_changes.into_log(capacity);
-        *self.namespace_changes.write().await = state.namespace_changes.into_log(capacity);
-        *self.stream_changes.write().await = state.stream_changes.into_log(capacity);
-        *self.cache_changes.write().await = state.cache_changes.into_log(capacity);
-        *self.idp_issuers.write().await = state.idp_issuers.into_iter().collect();
-        *self.tenant_signing_keys.write().await = state.tenant_signing_keys.into_iter().collect();
-        *self.rbac_policies.write().await = state.rbac_policies.into_iter().collect();
-        *self.rbac_groupings.write().await = state.rbac_groupings.into_iter().collect();
-        *self.auth_bootstrapped.write().await = state.auth_bootstrapped.into_iter().collect();
-        // The derived-key cache may hold keys the imported state replaced —
-        // an --overwrite restore in a live process would otherwise keep
-        // verifying tokens against a world that no longer exists.
-        for tenant_id in self.tenant_signing_keys.read().await.keys() {
-            crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
-        }
-        Ok(())
-    }
-
-    /// Whether this store has never held anything — no records and no
-    /// change-feed history. The guard an import checks before replacing
-    /// everything: a store with any past has consumers whose checkpoints an
-    /// accidental import would silently invalidate.
-    pub async fn is_unused(&self) -> bool {
-        self.tenants.read().await.is_empty()
-            && self.namespaces.read().await.is_empty()
-            && self.streams.read().await.is_empty()
-            && self.caches.read().await.is_empty()
-            && self.nodes.read().await.records.is_empty()
-            && self.shards.read().await.records.is_empty()
-            && self.tenant_changes.read().await.next_seq == 0
-            && self.namespace_changes.read().await.next_seq == 0
-            && self.stream_changes.read().await.next_seq == 0
-            && self.cache_changes.read().await.next_seq == 0
-            && self.nodes.read().await.changes.next_seq == 0
-            && self.shards.read().await.changes.next_seq == 0
     }
 }
 

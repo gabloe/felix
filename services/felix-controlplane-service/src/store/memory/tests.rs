@@ -1,5 +1,9 @@
 use super::*;
-use crate::model::{ConsistencyLevel, DeliveryGuarantee, RetentionPolicy, StreamKind};
+use crate::model::{
+    Cache, CacheChangeOp, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy, Stream,
+    StreamChangeOp, StreamKind, Tenant,
+};
+use crate::store::StoreError;
 
 /// The same suite Postgres runs, so parity is enforced rather than assumed.
 #[tokio::test]
