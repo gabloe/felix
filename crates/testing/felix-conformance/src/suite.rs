@@ -6,6 +6,7 @@ mod fixture;
 mod frames;
 mod raw;
 mod sdk;
+mod shard_move;
 
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use felix_transport::{QuicClient, QuicServer, TransportConfig};
 use fixture::{build_auth_fixture, build_quinn_client_config, build_server_config};
 use raw::{run_cache, run_pubsub};
 use sdk::{run_client_cache, run_client_pubsub};
+use shard_move::{MOVED_STREAM, run_shard_move};
 
 pub(crate) const MAX_TEST_FRAME_BYTES: usize = 64 * 1024;
 
@@ -32,6 +34,9 @@ pub(crate) async fn run_protocol_suite() -> Result<()> {
         .await?;
     broker
         .register_stream("t1", "default", "conformance", Default::default())
+        .await?;
+    broker
+        .register_stream("t1", "default", MOVED_STREAM, Default::default())
         .await?;
     let (server_config, cert) = build_server_config().context("build server config")?;
     let server = Arc::new(QuicServer::bind(
@@ -59,6 +64,7 @@ pub(crate) async fn run_protocol_suite() -> Result<()> {
     run_cache(&connection, &auth).await?;
     run_client_pubsub(addr, cert.clone(), &auth).await?;
     run_client_cache(addr, cert, &auth).await?;
+    run_shard_move(&connection, &auth, &broker).await?;
 
     drop(connection);
     server_task.abort();
