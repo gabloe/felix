@@ -1,41 +1,44 @@
-// Control stream (bi-directional QUIC stream)
-//
-// This module implements the *read side* of the broker's bidirectional control stream.
-// The control stream is the request/response path used by clients for:
-//   - Publish / PublishBatch (optionally requesting an ack)
-//   - Subscribe (establishing a subscription and spawning a uni-directional event stream)
-//   - CachePut / CacheGet (request/response cache API)
-//
-// Key design points:
-//   1) Single-writer response path (implemented elsewhere): the read loop never writes to the
-//      SendStream directly; it enqueues `Outgoing` responses into an outbound channel drained by a
-//      dedicated writer task.
-//
-//   2) Fast-path binary batching: when a frame is marked with FLAG_BINARY_PUBLISH_BATCH we bypass
-//      JSON decoding and dispatch to a specialized handler. This keeps the hot path cheap.
-//
-//   3) Cooperative cancellation: `cancel_rx_read` (watch) allows the writer or other tasks to
-//      request the control loop stop (e.g., writer detects the peer closed, or backpressure logic
-//      decides to tear down).
-//
-//   4) Backpressure / throttling coordination: `ack_throttle_rx/tx` is a watch channel used to
-//      communicate whether the outbound response queue is in a throttled state (watermarks are
-//      enforced in the writer/enqueue helpers). The control loop passes the current throttled state
-//      into publish handlers so they can adjust behavior.
-//
-//   5) Ack-on-commit mode: when `config.ack_on_commit` is enabled, publish handlers may defer the
-//      ack until the publish worker commits. `ack_waiters` bounds in-flight waiters and
-//      `ack_waiter_tx` delivers waiter work to the background ack-waiter task.
-//
-// Return value convention:
-//   Ok(true)  => graceful close / stream should be considered "done" (no error)
-//   Ok(false) => protocol error or peer sent Error/unexpected message
-//   Err(_)    => hard failure (decode/IO/etc.)
+//! Control stream (bi-directional QUIC stream)
+//!
+//! This module implements the *read side* of the broker's bidirectional control stream.
+//! The control stream is the request/response path used by clients for:
+//!   - Publish / PublishBatch (optionally requesting an ack)
+//!   - Subscribe (establishing a subscription and spawning a uni-directional event stream)
+//!   - CachePut / CacheGet (request/response cache API)
+//!
+//! Key design points:
+//!   1) Single-writer response path (implemented elsewhere): the read loop never writes to the
+//!      SendStream directly; it enqueues `Outgoing` responses into an outbound channel drained by a
+//!      dedicated writer task.
+//!
+//!   2) Fast-path binary batching: when a frame is marked with FLAG_BINARY_PUBLISH_BATCH we bypass
+//!      JSON decoding and dispatch to a specialized handler. This keeps the hot path cheap.
+//!
+//!   3) Cooperative cancellation: `cancel_rx_read` (watch) allows the writer or other tasks to
+//!      request the control loop stop (e.g., writer detects the peer closed, or backpressure logic
+//!      decides to tear down).
+//!
+//!   4) Backpressure / throttling coordination: `ack_throttle_rx/tx` is a watch channel used to
+//!      communicate whether the outbound response queue is in a throttled state (watermarks are
+//!      enforced in the writer/enqueue helpers). The control loop passes the current throttled state
+//!      into publish handlers so they can adjust behavior.
+//!
+//!   5) Ack-on-commit mode: when `config.ack_on_commit` is enabled, publish handlers may defer the
+//!      ack until the publish worker commits. `ack_waiters` bounds in-flight waiters and
+//!      `ack_waiter_tx` delivers waiter work to the background ack-waiter task.
+//!
+//! Return value convention:
+//!   Ok(true)  => graceful close / stream should be considered "done" (no error)
+//!   Ok(false) => protocol error or peer sent Error/unexpected message
+//!   Err(_)    => hard failure (decode/IO/etc.)
+
+mod authz;
+mod group;
+mod responder;
+
 use anyhow::{Context, Result};
 use bytes::BytesMut;
-use felix_authz::{
-    Action, CacheScope, Namespace, StreamName, TenantId, cache_resource, stream_resource,
-};
+use felix_authz::Action;
 use felix_broker::Broker;
 use felix_wire::Message;
 use std::sync::Arc;
@@ -59,6 +62,9 @@ use crate::serving::quic::handlers::subscribe::handle_subscribe_message;
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
 use super::frame_source::FrameSource;
+use authz::{authorize_cache, authorize_stream, authorize_stream_simple};
+use group::group_redirect;
+use responder::{Responder, send_control_error};
 
 // The loop is intentionally structured as:
 //   read frame -> (optional fast-path) -> decode -> dispatch.
@@ -106,7 +112,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // Optional messages this client understands. Nothing until an `Auth` says
     // otherwise.
     let mut peer_features = 0u32;
-    let authz_ctx = AuthzResponseContext {
+    let authz_ctx = Responder {
         out_ack_tx: &out_ack_tx,
         out_ack_depth: &out_ack_depth,
         ack_throttle_tx: &ack_throttle_tx,
@@ -2033,241 +2039,4 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     // `graceful_close` only tracks EOF from the peer. Any other early-exit path returns false
     // (protocol error) or Err (hard failure).
     Ok(graceful_close)
-}
-
-/// A group operation for a shard another broker leads, answered with where to
-/// go instead of refused.
-///
-/// Only a client that offered `FEATURE_REDIRECT` gets it; the rest keep the
-/// plain refusal they always had. Every group request travels on its own
-/// stream, so a `NotLeader` there answers exactly that request.
-fn group_redirect(
-    publish_ctx: &PublishContext,
-    peer_features: u32,
-    tenant_id: &str,
-    namespace: &str,
-    stream: &str,
-    shard: u32,
-) -> Option<Message> {
-    if !felix_wire::supports_feature(peer_features, felix_wire::FEATURE_REDIRECT) {
-        return None;
-    }
-    match crate::serving::quic::handlers::redirect::redirect_for(
-        publish_ctx.ingress.as_deref(),
-        publish_ctx.client_endpoints.as_deref(),
-        tenant_id,
-        namespace,
-        stream,
-        shard,
-        crate::shards::ShardKind::Stream,
-        peer_features,
-    ) {
-        answer @ Some(Message::NotLeader { .. }) => answer,
-        _ => None,
-    }
-}
-
-async fn send_control_error(
-    out_ack_tx: &mpsc::Sender<Outgoing>,
-    out_ack_depth: &Arc<AtomicUsize>,
-    ack_throttle_tx: &watch::Sender<bool>,
-    ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
-    cancel_tx: &watch::Sender<bool>,
-    message: &str,
-) -> Result<()> {
-    handle_ack_enqueue_result(
-        send_outgoing_critical(
-            out_ack_tx,
-            out_ack_depth,
-            "felix_broker_out_ack_depth",
-            ack_throttle_tx,
-            Outgoing::Message(Message::Error {
-                message: message.to_string(),
-            }),
-        )
-        .await,
-        ack_timeout_state,
-        ack_throttle_tx,
-        cancel_tx,
-    )
-    .await
-}
-
-struct AuthzResponseContext<'a> {
-    out_ack_tx: &'a mpsc::Sender<Outgoing>,
-    out_ack_depth: &'a Arc<AtomicUsize>,
-    ack_throttle_tx: &'a watch::Sender<bool>,
-    ack_timeout_state: &'a Arc<Mutex<AckTimeoutState>>,
-    cancel_tx: &'a watch::Sender<bool>,
-}
-
-async fn authorize_stream(
-    auth_ctx: Option<&AuthContext>,
-    tenant_id: &str,
-    action: Action,
-    namespace: &str,
-    stream: &str,
-    request_id: Option<u64>,
-    ctx: &AuthzResponseContext<'_>,
-) -> Result<bool> {
-    let Some(auth_ctx) = auth_ctx else {
-        send_control_error(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            ctx.ack_throttle_tx,
-            ctx.ack_timeout_state,
-            ctx.cancel_tx,
-            "auth required",
-        )
-        .await?;
-        return Ok(false);
-    };
-    if auth_ctx.tenant_id != tenant_id {
-        send_control_error(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            ctx.ack_throttle_tx,
-            ctx.ack_timeout_state,
-            ctx.cancel_tx,
-            "tenant mismatch",
-        )
-        .await?;
-        return Ok(false);
-    }
-    let resource = stream_resource(
-        &TenantId::new(tenant_id),
-        &Namespace::new(namespace),
-        &StreamName::new(stream),
-    );
-    if auth_ctx.matcher.allows(action, &resource) {
-        return Ok(true);
-    }
-    let outgoing = match request_id {
-        Some(request_id) => Outgoing::Message(Message::PublishError {
-            request_id,
-            message: "forbidden".to_string(),
-        }),
-        None => Outgoing::Message(Message::Error {
-            message: "forbidden".to_string(),
-        }),
-    };
-    handle_ack_enqueue_result(
-        send_outgoing_critical(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            "felix_broker_out_ack_depth",
-            ctx.ack_throttle_tx,
-            outgoing,
-        )
-        .await,
-        ctx.ack_timeout_state,
-        ctx.ack_throttle_tx,
-        ctx.cancel_tx,
-    )
-    .await?;
-    Ok(false)
-}
-
-async fn authorize_stream_simple(
-    auth_ctx: Option<&AuthContext>,
-    tenant_id: &str,
-    action: Action,
-    namespace: &str,
-    stream: &str,
-    ctx: &AuthzResponseContext<'_>,
-) -> Result<bool> {
-    let Some(auth_ctx) = auth_ctx else {
-        send_control_error(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            ctx.ack_throttle_tx,
-            ctx.ack_timeout_state,
-            ctx.cancel_tx,
-            "auth required",
-        )
-        .await?;
-        return Ok(false);
-    };
-    if auth_ctx.tenant_id != tenant_id {
-        send_control_error(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            ctx.ack_throttle_tx,
-            ctx.ack_timeout_state,
-            ctx.cancel_tx,
-            "tenant mismatch",
-        )
-        .await?;
-        return Ok(false);
-    }
-    let resource = stream_resource(
-        &TenantId::new(tenant_id),
-        &Namespace::new(namespace),
-        &StreamName::new(stream),
-    );
-    if auth_ctx.matcher.allows(action, &resource) {
-        return Ok(true);
-    }
-    send_control_error(
-        ctx.out_ack_tx,
-        ctx.out_ack_depth,
-        ctx.ack_throttle_tx,
-        ctx.ack_timeout_state,
-        ctx.cancel_tx,
-        "forbidden",
-    )
-    .await?;
-    Ok(false)
-}
-
-async fn authorize_cache(
-    auth_ctx: Option<&AuthContext>,
-    tenant_id: &str,
-    action: Action,
-    namespace: &str,
-    cache: &str,
-    ctx: &AuthzResponseContext<'_>,
-) -> Result<bool> {
-    let Some(auth_ctx) = auth_ctx else {
-        send_control_error(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            ctx.ack_throttle_tx,
-            ctx.ack_timeout_state,
-            ctx.cancel_tx,
-            "auth required",
-        )
-        .await?;
-        return Ok(false);
-    };
-    if auth_ctx.tenant_id != tenant_id {
-        send_control_error(
-            ctx.out_ack_tx,
-            ctx.out_ack_depth,
-            ctx.ack_throttle_tx,
-            ctx.ack_timeout_state,
-            ctx.cancel_tx,
-            "tenant mismatch",
-        )
-        .await?;
-        return Ok(false);
-    }
-    let resource = cache_resource(
-        &TenantId::new(tenant_id),
-        &Namespace::new(namespace),
-        &CacheScope::new(cache),
-    );
-    if auth_ctx.matcher.allows(action, &resource) {
-        return Ok(true);
-    }
-    send_control_error(
-        ctx.out_ack_tx,
-        ctx.out_ack_depth,
-        ctx.ack_throttle_tx,
-        ctx.ack_timeout_state,
-        ctx.cancel_tx,
-        "forbidden",
-    )
-    .await?;
-    Ok(false)
 }
