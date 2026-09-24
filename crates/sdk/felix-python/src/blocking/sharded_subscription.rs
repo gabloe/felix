@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use tokio::sync::Mutex;
 
 use crate::runtime::block_on;
-use crate::types::OwnedShardEvent;
+use crate::types::next_shard_event;
 
 /// Every shard of a stream, merged into one iterator.
 ///
@@ -44,14 +44,14 @@ impl ShardedSubscriptionHandle {
             let next = match timeout {
                 Some(seconds) => {
                     let duration = std::time::Duration::from_secs_f64(seconds.max(0.0));
-                    match tokio::time::timeout(duration, subscription.next()).await {
+                    match tokio::time::timeout(duration, next_shard_event(subscription)).await {
                         Ok(event) => event,
                         Err(_elapsed) => return Ok(None),
                     }
                 }
-                None => subscription.next().await,
+                None => next_shard_event(subscription).await,
             };
-            Ok(next.map(OwnedShardEvent::from))
+            Ok(next)
         })?;
         event
             .map(|event| event.into_pyobject(py).map(|bound| bound.unbind()))

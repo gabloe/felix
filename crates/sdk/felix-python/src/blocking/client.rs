@@ -172,13 +172,13 @@ impl Client {
             namespace.to_string(),
             stream.to_string(),
         );
-        let (client, subscription) = block_on(py, async move {
+        let subscription = block_on(py, async move {
             inner
                 .subscribe_from(&tenant_id, &namespace, &stream, start)
                 .await
                 .map_err(to_py_err)
         })?;
-        Ok(SubscriptionHandle::new(subscription, client))
+        Ok(SubscriptionHandle::new(subscription))
     }
 
     /// Store a value, optionally with a time-to-live in seconds.

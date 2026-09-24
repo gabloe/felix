@@ -75,7 +75,18 @@ class CacheWatchLagged:
 
     resume_from: int
 
-WatchItem = CacheChange | CacheWatchLagged
+class CacheWatchShardMoved:
+    """The watch's shard moved to another broker, which ended the watch.
+
+    Re-watch from ``resume_from`` when set, else after the last change seen.
+    """
+
+    resume_from: int | None
+    node_id: str | None
+    addr: str | None
+    generation: int
+
+WatchItem = CacheChange | CacheWatchLagged | CacheWatchShardMoved
 
 class CacheWatchFilter:
     @staticmethod

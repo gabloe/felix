@@ -141,11 +141,11 @@ impl AsyncClient {
             stream.to_string(),
         );
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let (client, subscription) = inner
+            let subscription = inner
                 .subscribe_from(&tenant_id, &namespace, &stream, start)
                 .await
                 .map_err(to_py_err)?;
-            Ok(AsyncSubscription::new(subscription, client))
+            Ok(AsyncSubscription::new(subscription))
         })
     }
 

@@ -50,6 +50,7 @@ from ._felix import (
     CacheWatchFilter,
     CacheWatchHandle,
     CacheWatchLagged,
+    CacheWatchShardMoved,
     Client,
     ConnectionError,
     CursorError,
@@ -90,6 +91,7 @@ __all__ = [
     "AsyncCacheWatch",
     "CacheChange",
     "CacheWatchLagged",
+    "CacheWatchShardMoved",
     # Errors
     "FelixError",
     "ConnectionError",

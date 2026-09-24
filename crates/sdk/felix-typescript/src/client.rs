@@ -172,11 +172,11 @@ impl Client {
     ) -> Result<SubscriptionHandle> {
         let start = parse_start(start)?;
         let inner = self.cluster()?;
-        let (client, subscription) = inner
+        let subscription = inner
             .subscribe_from(&tenant_id, &namespace, &stream, Some(start))
             .await
             .map_err(classify)?;
-        Ok(SubscriptionHandle::new(subscription, client))
+        Ok(SubscriptionHandle::new(subscription))
     }
 
     /// Subscribe to **every** shard of a stream and merge them.
