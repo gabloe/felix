@@ -1,4 +1,4 @@
-//! Applying a plan to the store, on a timer.
+//! Applying a plan to the store, on a timer or when woken.
 use std::collections::HashMap;
 
 use super::{MovePolicy, PlacementWakes, Plan, ReplicaPositions, assignment_for, plan_with};
@@ -243,8 +243,11 @@ pub(super) async fn apply_pass(
     outcome
 }
 
-/// Place shards on an interval until `shutdown` fires. Every assignment it
-/// writes wakes this instance's long-polls through `wakes`.
+/// Place shards on an interval, and whenever `wakes` asks for a pass, until
+/// `shutdown` fires.
+///
+/// One pass at a time: a wake that arrives mid-pass runs one more pass after
+/// it, however many arrived.
 pub fn spawn_reconciler(
     store: std::sync::Arc<dyn crate::store::ControlPlaneStore + Send + Sync>,
     liveness: crate::config::NodeLivenessConfig,
@@ -262,6 +265,7 @@ pub fn spawn_reconciler(
             tokio::select! {
                 _ = shutdown.cancelled() => return,
                 _ = ticker.tick() => {}
+                _ = wakes.pass_requested() => {}
             }
             // Placement decides from what it reads; under Raft the gate's
             // linearizable check also guarantees those reads are current

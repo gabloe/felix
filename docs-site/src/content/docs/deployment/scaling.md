@@ -162,11 +162,13 @@ tests behind that claim are in `crates/testing/felix-cluster/tests/routing/rebal
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `FELIX_SHARD_MOVES_MAX_CONCURRENT` | `1` | Moves in flight across the cluster. Each is a full copy of a shard's log; raise it to drain a broker with many shards faster, at the cost of that much more replication traffic at once. `0` holds every move. |
-| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often a move advances a step. |
+| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement runs on its own. A report a move is waiting for (the successor caught up, the leader drained) runs a pass straight away when the control-plane instance that receives it is the one running placement. |
 | `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS` (broker) | `5000` | How quickly brokers see each step. Bounds the refused-publish window. |
 
-A drain of `n` shards at the default policy takes roughly three placement
-intervals per shard plus the time to copy each log.
+A drain of `n` shards at the default policy takes up to one placement
+interval per shard to start its move, plus the time to copy each log. The
+fence and the cut-over follow the reports that allow them rather than the
+interval.
 
 ## Troubleshooting
 

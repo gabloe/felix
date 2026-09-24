@@ -408,6 +408,16 @@ no eligible leader is left unplaced and logged with the reason — an empty
 cluster and a full one are reported differently, because they need different
 fixes.
 
+**A pass also runs as soon as a move can advance**, not only on the timer. When
+an instance records a replica report that is exactly what a move is waiting
+for — a leader reporting `drained` at a fenced generation, or a report listing
+the staged successor as caught up — it wakes its own reconciler. Wakes
+coalesce: however many arrive while a pass is pending or running, one more
+pass follows, and only one pass is ever in flight. The wake changes when a pass
+runs, never what it decides; the pass reads the store and judges the report
+itself like any other. It is local: a report that reaches an instance which
+does not run placement (a Raft follower) waits for the leader's next tick.
+
 | Setting | Env | Default |
 | --- | --- | --- |
 | `node_liveness.shard_reconcile_interval_ms` | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | 5000 |

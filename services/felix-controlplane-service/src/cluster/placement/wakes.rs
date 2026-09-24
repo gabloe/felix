@@ -1,16 +1,17 @@
-//! Waking this instance's assignment long-polls when it writes an
-//! assignment, instead of leaving them to their re-check.
-use tokio::sync::watch;
+//! Waking the placement loop and assignment long-polls on this instance
+//! instead of leaving them to their timers.
+use tokio::sync::{Notify, watch};
 use tokio_util::sync::CancellationToken;
 
 /// Wakes shared by this instance's API handlers and its placement loop.
 ///
-/// A hint, never the only path: a long-poll still re-checks the store, which
-/// is how it sees another instance's writes. A missed wake costs latency,
-/// never a change.
+/// Both are hints, never the only path: a long-poll still re-checks the store,
+/// which is how it sees another instance's writes, and the reconciler's timer
+/// still runs. A missed wake costs latency, never a change.
 #[derive(Debug)]
 pub struct PlacementWakes {
     written: watch::Sender<u64>,
+    pass: Notify,
     closing: CancellationToken,
 }
 
@@ -26,6 +27,7 @@ impl PlacementWakes {
     pub(crate) fn new(closing: CancellationToken) -> Self {
         Self {
             written: watch::Sender::new(0),
+            pass: Notify::new(),
             closing,
         }
     }
@@ -39,6 +41,18 @@ impl PlacementWakes {
     /// Resolves on each [`Self::assignment_written`] after this call.
     pub(crate) fn watch_assignments(&self) -> watch::Receiver<u64> {
         self.written.subscribe()
+    }
+
+    /// Ask the placement loop for a pass now.
+    ///
+    /// Requests coalesce: any number made while a pass is pending or running
+    /// produce one more pass, not one each.
+    pub(crate) fn request_pass(&self) {
+        self.pass.notify_one();
+    }
+
+    pub(crate) async fn pass_requested(&self) {
+        self.pass.notified().await;
     }
 
     /// Fires when this instance stops serving.

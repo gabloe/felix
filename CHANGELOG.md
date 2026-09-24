@@ -17,7 +17,10 @@ for what the current release actually guarantees.
   `GET /v1/shard-assignments/changes` takes an optional `wait_ms`: with
   nothing newer than `since`, the request waits up to that long (capped at
   25 s) and answers as soon as a change lands. It holds no store connection
-  while waiting, and without `wait_ms` it behaves exactly as before.
+  while waiting, and without `wait_ms` it behaves exactly as before. A replica
+  report that a move is waiting for — a drained leader, or a caught-up staged
+  successor — now wakes placement at once instead of at its next tick; wakes
+  coalesce and one pass runs at a time.
 
 - **Online shard rebalancing** (#130). A shard whose leader is alive is now
   moved rather than reassigned. The control plane stages the destination as a
