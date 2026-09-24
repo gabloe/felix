@@ -15,6 +15,8 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use felix_client::BrokerError;
+use felix_wire::ErrorCode;
 
 use crate::Cluster;
 
@@ -229,7 +231,14 @@ pub async fn unknown_stream_is_refused(cluster: &Cluster, ingress: Ingress) -> R
         .await
     {
         Ok(()) => bail!("publishing to an unregistered stream succeeded via {via}"),
-        Err(_) => Ok(Outcome::Passed),
+        Err(err) => match broker_error(&err) {
+            Some(typed) if typed.code == ErrorCode::NotFound => Ok(Outcome::Passed),
+            // A broker with no assignment for the shard cannot tell an
+            // unregistered stream from one not placed yet, and says the
+            // latter. The reason is not checked: a binary ack carries no detail.
+            Some(typed) if typed.code == ErrorCode::ShardUnavailable => Ok(Outcome::Passed),
+            _ => expect_code(&err, ErrorCode::NotFound, &via),
+        },
     }
 }
 
@@ -276,7 +285,24 @@ pub async fn unauthorized_publish_is_refused(
             "a token without stream.publish was accepted ({})",
             diagnose(cluster, stream, &via).await
         ),
-        Err(_) => Ok(Outcome::Passed),
+        Err(err) => expect_code(&err, ErrorCode::Forbidden, &via),
+    }
+}
+
+/// The broker's typed error under whatever context the client added.
+pub fn broker_error(err: &anyhow::Error) -> Option<&BrokerError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<BrokerError>())
+}
+
+/// A refusal is typed, and typed as `code`: a client branches on the code, so
+/// an untyped or mistyped refusal is a failure even when the request was
+/// refused.
+fn expect_code(err: &anyhow::Error, code: ErrorCode, via: &str) -> Result<Outcome> {
+    match broker_error(err) {
+        Some(typed) if typed.code == code => Ok(Outcome::Passed),
+        Some(_) => bail!("refused via {via} with a code other than {code}"),
+        None => bail!("refused via {via} without a code, expected {code}"),
     }
 }
 

@@ -79,6 +79,34 @@ impl Cluster {
         Ok(after.leader)
     }
 
+    /// Stop a stream's shard 0 halfway through a move, with its owner fenced.
+    ///
+    /// Drains the owner and steps placement until the assignment is
+    /// `draining`: the owner has been told to stop serving and nobody else
+    /// leads yet. It stays that way until placement is stepped again, which
+    /// cuts over to the successor, so a caller can look at what a client sees
+    /// during a move for as long as it likes. Every shard the owner leads is
+    /// fenced with it. Returns the fenced owner.
+    ///
+    /// Needs a replica that can take the shard, so a stream replicated to more
+    /// than one node.
+    pub async fn fence_shard(&self, stream: &str) -> Result<String> {
+        let owner = self.owner(stream).await?;
+        self.drain_node(&owner).await?;
+        wait::until(
+            READY_TIMEOUT,
+            &format!("{stream} to be fenced on {owner}"),
+            || async move {
+                // Every move at once, so this shard does not queue behind the
+                // owner's others.
+                self.place_shards_moving(usize::MAX).await;
+                self.shard_fenced(stream, 0).await.unwrap_or(false)
+            },
+        )
+        .await?;
+        Ok(owner)
+    }
+
     /// Start another broker and wait until the control plane can place on it.
     ///
     /// The node takes the next index, so its id follows the ones the cluster

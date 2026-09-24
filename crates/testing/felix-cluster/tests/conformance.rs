@@ -9,9 +9,10 @@
 //! broker internals could not tell the difference between a publish that was
 //! routed correctly and one that was handled by the wrong broker, which is the
 //! failure this suite exists to catch.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use felix_cluster::scenarios::{self, Ingress, Outcome};
 use felix_cluster::{Cluster, ClusterConfig, StreamSpec};
+use felix_wire::{ErrorCode, RetryClass};
 use serial_test::serial;
 
 /// A scenario's future, boxed so `on_both` can name it for any borrow of the
@@ -294,6 +295,88 @@ async fn a_broker_that_cannot_renew_its_lease_stops_serving() -> Result<()> {
         refused,
         "{owner} kept accepting writes after it could no longer renew its lease",
     );
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// A shard fenced halfway through a move refuses, and says the refusal is
+/// safe to retry.
+///
+/// Held fenced rather than caught in passing: placement is not stepped past
+/// the fence, so the refusal is there to be seen for as long as the test
+/// looks, instead of in whatever window a live move happens to leave.
+#[serial]
+#[tokio::test]
+async fn a_publish_refused_during_a_move_is_retryable() -> Result<()> {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::replicated(STREAM, 1, 3)],
+        ..Default::default()
+    })
+    .await?;
+    let owner = cluster.fence_shard(STREAM).await?;
+
+    // The owner hears of the fence from its assignment feed.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let refusal = loop {
+        match cluster
+            .publish_via(&owner, STREAM, b"mid-move".to_vec())
+            .await
+        {
+            Err(err) => break err,
+            Ok(()) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Ok(()) => panic!("{owner} kept serving {STREAM} after it was fenced"),
+        }
+    };
+    // Asserted without formatting the refusal: it arrived over TLS, and a
+    // failure message is not where that belongs.
+    let typed = scenarios::broker_error(&refusal).expect("a refusal during a move had no code");
+    assert!(
+        matches!(
+            typed.code,
+            ErrorCode::ShardUnavailable | ErrorCode::NotLeader
+        ),
+        "a refusal during a move was not typed as an unavailable shard",
+    );
+    assert!(
+        matches!(typed.retry, RetryClass::Retry | RetryClass::Redirect),
+        "a refusal during a move was not sent as safe to retry",
+    );
+
+    cluster.shutdown().await;
+    Ok(())
+}
+
+/// A leader cut off from its followers cannot say whether a `Quorum` write
+/// will survive, and says so rather than refusing it.
+#[serial]
+#[tokio::test]
+async fn a_write_no_majority_confirmed_is_outcome_unknown() -> Result<()> {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::quorum(STREAM, 1, 3)],
+        ..Default::default()
+    })
+    .await?;
+    let leader = cluster.owner(STREAM).await?;
+    cluster
+        .publish_via(&leader, STREAM, b"whole".to_vec())
+        .await
+        .context("publish while the cluster is whole")?;
+
+    cluster.partition_node(&leader)?;
+    let outcome = cluster
+        .publish_via(&leader, STREAM, b"no majority".to_vec())
+        .await;
+    cluster.heal_partitions()?;
+
+    let err = outcome.expect_err("a partitioned leader acknowledged a Quorum publish");
+    let typed = scenarios::broker_error(&err).expect("a lost quorum had no code");
+    assert_eq!(typed.code, ErrorCode::QuorumTimeout);
+    assert_eq!(typed.retry, RetryClass::OutcomeUnknown);
 
     cluster.shutdown().await;
     Ok(())

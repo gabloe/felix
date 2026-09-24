@@ -1,5 +1,9 @@
 //! `client-fixture`: a cluster for a client conformance suite to run against.
 
+mod control;
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -15,7 +19,8 @@ use crate::signals::stop_signal;
 /// on, a cache, a credential that may publish and one that may not, a stream
 /// name that is deliberately absent, and the broker's certificate so a client
 /// can verify properly instead of skipping verification. This starts all of
-/// that and writes it where the suite can read it.
+/// that and writes it where the suite can read it, along with the URL of a
+/// small control endpoint (see `control`) for the scenarios that need a fault.
 ///
 /// Three nodes by default, because the semantics that matter most to a client
 /// only exist in a cluster: a redirect needs a broker that does not own the
@@ -46,6 +51,10 @@ pub(crate) async fn client_fixture(args: &[String]) -> Result<()> {
     // Never registered. A client proving it reports "unknown stream"
     // distinguishably needs a name the broker will genuinely refuse.
     const MISSING_STREAM: &str = "conformance-absent";
+    // For the faults a suite asks the control endpoint for: one to fence
+    // mid-move, one whose writes need a majority.
+    const MOVABLE_STREAM: &str = "conformance-movable";
+    const QUORUM_STREAM: &str = "conformance-quorum";
 
     eprintln!("starting a {node_count}-node cluster for a client conformance suite...");
     let cluster = Cluster::start(ClusterConfig {
@@ -59,7 +68,11 @@ pub(crate) async fn client_fixture(args: &[String]) -> Result<()> {
         // copy per shard the answer would be confounded by the shard not
         // surviving either. A client cannot reconnect its way to data that is
         // gone.
-        streams: vec![StreamSpec::replicated(DURABLE_STREAM, 4, node_count as u32)],
+        streams: vec![
+            StreamSpec::replicated(DURABLE_STREAM, 4, node_count as u32),
+            StreamSpec::replicated(MOVABLE_STREAM, 1, node_count as u32),
+            StreamSpec::quorum(QUORUM_STREAM, 1, node_count as u32),
+        ],
         caches: vec![
             CacheSpec::replicated(CACHE, 4, node_count as u32),
             CacheSpec::replicated(SINGLE_SHARD_CACHE, 1, node_count as u32),
@@ -89,6 +102,17 @@ pub(crate) async fn client_fixture(args: &[String]) -> Result<()> {
     std::fs::write(&ca_file, &bundle)
         .with_context(|| format!("write the certificate bundle to {ca_file}"))?;
 
+    let cluster = Arc::new(cluster);
+    let hold = Arc::new(AtomicBool::new(false));
+    let (control_url, control_task) = control::Control::new(
+        Arc::clone(&cluster),
+        Arc::clone(&hold),
+        MOVABLE_STREAM,
+        QUORUM_STREAM,
+    )
+    .serve()
+    .await?;
+
     let fixture = felix_conformance::kit::Fixture {
         addrs: cluster
             .nodes
@@ -104,6 +128,9 @@ pub(crate) async fn client_fixture(args: &[String]) -> Result<()> {
         cache: CACHE.to_string(),
         single_shard_cache: SINGLE_SHARD_CACHE.to_string(),
         missing_stream: MISSING_STREAM.to_string(),
+        movable_stream: Some(MOVABLE_STREAM.to_string()),
+        quorum_stream: Some(QUORUM_STREAM.to_string()),
+        control_url: Some(control_url.clone()),
     };
     let body = serde_json::to_vec_pretty(&fixture).context("encode the fixture")?;
     std::fs::write(&out, body).with_context(|| format!("write the fixture to {out}"))?;
@@ -111,6 +138,7 @@ pub(crate) async fn client_fixture(args: &[String]) -> Result<()> {
     println!("fixture   {out}");
     println!("broker    {}", fixture.addrs.join(", "));
     println!("ca        {ca_file}");
+    println!("control   {control_url}");
     eprintln!("\nholding the fixture. press Ctrl-C to tear it down.");
 
     // A placement pass on a timer, which is what makes the reconnect scenario
@@ -119,20 +147,25 @@ pub(crate) async fn client_fixture(args: &[String]) -> Result<()> {
     // Rust tests call `place_shards` themselves while they wait. A suite in
     // another language has no such handle, so the fixture does it here: an
     // unowned shard is reassigned within a second or so, exactly as a
-    // control plane's own sweep would.
-    let cluster = std::sync::Arc::new(cluster);
+    // control plane's own sweep would. Skipped while the control endpoint
+    // holds a fault open.
     let placement = tokio::spawn({
-        let held = std::sync::Arc::clone(&cluster);
+        let held = Arc::clone(&cluster);
         async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                held.place_shards().await;
+                if !hold.load(Ordering::SeqCst) {
+                    held.place_shards().await;
+                }
             }
         }
     });
 
     stop_signal().await?;
     placement.abort();
+    control_task.abort();
+    let _ = control_task.await;
+    let _ = placement.await;
     eprintln!("\ntearing down...");
     let _ = std::fs::remove_file(&out);
     drop(cluster);
