@@ -43,6 +43,7 @@ pub struct ControlPlane {
     pub base_url: String,
     pub store: Arc<InMemoryStore>,
     keys: TenantSigningKeys,
+    placement_wakes: Arc<felix_controlplane_service::cluster::placement::PlacementWakes>,
     shutdown: CancellationToken,
     task: tokio::task::JoinHandle<()>,
 }
@@ -94,6 +95,7 @@ impl ControlPlane {
             in_flight: Default::default(),
             placement_wakes: Default::default(),
         };
+        let placement_wakes = Arc::clone(&state.placement_wakes);
 
         let addr = ports::free_tcp()?;
         let listener = tokio::net::TcpListener::bind(addr)
@@ -126,6 +128,7 @@ impl ControlPlane {
             base_url: format!("http://{addr}"),
             store,
             keys,
+            placement_wakes,
             shutdown,
             task,
         })
@@ -284,6 +287,24 @@ impl ControlPlane {
             policy,
         )
         .await
+    }
+
+    /// Run placement the way a deployment does: on `interval`, and whenever a
+    /// report a move waits on arrives. Off unless a test asks, because most
+    /// tests step placement themselves.
+    pub fn run_placement(&self, interval: Duration) {
+        drop(
+            felix_controlplane_service::cluster::placement::spawn_reconciler(
+                Arc::clone(&self.store)
+                    as Arc<dyn felix_controlplane_service::store::ControlPlaneStore + Send + Sync>,
+                LIVENESS,
+                felix_controlplane_service::cluster::placement::MovePolicy::default(),
+                interval,
+                felix_controlplane_service::raft::LeadershipGate::Always,
+                Arc::clone(&self.placement_wakes),
+                self.shutdown.clone(),
+            ),
+        );
     }
 
     /// Stop serving and cut every connection brokers hold to it.

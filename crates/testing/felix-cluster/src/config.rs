@@ -18,6 +18,10 @@ pub struct ClusterConfig {
     /// ports. One by default, which is what every test that says nothing about
     /// listeners gets.
     pub quic_listeners: usize,
+    /// Each broker's `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS`. Short by default so
+    /// ownership converges while a person watches; a test that measures what
+    /// the broker's wakes buy sets the production default instead.
+    pub sync_interval_ms: u64,
 }
 
 impl Default for ClusterConfig {
@@ -30,6 +34,7 @@ impl Default for ClusterConfig {
             caches: Vec::new(),
             inherit_output: false,
             quic_listeners: 1,
+            sync_interval_ms: 200,
         }
     }
 }
