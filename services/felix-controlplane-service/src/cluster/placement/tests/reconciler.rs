@@ -149,6 +149,7 @@ async fn report(store: &InMemoryStore, generation: u64, caught_up: &[&str], drai
             offsets: Default::default(),
             reported_at_millis: store.now_millis().await.expect("clock"),
             drained,
+            leader_offset: None,
         })
         .await
         .expect("report");
@@ -181,6 +182,8 @@ async fn a_fence_planned_before_a_cut_over_is_not_written_after_it() {
             generation: 0,
             state: ShardState::Active,
             successor: Some("broker-y".to_string()),
+            joining: None,
+            move_started_at_millis: None,
         })
         .await
         .expect("staged move");
@@ -296,6 +299,8 @@ async fn a_promotion_planned_from_an_old_read_is_not_written_later() {
             generation: 0,
             state: ShardState::Assigning,
             successor: None,
+            joining: None,
+            move_started_at_millis: None,
         })
         .await
         .expect("placed");

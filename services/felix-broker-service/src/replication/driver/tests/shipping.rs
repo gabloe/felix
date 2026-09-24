@@ -298,6 +298,7 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         Duration::from_secs(300),
         Arc::default(),
         RebuildPolicy::default(),
+        MoveThrottle::unlimited(),
         shutdown.clone(),
     );
 
@@ -359,6 +360,7 @@ async fn a_route_change_ships_without_waiting_for_the_tick() {
         Duration::from_secs(300),
         Arc::clone(&routes_changed),
         RebuildPolicy::default(),
+        MoveThrottle::unlimited(),
         shutdown.clone(),
     );
     tokio::time::sleep(Duration::from_millis(200)).await;

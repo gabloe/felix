@@ -98,6 +98,10 @@ pub struct ShardReplicaStatus {
     /// measured against its final tail. Omitted when false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drained: bool,
+    /// The leader's own tail when it reported, which `replica_offsets` are
+    /// measured against. Omitted by brokers that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_offset: Option<u64>,
 }
 
 /// What a leader tells the control plane about the shards it leads.

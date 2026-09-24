@@ -200,6 +200,10 @@ pub struct BrokerConfig {
     /// How many writes may wait on moving shards at once. Each holds its
     /// payload, so this bounds the memory a move can pin.
     pub shard_move_hold_max: usize,
+    /// Bytes per second this broker ships to move destinations, across every
+    /// shard it leads; zero is unlimited. Never applied to a follower the
+    /// quorum needs.
+    pub shard_move_bytes_per_sec: u64,
 }
 
 impl BrokerConfig {
@@ -328,6 +332,7 @@ impl Default for BrokerConfig {
             replication_rebuild_bytes_per_sec: DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC,
             shard_move_hold_ms: DEFAULT_SHARD_MOVE_HOLD_MS,
             shard_move_hold_max: DEFAULT_SHARD_MOVE_HOLD_MAX,
+            shard_move_bytes_per_sec: DEFAULT_SHARD_MOVE_BYTES_PER_SEC,
         }
     }
 }

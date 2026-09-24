@@ -872,3 +872,221 @@ async fn a_quorum_publish_during_a_copy_is_not_held_by_it() {
     assert!(lost.is_empty(), "acknowledged records lost: {lost:?}");
     cluster.shutdown().await;
 }
+
+/// **A move finishes under steady writes.** The destination of a busy shard
+/// is almost never exactly level with the leader, so a move that waited for
+/// that could wait forever. Placement fences once the destination is within
+/// the lag bound, the leader stops, and the drained report waits for the
+/// rest; every acknowledged write is on the new owner.
+#[serial]
+#[tokio::test]
+async fn a_move_completes_while_a_publisher_keeps_writing() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use felix_controlplane_service::cluster::placement::MovePolicy;
+
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    let other = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &owner)
+        .expect("two brokers");
+    let mut acknowledged = publish_batch(&cluster, &owner, "before", 200).await;
+
+    let moved = AtomicBool::new(false);
+    // Four writers with no pause between publishes, so the log grows between
+    // any two reports.
+    // Four writers on their own connections, batches back to back, so the
+    // log grows between any two reports. Half write through the owner, half
+    // through the other broker, which forwards.
+    let writer = |writer: usize| {
+        let (cluster, moved) = (&cluster, &moved);
+        let via = if writer.is_multiple_of(2) {
+            owner.clone()
+        } else {
+            other.clone()
+        };
+        async move {
+            let mut acknowledged = Vec::new();
+            let mut i = 0usize;
+            while !moved.load(Ordering::Relaxed) {
+                let Ok(client) = cluster.client_on(&via).await else {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                };
+                let Ok(publisher) = client.publisher().await else {
+                    continue;
+                };
+                while !moved.load(Ordering::Relaxed) {
+                    let batch: Vec<Vec<u8>> = (0..20)
+                        .map(|n| format!("steady-{writer}-{i}-{n}").into_bytes())
+                        .collect();
+                    i += 1;
+                    let published = publisher
+                        .publish_batch(
+                            &cluster.tenant_id,
+                            &cluster.namespace,
+                            STREAM,
+                            batch.clone(),
+                            felix_wire::AckMode::PerMessage,
+                        )
+                        .await;
+                    match published {
+                        Ok(()) => acknowledged.extend(batch),
+                        // Refused across the switch-over: a new connection
+                        // finds the new route.
+                        Err(_) => break,
+                    }
+                }
+            }
+            acknowledged
+        }
+    };
+    let mover = async {
+        cluster.drain_node(&owner).await.expect("drain");
+        let deadline =
+            std::time::Instant::now() + felix_cluster::wait::budget(Duration::from_secs(60));
+        loop {
+            cluster
+                .control_plane
+                .as_ref()
+                .expect("control plane")
+                .place_shards_with(MovePolicy::default())
+                .await;
+            if cluster
+                .owner(STREAM)
+                .await
+                .is_ok_and(|leader| leader != owner)
+            {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                moved.store(true, Ordering::Relaxed);
+                panic!("the shard never left {owner} while writes kept arriving");
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // A little more writing on the new owner before the writers stop.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        moved.store(true, Ordering::Relaxed);
+    };
+    let (a, b, c, d, ()) = tokio::join!(writer(0), writer(1), writer(2), writer(3), mover);
+    for batch in [a, b, c, d] {
+        acknowledged.extend(batch);
+    }
+    println!("{} acknowledged across the move", acknowledged.len());
+
+    let new_owner = cluster.owner(STREAM).await.expect("owner");
+    assert_eq!(new_owner, other);
+    let got = read_whole_log(&cluster, &new_owner).await;
+    let lost = missing(&acknowledged, &got);
+    assert!(
+        lost.is_empty(),
+        "records acknowledged during the move are missing from {new_owner}: {} of {}",
+        lost.len(),
+        acknowledged.len()
+    );
+    cluster.shutdown().await;
+}
+
+/// **A move that cannot copy gives its slot back.** The destination stays
+/// live -- it heartbeats -- but the leader cannot reach it, so it never gets
+/// close. Past the move timeout the staging is undone in one write, the
+/// leader keeps serving throughout, and once the destination is reachable
+/// again the next attempt finishes.
+#[serial]
+#[tokio::test]
+async fn a_move_that_cannot_copy_is_abandoned_after_its_timeout() {
+    use felix_controlplane_service::cluster::placement::MovePolicy;
+    use felix_controlplane_service::store::ControlPlaneStore;
+
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    let destination = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &owner)
+        .expect("two brokers");
+    let mut sent = publish_batch(&cluster, &owner, "before", 20).await;
+
+    cluster.partition_node(&destination).expect("partition");
+    cluster.drain_node(&owner).await.expect("drain");
+    let policy = MovePolicy {
+        timeout_millis: Some(3_000),
+        ..MovePolicy::default()
+    };
+    let store = &cluster.control_plane.as_ref().expect("control plane").store;
+    let assignment = || async {
+        store
+            .list_shard_assignments()
+            .await
+            .expect("assignments")
+            .into_iter()
+            .find(|a| a.key.stream == STREAM)
+            .expect("assigned")
+    };
+
+    let deadline = std::time::Instant::now() + felix_cluster::wait::budget(Duration::from_secs(30));
+    let mut staged_at = None;
+    let abandoned = loop {
+        cluster
+            .control_plane
+            .as_ref()
+            .expect("control plane")
+            .place_shards_with(policy)
+            .await;
+        let now = assignment().await;
+        if now.successor.is_some() {
+            staged_at.get_or_insert(now.generation);
+        } else if let Some(generation) = staged_at {
+            break (generation, now);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the move was never abandoned: {now:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let (staged_generation, undone) = abandoned;
+    assert_eq!(undone.leader, owner, "the leader never changed");
+    assert!(
+        undone.replicas.is_empty(),
+        "the partial copy is dropped: {undone:?}"
+    );
+    assert_eq!(
+        undone.generation,
+        staged_generation + 1,
+        "undone in one write, without a fence"
+    );
+    assert!(
+        undone.move_started_at_millis.is_some(),
+        "the shard keeps its place at the back of the queue"
+    );
+    sent.extend(publish_batch(&cluster, &owner, "while-stuck", 5).await);
+
+    cluster.heal_partitions().expect("heal");
+    cluster
+        .drain_until_empty(&owner, 1, Duration::from_secs(60))
+        .await
+        .expect("once reachable, the shard moves");
+    let got = replay_from(&cluster, &destination, Duration::from_secs(30)).await;
+    let lost = missing(&sent, &got);
+    assert!(
+        lost.is_empty(),
+        "records lost across the retried move: {lost:?}"
+    );
+    cluster.shutdown().await;
+}

@@ -13,44 +13,127 @@ use crate::model::{Node, ShardAssignment, ShardKey, ShardState};
 /// a shard's log.
 pub const DEFAULT_MAX_CONCURRENT_MOVES: usize = 1;
 
-/// How many moves may be in progress at once.
+/// How far behind the leader's tail a destination may be when the leader is
+/// fenced. The fence stops new writes, and the drained report waits for the
+/// destination to hold the rest, so this bounds how long the switch-over
+/// waits on the copy -- a few milliseconds of shipping -- not what is lost.
+pub const DEFAULT_FENCE_MAX_LAG_RECORDS: u64 = 1_000;
+
+/// How long a move may copy before it is given up: long enough for a large
+/// shard under a bandwidth limit, short enough that a copy that is stuck
+/// gives its slot back the same hour.
+pub const DEFAULT_MOVE_TIMEOUT_MILLIS: u64 = 30 * 60 * 1_000;
+
+/// How moves are paced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MovePolicy {
-    /// Cluster-wide. A move holds a slot from staging to cut-over. `0` starts
-    /// nothing: a drain waits and an imbalance stays, both visibly.
+    /// Copies in flight at once, cluster-wide: moves from staging to
+    /// cut-over, and follower replacements until the new follower has caught
+    /// up. `0` starts nothing: a drain waits and an imbalance stays, both
+    /// visibly.
     pub max_concurrent: usize,
+    /// Copies in flight into or out of any one node. `None` is no limit
+    /// beyond `max_concurrent`.
+    pub max_per_node: Option<usize>,
+    /// How far behind the leader a destination may be for the leader to be
+    /// fenced. Leaders that do not report their tail are waited on until the
+    /// destination is exactly level.
+    pub fence_max_lag_records: u64,
+    /// How long a move may copy before the fence, or a replacement before it
+    /// has caught up, before it is abandoned. `None` never gives up.
+    pub timeout_millis: Option<u64>,
 }
 
 impl Default for MovePolicy {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_MOVES,
+            max_per_node: None,
+            fence_max_lag_records: DEFAULT_FENCE_MAX_LAG_RECORDS,
+            timeout_millis: Some(DEFAULT_MOVE_TIMEOUT_MILLIS),
         }
     }
 }
 
-/// The move slots one pass hands out.
+/// The move slots one pass hands out, cluster-wide and per node.
 pub(super) struct Moves {
-    pub(super) in_flight: usize,
-    pub(super) policy: MovePolicy,
+    in_flight: usize,
+    per_node: HashMap<String, usize>,
+    policy: MovePolicy,
 }
 
 impl Moves {
-    /// Take a slot for a new move, if one is free.
-    fn begin(&mut self) -> bool {
-        if self.in_flight < self.policy.max_concurrent {
-            self.in_flight += 1;
-            true
-        } else {
-            false
+    /// The copies `existing` already has in flight.
+    pub(super) fn counting(existing: &[ShardAssignment], policy: MovePolicy) -> Self {
+        let mut moves = Self {
+            in_flight: 0,
+            per_node: HashMap::new(),
+            policy,
+        };
+        for assignment in existing {
+            if assignment.successor.is_some() || assignment.state == ShardState::Draining {
+                moves.take(&assignment.leader, assignment.successor.as_deref());
+            }
+            if let Some(joining) = assignment.joining.as_deref() {
+                moves.take(&assignment.leader, Some(joining));
+            }
+        }
+        moves
+    }
+
+    /// Take a slot for a copy from `from` to `to`, if both nodes and the
+    /// cluster have one free.
+    fn begin(&mut self, from: &str, to: &str) -> Result<(), Blocked> {
+        if self.in_flight >= self.policy.max_concurrent {
+            return Err(Blocked::MoveLimit);
+        }
+        if let Some(max) = self.policy.max_per_node {
+            for node in [from, to] {
+                if self.per_node.get(node).copied().unwrap_or(0) >= max {
+                    return Err(Blocked::NodeMoveLimit {
+                        node: node.to_string(),
+                    });
+                }
+            }
+        }
+        self.take(from, Some(to));
+        Ok(())
+    }
+
+    fn take(&mut self, from: &str, to: Option<&str>) {
+        self.in_flight += 1;
+        for node in std::iter::once(from).chain(to) {
+            *self.per_node.entry(node.to_string()).or_default() += 1;
+        }
+    }
+
+    /// Whether `destination` is close enough to the leader to fence it.
+    fn ready_to_fence(&self, caught_up: &dyn CaughtUp, key: &ShardKey, destination: &str) -> bool {
+        caught_up.is_caught_up(key, destination)
+            || caught_up
+                .lag_records(key, destination)
+                .is_some_and(|lag| lag <= self.policy.fence_max_lag_records)
+    }
+
+    /// Whether a copy started at `started` has run past the timeout, on the
+    /// clock the reports were read at.
+    fn timed_out(&self, caught_up: &dyn CaughtUp, started: Option<u64>) -> bool {
+        match (
+            self.policy.timeout_millis,
+            started,
+            caught_up.as_of_millis(),
+        ) {
+            (Some(timeout), Some(started), Some(now)) => now.saturating_sub(started) > timeout,
+            _ => false,
         }
     }
 }
 
 /// What to do about a shard whose leader is still serving.
 ///
-/// Stage the destination as a replica; fence once it is caught up, which
-/// stops the leader; cut over once the leader reports drained. A leader that
+/// Stage the destination as a replica; fence once it is within the lag
+/// bound, which stops the leader; cut over once the leader reports drained,
+/// which it does only once the destination holds everything. A leader that
 /// dies mid-move is handled by the failover path, where the successor is a
 /// candidate like any other replica. Every input is in the store or a fresh
 /// report, so any pass resumes where the last left off.
@@ -81,9 +164,33 @@ pub(super) fn move_step<'a>(
             .find(|node| node.node_id == id)
             .map(|node| node.node_id.as_str())
     };
+    let started = caught_up.as_of_millis();
 
     if existing.state == ShardState::Draining {
+        // No timeout from here. The leader has stopped serving, and going
+        // back is a new generation and every client following the shard
+        // twice; going on waits for at most the lag bound's worth of copy.
         if !caught_up.is_drained(key, existing.generation) {
+            // The fence may land while the destination is still copying, and
+            // the leader will not report drained until it is level. One that
+            // died first never will be: drop it, still fenced, and the leader
+            // reports drained against the followers it has. The cut-over then
+            // picks one of them, or hands the shard back to the leader.
+            if let Some(successor) = existing.successor.as_deref().filter(|s| !is_live(s)) {
+                let mut replicas = existing.replicas.clone();
+                replicas.retain(|replica| replica != successor);
+                return Decision::Move(
+                    MoveStep::Abandon {
+                        successor: successor.to_string(),
+                    },
+                    ShardAssignment {
+                        successor: None,
+                        replicas,
+                        generation: 0,
+                        ..existing.clone()
+                    },
+                );
+            }
             return Decision::Waiting(Blocked::LeaderStopping);
         }
         // Whoever leads next must hold everything the leader held.
@@ -133,6 +240,8 @@ pub(super) fn move_step<'a>(
                 generation: 0,
                 state: ShardState::Assigning,
                 successor: None,
+                joining: None,
+                move_started_at_millis: None,
             },
         );
     }
@@ -148,25 +257,40 @@ pub(super) fn move_step<'a>(
                     successor: successor.to_string(),
                 },
                 ShardAssignment {
-                    key: key.clone(),
-                    leader: leader.to_string(),
+                    successor: None,
+                    move_started_at_millis: None,
                     replicas,
                     generation: 0,
-                    state: existing.state,
-                    successor: None,
+                    ..existing.clone()
                 },
             );
         }
-        if caught_up.is_caught_up(key, successor) {
+        if moves.ready_to_fence(caught_up, key, successor) {
             return Decision::Move(
                 MoveStep::Fence,
                 ShardAssignment {
-                    key: key.clone(),
-                    leader: leader.to_string(),
-                    replicas: existing.replicas.clone(),
-                    generation: 0,
                     state: ShardState::Draining,
-                    successor: Some(successor.to_string()),
+                    generation: 0,
+                    ..existing.clone()
+                },
+            );
+        }
+        if moves.timed_out(caught_up, existing.move_started_at_millis) {
+            // The copy is dropped unless the stream had it anyway. The start
+            // stays, so this shard waits behind the others for its next slot.
+            let mut replicas = existing.replicas.clone();
+            if replicas.len() >= replication_factor.max(1) as usize {
+                replicas.retain(|replica| replica != successor);
+            }
+            return Decision::Move(
+                MoveStep::TimedOut {
+                    successor: successor.to_string(),
+                },
+                ShardAssignment {
+                    successor: None,
+                    replicas,
+                    generation: 0,
+                    ..existing.clone()
                 },
             );
         }
@@ -175,26 +299,31 @@ pub(super) fn move_step<'a>(
         });
     }
 
+    if let Some(joining) = existing.joining.as_deref() {
+        return replacement_step(existing, joining, is_live, is_draining, caught_up, moves);
+    }
+
     // Nothing in progress. Should a move start?
     let over_share = leaders.get(leader).copied().unwrap_or(0) > leader_share;
     let wanted = if !leader_live {
         // Draining: a caught-up live replica under its share is cheapest, the
         // copy already exists; otherwise the bounded choice, or any live node
         // with room.
-        promote_under_share(key, existing, eligible, caught_up, leaders, leader_share)
-            .or_else(|| choose_destination(key, eligible, leaders, leader_share, leader, false))
+        promote_under_share(key, existing, eligible, caught_up, leaders, leader_share).or_else(
+            || choose_destination(key, existing, eligible, leaders, load, leader_share, false),
+        )
     } else if leader_live && over_share {
         // Only from over share to under share, so moves converge instead of
         // trading shards back and forth.
-        choose_destination(key, eligible, leaders, leader_share, leader, true)
+        choose_destination(key, existing, eligible, leaders, load, leader_share, true)
     } else {
         None
     };
 
     match wanted {
         Some(destination) => {
-            if !moves.begin() {
-                return Decision::Waiting(Blocked::MoveLimit);
+            if let Err(blocked) = moves.begin(leader, destination) {
+                return Decision::Waiting(blocked);
             }
             if let Some(from) = catalog_id(leader) {
                 leaders
@@ -203,8 +332,8 @@ pub(super) fn move_step<'a>(
             }
             *leaders.entry(destination).or_default() += 1;
             let already_a_replica = existing.replicas.iter().any(|r| r == destination);
-            if already_a_replica && caught_up.is_caught_up(key, destination) {
-                // The copy is already there and level: straight to the fence.
+            if already_a_replica && moves.ready_to_fence(caught_up, key, destination) {
+                // The copy is already there: straight to the fence.
                 return Decision::Move(
                     MoveStep::Fence,
                     ShardAssignment {
@@ -214,6 +343,8 @@ pub(super) fn move_step<'a>(
                         generation: 0,
                         state: ShardState::Draining,
                         successor: Some(destination.to_string()),
+                        joining: None,
+                        move_started_at_millis: started,
                     },
                 );
             }
@@ -233,23 +364,30 @@ pub(super) fn move_step<'a>(
                     generation: 0,
                     state: existing.state,
                     successor: Some(destination.to_string()),
+                    joining: None,
+                    move_started_at_millis: started,
                 },
             )
         }
         None if !leader_live => Decision::Waiting(Blocked::NoDestination),
-        None => reseat(key, existing, eligible, is_draining, load, moves),
+        None => reseat(key, existing, eligible, is_draining, caught_up, load, moves),
     }
 }
 
-/// Replace a follower on a draining node with one that is staying.
+/// Start replacing a follower on a draining node with one that is staying.
 ///
 /// Draining only, never merely down: a rolling restart takes every node down
 /// in turn, and reseating each would copy every shard once per restart.
+///
+/// The replacement joins beside the follower it replaces, which leaves once
+/// it has caught up (`replacement_step`), so the shard keeps every copy it
+/// asked for while the new one fills.
 fn reseat<'a>(
     key: &ShardKey,
     existing: &ShardAssignment,
     eligible: &[&'a Node],
     is_draining: &dyn Fn(&str) -> bool,
+    caught_up: &dyn CaughtUp,
     load: &mut HashMap<&'a str, u32>,
     moves: &mut Moves,
 ) -> Decision {
@@ -261,8 +399,7 @@ fn reseat<'a>(
         return Decision::Kept;
     };
     // Swapped only when someone can take its place; dropping it costs a copy.
-    let mut taken: Vec<&str> = existing.nodes().map(String::as_str).collect();
-    taken.retain(|node| node != departing);
+    let taken: Vec<&str> = existing.nodes().map(String::as_str).collect();
     let Some(replacement) = eligible
         .iter()
         .filter(|node| !taken.contains(&node.node_id.as_str()))
@@ -278,35 +415,93 @@ fn reseat<'a>(
     else {
         return Decision::Kept;
     };
-    if !moves.begin() {
-        return Decision::Waiting(Blocked::MoveLimit);
+    if let Err(blocked) = moves.begin(&existing.leader, &replacement.node_id) {
+        return Decision::Waiting(blocked);
     }
     *load.entry(replacement.node_id.as_str()).or_default() += 1;
-    let replicas = existing
-        .replicas
-        .iter()
-        .map(|replica| {
-            if replica == departing {
-                replacement.node_id.clone()
-            } else {
-                replica.clone()
-            }
-        })
-        .collect();
+    let mut replicas = existing.replicas.clone();
+    replicas.push(replacement.node_id.clone());
     Decision::Move(
         MoveStep::Reseat {
             from: departing.clone(),
             to: replacement.node_id.clone(),
         },
         ShardAssignment {
-            key: key.clone(),
-            leader: existing.leader.clone(),
             replicas,
             generation: 0,
-            state: existing.state,
-            successor: None,
+            joining: Some(replacement.node_id.clone()),
+            move_started_at_millis: caught_up.as_of_millis(),
+            ..existing.clone()
         },
     )
+}
+
+/// A follower replacement in progress: seat it once it has caught up, or
+/// undo it if it cannot finish.
+fn replacement_step(
+    existing: &ShardAssignment,
+    joining: &str,
+    is_live: &dyn Fn(&str) -> bool,
+    is_draining: &dyn Fn(&str) -> bool,
+    caught_up: &dyn CaughtUp,
+    moves: &Moves,
+) -> Decision {
+    let departing = existing
+        .replicas
+        .iter()
+        .find(|replica| replica.as_str() != joining && is_draining(replica));
+    let undo = |step: MoveStep, started| {
+        let mut replicas = existing.replicas.clone();
+        replicas.retain(|replica| replica != joining);
+        Decision::Move(
+            step,
+            ShardAssignment {
+                replicas,
+                generation: 0,
+                joining: None,
+                move_started_at_millis: started,
+                ..existing.clone()
+            },
+        )
+    };
+    // Nothing to replace any more (the node was undrained), or nowhere to
+    // put the copy: the follower that was staying stays.
+    let Some(departing) = departing.filter(|_| is_live(joining)) else {
+        return undo(
+            MoveStep::Abandon {
+                successor: joining.to_string(),
+            },
+            None,
+        );
+    };
+    if moves.ready_to_fence(caught_up, &existing.key, joining) {
+        let mut replicas = existing.replicas.clone();
+        replicas.retain(|replica| replica != departing);
+        return Decision::Move(
+            MoveStep::Seat {
+                from: departing.clone(),
+                to: joining.to_string(),
+            },
+            ShardAssignment {
+                replicas,
+                generation: 0,
+                joining: None,
+                move_started_at_millis: None,
+                ..existing.clone()
+            },
+        );
+    }
+    if moves.timed_out(caught_up, existing.move_started_at_millis) {
+        return undo(
+            MoveStep::TimedOut {
+                successor: joining.to_string(),
+            },
+            existing.move_started_at_millis,
+        );
+    }
+    Decision::Waiting(Blocked::DestinationCatchingUp {
+        successor: joining.to_string(),
+    })
 }
 
 /// The replica set once `target` leads: nodes that already hold a copy first
@@ -364,40 +559,38 @@ fn promote_under_share<'a>(
 
 /// The live node to move a shard to, by score, preferring nodes under their
 /// leadership share. `balanced_only` answers `None` rather than spill over.
+///
+/// `max_shards` caps roles, leaders and followers alike, so a node already
+/// holding a copy of this shard gains no role by leading it.
 fn choose_destination<'a>(
     key: &ShardKey,
+    existing: &ShardAssignment,
     eligible: &[&'a Node],
     leaders: &HashMap<&str, u32>,
+    load: &HashMap<&str, u32>,
     leader_share: u32,
-    exclude: &str,
     balanced_only: bool,
 ) -> Option<&'a str> {
     let candidates: Vec<&'a Node> = eligible
         .iter()
         .copied()
-        .filter(|node| node.node_id != exclude)
-        .collect();
-    let leader_load: HashMap<&str, u32> = candidates
-        .iter()
-        .map(|node| {
-            (
-                node.node_id.as_str(),
-                leaders.get(node.node_id.as_str()).copied().unwrap_or(0),
-            )
+        .filter(|node| node.node_id != existing.leader)
+        .filter(|node| match node.spec.capacity.max_shards {
+            Some(max) => {
+                existing.replicas.contains(&node.node_id)
+                    || load.get(node.node_id.as_str()).copied().unwrap_or(0) < max
+            }
+            None => true,
         })
         .collect();
     let under_share = candidates
         .iter()
         .copied()
-        .filter(|node| leader_load.get(node.node_id.as_str()).copied().unwrap_or(0) < leader_share)
+        .filter(|node| leaders.get(node.node_id.as_str()).copied().unwrap_or(0) < leader_share)
         .collect::<Vec<_>>();
     let pick = |from: &[&'a Node]| {
         from.iter()
             .copied()
-            .filter(|node| match node.spec.capacity.max_shards {
-                Some(max) => leader_load.get(node.node_id.as_str()).copied().unwrap_or(0) < max,
-                None => true,
-            })
             .max_by(|a, b| {
                 score(key, &a.node_id)
                     .cmp(&score(key, &b.node_id))
@@ -444,7 +637,17 @@ impl CaughtUp for AtGeneration<'_> {
         self.inner.is_drained(key, generation)
     }
 
+    fn lag_records(&self, key: &ShardKey, node_id: &str) -> Option<u64> {
+        self.current(key)
+            .then(|| self.inner.lag_records(key, node_id))
+            .flatten()
+    }
+
     fn reported_generation(&self, key: &ShardKey) -> Option<u64> {
         self.inner.reported_generation(key)
+    }
+
+    fn as_of_millis(&self) -> Option<u64> {
+        self.inner.as_of_millis()
     }
 }

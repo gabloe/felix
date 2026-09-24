@@ -21,6 +21,8 @@ struct DbShardAssignment {
     generation: i64,
     state: String,
     successor: Option<String>,
+    joining: Option<String>,
+    move_started_at_millis: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -47,6 +49,7 @@ struct DbReplicaReport {
     offsets: serde_json::Value,
     reported_at_millis: i64,
     drained: bool,
+    leader_offset: Option<i64>,
 }
 
 pub(super) async fn put_shard_assignment(
@@ -116,7 +119,8 @@ async fn write_shard_assignment(
     // `FOR UPDATE` so a concurrent write to the same shard waits rather than
     // reading the row this transaction is about to replace.
     let existing = sqlx::query_as::<_, DbShardAssignment>(
-        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
+        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
+                      joining, move_started_at_millis
                FROM shard_assignments
                WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5
                FOR UPDATE"#,
@@ -166,18 +170,20 @@ async fn write_shard_assignment(
     // A write that expects no assignment must not replace one another writer
     // inserted since the read above.
     let insert = if expected == Some(None) {
-        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor, joining, move_started_at_millis)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO NOTHING"#
     } else {
-        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        r#"INSERT INTO shard_assignments (tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor, joining, move_started_at_millis)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE SET
                  leader = EXCLUDED.leader,
                  replicas = EXCLUDED.replicas,
                  generation = EXCLUDED.generation,
                  state = EXCLUDED.state,
                  successor = EXCLUDED.successor,
+                 joining = EXCLUDED.joining,
+                 move_started_at_millis = EXCLUDED.move_started_at_millis,
                  updated_at = now()"#
     };
     let written = sqlx::query(insert)
@@ -191,6 +197,8 @@ async fn write_shard_assignment(
         .bind(stored.generation as i64)
         .bind(shard_state_to_str(stored.state))
         .bind(&stored.successor)
+        .bind(&stored.joining)
+        .bind(stored.move_started_at_millis.map(|millis| millis as i64))
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -218,7 +226,8 @@ pub(super) async fn get_shard_assignment(
     key: &ShardKey,
 ) -> StoreResult<ShardAssignment> {
     sqlx::query_as::<_, DbShardAssignment>(
-        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
+        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
+                      joining, move_started_at_millis
                FROM shard_assignments
                WHERE tenant_id = $1 AND namespace = $2 AND stream = $3 AND shard = $4 AND kind = $5"#,
     )
@@ -238,7 +247,8 @@ pub(super) async fn list_shard_assignments(
     store: &PostgresStore,
 ) -> StoreResult<Vec<ShardAssignment>> {
     let rows = sqlx::query_as::<_, DbShardAssignment>(
-        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
+        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
+                      joining, move_started_at_millis
                FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
     )
     .fetch_all(&store.pool)
@@ -251,7 +261,8 @@ pub(super) async fn list_shard_assignments_for_node(
     node_id: &str,
 ) -> StoreResult<Vec<ShardAssignment>> {
     let rows = sqlx::query_as::<_, DbShardAssignment>(
-        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
+        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
+                      joining, move_started_at_millis
                FROM shard_assignments WHERE leader = $1
                ORDER BY tenant_id, namespace, stream, shard, kind"#,
     )
@@ -296,7 +307,8 @@ pub(super) async fn shard_assignment_snapshot(
     let mut tx = store.pool.begin().await?;
     begin_consistent_read(&mut tx).await?;
     let rows = sqlx::query_as::<_, DbShardAssignment>(
-        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor
+        r#"SELECT tenant_id, namespace, stream, shard, kind, leader, replicas, generation, state, successor,
+                      joining, move_started_at_millis
                FROM shard_assignments ORDER BY tenant_id, namespace, stream, shard, kind"#,
     )
     .fetch_all(&mut *tx)
@@ -360,14 +372,15 @@ pub(super) async fn record_replica_report(
     let result = sqlx::query(
         r#"INSERT INTO replica_reports
                    (tenant_id, namespace, kind, stream, shard, generation, caught_up, offsets,
-                    reported_at_millis, drained)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    reported_at_millis, drained, leader_offset)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                ON CONFLICT (tenant_id, namespace, kind, stream, shard) DO UPDATE
                SET generation = EXCLUDED.generation,
                    caught_up = EXCLUDED.caught_up,
                    offsets = EXCLUDED.offsets,
                    reported_at_millis = EXCLUDED.reported_at_millis,
-                   drained = EXCLUDED.drained
+                   drained = EXCLUDED.drained,
+                   leader_offset = EXCLUDED.leader_offset
                WHERE EXCLUDED.generation >= replica_reports.generation"#,
     )
     .bind(&report.key.tenant_id)
@@ -380,6 +393,7 @@ pub(super) async fn record_replica_report(
     .bind(serde_json::to_value(&report.offsets).expect("a map of integers serializes"))
     .bind(report.reported_at_millis as i64)
     .bind(report.drained)
+    .bind(report.leader_offset.map(|offset| offset as i64))
     .execute(&store.pool)
     .await;
     match result {
@@ -394,7 +408,7 @@ pub(super) async fn record_replica_report(
 pub(super) async fn list_replica_reports(store: &PostgresStore) -> StoreResult<Vec<ReplicaReport>> {
     sqlx::query_as::<_, DbReplicaReport>(
         r#"SELECT tenant_id, namespace, stream, shard, kind, generation, caught_up, offsets,
-                      reported_at_millis, drained
+                      reported_at_millis, drained, leader_offset
                FROM replica_reports
                ORDER BY tenant_id, namespace, kind, stream, shard"#,
     )
@@ -419,6 +433,8 @@ fn shard_from_db(row: DbShardAssignment) -> StoreResult<ShardAssignment> {
         generation: row.generation as u64,
         state: parse_shard_state(&row.state)?,
         successor: row.successor,
+        joining: row.joining,
+        move_started_at_millis: row.move_started_at_millis.map(|millis| millis as u64),
     })
 }
 
@@ -438,6 +454,7 @@ fn replica_report_from_db(row: DbReplicaReport) -> StoreResult<ReplicaReport> {
             .map_err(|err| StoreError::Unexpected(anyhow!("decode offsets: {err}")))?,
         reported_at_millis: row.reported_at_millis as u64,
         drained: row.drained,
+        leader_offset: row.leader_offset.map(|offset| offset as u64),
     })
 }
 

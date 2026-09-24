@@ -27,6 +27,9 @@ pub(super) const DEFAULT_SHARD_MOVE_HOLD_MS: u64 = 2_000;
 /// A held write is one message or batch on one client stream, so this is
 /// room for a thousand streams to be caught by a move at once.
 pub(super) const DEFAULT_SHARD_MOVE_HOLD_MAX: usize = 1_024;
+/// Unlimited: a move finishes as fast as the network allows unless an
+/// operator trades speed for headroom.
+pub(super) const DEFAULT_SHARD_MOVE_BYTES_PER_SEC: u64 = 0;
 pub(super) const DEFAULT_ACK_WAIT_TIMEOUT_MS: u64 = 2000;
 /// Thirty seconds. Long enough that ordinary work finishes inside it, short
 /// enough that a dead consumer does not hold its records for minutes.

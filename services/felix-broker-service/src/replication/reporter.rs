@@ -98,6 +98,8 @@ pub struct ShardReport {
     /// leader that reports and then writes more before dying leaves a report
     /// that says every replica was level without saying level with what.
     pub offsets: Vec<(String, u64)>,
+    /// This leader's tail, which `offsets` are measured against.
+    pub tail: u64,
     /// This broker has stopped serving the shard and its log will not grow,
     /// so `caught_up` is measured against the final tail.
     pub drained: bool,
@@ -115,11 +117,15 @@ pub(super) fn shard_report(
         key: key.clone(),
         generation,
         caught_up: caught_up(tail, followers),
+        // Only followers whose position is moving: placement fences a move
+        // on how far behind its destination is, and one it cannot reach is
+        // not going to close any gap.
         offsets: followers
             .iter()
-            .filter(|follower| follower.halted.is_none())
+            .filter(|follower| follower.halted.is_none() && !follower.stalled)
             .map(|follower| (follower.node_id.clone(), follower.next_offset))
             .collect(),
+        tail,
         drained,
     }
 }
@@ -201,6 +207,7 @@ async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
                 generation: report.generation,
                 caught_up: report.caught_up.to_vec(),
                 drained: report.drained,
+                leader_offset: Some(report.tail),
                 replica_offsets: report
                     .offsets
                     .iter()

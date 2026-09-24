@@ -115,6 +115,8 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardStagedMove.cfg` | two replicas and a staged destination left out of the quorum while it copies, then the move | pass every invariant (2.3M states) |
 | `FelixShardStagedMoveSingle.cfg` | the same with one replica: the leader alone is the quorum | pass every invariant (0.8M states) |
 | `FelixShardStagedMoveVotes.cfg` | one replica, with the destination counted toward the quorum | violate `StagedCopyNeverDelaysAck` |
+| `FelixPlacementPacing.cfg` | `FelixPlacementPacing.tla`: moves and follower replacements across four shards, two copies at once, one per node | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (92 states) |
+| `FelixPlacementPacingUncountedReplacement.cfg` | the same with a follower replacement invisible to the count, as it used to be written | violate `CopiesWithinLimit` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -186,6 +188,30 @@ reports drained, and the cut-over to the second follower lands while the first
 still holds a live lease. `FelixShardStalePromotion.cfg` is the failover
 version: two promotions from one report of two caught-up followers. With
 `CasWrites`, each late write finds a newer generation and writes nothing.
+
+### A fence before the destination is level
+
+Placement fences a move once the destination is within
+`FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS` of the leader's tail, because under
+steady writes it may never be exactly level. The model's `Fence` asks nothing
+of the destination's position at all, so every bound the code may use is
+covered: the cut-over still waits for a drained report naming the destination
+level, and that is what keeps an acknowledged write on whoever leads next.
+
+### Pacing across shards
+
+`FelixPlacementPacing.tla` is a second, much smaller model: many shards, no
+records, only the copies placement starts and finishes. It checks the move
+limits hold when every copy is one the store names -- a move's `successor`, a
+replacement's `joining` -- and that only a move before its fence times out.
+`FelixPlacementPacingUncountedReplacement.cfg` writes a replacement the way it
+used to be, with nothing in the assignment saying a copy is running, and TLC
+finds a move starting beside it under a limit of one.
+
+It does not model several control-plane instances planning at once. Each
+write is conditional on its own shard's generation, not on the count, so two
+Postgres instances running placement in the same instant can each start a
+move; the limit holds per planner.
 
 ### The interval that is load-bearing
 

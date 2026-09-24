@@ -280,6 +280,7 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                         max_concurrent: config.replication_rebuild_max_concurrent,
                         bytes_per_sec: config.replication_rebuild_bytes_per_sec,
                     },
+                    replication::MoveThrottle::new(config.shard_move_bytes_per_sec),
                     sync_shutdown.clone(),
                 );
             }

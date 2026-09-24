@@ -13,23 +13,36 @@ pub struct PlacementWakes {
     written: watch::Sender<u64>,
     pass: Notify,
     closing: CancellationToken,
+    fence_max_lag_records: u64,
 }
 
 impl Default for PlacementWakes {
     fn default() -> Self {
-        Self::new(CancellationToken::new())
+        Self::new(
+            CancellationToken::new(),
+            super::DEFAULT_FENCE_MAX_LAG_RECORDS,
+        )
     }
 }
 
 impl PlacementWakes {
     /// Long-polls waiting on these wakes return once `closing` fires, so a
     /// drain is not held open by requests that are only waiting.
-    pub(crate) fn new(closing: CancellationToken) -> Self {
+    ///
+    /// `fence_max_lag_records` is the placement policy's, so a report puts a
+    /// destination close enough to fence exactly when placement will.
+    pub(crate) fn new(closing: CancellationToken, fence_max_lag_records: u64) -> Self {
         Self {
             written: watch::Sender::new(0),
             pass: Notify::new(),
             closing,
+            fence_max_lag_records,
         }
+    }
+
+    /// How far behind a move's destination may be to be fenced.
+    pub(crate) fn fence_max_lag_records(&self) -> u64 {
+        self.fence_max_lag_records
     }
 
     /// This instance wrote a shard assignment.

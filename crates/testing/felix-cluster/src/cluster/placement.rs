@@ -31,7 +31,10 @@ impl Cluster {
     /// Step placement once with up to `max_concurrent` shard moves in flight.
     pub async fn place_shards_moving(&self, max_concurrent: usize) -> ReconcileOutcome {
         self.control_plane()
-            .place_shards_with(MovePolicy { max_concurrent })
+            .place_shards_with(MovePolicy {
+                max_concurrent,
+                ..MovePolicy::default()
+            })
             .await
     }
 

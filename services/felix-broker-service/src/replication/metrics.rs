@@ -49,6 +49,11 @@ pub const OUTCOME_REBUILD_COMPLETED: &str = "completed";
 /// The follower would not, or could not, rebuild; the halt stands.
 pub const OUTCOME_REBUILD_REFUSED: &str = "refused";
 
+/// Bytes shipped to a move's destination under `FELIX_SHARD_MOVE_BYTES_PER_SEC`.
+/// Beside `felix_broker_replication_shipped_total`, it says how much of this
+/// broker's shipping is move copies being held to the limit.
+pub const MOVE_THROTTLED_BYTES_TOTAL: &str = "felix_broker_replication_move_throttled_bytes_total";
+
 pub const REBUILDS_TOTAL: &str = "felix_broker_replication_rebuilds_total";
 /// Followers this broker is rebuilding right now, across every shard it leads.
 pub const REBUILDING: &str = "felix_broker_replication_rebuilding";
@@ -90,6 +95,10 @@ pub const QUORUM_FAILED_TOTAL: &str = "felix_broker_publish_quorum_failed_total"
 pub const QUORUM_TIMED_OUT: &str = "timed_out";
 /// Leadership moved before the batch reached a majority.
 pub const QUORUM_NOT_LEADING: &str = "not_leading";
+
+pub fn record_move_throttled(bytes: u64) {
+    metrics::counter!(MOVE_THROTTLED_BYTES_TOTAL).increment(bytes);
+}
 
 pub fn record_rebuild(outcome: &'static str) {
     metrics::counter!(REBUILDS_TOTAL, "outcome" => outcome).increment(1);

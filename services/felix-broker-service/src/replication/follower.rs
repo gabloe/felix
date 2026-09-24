@@ -32,6 +32,11 @@ pub struct FollowerCursor {
     /// This follower refused, or did not understand, a rebuild. Asked once per
     /// generation: nothing about a refusal changes with the next pass.
     pub rebuild_refused: bool,
+    /// Bytes this follower has stored from this leader, for pacing a copy.
+    pub shipped_bytes: u64,
+    /// The last batch did not reach the follower, or it refused it: its
+    /// position is not moving, however close it is.
+    pub stalled: bool,
 }
 
 impl FollowerCursor {
@@ -43,6 +48,8 @@ impl FollowerCursor {
             halted: None,
             rebuilding: false,
             rebuild_refused: false,
+            shipped_bytes: 0,
+            stalled: false,
         }
     }
 }

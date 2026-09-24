@@ -513,12 +513,18 @@ Promote(v, f, views) ==
 \* The fence names the leader that was read. If that is no longer the
 \* leader -- only possible without `CasWrites` -- the write hands the shard
 \* back to it at a new generation, fenced from the start.
+\*
+\* Placement fences once the destination is within a lag bound of the
+\* leader's tail (`FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS`), not only when it
+\* is level. The model allows any lag: a fence toward a destination holding
+\* nothing is still safe, because the cut-over waits for a drained report
+\* naming it level. So every bound the code may use is covered.
 Fence(v, f, views) ==
     /\ Handoff
     /\ moves < MaxMoves
     /\ ~v.draining
     /\ f /= v.leader
-    /\ f \in v.report.holders /\ f \notin halted
+    /\ f \notin halted
     /\ staged /= {} => f \in staged
     /\ Cas(v)
     /\ ver' = ver + 1

@@ -37,6 +37,8 @@ pub enum ShardValidationError {
     SuccessorIsLeader(String),
     #[error("successor {0:?} is not in the replica set")]
     SuccessorNotAReplica(String),
+    #[error("joining follower {0:?} is not in the replica set")]
+    JoiningNotAReplica(String),
 }
 
 /// Where an assignment is between being decided and being served.
@@ -180,6 +182,17 @@ pub struct ShardAssignment {
     /// store so any instance can resume the move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub successor: Option<String>,
+    /// A follower being copied in to replace one on a draining node. Always
+    /// one of `replicas`; the one it replaces stays in the set until it is
+    /// caught up, so the shard never has fewer copies than it asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joining: Option<String>,
+    /// The store's clock when the move or replacement in progress started,
+    /// for the move timeout. With neither in progress, when the last one that
+    /// timed out started: such a shard goes to the back of the queue for a
+    /// move slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_started_at_millis: Option<u64>,
 }
 
 impl ShardAssignment {
@@ -212,6 +225,11 @@ impl ShardAssignment {
                     successor.clone(),
                 ));
             }
+        }
+        if let Some(joining) = &self.joining
+            && !self.replicas.contains(joining)
+        {
+            return Err(ShardValidationError::JoiningNotAReplica(joining.clone()));
         }
         Ok(())
     }
@@ -274,6 +292,11 @@ pub struct ReplicaReport {
     /// grow: the handoff may proceed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drained: bool,
+    /// The leader's own tail when it reported, so placement can tell how far
+    /// behind each replica in `offsets` is. Absent from brokers that predate
+    /// it; placement then waits for an exact catch-up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leader_offset: Option<u64>,
 }
 
 #[cfg(test)]

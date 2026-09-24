@@ -23,6 +23,7 @@ async fn a_stored_batch_advances_the_cursor_to_what_the_follower_reported() {
 
     assert_eq!(progress, Progress::Stored { durable_offset: 3 });
     assert_eq!(cursor.next_offset, 3);
+    assert!(!cursor.stalled);
     assert_eq!(follower.sent(), vec![(0, vec_of(&["a", "b", "c"]))]);
 }
 
@@ -264,6 +265,7 @@ async fn an_unreachable_follower_is_retried_without_moving_the_cursor() {
     );
     assert_eq!(cursor.next_offset, 0);
     assert!(cursor.halted.is_none(), "a timeout halted replication");
+    assert!(cursor.stalled, "not reached, so its position is not moving");
 }
 
 /// A follower level with the leader is not shipped an empty batch.

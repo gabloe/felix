@@ -121,6 +121,8 @@ fn shard_assignment(
         generation: 0,
         state: crate::model::ShardState::Assigning,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     }
 }
 

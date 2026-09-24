@@ -684,6 +684,29 @@ positions for these logs; the leader gates on them, so the control plane has
 nothing more to check. The broker learns the successor from the assignment's
 `successor` field.
 
+The successor does not have to be exactly level for the fence. A busy
+shard's successor almost never is at the instant a report is made, so the
+control plane fences once it is within `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS`
+of the leader's tail, which the report carries as `leader_offset`. That is
+safe for any bound, because the drained report above waits for the successor
+to hold everything to the final tail; the bound only limits how long the
+switch-over waits on the copy. A follower whose last batch did not reach it
+is left out of the report's offsets, so an unreachable successor is never
+fenced on the position it had before it went quiet. While a fenced shard has not
+reported drained, the leader runs its next pass 10 ms later rather than on
+the next wake, so the remainder, and a destination that has not yet seen the
+new generation, cost milliseconds rather than a sync interval.
+
+The copy to the successor can be held to `FELIX_SHARD_MOVE_BYTES_PER_SEC`,
+one token bucket per leader across every shard it leads. Only a successor the
+quorum does not need is paced: one still copying, which the leader leaves out
+of the quorum, or one the rest of the replica set can make a majority
+without. So a `Quorum` publish never waits on the limit. The remainder after
+the fence is not paced at all, since the shard is not being served. A pass
+waits at most 50 ms on the limit for a successor before leaving the rest to
+the next pass. `felix_broker_replication_move_throttled_bytes_total` counts
+what was shipped under it.
+
 So the ordering is the same shape as report-before-mark. The successor is
 staged as a replica and caught up *before* the fence; the leader stops
 *before* it reports; the control plane names the successor *after* the
@@ -736,7 +759,11 @@ broker on the default 2 s interval the switch-over is tens of milliseconds;
 the destination records it as `felix_broker_shard_switchover_seconds`.
 
 A destination that dies before it leads is passed over: another caught-up
-replica, or the old leader itself, takes the shard at a new generation. A
+replica, or the old leader itself, takes the shard at a new generation. If it
+dies after the fence but before it is level, the drained report would wait
+for it forever, so the control plane first drops it at a new generation that
+is still fenced; the leader then reports drained against the followers it
+has, and reports even when that is none. A
 leader that dies mid-move is a failover, and the successor is a candidate
 there like any other replica. Neither path can name a broker holding less
 than the report said, because the report is the only input either reads.
@@ -757,6 +784,15 @@ than the report said, because the report is the only input either reads.
 >
 > `a_quorum_publish_during_a_copy_is_not_held_by_it` — a one-replica `Quorum`
 > stream keeps acknowledging while its destination is stalled mid-copy.
+>
+> `a_move_completes_while_a_publisher_keeps_writing` — four writers keep the
+> log growing between every two reports; the move still fences, cuts over,
+> and every acknowledged write is on the new owner.
+>
+> `a_move_that_cannot_copy_is_abandoned_after_its_timeout` — the leader
+> cannot reach a live destination; the staging is undone in one write at the
+> move timeout, the leader serves throughout, and the move finishes once the
+> destination is reachable.
 >
 > `records_acknowledged_during_a_move_survive_it` — publishes arriving through
 > the staging, fence and cut-over are either acknowledged and on the new owner,

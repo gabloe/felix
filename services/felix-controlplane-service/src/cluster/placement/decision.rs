@@ -2,6 +2,9 @@
 use crate::model::ShardAssignment;
 
 /// What placement decided for one shard.
+// One per shard per pass, so the size of the move variant costs nothing worth
+// a box at every match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// The existing assignment is still valid. Nothing to write.
@@ -27,10 +30,18 @@ pub enum MoveStep {
     Fence,
     /// The leader has stopped. `to` leads from the next generation.
     CutOver { from: String, to: String },
-    /// The destination stopped being live before it led; its staging is undone.
+    /// A move's destination, or a follower being copied in, stopped being
+    /// live before it finished; its staging is undone.
     Abandon { successor: String },
-    /// A follower on a draining node is replaced by one that is staying.
+    /// A move's destination, or a follower being copied in, did not get
+    /// close enough within `MovePolicy::timeout_millis` and is dropped, giving
+    /// its slot to the next move.
+    TimedOut { successor: String },
+    /// A follower on a draining node starts being replaced: `to` joins the
+    /// replica set beside it.
     Reseat { from: String, to: String },
+    /// The replacement has caught up, and the follower it replaces leaves.
+    Seat { from: String, to: String },
 }
 
 impl MoveStep {
@@ -40,7 +51,9 @@ impl MoveStep {
             Self::Fence => "fence",
             Self::CutOver { .. } => "cut_over",
             Self::Abandon { .. } => "abandon",
+            Self::TimedOut { .. } => "timed_out",
             Self::Reseat { .. } => "reseat",
+            Self::Seat { .. } => "seat",
         }
     }
 }
@@ -48,7 +61,8 @@ impl MoveStep {
 /// Why a move could not advance this pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Blocked {
-    /// The successor is a replica but has not reported caught up.
+    /// The successor, or a follower being copied in, is not yet within
+    /// `MovePolicy::fence_max_lag_records` of the leader.
     DestinationCatchingUp { successor: String },
     /// The assignment is `Draining` and the leader has not reported drained:
     /// writes are still in flight there, or its group state or counters are
@@ -56,6 +70,9 @@ pub enum Blocked {
     LeaderStopping,
     /// A move is wanted, and `MovePolicy::max_concurrent` is reached.
     MoveLimit,
+    /// A move is wanted, and `node` already has `MovePolicy::max_per_node`
+    /// copies going in or out.
+    NodeMoveLimit { node: String },
     /// The leader is draining and no live node can take the shard.
     NoDestination,
 }
@@ -71,6 +88,7 @@ impl std::fmt::Display for Blocked {
                 "waiting for the leader to stop serving and hand over its logs"
             ),
             Self::MoveLimit => write!(f, "waiting for a move slot"),
+            Self::NodeMoveLimit { node } => write!(f, "waiting for a move slot on {node}"),
             Self::NoDestination => write!(f, "no live node can take this shard"),
         }
     }

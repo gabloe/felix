@@ -14,6 +14,7 @@ use crate::replication::halted::HaltedReplica;
 use crate::replication::quorum::QuorumMarks;
 use crate::replication::reporter::Reporter;
 use crate::replication::reporter::{ShardReport, shard_report};
+use crate::replication::throttle::{MoveThrottle, paced_destination};
 use crate::replication::{
     FollowerCursor, Progress, Rebuilds, caught_up, lag_records, metrics, quorum_offset_without,
     ship_once,
@@ -71,6 +72,8 @@ pub(super) struct ShardPass {
     /// A destination still copying was cut off at [`COPY_SLICE`] with more to
     /// send.
     pub(super) copying: bool,
+    /// Fenced here and not yet drained: the move is waiting on this broker.
+    pub(super) drain_pending: bool,
 }
 
 impl ShardPass {
@@ -86,6 +89,7 @@ impl ShardPass {
             halted: Vec::new(),
             lag: None,
             copying: false,
+            drain_pending: false,
         }
     }
 }
@@ -106,6 +110,7 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     marks: &QuorumMarks,
     reporter: Option<&Reporter>,
     rebuilds: &Rebuilds,
+    throttle: &MoveThrottle,
     key: ShardKey,
     route: felix_router::Route,
     mut entry: ShardCursors,
@@ -199,30 +204,53 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     let learner = entry.learner.clone();
     let mut positions: Vec<FollowerCursor> = entry.followers.clone();
     let (log_ref, shard_ref) = (&log, &shard);
+    // Not once the leader is fenced: the shard is not serving until the
+    // remainder is across, and the remainder is bounded by the fence's lag
+    // bound anyway. A learner is never needed by the quorum; any other
+    // destination only when the rest of the set can make a majority alone.
+    let paced = (throttle.is_limited() && !route.draining)
+        .then(|| {
+            learner
+                .clone()
+                .or_else(|| paced_destination(route, &entry.followers).map(str::to_string))
+        })
+        .flatten();
     let mut in_flight: futures::stream::FuturesUnordered<_> = entry
         .followers
         .drain(..)
         .map(|mut cursor| {
             let sliced = learner.as_deref() == Some(cursor.node_id.as_str());
+            let paced = paced.as_deref() == Some(cursor.node_id.as_str());
             async move {
                 // Keep going while there is more to send, so a follower
                 // catching up is not limited to one batch per tick. It ends on
                 // the first answer that is not progress, which bounds the work
                 // per pass -- or, for a destination still copying, at the end
-                // of its slice.
+                // of its slice, or once it has waited its slice on the limit.
                 let started = tokio::time::Instant::now();
                 let mut cut = false;
-                while let Progress::Stored { .. } = ship_once(
-                    requester,
-                    log_ref,
-                    shard_ref,
-                    log_kind,
-                    &mut cursor,
-                    MAX_BATCH_BYTES,
-                    rebuilds,
-                )
-                .await
-                {
+                loop {
+                    if paced && !throttle.pace(started).await {
+                        cut = true;
+                        break;
+                    }
+                    let before = cursor.shipped_bytes;
+                    let progress = ship_once(
+                        requester,
+                        log_ref,
+                        shard_ref,
+                        log_kind,
+                        &mut cursor,
+                        MAX_BATCH_BYTES,
+                        rebuilds,
+                    )
+                    .await;
+                    if paced {
+                        throttle.charge(cursor.shipped_bytes - before);
+                    }
+                    if !matches!(progress, Progress::Stored { .. }) {
+                        break;
+                    }
                     if sliced && started.elapsed() >= COPY_SLICE {
                         cut = true;
                         break;
@@ -425,6 +453,7 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         halted,
         lag,
         copying,
+        drain_pending: route.draining && !drained,
     }
 }
 

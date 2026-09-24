@@ -43,6 +43,23 @@ for what the current release actually guarantees.
   A `Quorum` publish waits for a majority of the replicas the stream asked for,
   not for the copy, and the copy is shipped in slices so it never holds a
   replication pass for long.
+- **Shard moves are paced.** Every copy holds a move slot, including a
+  follower being replaced on a draining broker, which is now copied in beside
+  the follower it replaces (named `joining`) and seated once it has caught
+  up, so a shard never drops below its replication factor while it fills.
+  `FELIX_SHARD_MOVES_MAX_PER_NODE` bounds copies into or out of one broker.
+  Drains get slots before rebalancing. A move fences once its destination is
+  within `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS` (default 1000) of the
+  leader's tail rather than exactly level, which under steady writes it may
+  never be; replica reports carry the leader's tail (`leader_offset`) for
+  this. A move that has not reached its fence within
+  `FELIX_SHARD_MOVE_TIMEOUT_MS` (default 30 min) is abandoned as a
+  `timed_out` step, counted in `felix_shard_moves_timed_out_total`, and waits
+  behind other shards for its next slot; a fenced move is always finished.
+  On the broker, `FELIX_SHARD_MOVE_BYTES_PER_SEC` limits what a leader ships
+  to move destinations that the quorum does not need
+  (`felix_broker_replication_move_throttled_bytes_total`). Migration
+  `0014_shard_move_pacing` adds the assignment and report columns.
 
 - **Faster shard move switch-over, control-plane side.**
   `GET /v1/shard-assignments/changes` takes an optional `wait_ms`: with
@@ -145,6 +162,14 @@ for what the current release actually guarantees.
   matches need an arm. On the broker, `Broker::end_subscriptions` and
   `CacheWatchHub::end_shard` take an optional argument saying where the shard
   went.
+- **`max_shards` caps roles when choosing a move's destination.** It was
+  compared against leaders only, so a node full of follower roles could be
+  given a shard to lead. Placement's load now counts existing followers too.
+- **A replica report leaves out followers the leader could not reach**, as it
+  already left out halted ones, so an unreachable move destination is never
+  fenced on its last position.
+- **`MovePolicy` gained fields** (`max_per_node`, `fence_max_lag_records`,
+  `timeout_millis`); the control-plane config holds it as `shard_moves`.
 
 - **Breaking for TypeScript callers: `err.code` is now the broker's error
   code.** It used to hold this client's own kind (`FELIX_AUTH`,

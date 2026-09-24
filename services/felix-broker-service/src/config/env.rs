@@ -279,6 +279,10 @@ impl BrokerConfig {
                 .ok()
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(DEFAULT_REPLICATION_REBUILD_BYTES_PER_SEC);
+        let shard_move_bytes_per_sec = std::env::var("FELIX_SHARD_MOVE_BYTES_PER_SEC")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_SHARD_MOVE_BYTES_PER_SEC);
         Ok(Self {
             quic_bind,
             quic_listeners,
@@ -333,6 +337,7 @@ impl BrokerConfig {
             replication_rebuild_bytes_per_sec,
             shard_move_hold_ms,
             shard_move_hold_max,
+            shard_move_bytes_per_sec,
         })
     }
 }

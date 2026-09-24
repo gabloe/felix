@@ -15,6 +15,8 @@ fn assignment() -> ShardAssignment {
         generation: 7,
         state: ShardState::Active,
         successor: None,
+        joining: None,
+        move_started_at_millis: None,
     }
 }
 

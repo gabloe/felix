@@ -65,7 +65,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | 1 | Fast switch-over: wake the loops instead of polling, long-poll the assignment feed, run placement when a report arrives, warm the destination, publish routes and servable shards together | done |
 | 2 | No refused publishes: hold a publish to a moving shard briefly and forward it, a typed "shard moving" refusal the client retries, the destination not counted toward quorum while it copies | done |
 | 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | done |
-| 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | planned |
+| 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | done |
 | 5 | Operator controls: list, start, cancel and pause moves over the API and a CLI | planned |
 | 6 | Idempotent producers keep their sequences across a planned move | planned |
 | 7 | Docs and the status row | planned |
@@ -201,6 +201,39 @@ Evidence: `routing::subscriptions_follow`
 from its start while a publisher keeps writing and the shard moves, and checks
 every offset arrives once, in order, with every acknowledged record. The
 conformance runner checks the frame on the wire, offered and not.
+
+### Phase 4: pacing
+
+- **Every copy counts.** A follower replacement on a draining node used to
+  swap the new follower in with nothing in the assignment saying a copy was
+  running, so it escaped the move limit. It now names the follower being
+  copied in (`joining`), keeps the one it replaces until the new one is
+  within the lag bound, and holds a slot until then.
+  `FelixPlacementPacingUncountedReplacement` shows the limit broken without
+  the count.
+- **A per-node limit**, `FELIX_SHARD_MOVES_MAX_PER_NODE`, on copies into or
+  out of one broker, counting both ends.
+- **Drains go first.** Slots go to drains, then to rebalancing, then to
+  shards whose last move timed out.
+- **The fence starts within a lag bound.** The replica report carries the
+  leader's tail, and a move fences once its destination is within
+  `FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS`. The write fence and the drained
+  report already wait for the remainder, so nothing is lost by not waiting for
+  exactly level. A follower the leader cannot reach is left out of the
+  report's offsets so it is never fenced on a stale position.
+  `a_move_completes_while_a_publisher_keeps_writing` moves a shard under four
+  writers.
+- **A move timeout**, `FELIX_SHARD_MOVE_TIMEOUT_MS`. A staged move or a
+  replacement past it is dropped in one write and its slot goes to the next
+  move. A fenced move is finished rather than timed out: going back means a
+  new generation and clients following the shard twice, and going on waits
+  for at most the lag bound's worth of copy. Taking a fenced move back is left
+  to the operator's cancel in phase 5.
+- **A bandwidth limit**, `FELIX_SHARD_MOVE_BYTES_PER_SEC`, a token bucket per
+  leader over its copies to move destinations, applied only to a destination
+  the quorum does not need and never to the remainder after the fence.
+- `max_shards` is compared against roles, not leaders, when choosing a
+  destination.
 
 ## Checking the work
 

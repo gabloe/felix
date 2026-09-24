@@ -193,6 +193,42 @@ fn from_env_respects_env_vars() {
     let _env = clear_felix_env();
 }
 
+/// Move pacing from the environment. Zero means "no limit" for the per-node
+/// cap and "never" for the timeout, and a move limit of zero holds every
+/// move.
+#[serial]
+#[test]
+fn shard_move_pacing_comes_from_the_environment() {
+    let _env = clear_felix_env();
+    let defaults = ControlPlaneConfig::from_env()
+        .expect("from_env")
+        .shard_moves;
+    assert_eq!(defaults, crate::cluster::placement::MovePolicy::default());
+
+    unsafe {
+        env::set_var("FELIX_SHARD_MOVES_MAX_CONCURRENT", "0");
+        env::set_var("FELIX_SHARD_MOVES_MAX_PER_NODE", "2");
+        env::set_var("FELIX_SHARD_MOVE_FENCE_MAX_LAG_RECORDS", "0");
+        env::set_var("FELIX_SHARD_MOVE_TIMEOUT_MS", "0");
+    }
+    let config = ControlPlaneConfig::from_env()
+        .expect("from_env")
+        .shard_moves;
+    assert_eq!(config.max_concurrent, 0);
+    assert_eq!(config.max_per_node, Some(2));
+    assert_eq!(config.fence_max_lag_records, 0);
+    assert_eq!(config.timeout_millis, None);
+
+    unsafe {
+        env::set_var("FELIX_SHARD_MOVES_MAX_PER_NODE", "0");
+    }
+    let config = ControlPlaneConfig::from_env()
+        .expect("from_env")
+        .shard_moves;
+    assert_eq!(config.max_per_node, None);
+    let _env = clear_felix_env();
+}
+
 #[serial]
 #[test]
 fn from_env_rejects_invalid_socket_addr() {
@@ -366,6 +402,10 @@ region_id: "eu-west-1"
 changes_limit: 4096
 change_retention_max_rows: 100000
 shutdown_drain_timeout_ms: 12000
+max_concurrent_shard_moves: 3
+max_shard_moves_per_node: 2
+shard_move_fence_max_lag_records: 500
+shard_move_timeout_ms: 60000
 oidc_allowed_algorithms: ["ES256", "RS256"]
 node_liveness:
   heartbeat_interval_ms: 1100
@@ -397,6 +437,15 @@ bootstrap:
             "127.0.0.1:9445".parse().unwrap()
         );
         assert_eq!(config.bootstrap.token.as_deref(), Some("a-bootstrap-token"));
+        assert_eq!(
+            config.shard_moves,
+            crate::cluster::placement::MovePolicy {
+                max_concurrent: 3,
+                max_per_node: Some(2),
+                fence_max_lag_records: 500,
+                timeout_millis: Some(60_000),
+            }
+        );
     }
 
     /// A file that names no keys changes nothing. Absent is not zero: what

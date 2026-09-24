@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Model-check docs/formal/FelixShard.tla under each configuration beside it,
+# Model-check the specs in docs/formal under each configuration beside them,
 # and hold each to the outcome the configuration declares.
 #
 # A configuration that is expected to pass must pass. One that is expected to
@@ -43,7 +43,12 @@ tlc() {
   local cfg="$1"
   local scratch
   scratch="$(mktemp -d)"
-  local flags=(-deadlock -workers auto -checkpoint 0 -config "$cfg.cfg" FelixShard.tla)
+  # A configuration checks the module whose name it starts with.
+  local module="FelixShard"
+  case "$cfg" in
+    FelixPlacementPacing*) module="FelixPlacementPacing" ;;
+  esac
+  local flags=(-deadlock -workers auto -checkpoint 0 -config "$cfg.cfg" "$module.tla")
   if command -v java >/dev/null 2>&1 && java -version >/dev/null 2>&1; then
     (cd "$SPEC_DIR" && java -XX:+UseParallelGC -jar "../../$JAR" \
       -metadir "$scratch" "${flags[@]}")
@@ -79,6 +84,8 @@ expectations=(
   "FelixShardStagedMove pass"
   "FelixShardStagedMoveSingle pass"
   "FelixShardStagedMoveVotes violates StagedCopyNeverDelaysAck"
+  "FelixPlacementPacing pass"
+  "FelixPlacementPacingUncountedReplacement violates CopiesWithinLimit"
 )
 
 fetch_tools
