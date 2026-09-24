@@ -251,3 +251,88 @@ async fn a_placement_planned_against_no_assignment_does_not_overwrite_one() {
     assert_eq!(late.conflicts, 3);
     assert_eq!(store.list_shard_assignments().await.expect("list"), placed);
 }
+
+/// Failover from a stale read. One instance reads the leader down and plans
+/// a promotion, then stalls; the other promotes, and when that leader fails
+/// too, promotes again. The stalled promotion must not land: it names a node
+/// that is down and holds nothing written since.
+#[tokio::test]
+async fn a_promotion_planned_from_an_old_read_is_not_written_later() {
+    let store = cluster(&["broker-x", "broker-y", "broker-z"]).await;
+    store
+        .delete_stream(&crate::model::StreamKey {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+        })
+        .await
+        .expect("drop the three-shard stream");
+    store
+        .create_stream(replicated_stream("orders", 1, 3))
+        .await
+        .expect("stream");
+    let placed = store
+        .put_shard_assignment(ShardAssignment {
+            key: shard_zero(),
+            leader: "broker-x".to_string(),
+            replicas: vec!["broker-y".to_string(), "broker-z".to_string()],
+            generation: 0,
+            state: ShardState::Assigning,
+            successor: None,
+        })
+        .await
+        .expect("placed");
+    report(&store, placed.generation, &["broker-y", "broker-z"], false).await;
+    store
+        .set_node_lifecycle("broker-x", NodeLifecycle::Down)
+        .await
+        .expect("down");
+
+    let liveness = Default::default();
+    let stale = super::super::reconciler::plan_pass(&store, &liveness, MovePolicy::default())
+        .await
+        .expect("plan");
+    let (_, first, _) = stale.plan().to_place().next().expect("a promotion");
+    let first = first.to_string();
+
+    assert_eq!(
+        reconcile_once(&store, &liveness, MovePolicy::default())
+            .await
+            .placed,
+        1
+    );
+    let promoted = store
+        .get_shard_assignment(&shard_zero())
+        .await
+        .expect("get");
+    assert_eq!(promoted.leader, first);
+    let others: Vec<&str> = promoted.replicas.iter().map(String::as_str).collect();
+    report(&store, promoted.generation, &others, false).await;
+    store
+        .set_node_lifecycle(&first, NodeLifecycle::Down)
+        .await
+        .expect("down");
+    assert_eq!(
+        reconcile_once(&store, &liveness, MovePolicy::default())
+            .await
+            .placed,
+        1
+    );
+    let again = store
+        .get_shard_assignment(&shard_zero())
+        .await
+        .expect("get");
+    assert_ne!(again.leader, first);
+
+    let late = super::super::reconciler::apply_pass(&store, &stale).await;
+    assert_eq!(late.placed, 0);
+    assert_eq!(late.conflicts, 1);
+    assert_eq!(
+        store
+            .get_shard_assignment(&shard_zero())
+            .await
+            .expect("get"),
+        again,
+        "the second promotion stands",
+    );
+}
