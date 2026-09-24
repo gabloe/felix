@@ -543,7 +543,7 @@ locally", because that is a broker writing a shard it does not own:
 | Outcome | Meaning |
 | --- | --- |
 | `Local` | this node leads the shard; handle it here |
-| `Remote` | another node leads it, with the address to reach it. M4 forwards; until then it is a typed refusal, distinguishable from failure |
+| `Remote` | another node leads it, with the address to reach it. A publish is forwarded there |
 | `Stale` | the caller knows a newer generation than this router does. Wait for the watch, do not fail the stream |
 | `Unavailable::NoAssignment` | placement has not assigned it |
 | `Unavailable::LeaderUnknown` | the assignment names a node with no known address |
@@ -821,8 +821,8 @@ window.
 
 Every claim in this section is exercised against a real Postgres reached through
 a proxy the test can cut, black-hole, and restore, in
-`tests/readiness_pg.rs` (`cargo test -p controlplane --features pg-tests --test
-readiness_pg`):
+`tests/pg_readiness.rs` (`cargo test -p felix-controlplane-service --features pg-tests --test
+pg_readiness`):
 
 | Claim | What the test does |
 | --- | --- |
@@ -833,7 +833,7 @@ readiness_pg`):
 | A probe answers rather than hangs | Black-holes the connection — established, then silent — and the probe still comes back inside its own bound |
 
 The mechanism itself (cache window, timeout, draining short-circuit) is covered
-separately in `src/readiness_tests.rs` against a probe that fails on command;
+separately in `src/api/readiness/tests.rs` against a probe that fails on command;
 the tests above are what make those the *database's* behaviour rather than a
 fake's.
 
@@ -887,7 +887,7 @@ What a drain looks like on the metrics endpoint, which outlives it:
 
 The rolling-restart guarantee — two instances over one Postgres, every broker
 heartbeat and watch served across a restart of each — is exercised end to end
-by `tests/rolling_restart.rs` (`cargo test -p controlplane --features pg-tests
+by `tests/rolling_restart.rs` (`cargo test -p felix-controlplane-service --features pg-tests
 --test rolling_restart`).
 
 ## Open Questions

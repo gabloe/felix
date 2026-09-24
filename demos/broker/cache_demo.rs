@@ -5,10 +5,11 @@
 //!
 //! Intended for local benchmarking and diagnostics rather than production use.
 use anyhow::{Context, Result};
-use broker::timings as broker_timings;
-use broker::{auth::BrokerAuth, auth_demo, quic};
 use bytes::Bytes;
 use felix_broker::{Broker, CacheMetadata};
+use felix_broker_service::observability::timings as broker_timings;
+use felix_broker_service::serving::auth::{BrokerAuth, demo::demo_auth_for_tenant};
+use felix_broker_service::serving::quic;
 use felix_client::timings as client_timings;
 use felix_client::{Client, ClientConfig};
 use felix_storage::EphemeralCache;
@@ -36,10 +37,13 @@ async fn run_demo(mut bench: BenchConfig) -> Result<()> {
     broker
         .register_cache("t1", "default", "primary", CacheMetadata::default())
         .await?;
-    let config = broker::config::BrokerConfig::from_env()?;
+    let config = felix_broker_service::config::BrokerConfig::from_env()?;
     let (auth, auth_override) = resolve_demo_auth(&config)?;
     let (server_config, cert) = build_server_config().context("build server config")?;
-    let transport = broker::transport::cache_transport_config(&config, TransportConfig::default());
+    let transport = felix_broker_service::serving::quic::cache_transport_config(
+        &config,
+        TransportConfig::default(),
+    );
     let server = Arc::new(QuicServer::bind(
         "127.0.0.1:0".parse()?,
         server_config,
@@ -765,12 +769,12 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     ClientConfig::from_env_or_yaml(quinn, None)
 }
 
-fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
+fn resolve_demo_auth(config: &felix_broker_service::config::BrokerConfig) -> DemoAuthResult {
     if let Some(controlplane_url) = config.controlplane_url.clone() {
         return Ok((Arc::new(BrokerAuth::new(controlplane_url)), None));
     }
 
-    let demo = auth_demo::demo_auth_for_tenant("t1")?;
+    let demo = demo_auth_for_tenant("t1")?;
     Ok((demo.auth, Some((demo.tenant_id, demo.token))))
 }
 

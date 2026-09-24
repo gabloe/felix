@@ -1,0 +1,172 @@
+//! The cluster identity a broker claims, read from `FELIX_NODE_*`.
+
+use std::io::ErrorKind;
+use std::net::SocketAddr;
+
+use serde::Serialize;
+
+/// Identity this broker claims in the cluster.
+///
+/// Present only when `FELIX_NODE_ID` is set. Membership is opt-in because a
+/// single-node broker has no cluster to join, and registering one would put a
+/// node in the catalog that placement would then try to use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MembershipConfig {
+    /// Stable across restarts. This is the identity, not the process.
+    pub node_id: String,
+    /// `host:port` peers reach this broker on. Not the bind address: a broker
+    /// bound to 0.0.0.0 has to advertise something routable.
+    pub advertise_addr: String,
+    /// `host:port` *clients* reach this broker on, if it offers itself as one.
+    ///
+    /// Optional, and left unset by default. A broker that does not advertise
+    /// one is not offered to clients looking for somewhere to connect, which is
+    /// the right answer for a broker behind a load balancer whose own address
+    /// no client should hold, and the only safe answer for one whose operator
+    /// has not said where clients reach it.
+    pub client_advertise_addr: Option<String>,
+    pub region: String,
+    /// Where this broker's refresh token lives, when it has one.
+    ///
+    /// A path rather than a value, and that is forced by rotation: refreshing
+    /// spends the token and mints a replacement, so whatever the broker was
+    /// given at startup stops working the first time it refreshes. It has to
+    /// write the replacement somewhere it will read on restart, or a restart
+    /// presents a spent token — which the control plane correctly reads as a
+    /// replay and answers by revoking the whole chain, locking the broker out
+    /// for good.
+    ///
+    /// `None` means no refresh: the broker runs on the token it was given and
+    /// falls out of the cluster when that expires, which is the behaviour every
+    /// deployment had before refresh existed.
+    pub refresh_token_file: Option<std::path::PathBuf>,
+    /// Where the *access* token was read from, when it came from a file.
+    ///
+    /// Two jobs. It is the path re-read when something outside the broker
+    /// rotates the credential -- a Vault agent, SPIRE, a sidecar -- so that
+    /// rotation takes effect without a restart, the way the refresh token file
+    /// already does. And it is what makes an expiring credential legitimate
+    /// without `refresh_token_file`: a file is a seam something else can write,
+    /// where a token passed by value is not.
+    pub node_token_file: Option<std::path::PathBuf>,
+}
+
+/// Read the cluster identity, or `None` when this broker is not joining one.
+///
+/// Fails rather than defaults on a half-configured identity. A broker that
+/// guessed its own advertised address would register something unreachable, and
+/// the failure would surface later as peers unable to connect to a node the
+/// catalog says is live.
+pub(super) fn membership_from_env(
+    controlplane_url: &Option<String>,
+    controlplane_token: &str,
+) -> std::io::Result<Option<MembershipConfig>> {
+    let Some(node_id) = std::env::var("FELIX_NODE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+
+    let advertise_addr = std::env::var("FELIX_NODE_ADVERTISE_ADDR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "FELIX_NODE_ID is set but FELIX_NODE_ADVERTISE_ADDR is not; \
+                 a broker cannot advertise an address it has to guess",
+            )
+        })?;
+
+    // Parsed here so a malformed address fails at startup rather than as a
+    // rejected registration once everything else is already running.
+    if advertise_addr.parse::<SocketAddr>().is_err() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("FELIX_NODE_ADVERTISE_ADDR is not a valid host:port address: {advertise_addr}"),
+        ));
+    }
+
+    if controlplane_url.is_none() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "FELIX_NODE_ID is set but FELIX_CONTROLPLANE_URL is not; \
+             there is nowhere to register",
+        ));
+    }
+
+    if controlplane_token.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "FELIX_NODE_ID is set but no node credential was provided; \
+             set FELIX_NODE_TOKEN or FELIX_NODE_TOKEN_FILE",
+        ));
+    }
+
+    // A value, not a path — which cannot work, so say why rather than accept
+    // it and lock the broker out at its first restart.
+    if std::env::var("FELIX_NODE_REFRESH_TOKEN")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "FELIX_NODE_REFRESH_TOKEN is set, but a refresh token cannot be \
+             passed by value: refreshing spends it and mints a replacement, so \
+             the broker has to write that replacement back somewhere. Use \
+             FELIX_NODE_REFRESH_TOKEN_FILE and make the path writable.",
+        ));
+    }
+    let refresh_token_file = std::env::var("FELIX_NODE_REFRESH_TOKEN_FILE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+
+    let node_token_file = std::env::var("FELIX_NODE_TOKEN_FILE")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+
+    Ok(Some(MembershipConfig {
+        node_id,
+        refresh_token_file,
+        node_token_file,
+        advertise_addr,
+        client_advertise_addr: std::env::var("FELIX_CLIENT_ADVERTISE_ADDR")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        region: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
+    }))
+}
+
+/// Warn when peers would be told to connect somewhere nothing is listening.
+///
+/// `NodeSpec.advertise_addr` is the *internal* listener's address, so a broker
+/// that advertises a port it does not bind is reachable by the catalog and
+/// unreachable in fact. Not fatal: a deployment may map ports, and refusing to
+/// start on a legitimate NAT would be worse than saying so.
+pub(super) fn warn_on_unreachable_advertise(
+    membership: &MembershipConfig,
+    peer: &crate::peer::PeerTransportConfig,
+) {
+    // Port 0 is an ephemeral bind, so there is nothing to compare against.
+    if peer.bind.port() == 0 {
+        return;
+    }
+    let Ok(advertised) = membership.advertise_addr.parse::<SocketAddr>() else {
+        return;
+    };
+    if advertised.port() != peer.bind.port() {
+        tracing::warn!(
+            advertise_addr = %membership.advertise_addr,
+            internal_bind = %peer.bind,
+            "FELIX_NODE_ADVERTISE_ADDR names a different port than the internal \
+             listener binds; peers will be told to connect where nothing is listening \
+             unless the ports are mapped",
+        );
+    }
+}

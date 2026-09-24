@@ -1,0 +1,566 @@
+//! Publishing: [`Publisher`], and the pool of single-writer streams behind it.
+//!
+//! A client opens several publish streams across its publish connections.
+//! Each has exactly one writer task (`writer`) fed by a bounded queue, so
+//! publishes on a stream are serialized without contending for it, and a
+//! publish's bytes are admitted against a shared in-flight budget before
+//! they are queued (`admission`), so a slow broker makes callers wait rather
+//! than letting the client buffer without limit. `routing` picks the stream,
+//! `send` encodes and enqueues, and `ack` reads the broker's answers.
+
+mod ack;
+mod admission;
+mod idempotent;
+mod routing;
+mod send;
+mod writer;
+
+pub use idempotent::IdempotentProducer;
+pub use routing::PublishSharding;
+
+pub(crate) use admission::PublishAdmission;
+pub(crate) use writer::{PublishWorker, run_publisher_writer_with_limit};
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::{Context, Result};
+use bytes::Bytes;
+use felix_wire::{AckMode, Message};
+use tokio::sync::oneshot;
+
+#[cfg(feature = "telemetry")]
+use crate::telemetry::frame_counters;
+use crate::telemetry::maybe_append_publish_ts_batch;
+#[cfg(feature = "telemetry")]
+use crate::timings;
+use routing::{STREAM_SHARD_CACHE_CAPACITY, StreamShardCache};
+use send::CancelledAfterEnqueue;
+use writer::PublishRequest;
+
+/// Publishes to one broker over the client's pool of publish streams.
+///
+/// Cheap to clone; clones share the pool. Built by [`crate::Client::publisher`].
+#[derive(Clone)]
+pub struct Publisher {
+    pub(crate) inner: Arc<PublisherInner>,
+}
+
+impl Publisher {
+    /// Frame-flag bits the broker advertised during the auth handshake,
+    /// intersected across this publisher's streams.
+    ///
+    /// Resolves to `felix_wire::ORIGINAL_V1_FLAGS` against a broker that predates
+    /// capability negotiation. Exposed so callers can log or assert what was
+    /// actually negotiated rather than inferring it from behaviour.
+    pub fn negotiated_server_flags(&self) -> u16 {
+        self.inner.server_flags
+    }
+
+    /// Publish one payload using the binary data-plane encoding.
+    ///
+    /// Acked and unacked publishes both take the binary path: an unacked publish is
+    /// a plain `FLAG_BINARY_PUBLISH_BATCH` frame, and an acked one adds
+    /// `FLAG_BINARY_PUBLISH_ACKED` and waits for the broker's binary ack.
+    ///
+    /// **Not cancel-safe.** Dropping this future — a `timeout`, a losing
+    /// `select!` branch — after the record reaches the worker does not stop the
+    /// publish. The record is sent and very likely lands; what is lost is
+    /// learning so, which leaves the outcome exactly as unknown as a failed
+    /// acknowledgement does. A timeout here means *do not know*, not *did not
+    /// happen*, and re-sending on one may duplicate the record. Cancellations
+    /// past that point are counted as
+    /// `felix_client_publish_cancelled_after_enqueue_total`.
+    ///
+    /// JSON is reached only as a compatibility fallback, against a broker that
+    /// never advertised the binary frame this call needs. There is no longer a
+    /// way to ask for it: it is strictly more expensive and buys nothing the
+    /// binary frames do not cover.
+    pub async fn publish(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> Result<()> {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary(tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        // A single acked publish is a one-item acked batch on the wire; there is no
+        // separate binary encoding for single messages.
+        self.publish_batch(tenant_id, namespace, stream, vec![payload], ack)
+            .await
+    }
+
+    /// Publish one payload with a routing key.
+    ///
+    /// The key decides the shard, and therefore the broker. Records sharing a
+    /// key are ordered with respect to each other; records with different keys
+    /// are not, once a stream has more than one shard.
+    ///
+    /// Binary against a broker that advertised `FLAG_BINARY_PUBLISH_KEYED`, JSON
+    /// against one that did not. A single keyed publish is a one-item keyed
+    /// batch on the wire, exactly as `publish` is for the unkeyed case.
+    pub async fn publish_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> Result<()> {
+        self.publish_batch_keyed(tenant_id, namespace, stream, key, vec![payload], ack)
+            .await
+    }
+
+    /// Publish a batch.
+    ///
+    /// Binary, unless the broker never advertised the frame this needs — then
+    /// JSON, which costs throughput and not correctness. That fallback is the
+    /// only way a Felix client emits a JSON publish.
+    pub async fn publish_batch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary(tenant_id, namespace, stream, &payloads)
+                .await;
+        }
+        // Fall back to the JSON encoding against a broker that has not advertised
+        // the acked binary frame. Both paths are equivalent in semantics; only the
+        // framing differs, so the fallback costs throughput, not correctness.
+        if !self.supports_binary_ack() {
+            // The private keyed form, not the deprecated public one: the
+            // fallback has to keep working after that surface is removed.
+            return self
+                .publish_batch_json_keyed(tenant_id, namespace, stream, payloads, None, ack)
+                .await;
+        }
+        self.publish_batch_binary_acked(tenant_id, namespace, stream, payloads, ack)
+            .await
+    }
+
+    /// A batch routed by one key. Every record in it lands on the same shard,
+    /// because a batch is acknowledged as a unit and splitting it across shards
+    /// would make it several batches.
+    ///
+    /// Binary whenever the broker advertised `FLAG_BINARY_PUBLISH_KEYED`, with
+    /// the JSON encoding as the fallback for brokers that predate it. The
+    /// fallback costs throughput, not correctness.
+    pub async fn publish_batch_keyed(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        if !self.supports_binary_keyed() {
+            return self
+                .publish_batch_json_keyed(tenant_id, namespace, stream, payloads, Some(key), ack)
+                .await;
+        }
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(Some(&key), tenant_id, namespace, stream, &payloads)
+                .await
+                .map(|_| ());
+        }
+        // An acked keyed batch needs both modifier bits, so it also needs the
+        // broker to have advertised the acked frame.
+        if !self.supports_binary_ack() {
+            return self
+                .publish_batch_json_keyed(tenant_id, namespace, stream, payloads, Some(key), ack)
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            Some(&key),
+            tenant_id,
+            namespace,
+            stream,
+            payloads,
+            ack,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Publish a batch as one binary frame, without asking for an ack.
+    pub async fn publish_batch_binary(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Vec<u8>],
+    ) -> Result<()> {
+        self.publish_batch_binary_inner(None, tenant_id, namespace, stream, payloads)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Publisher::publish_batch_binary`] for payloads already held as [`Bytes`].
+    pub async fn publish_batch_binary_bytes(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: &[Bytes],
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        #[cfg(feature = "telemetry")]
+        let sample = crate::telemetry::t_should_sample();
+        #[cfg(not(feature = "telemetry"))]
+        let sample = false;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = sample;
+        #[cfg(feature = "telemetry")]
+        let start = crate::telemetry::t_now_if(sample);
+        let (bytes, stats) = felix_wire::binary::encode_publish_batch_bytes_with_stats_from_bytes(
+            tenant_id, namespace, stream, payloads,
+        )?;
+        #[cfg(not(feature = "telemetry"))]
+        let _ = stats;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = start {
+            let encode_ns = start.elapsed().as_nanos() as u64;
+            timings::record_encode_ns(encode_ns);
+            timings::record_binary_encode_ns(encode_ns);
+            t_histogram!("felix_client_encode_ns").record(encode_ns as f64);
+        }
+        #[cfg(feature = "telemetry")]
+        if stats.reallocs > 0 {
+            let counters = frame_counters();
+            counters
+                .binary_encode_reallocs
+                .fetch_add(stats.reallocs, Ordering::Relaxed);
+        }
+        let permit = self.inner.admission.acquire(bytes.len()).await?;
+        let (response_tx, response_rx) = oneshot::channel();
+        #[cfg(feature = "telemetry")]
+        let enqueue_start = crate::telemetry::t_now_if(sample);
+        worker
+            .tx
+            .send(PublishRequest::BinaryBytes {
+                bytes,
+                item_count: payloads.len(),
+                sample,
+                ack: AckMode::None,
+                request_id: None,
+                _permit: permit,
+                response: response_tx,
+            })
+            .await
+            .context("enqueue binary batch")?;
+        #[cfg(feature = "telemetry")]
+        if let Some(start) = enqueue_start {
+            let enqueue_ns = start.elapsed().as_nanos() as u64;
+            timings::record_publish_enqueue_wait_ns(enqueue_ns);
+            t_histogram!("client_pub_enqueue_wait_ns").record(enqueue_ns as f64);
+        }
+        let cancelled = CancelledAfterEnqueue::armed();
+        let answer = response_rx.await.context("binary batch response dropped")?;
+        cancelled.answered();
+        answer.map(|_| ())
+    }
+
+    /// Publish a batch that asks to be acknowledged, using the binary encoding.
+    ///
+    /// The frame is written with `FLAG_BINARY_PUBLISH_ACKED` and the broker replies
+    /// with a binary ack frame.
+    ///
+    /// This is the unconditional form: it sends the acked binary frame whether or
+    /// not the broker advertised support. Prefer `publish_batch`, which consults the
+    /// mask negotiated during auth and falls back to JSON when the broker has not
+    /// advertised `0x0008`.
+    pub async fn publish_batch_binary_acked(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        self.publish_batch_binary_acked_inner(None, tenant_id, namespace, stream, payloads, ack)
+            .await
+            .map(|_| ())
+    }
+
+    /// One batch under a producer's sequence, appended once however many
+    /// times it is sent. Always acknowledged, only once committed.
+    ///
+    /// The low-level send: the sequence is the caller's to keep, and a refusal
+    /// comes back as a [`crate::PublishRefused`]. [`crate::IdempotentProducer`]
+    /// is the form that keeps the sequence and does the re-sending.
+    pub async fn publish_idempotent_batch(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        producer_id: u64,
+        sequence: u64,
+    ) -> Result<()> {
+        let worker = self.select_worker(tenant_id, namespace, stream)?;
+        let payloads = maybe_append_publish_ts_batch(payloads, self.inner.bench_embed_ts);
+        let request_id = worker.request_counter.fetch_add(1, Ordering::Relaxed);
+        if self.supports_binary_idempotent() {
+            let bytes = felix_wire::binary::encode_idempotent_publish_batch_bytes(
+                request_id,
+                felix_wire::binary::ProducerSequence {
+                    producer_id,
+                    sequence,
+                },
+                None,
+                tenant_id,
+                namespace,
+                stream,
+                &payloads,
+            )?;
+            let permit = self.inner.admission.acquire(bytes.len()).await?;
+            let (response_tx, response_rx) = oneshot::channel();
+            worker
+                .tx
+                .send(PublishRequest::BinaryBytes {
+                    bytes,
+                    item_count: payloads.len(),
+                    sample: false,
+                    ack: AckMode::PerBatch,
+                    request_id: Some(request_id),
+                    _permit: permit,
+                    response: response_tx,
+                })
+                .await
+                .context("enqueue idempotent binary batch")?;
+            let cancelled = CancelledAfterEnqueue::armed();
+            let answer = response_rx
+                .await
+                .context("idempotent binary batch response dropped")?;
+            cancelled.answered();
+            return answer.map(|_| ());
+        }
+        let message = Message::PublishIdempotent {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            payloads,
+            key: None,
+            request_id,
+            producer_id,
+            sequence,
+        };
+        self.send_message(worker, message, AckMode::PerBatch, Some(request_id))
+            .await
+            .map(|_| ())
+    }
+
+    /// Close the publish streams once everything already queued has been
+    /// written and, if it asked for one, acknowledged.
+    ///
+    /// The streams are shared by every publisher from the same client, so this
+    /// ends publishing for all of them.
+    pub async fn finish(&self) -> Result<()> {
+        let mut handles = Vec::new();
+        for worker in self.inner.workers.iter() {
+            let handle = {
+                let mut guard = worker.handle.lock().await;
+                guard.take()
+            };
+            if let Some(handle) = handle {
+                let (response_tx, response_rx) = oneshot::channel();
+                if worker
+                    .tx
+                    .send(PublishRequest::Finish {
+                        response: response_tx,
+                    })
+                    .await
+                    .is_ok()
+                {
+                    response_rx
+                        .await
+                        .context("publisher finish response dropped")??;
+                }
+                handles.push(handle);
+            }
+        }
+        for handle in handles {
+            handle.await.context("publisher writer task")??;
+        }
+        Ok(())
+    }
+
+    /// [`Publisher::publish`], reporting the shard's owner when this broker
+    /// forwarded the batch rather than owning it.
+    ///
+    /// Internal because the owner is only useful to something that can act on
+    /// it -- `ClusterClient`, which holds connections to more than one broker.
+    /// A `Client` speaks to one and has nowhere else to send the next batch.
+    pub(crate) async fn publish_reporting_owner(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> AckOutcome {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(None, tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            None,
+            tenant_id,
+            namespace,
+            stream,
+            vec![payload],
+            ack,
+        )
+        .await
+    }
+
+    /// [`Publisher::publish_keyed`], reporting the shard's owner when this
+    /// broker forwarded the batch rather than owning it.
+    pub(crate) async fn publish_keyed_reporting_owner(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        key: bytes::Bytes,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> AckOutcome {
+        if ack == AckMode::None {
+            return self
+                .publish_batch_binary_inner(Some(&key), tenant_id, namespace, stream, &[payload])
+                .await;
+        }
+        self.publish_batch_binary_acked_inner(
+            Some(&key),
+            tenant_id,
+            namespace,
+            stream,
+            vec![payload],
+            ack,
+        )
+        .await
+    }
+
+    /// Publish one payload using the JSON compatibility encoding.
+    #[deprecated(
+        since = "0.5.0",
+        note = "the data path is binary; the binary publish frame carries a routing key \
+                since 0.5.0. JSON is still spoken to a broker that predates the frame, but \
+                the client chooses that itself — see `publish`. Removed in 0.6.0."
+    )]
+    pub async fn publish_json(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payload: Vec<u8>,
+        ack: AckMode,
+    ) -> Result<()> {
+        self.publish_json_keyed(tenant_id, namespace, stream, payload, None, ack)
+            .await
+            .map(|_| ())
+    }
+
+    /// Publish a batch using the JSON compatibility encoding.
+    #[deprecated(
+        since = "0.5.0",
+        note = "the data path is binary; the binary publish frame carries a routing key \
+                since 0.5.0. JSON is still spoken to a broker that predates the frame, but \
+                the client chooses that itself — see `publish_batch`. Removed in 0.6.0."
+    )]
+    pub async fn publish_batch_json(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        payloads: Vec<Vec<u8>>,
+        ack: AckMode,
+    ) -> Result<()> {
+        self.publish_batch_json_keyed(tenant_id, namespace, stream, payloads, None, ack)
+            .await
+    }
+}
+
+pub(crate) struct PublisherInner {
+    pub(crate) workers: Arc<Vec<PublishWorker>>,
+    pub(crate) sharding: PublishSharding,
+    pub(crate) rr: AtomicUsize,
+    admission: Arc<PublishAdmission>,
+    stream_cache: Mutex<StreamShardCache>,
+    bench_embed_ts: bool,
+    /// Intersection of every worker's advertised flags.
+    ///
+    /// The workers all talk to the same broker, so in practice these agree; the
+    /// intersection is taken anyway so a single lagging stream can never cause
+    /// an encoding to be used on a connection that cannot parse it.
+    server_flags: u16,
+}
+
+impl PublisherInner {
+    #[cfg(test)]
+    pub(crate) fn new(workers: Arc<Vec<PublishWorker>>, sharding: PublishSharding) -> Self {
+        Self::with_admission(
+            workers,
+            sharding,
+            Arc::new(PublishAdmission::new(
+                crate::config::DEFAULT_PUBLISH_INFLIGHT_BYTES,
+            )),
+        )
+    }
+
+    pub(crate) fn with_admission(
+        workers: Arc<Vec<PublishWorker>>,
+        sharding: PublishSharding,
+        admission: Arc<PublishAdmission>,
+    ) -> Self {
+        let server_flags = workers
+            .iter()
+            .map(|worker| worker.server_flags)
+            .fold(u16::MAX, |acc, flags| acc & flags);
+        Self {
+            workers,
+            sharding,
+            rr: AtomicUsize::new(0),
+            admission,
+            stream_cache: Mutex::new(StreamShardCache::new(STREAM_SHARD_CACHE_CAPACITY)),
+            bench_embed_ts: false,
+            server_flags,
+        }
+    }
+
+    pub(crate) fn with_runtime_config(
+        workers: Arc<Vec<PublishWorker>>,
+        sharding: PublishSharding,
+        admission: Arc<PublishAdmission>,
+        bench_embed_ts: bool,
+    ) -> Self {
+        let mut inner = Self::with_admission(workers, sharding, admission);
+        inner.bench_embed_ts = bench_embed_ts;
+        inner
+    }
+}
+
+/// What a publish learns from its ack: whether it succeeded, and -- when the
+/// broker it went to did not own the shard -- who does.
+///
+/// The owner travels back so `ClusterClient` can send the next batch for this
+/// shard straight there. A forward is correct but costs a decrypt, a
+/// re-encrypt and a decrypt, roughly half the throughput per core (#536).
+pub(crate) type AckOutcome = Result<Option<felix_wire::binary::PublishOwner>>;
+
+#[cfg(test)]
+mod tests;

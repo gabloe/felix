@@ -39,7 +39,7 @@ docs-site/node_modules/
 docs-site/.astro/
 .cache/
 data/soak/
-/crates/felix-storage/fuzz/target
+/crates/server/felix-storage/fuzz/target
 .venv-perf
 
 # Perf session inventories carry the bootstrap token and the addresses of a live
@@ -56,9 +56,9 @@ scripts/perf/azure/compare/*.json
 # Python binding build artifacts.
 # `maturin develop` compiles the extension straight into the package source so
 # an editable install can find it; it is a build output, not source.
-crates/felix-python/python/felix/*.so
-crates/felix-python/python/felix/*.pyd
-crates/felix-python/python/felix/*.dylib
+crates/sdk/felix-python/python/felix/*.so
+crates/sdk/felix-python/python/felix/*.pyd
+crates/sdk/felix-python/python/felix/*.dylib
 __pycache__/
 *.egg-info/
 .pytest_cache/

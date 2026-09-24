@@ -37,7 +37,7 @@ if [ -z "$tag" ]; then
 fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-pkg="$root/crates/felix-typescript"
+pkg="$root/crates/sdk/felix-typescript"
 version="${tag#v}"
 
 echo "== checking this machine can publish at all"

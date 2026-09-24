@@ -1,0 +1,27 @@
+//! What every handler is handed: the store, auth, and this instance's settings.
+use std::sync::Arc;
+
+use crate::api::types::{FeatureFlags, Region};
+use crate::auth::oidc::UpstreamOidcValidator;
+use crate::config::NodeLivenessConfig;
+use crate::store::ControlPlaneAuthStore;
+
+/// Shared state injected into every handler.
+#[derive(Clone)]
+pub struct AppState {
+    pub region: Region,
+    pub api_version: String,
+    pub features: FeatureFlags,
+    pub store: Arc<dyn ControlPlaneAuthStore + Send + Sync>,
+    pub oidc_validator: UpstreamOidcValidator,
+    pub bootstrap_enabled: bool,
+    /// Accepted bootstrap tokens, current first. More than one only during a
+    /// rotation, so replacing the token is a rolling deploy rather than an
+    /// outage — see [`crate::api::bootstrap::initialize`].
+    pub bootstrap_tokens: Vec<String>,
+    pub node_liveness: NodeLivenessConfig,
+    /// Whether this instance can serve, bounded and cached.
+    pub readiness: Arc<crate::api::readiness::Readiness>,
+    /// Requests currently being served, so a drain can say what it waited for.
+    pub in_flight: felix_common::lifecycle::InFlight,
+}

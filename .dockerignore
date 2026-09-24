@@ -19,7 +19,7 @@ docs-site/
 .venv*/
 **/__pycache__/
 **/*.pyc
-crates/felix-python/dist/
+crates/sdk/felix-python/dist/
 
 # Version control and editor state.
 .git/

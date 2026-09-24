@@ -44,8 +44,8 @@ Checkpoints 1/3 (bytes) and 2/4 (items) look redundant but aren't:
 `pub_queue_depth` alone bounds how many *jobs* queue, but a job's payload
 can be as large as `max_frame_bytes` (16 MiB default) — a handful of large
 batches can blow the intended memory budget long before they fill an
-item-count queue. `PublishAdmission` (`crates/felix-client/src/client/publisher.rs`
-and `services/broker/src/transport/quic/handlers/publish/` — two separate
+item-count queue. `PublishAdmission` (`crates/sdk/felix-client/src/publish/admission.rs`
+and `services/felix-broker-service/src/serving/quic/handlers/publish/` — two separate
 structs, same design) is a `tokio::sync::Semaphore` sized in bytes rather
 than permits-as-items, acquired via `acquire_many_owned(byte_count)`. The
 permit is attached to the request/job and released only when it's actually
@@ -107,7 +107,7 @@ missing events.
 
 ## Core sharding
 
-**File**: `services/broker/src/core_shards.rs`
+**File**: `services/felix-broker-service/src/serving/core_shards.rs`
 
 Everything above describes *what* queues and *what* gets shed. Core
 sharding is about *where* the code that does this actually runs — normally,
@@ -141,7 +141,7 @@ A stream's `StreamHandle::id()` deterministically picks its shard. Two
 places use `shard_for`/`handle_for` with that *same* id, so they always
 agree on which shard owns a given stream:
 
-- **Publish workers** (`conn.rs:build_publish_context`): when `core_shards`
+- **Publish workers** (`handlers/publish/worker.rs:build_publish_context`): when `core_shards`
   is set, the worker count becomes the shard count (one worker per shard,
   replacing `pub_workers_per_conn`), and worker `i` is spawned on shard
   `i`'s runtime via `shards.handle_for(worker_id as u64).spawn(..)`.
@@ -163,7 +163,7 @@ by design, since a single stream only ever has one owning shard either way).
 
 ## The QUIC I/O runtime
 
-**File**: `crates/felix-transport/src/lib.rs`
+**File**: `crates/protocol/felix-transport/src/io_runtime.rs`
 
 Quinn's driver tasks (the endpoint receive loop and each connection's
 transmit/ACK/timer loop) do a *bounded* slice of work per poll and then
@@ -268,7 +268,7 @@ backpressure on every producer of that stream.
 | You want to... | Look at |
 |---|---|
 | Add a new backpressure checkpoint | Decide which layer it belongs to (ingest vs. broker-core fanout vs. lane) — see the table above for precedent |
-| Change what happens when a checkpoint is full | `SubQueuePolicy` (`crates/felix-broker/src/config.rs`) for 5/6, `EnqueuePolicy` (`publish/ack.rs`) for 3/4 |
-| Change the byte-budget admission logic | `PublishAdmission` — separately in `crates/felix-client/src/client/publisher.rs` (client) and `services/broker/src/transport/quic/handlers/publish/admission.rs` (broker); kept intentionally symmetric, change both if you change the design |
-| Change core-sharding/stream-ownership logic | `services/broker/src/core_shards.rs`; the two call sites in `conn.rs` and `subscribe.rs` that must agree on `handle_id -> shard` |
+| Change what happens when a checkpoint is full | `SubQueuePolicy` (`crates/server/felix-broker/src/stream/delivery.rs`) for 5/6, `EnqueuePolicy` (`publish/ack.rs`) for 3/4 |
+| Change the byte-budget admission logic | `PublishAdmission` — separately in `crates/sdk/felix-client/src/publish/admission.rs` (client) and `services/felix-broker-service/src/serving/quic/handlers/publish/admission.rs` (broker); kept intentionally symmetric, change both if you change the design |
+| Change core-sharding/stream-ownership logic | `services/felix-broker-service/src/serving/core_shards.rs`; the two call sites in `handlers/publish/worker.rs` and `handlers/subscribe.rs` that must agree on `handle_id -> shard` |
 | Debug "why is this subscriber not getting messages" | Check `felix_subscribe_dropped_total` / `felix_sub_queue_dropped_total` counters first — if either is nonzero for a stream, you're at checkpoint 5 or 6, not a bug |

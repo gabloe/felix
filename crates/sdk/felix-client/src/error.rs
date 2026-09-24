@@ -1,0 +1,100 @@
+//! Errors a caller is expected to downcast to and act on.
+//!
+//! Each is typed rather than formatted into a string because the caller's
+//! next step depends on its fields, not its message.
+
+use felix_wire::{CursorErrorReason, PublishRefusalReason};
+
+/// The broker would not append an idempotent publish, and said why.
+///
+/// Carried as a typed error so a producer can act on the reason rather than
+/// parse the message: a sequence gap means stop, an unknown producer means
+/// start again under a new id, and neither is a transport failure to retry.
+/// Recover it from an `anyhow::Error` with `downcast_ref`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishRefused {
+    /// Why the broker refused.
+    pub reason: PublishRefusalReason,
+    /// The broker's explanation, for logs.
+    pub message: String,
+}
+
+impl std::fmt::Display for PublishRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "publish refused ({:?}): {}", self.reason, self.message)
+    }
+}
+
+impl std::error::Error for PublishRefused {}
+
+/// The broker does not own this shard, and names the one that does.
+///
+/// Typed rather than a formatted string because it is an instruction, not a
+/// failure: the subscription is available, just somewhere else, and a caller
+/// that can reach the named broker can simply go there. [`ClusterClient`] does
+/// exactly that.
+///
+/// [`ClusterClient`]: crate::ClusterClient
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub struct NotLeaderError {
+    /// The broker that owns the shard.
+    pub node_id: String,
+    /// Where clients reach it, when the cluster has been told. Absent means the
+    /// owner is known by name only, and a caller has to resolve it some other
+    /// way -- discovery, or its own configuration.
+    pub addr: Option<String>,
+    /// The assignment epoch this answer describes.
+    pub generation: u64,
+}
+
+impl std::fmt::Display for NotLeaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.addr {
+            Some(addr) => write!(
+                f,
+                "shard is owned by {} at {addr} (generation {})",
+                self.node_id, self.generation
+            ),
+            None => write!(
+                f,
+                "shard is owned by {}, whose client address is not published (generation {})",
+                self.node_id, self.generation
+            ),
+        }
+    }
+}
+
+/// A resume could not start where it asked to.
+///
+/// Typed rather than a formatted string so callers can branch: `TooOld` means
+/// retention has passed the requested offset and the application must decide
+/// whether to accept the gap or start from `earliest`; `InFuture` means the
+/// offset does not exist yet, which usually means a checkpoint was written from
+/// a different stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub struct SubscribeCursorError {
+    /// Whether the offset was too old or not yet written.
+    pub reason: CursorErrorReason,
+    /// The offset that was asked for.
+    pub requested: u64,
+    /// The nearest offset that would have worked: the oldest retained for
+    /// `TooOld`, the current tail for `InFuture`.
+    pub available: u64,
+}
+
+impl std::fmt::Display for SubscribeCursorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.reason {
+            CursorErrorReason::TooOld => write!(
+                f,
+                "offset {} is no longer retained; oldest available is {}",
+                self.requested, self.available
+            ),
+            CursorErrorReason::InFuture => write!(
+                f,
+                "offset {} is past the end of the stream; tail is {}",
+                self.requested, self.available
+            ),
+        }
+    }
+}

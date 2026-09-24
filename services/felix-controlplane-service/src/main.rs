@@ -1,0 +1,22 @@
+//! The `felix-controlplane` binary: `migrate` as a subcommand, otherwise the
+//! server, configured from the environment and an optional YAML file.
+use felix_common::lifecycle;
+use felix_controlplane_service::{config, migrate, server};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // The migration tool rides the same binary so an operator's image has
+    // it wherever the control plane runs; everything else stays env-driven.
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("migrate") {
+        args.remove(0);
+        return migrate::run(args).await;
+    }
+
+    let config = config::ControlPlaneConfig::from_env_or_yaml().expect("control plane config");
+    // SIGTERM is what Kubernetes, systemd, and `docker stop` send; SIGINT only
+    // covers an interactive Ctrl-C. Evaluated as an argument, so the handlers are
+    // installed before `server::run` binds anything — a signal arriving
+    // between binding and awaiting would otherwise kill the process outright.
+    server::run(config, lifecycle::termination_signal()).await
+}

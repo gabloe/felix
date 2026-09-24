@@ -1,0 +1,322 @@
+//! Admin endpoints for IdP issuer configuration and RBAC management.
+//!
+//! # Security model
+//! - RBAC reads require `rbac.view`.
+//! - Policy writes require `rbac.policy.manage`.
+//! - Assignment writes require `rbac.assignment.manage`.
+//! - Non-RBAC tenant settings (IdP issuer config) require `tenant.manage`.
+//!
+//! # Delegation model
+//! Callers can only read/mutate rules within the scope encoded in their token
+//! permissions. Scope checks happen server-side before store writes, and the
+//! credential is checked before the tenant's existence, so an unauthenticated
+//! caller cannot probe for tenants.
+use std::collections::HashSet;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
+use axum::http::StatusCode;
+use serde::Deserialize;
+use utoipa::ToSchema;
+
+use crate::api::AppState;
+use crate::api::ensure_tenant_exists;
+use crate::api::error::{ApiError, api_forbidden, api_internal, api_validation_error};
+use crate::auth::bearer::{Refusal, refused, tenant_permissions};
+use crate::auth::idp_registry::IdpIssuerConfig;
+use crate::auth::rbac::authorize::{
+    ACTION_RBAC_ASSIGNMENT_MANAGE, ACTION_RBAC_POLICY_MANAGE, ACTION_RBAC_VIEW,
+    ACTION_TENANT_MANAGE, ParsedObject, canonical_action, object_within_scope, parse_object,
+    validate_assignment_allowed, validate_new_rule_allowed,
+};
+use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
+
+#[derive(Debug, Deserialize, ToSchema, Clone)]
+pub struct PolicyRequest {
+    /// RBAC subject, typically a role such as `role:namespace-admin`.
+    pub subject: String,
+    /// Canonical object string (for example `stream:t1/payments/orders`).
+    pub object: String,
+    /// Canonical action string such as `stream.publish`.
+    pub action: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema, Clone)]
+pub struct GroupingRequest {
+    /// Principal identifier (user or group subject).
+    pub user: String,
+    /// Role identifier (for example `role:stream-reader`).
+    pub role: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tenants/{tenant_id}/idp-issuers",
+    tag = "auth",
+    params(("tenant_id" = String, Path, description = "Tenant identifier")),
+    request_body = IdpIssuerConfig,
+    responses((status = 204), (status = 404))
+)]
+pub async fn upsert_idp_issuer(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<IdpIssuerConfig>,
+) -> Result<StatusCode, ApiError> {
+    require_action_for_object(
+        &state,
+        &tenant_id,
+        &headers,
+        ACTION_TENANT_MANAGE,
+        &format!("tenant:{tenant_id}"),
+    )
+    .await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    state
+        .store
+        .upsert_idp_issuer(&tenant_id, body)
+        .await
+        .map_err(|err| api_internal("failed to upsert issuer", &err))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v1/tenants/{tenant_id}/idp-issuers/{issuer}",
+    tag = "auth",
+    params(("tenant_id" = String, Path, description = "Tenant identifier"), ("issuer" = String, Path, description = "Issuer")),
+    responses((status = 204), (status = 404))
+)]
+pub async fn delete_idp_issuer(
+    Path((tenant_id, issuer)): Path<(String, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    require_action_for_object(
+        &state,
+        &tenant_id,
+        &headers,
+        ACTION_TENANT_MANAGE,
+        &format!("tenant:{tenant_id}"),
+    )
+    .await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    state
+        .store
+        .delete_idp_issuer(&tenant_id, &issuer)
+        .await
+        .map_err(|err| api_internal("failed to delete issuer", &err))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/{tenant_id}/rbac/policies",
+    tag = "auth",
+    params(("tenant_id" = String, Path, description = "Tenant identifier")),
+    responses((status = 200, body = Vec<PolicyRule>), (status = 404))
+)]
+pub async fn list_policies(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PolicyRule>>, ApiError> {
+    let scope = require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_VIEW).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let policies = state
+        .store
+        .list_rbac_policies(&tenant_id)
+        .await
+        .map_err(|err| api_internal("failed to list policies", &err))?;
+    Ok(Json(filter_policies_by_scope(
+        &policies,
+        &scope.scopes,
+        &tenant_id,
+    )))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/tenants/{tenant_id}/rbac/groupings",
+    tag = "auth",
+    params(("tenant_id" = String, Path, description = "Tenant identifier")),
+    responses((status = 200, body = Vec<GroupingRule>), (status = 404))
+)]
+pub async fn list_groupings(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<GroupingRule>>, ApiError> {
+    let scope = require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_VIEW).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let policies = state
+        .store
+        .list_rbac_policies(&tenant_id)
+        .await
+        .map_err(|err| api_internal("failed to list policies", &err))?;
+    // Only reveal assignments for roles visible in the caller's RBAC scope.
+    let visible_roles: HashSet<String> =
+        filter_policies_by_scope(&policies, &scope.scopes, &tenant_id)
+            .into_iter()
+            .map(|policy| policy.subject)
+            .collect();
+    let groupings = state
+        .store
+        .list_rbac_groupings(&tenant_id)
+        .await
+        .map_err(|err| api_internal("failed to list groupings", &err))?;
+    Ok(Json(
+        groupings
+            .into_iter()
+            .filter(|grouping| visible_roles.contains(&grouping.role))
+            .collect(),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tenants/{tenant_id}/rbac/policies",
+    tag = "auth",
+    params(("tenant_id" = String, Path, description = "Tenant identifier")),
+    request_body = PolicyRequest,
+    responses((status = 204), (status = 404))
+)]
+pub async fn add_policy(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PolicyRequest>,
+) -> Result<StatusCode, ApiError> {
+    let scope =
+        require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_POLICY_MANAGE).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let rule = PolicyRule {
+        subject: body.subject,
+        object: body.object,
+        action: body.action,
+    };
+    if canonical_action(&rule.action).is_none() {
+        return Err(api_validation_error("invalid action"));
+    }
+    if let Err(err) = validate_new_rule_allowed(&scope.scopes, &tenant_id, &rule) {
+        if err.contains("scope") {
+            return Err(api_forbidden(&err));
+        }
+        return Err(api_validation_error(&err));
+    }
+    state
+        .store
+        .add_rbac_policy(&tenant_id, rule)
+        .await
+        .map_err(|err| api_internal("failed to add policy", &err))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/tenants/{tenant_id}/rbac/groupings",
+    tag = "auth",
+    params(("tenant_id" = String, Path, description = "Tenant identifier")),
+    request_body = GroupingRequest,
+    responses((status = 204), (status = 404))
+)]
+pub async fn add_grouping(
+    Path(tenant_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<GroupingRequest>,
+) -> Result<StatusCode, ApiError> {
+    let scope =
+        require_action_scope(&state, &tenant_id, &headers, ACTION_RBAC_ASSIGNMENT_MANAGE).await?;
+    ensure_tenant_exists(&state, &tenant_id).await?;
+    let grouping = GroupingRule {
+        user: body.user,
+        role: body.role,
+    };
+    // Enforce safe delegation by validating every policy attached to this role.
+    let role_policies = state
+        .store
+        .list_rbac_policies(&tenant_id)
+        .await
+        .map_err(|err| api_internal("failed to load policies", &err))?
+        .into_iter()
+        .filter(|policy| policy.subject == grouping.role)
+        .collect::<Vec<PolicyRule>>();
+    validate_assignment_allowed(&scope.scopes, &tenant_id, &grouping, &role_policies)
+        .map_err(|err| api_forbidden(&err))?;
+    state
+        .store
+        .add_rbac_grouping(&tenant_id, grouping)
+        .await
+        .map_err(|err| api_internal("failed to add grouping", &err))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+struct ActionScope {
+    /// Parsed RBAC objects this caller can manage/view for one action.
+    scopes: Vec<ParsedObject>,
+}
+
+/// Require that caller has at least one scope for the requested action.
+async fn require_action_scope(
+    state: &AppState,
+    tenant_id: &str,
+    headers: &HeaderMap,
+    action: &str,
+) -> Result<ActionScope, ApiError> {
+    let scopes = tenant_permissions(state, tenant_id, headers)
+        .await?
+        .into_iter()
+        .filter(|perm| perm.action == action)
+        .map(|perm| perm.object)
+        .collect::<Vec<ParsedObject>>();
+    if scopes.is_empty() {
+        return Err(refused(Refusal::Forbidden, "missing required permission"));
+    }
+    Ok(ActionScope { scopes })
+}
+
+/// Require `action` over a specific target object.
+///
+/// This is used for non-RBAC mutation endpoints such as IdP issuer config.
+async fn require_action_for_object(
+    state: &AppState,
+    tenant_id: &str,
+    headers: &HeaderMap,
+    action: &str,
+    object: &str,
+) -> Result<(), ApiError> {
+    let scope = require_action_scope(state, tenant_id, headers, action).await?;
+    let parsed = parse_object(object, tenant_id).map_err(|err| api_validation_error(&err))?;
+    if scope
+        .scopes
+        .iter()
+        .any(|candidate| object_within_scope(candidate, &parsed))
+    {
+        return Ok(());
+    }
+    Err(refused(Refusal::Forbidden, "insufficient scope"))
+}
+
+/// Return only policies that fall within one of the caller's scopes.
+fn filter_policies_by_scope(
+    policies: &[PolicyRule],
+    scopes: &[ParsedObject],
+    tenant_id: &str,
+) -> Vec<PolicyRule> {
+    policies
+        .iter()
+        .filter(|policy| {
+            parse_object(&policy.object, tenant_id)
+                .ok()
+                .map(|target| {
+                    scopes
+                        .iter()
+                        .any(|scope| object_within_scope(scope, &target))
+                })
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect()
+}

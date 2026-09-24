@@ -1,0 +1,96 @@
+[package]
+name = "felix-controlplane-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Felix control-plane HTTP service binary"
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+# Not a library anyone consumes from a registry: service binaries and a
+# dev/CI tool with hard AGPL-3.0 dependencies.
+publish = false
+
+[[bin]]
+name = "felix-controlplane"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+felix-common = { path = "../../crates/server/felix-common", version = "0.6.0-preview", features = ["lifecycle", "openapi"] }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tokio = { workspace = true }
+# `CancellationToken` coordinates the graceful drain in `src/server/drain.rs`.
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tower-http = { version = "0.7", features = ["trace"] }
+utoipa = { workspace = true, features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { workspace = true }
+casbin = { workspace = true }
+dashmap = { workspace = true }
+base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = "0.4"
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+sha2 = "0.11"
+rand = "0.10"
+# The bootstrap listener's optional mTLS termination (`src/server/tls.rs`). PEM
+# loading comes from pki-types' own "pem" feature, not rustls-pemfile, which
+# is unmaintained (RUSTSEC-2025-0134).
+rustls = { workspace = true }
+tokio-rustls = "0.26"
+hyper-util = { version = "0.1", features = ["server-auto", "http1", "http2", "tokio", "service"] }
+# The metadata Raft core (`src/raft/`), per docs/metadata-raft-design.md.
+# `storage-v2` unlocks implementing RaftLogStorage/RaftStateMachine directly;
+# openraft types stay inside `src/raft/` — that containment is the seam.
+# `loosen-follower-log-revert` is not optional for us: a member rejoining
+# with a wiped volume reports a log that went backwards, which is a scenario
+# this design explicitly supports — without the feature the *leader* trips a
+# debug assertion in its replication progress when that member returns (the
+# chaos suite caught it), and a release build would carry the inconsistent
+# progress state silently instead.
+openraft = { version = "0.9", features = [
+    "serde",
+    "storage-v2",
+    "loosen-follower-log-revert",
+] }
+# Backs the Raft log, vote, and snapshot store: crash-safe single-file ACID
+# writes so Felix carries no hand-rolled durability code for consensus state.
+redb = "4"
+uuid = { workspace = true }
+
+[dev-dependencies]
+tower = "0.5"
+tempfile = { workspace = true }
+serial_test = { workspace = true }
+sqlx = { workspace = true }
+base64 = { workspace = true }
+testcontainers = "0.15"
+testcontainers-modules = { version = "0.3", features = ["postgres"] }
+# Certificate fixtures for the bootstrap mTLS tests.
+rcgen = { workspace = true }
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+pg-tests = []
+
+[lints]
+workspace = true

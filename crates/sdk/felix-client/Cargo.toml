@@ -1,0 +1,47 @@
+[package]
+name = "felix-client"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+rust-version.workspace = true
+description = "Rust client SDK for the Felix pub/sub and cache broker"
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["felix", "client", "pubsub", "messaging", "quic"]
+categories = ["network-programming", "api-bindings"]
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+ahash = { workspace = true }
+hashbrown = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+metrics = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+serde_yaml_ng = { workspace = true }
+felix-transport = { path = "../../protocol/felix-transport", version = "0.6.0-preview" }
+felix-wire = { path = "../../protocol/felix-wire", version = "0.6.0-preview" }
+quinn = { workspace = true }
+
+[features]
+default = []
+telemetry = []
+
+[dev-dependencies]
+rcgen = { workspace = true }
+rustls = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[package.metadata.docs.rs]
+# `telemetry` is off by default; document it anyway.
+all-features = true
+
+[lints]
+workspace = true

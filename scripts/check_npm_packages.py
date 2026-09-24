@@ -24,7 +24,7 @@ import re
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-PACKAGE_DIR = REPO_ROOT / "crates/felix-typescript"
+PACKAGE_DIR = REPO_ROOT / "crates/sdk/felix-typescript"
 RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/release.yml"
 
 # napi names a binary by platform, architecture and -- where one platform has
@@ -139,7 +139,7 @@ def check() -> list[str]:
             )
     for name in ("README.md", "LICENSE"):
         if not (PACKAGE_DIR / name).is_file():
-            failures.append(f"crates/felix-typescript/{name}: missing.")
+            failures.append(f"crates/sdk/felix-typescript/{name}: missing.")
     return failures
 
 

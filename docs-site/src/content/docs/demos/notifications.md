@@ -35,13 +35,13 @@ flowchart TD
 ```bash
 task demo:notifications
 # or
-cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
 ```
 
 Optional failure injection:
 
 ```bash
-cargo run --release -p broker --bin pubsub-demo-notifications -- --drop-subscriber
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications -- --drop-subscriber
 ```
 
 ## Configuration flags

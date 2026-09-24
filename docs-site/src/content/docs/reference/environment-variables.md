@@ -1566,10 +1566,10 @@ Check current configuration:
 
 ```bash
 # Print effective configuration
-cargo run --release -p broker -- --dump-config
+cargo run --release -p felix-broker-service -- --dump-config
 
 # Validate without starting
-cargo run --release -p broker -- --validate-config
+cargo run --release -p felix-broker-service -- --validate-config
 ```
 
 ## Next Steps

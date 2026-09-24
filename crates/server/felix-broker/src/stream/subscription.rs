@@ -1,0 +1,164 @@
+//! Subscriber-facing handles: the receiver half plus the guard that
+//! unregisters the subscriber from its stream on drop.
+
+use std::collections::VecDeque;
+use std::sync::Weak;
+
+use bytes::Bytes;
+use tokio::sync::mpsc;
+
+use super::delivery::{DeliveryEnvelope, QueuedDelivery};
+use super::state::StreamState;
+
+/// Receiver wrapper that keeps the unsubscribe guard alive for the receiver lifetime.
+#[derive(Debug)]
+pub struct Subscription {
+    pub(crate) receiver: SubscriptionReceiver,
+    pub(crate) guard: SubscriptionGuard,
+    pub(crate) pending: VecDeque<Bytes>,
+    /// Live records below this offset are dropped.
+    ///
+    /// A publish claims its disk offsets before the record reaches the replay
+    /// ring, so a cursor taken from the durable tail can name an offset the ring
+    /// has not seen. Registering there yields an empty backlog and then delivers
+    /// that in-flight record *live*, below the position the caller was told to
+    /// resume from -- one record seen twice by anyone resuming from a
+    /// checkpoint.
+    ///
+    /// The backlog cannot be widened to include it (it is not in the ring yet)
+    /// and the cursor cannot be narrowed to exclude it (the ring can also lag
+    /// permanently, when a cancelled publish consumes offsets it never
+    /// delivers, and a cursor behind the ring's oldest entry is rejected as too
+    /// old). Dropping it on arrival is what closes the window without breaking
+    /// either.
+    ///
+    /// `None` for streams whose deliveries carry no offsets: an in-memory
+    /// stream's cursor comes from the ring itself and so cannot overshoot.
+    pub(crate) skip_below: Option<u64>,
+}
+
+impl Subscription {
+    /// The next record, or `None` once the subscription has ended.
+    ///
+    /// **`None` means the channel closed, and nothing else.** Every caller
+    /// treats it as the end of the stream, so a batch that happens to yield no
+    /// records must not produce one: a batch landing entirely below
+    /// the resume point is ordinary during a resume, and reporting it as an
+    /// end of stream loses every record after the cursor.
+    pub async fn recv(&mut self) -> Option<Bytes> {
+        loop {
+            if let Some(payload) = self.pending.pop_front() {
+                return Some(payload);
+            }
+            // Terminates: each turn consumes one envelope from a finite
+            // channel, and a closed one ends the loop through `?`.
+            let envelope = self.receiver.recv().await?;
+            self.extend_pending(&envelope);
+        }
+    }
+
+    /// The next record if one is already queued.
+    ///
+    /// `Empty` means nothing is waiting, so — as in [`Self::recv`] — a batch
+    /// that yielded no records is skipped rather than reported: the queue may
+    /// still hold the record the caller is after.
+    pub fn try_recv(&mut self) -> std::result::Result<Bytes, mpsc::error::TryRecvError> {
+        loop {
+            if let Some(payload) = self.pending.pop_front() {
+                return Ok(payload);
+            }
+            let envelope = self.receiver.try_recv()?;
+            self.extend_pending(&envelope);
+        }
+    }
+
+    /// Take whatever is already queued, without waiting.
+    ///
+    /// Used by resume to drain what accumulated while history was being read,
+    /// so the handler can spot a queue drop -- a jump in offsets -- and fill it
+    /// from disk before live delivery starts.
+    pub fn drain_ready(&mut self) -> Vec<DeliveryEnvelope> {
+        let mut drained = Vec::new();
+        while let Ok(envelope) = self.receiver.try_recv() {
+            drained.push(envelope);
+        }
+        drained
+    }
+
+    /// Split into the batch receiver and the guard that keeps the
+    /// subscriber registered.
+    pub fn into_parts(self) -> (SubscriptionReceiver, SubscriptionGuard) {
+        (self.receiver, self.guard)
+    }
+
+    /// Queue an envelope's payloads, dropping any below the resume point.
+    ///
+    /// Deliveries arrive in offset order, so once one lands at or above the
+    /// cursor the filter has done its job and is retired -- the check costs
+    /// nothing for the rest of the subscription's life.
+    fn extend_pending(&mut self, envelope: &DeliveryEnvelope) {
+        let payloads = envelope.payloads();
+        match (self.skip_below, envelope.base_offset()) {
+            (Some(skip), Some(base)) if base < skip => {
+                // `skip - base` payloads of this batch precede the resume point.
+                // A batch can straddle it, so this drops a prefix rather than
+                // the whole envelope.
+                let drop = (skip - base).min(payloads.len() as u64) as usize;
+                self.pending.extend(payloads[drop..].iter().cloned());
+                if (base + payloads.len() as u64) > skip {
+                    self.skip_below = None;
+                }
+            }
+            _ => {
+                self.skip_below = None;
+                self.pending.extend(payloads.iter().cloned());
+            }
+        }
+    }
+}
+
+/// The receiving end of a subscription, yielding whole batches.
+#[derive(Debug)]
+pub struct SubscriptionReceiver {
+    pub(crate) receiver: mpsc::Receiver<QueuedDelivery>,
+}
+
+impl SubscriptionReceiver {
+    pub(crate) fn new(receiver: mpsc::Receiver<QueuedDelivery>) -> Self {
+        Self { receiver }
+    }
+
+    /// The next batch, or `None` once the subscription has ended.
+    pub async fn recv(&mut self) -> Option<DeliveryEnvelope> {
+        Some(self.receiver.recv().await?.into_envelope())
+    }
+
+    /// The next batch if one is already queued.
+    pub fn try_recv(&mut self) -> std::result::Result<DeliveryEnvelope, mpsc::error::TryRecvError> {
+        self.receiver.try_recv().map(QueuedDelivery::into_envelope)
+    }
+}
+
+impl Drop for SubscriptionReceiver {
+    fn drop(&mut self) {
+        self.receiver.close();
+    }
+}
+
+/// RAII handle that unregisters a stream subscriber on drop.
+#[derive(Debug)]
+pub struct SubscriptionGuard {
+    pub(crate) stream_state: Weak<StreamState>,
+    pub(crate) subscriber_id: u64,
+}
+
+impl Drop for SubscriptionGuard {
+    fn drop(&mut self) {
+        if let Some(stream_state) = self.stream_state.upgrade() {
+            stream_state.remove_subscriber(self.subscriber_id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -47,7 +47,7 @@ cargo run --release --manifest-path demos/state-divergence/Cargo.toml
 - See [Queue Semantics](/felix/demos/queue-semantics/).
 
 ```bash
-cargo run --release -p broker --bin queue-semantics-demo
+cargo run --release -p felix-broker-service --bin queue-semantics-demo
 ```
 
 ### Leader vs Quorum (`felix-cluster consistency`)
@@ -124,7 +124,7 @@ STEP 19 t2 token publish denied: PASS
 ```bash
 task demo:pubsub
 # or
-cargo run --release -p broker --bin pubsub-demo-simple
+cargo run --release -p felix-broker-service --bin pubsub-demo-simple
 ```
 
 **What to expect**:
@@ -142,7 +142,7 @@ cargo run --release -p broker --bin pubsub-demo-simple
 ```bash
 task demo:cache
 # or
-cargo run --release -p broker --bin cache-demo
+cargo run --release -p felix-broker-service --bin cache-demo
 ```
 
 **Useful env vars**:
@@ -171,10 +171,10 @@ FELIX_CACHE_BENCH_OPS=put,get_hit,get_miss
 # Basic run
 task demo:latency
 # or
-cargo run --release -p broker --bin latency-demo
+cargo run --release -p felix-broker-service --bin latency-demo
 
 # Custom configuration
-cargo run --release -p broker --bin latency-demo -- \
+cargo run --release -p felix-broker-service --bin latency-demo -- \
     --binary \
     --fanout 10 \
     --batch 64 \
@@ -200,7 +200,7 @@ cargo run --release -p broker --bin latency-demo -- \
 ```bash
 task demo:notifications
 # or
-cargo run --release -p broker --bin pubsub-demo-notifications
+cargo run --release -p felix-broker-service --bin pubsub-demo-notifications
 ```
 
 **Optional flags**:
@@ -225,7 +225,7 @@ cargo run --release -p broker --bin pubsub-demo-notifications
 ```bash
 task demo:orders
 # or
-cargo run --release -p broker --bin pubsub-demo-orders
+cargo run --release -p felix-broker-service --bin pubsub-demo-orders
 ```
 
 **Optional flags**:

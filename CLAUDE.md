@@ -8,7 +8,7 @@ Rust 1.97, edition 2024. The `Taskfile.yml` shortcuts are the source of truth �
 
 ```bash
 task lint          # cargo fmt --check + clippy --workspace --all-targets --all-features -D warnings
-task test          # cargo test --workspace, then cargo test -p felix-client --features in-process
+task test          # cargo test --workspace (with Postgres when Docker is available)
 task demo:check    # build/clippy/test the demo crates that are OUTSIDE the workspace
 task coverage      # llvm-cov; spins up a Postgres container unless CI or FELIX_TEST_DATABASE_URL is set
 task conformance   # wire-protocol conformance runner
@@ -19,7 +19,7 @@ Single test / narrower runs:
 ```bash
 cargo test -p felix-storage --lib disk_log::                    # one module
 cargo test -p felix-broker --test durable_streams <name>        # one integration test
-cargo test -p broker quic_subscribe                             # QUIC integration tests
+cargo test -p felix-broker-service quic_subscribe                             # QUIC integration tests
 ```
 
 Docs and perf:
@@ -42,13 +42,10 @@ degrades gracefully without `pandas`.
   build. Run `task demo:check` after changing public APIs.
 - **The cluster harness runs a *prebuilt* `target/<profile>/felix-broker`.** `cargo test -p
   felix-cluster` does not rebuild it, so a broker-side change is not in the binary those
-  tests spawn until `cargo build -p broker --bin felix-broker` runs. This silently
+  tests spawn until `cargo build -p felix-broker-service --bin felix-broker` runs. This silently
   invalidates "revert the fix and watch the test fail": the test keeps passing because it
   is still running the old broker. `task test` is fine — `cargo test --workspace` builds
   the binary first.
-- **`task test` deliberately does not use `--all-features` on the whole workspace.**
-  `felix-client`'s `in-process` feature is run separately so its tests do not add concurrent
-  load to timing-sensitive tests elsewhere.
 
 ## Architecture
 
@@ -56,16 +53,16 @@ degrades gracefully without `pandas`.
 
 A publish crosses four components in a fixed order, and the order is the design:
 
-1. **`services/broker/src/transport/quic/`** decodes the frame. `handlers/publish.rs` and
+1. **`services/felix-broker-service/src/serving/quic/`** decodes the frame. `handlers/publish.rs` and
    `handlers/subscribe.rs` own the per-message work; `streams/control.rs` is the control-stream
    loop that owns auth state and dispatches every `Message` variant.
-2. **`crates/felix-broker/src/broker.rs`** takes offsets from storage *before* waiting on
-   durability (`begin_append` → `commit`), so the batch claims its place in the stream's order
-   the instant its offsets are consumed. `commit_order.rs` (`CommitSequencer`) then makes
+2. **`crates/server/felix-broker/src/broker/publish.rs`** takes offsets from storage *before*
+   waiting on durability (`begin_append` → `commit`), so the batch claims its place in the
+   stream's order the instant its offsets are consumed. `felix-storage`'s `CommitSequencer` then makes
    later publishes wait behind earlier ones regardless of whether those succeed, fail, or are
    cancelled.
-3. **`crates/felix-storage/src/disk_log/`** persists it. See below.
-4. **Fanout** happens after durability, via `delivery.rs`. One `DeliveryEnvelope` is shared by
+3. **`crates/server/felix-storage/src/disk_log/`** persists it. See below.
+4. **Fanout** happens after durability, via `stream/delivery.rs`. One `DeliveryEnvelope` is shared by
    every subscriber and caches its encoded frame, so a publish is encoded once regardless of
    fanout — with a second cached encoding when some subscribers negotiated event offsets and
    others did not.
@@ -75,13 +72,17 @@ e.g. reading history before registering a subscriber loses any publish landing i
 
 ### Storage: a log-structured segment store, not a WAL
 
-`crates/felix-storage/src/`:
+`crates/server/felix-storage/src/`:
 
-- `segment/` — the byte format (`format.rs`), platform I/O (`io.rs`: `pread`, preallocation,
-  `F_FULLFSYNC` on macOS), writer, reader, sparse index.
-- `disk_log/` — `segments.rs` (rollover, offset routing, truncation), `recovery.rs` (startup
-  validation and torn-tail repair), `sync.rs` (fsync policy and group commit), `mod.rs` (the
-  async `AppendOnlyLog` seam).
+- `io.rs` — platform I/O: `pread`, preallocation, `F_FULLFSYNC` on macOS, and the
+  optional io_uring flusher.
+- `segment/` — the byte format (`format.rs`), the startup scan that decides torn tail vs.
+  corruption (`scan.rs`), range reads (`reader.rs`), the writer, and the sparse index.
+- `disk_log.rs` — the async `AppendOnlyLog` seam; under `disk_log/`: `append.rs` (the append
+  path and background rollover), `flush.rs`, `segments.rs` (with `rollover.rs` and
+  `truncation.rs`), `recovery.rs` (startup validation and torn-tail repair), `sync.rs` (fsync
+  policy and group commit), `retention.rs`.
+- `cache/` and `counter_log.rs` — the cache and counters, each projected from its own logs.
 
 Load-bearing properties, all documented in `docs/durable-storage.md` and
 `docs/storage-format.md`:
@@ -106,8 +107,9 @@ delivered events carry log offsets for durable streams: a jump in offsets is exa
 
 ### Wire protocol: capability negotiation, not versioning
 
-`crates/felix-wire/`. Frame flags (`frame.rs`) select the *payload layout*, so an unknown flag
-bit is rejected rather than masked off — masking one means confidently misparsing the body.
+`crates/protocol/felix-wire/`. Frame flags (`client/flags.rs`) select the *payload layout*, so an
+unknown flag bit is rejected rather than masked off — masking one means confidently misparsing
+the body.
 
 New features are added as negotiated flag bits, not version bumps: a client offers
 `Auth.client_flags`, the broker answers `AuthOk.server_flags`. A peer that predates negotiation
@@ -119,12 +121,15 @@ exchange byte-identical frames.
 
 ### Control plane and startup ordering
 
-`services/controlplane/` serves metadata over REST; the broker seeds from it at startup.
-`services/broker/src/main.rs` gates readiness and the accept loop on that seeding, so the
+`services/felix-controlplane-service/` serves metadata over REST; the broker seeds from it at startup.
+`services/felix-broker-service/src/node.rs` gates readiness and the accept loop on that seeding, so the
 broker does not accept traffic for streams it does not yet know about.
 
 ## Conventions
 
+- **Code organization rules are in CONTRIBUTING.md** ("How the code is organized"): grouped
+  crate layout, `lib.rs` as a table of contents, domain-named modules, item order inside a
+  file, and unit tests in `<module>/tests.rs`. Follow them for new code.
 - **Comment the *why*, briefly.** A non-obvious constraint — an ordering requirement, a
   failure mode, a limit that exists for a reason — is worth a sentence or two next to the
   code that depends on it. Aim for that, not for an essay.

@@ -44,13 +44,13 @@ def red(text: str) -> str:
 
 
 def feature_bits() -> list[str]:
-    source = (REPO / "crates/felix-wire/src/frame.rs").read_text()
+    source = (REPO / "crates/protocol/felix-wire/src/client/features.rs").read_text()
     return re.findall(r"pub const (FEATURE_[A-Z_]+): u32", source)
 
 
 def message_variants() -> list[str]:
     """Variant names of `enum Message`, by brace matching rather than by line."""
-    source = (REPO / "crates/felix-wire/src/message.rs").read_text()
+    source = (REPO / "crates/protocol/felix-wire/src/client/message.rs").read_text()
     start = source.index("pub enum Message {")
     depth = 0
     for offset, char in enumerate(source[start:], start):

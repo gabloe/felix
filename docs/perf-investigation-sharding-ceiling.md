@@ -612,7 +612,7 @@ disproving and ended by confirming: **scale Felix with brokers.**
 
 ## 10. A local attempt on macOS, and why it settles nothing
 
-`crates/felix-cluster/tests/listener_throughput.rs` (`#[ignore]`d) sweeps
+`crates/testing/felix-cluster/tests/listener_throughput.rs` (`#[ignore]`d) sweeps
 `FELIX_QUIC_LISTENERS` on one broker, to see whether the multi-listener fix
 (#558) actually moves the ceiling section 9 measured. Run on an M4 Max, 16
 cores, with `FELIX_INITIAL_MTU=1350` (macOS loopback otherwise pins a

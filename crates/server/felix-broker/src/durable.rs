@@ -1,0 +1,295 @@
+//! Durable storage for streams marked `durable: true`.
+//!
+//! A durable stream keeps the in-memory ring buffer — cursor replay and fanout
+//! still read from it, and it is what keeps non-durable performance intact — but
+//! every publish is written to a disk-backed log *before* it is fanned out or
+//! acknowledged.
+//!
+//! ## Ordering, and why it is this way
+//!
+//! ```text
+//!   publish → append to the durable log → (fsync, if OnCommit) → fanout → ack
+//! ```
+//!
+//! The append comes first because the alternative is unrecoverable: a record
+//! delivered to subscribers and acknowledged to the publisher, but lost in a
+//! crash, is a silent hole in a log that consumers believe they have read. Paying
+//! the append latency before fanout means a failed write becomes a failed
+//! publish, which the publisher can retry.
+//!
+//! The cost is real and deliberate: a durable publish carries the storage write
+//! (and under `FsyncMode::OnCommit`, a device flush) inside its latency.
+//! Non-durable streams never touch this path at all.
+
+use std::sync::Arc;
+
+use bytes::Bytes;
+use felix_storage::DiskLogProvider;
+use felix_storage::disk_log::{DiskLog, PendingAppend};
+use felix_storage::log::{
+    AppendOnlyLog, AppendRecord, AppendResult, LogConfig, LogRecord, Offset, ReadRange, ShardKey,
+};
+
+use crate::error::{BrokerError, Result};
+
+/// The broker's handle on durable storage: one provider, many stream logs.
+#[derive(Debug, Clone)]
+pub struct DurableStorage {
+    provider: Arc<DiskLogProvider>,
+}
+
+impl DurableStorage {
+    /// Open (and recover) durable storage rooted at `root`.
+    pub fn open(root: impl Into<std::path::PathBuf>, config: LogConfig) -> Result<Self> {
+        let provider = DiskLogProvider::new(root, config).map_err(storage_error)?;
+        Ok(Self {
+            provider: Arc::new(provider),
+        })
+    }
+
+    /// Wrap an already constructed provider, for callers that build their own.
+    pub fn from_provider(provider: Arc<DiskLogProvider>) -> Self {
+        Self { provider }
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        self.provider.root()
+    }
+
+    pub fn config(&self) -> &LogConfig {
+        self.provider.config()
+    }
+
+    /// Open the log for one stream shard, recovering whatever is on disk.
+    ///
+    /// Repeated calls for the same shard return the same log, so re-registering
+    /// a stream — which the control-plane watcher does on every restart and
+    /// resync — never opens a second writer over the same files.
+    /// Open a shard's log, creating it to begin at `base_offset` if it is not
+    /// there yet.
+    ///
+    /// For a replica receiving a shard whose early history has already been
+    /// trimmed everywhere: its log begins where the surviving records do. An
+    /// existing shard keeps the base recorded in its own first segment.
+    pub fn open_stream_at(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+        base_offset: felix_storage::log::Offset,
+    ) -> Result<StreamLog> {
+        let key = ShardKey {
+            tenant: tenant.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            shard,
+        };
+        let log = self
+            .provider
+            .open_shard_at(&key, base_offset)
+            .map_err(storage_error)?;
+        Ok(StreamLog { log })
+    }
+
+    pub fn open_stream(
+        &self,
+        tenant: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+    ) -> Result<StreamLog> {
+        let key = ShardKey {
+            tenant: tenant.to_string(),
+            namespace: namespace.to_string(),
+            stream: stream.to_string(),
+            shard,
+        };
+        let log = self.provider.open_shard(&key).map_err(storage_error)?;
+        Ok(StreamLog { log })
+    }
+
+    /// Flush and stop every open log. Call once during graceful shutdown.
+    pub async fn shutdown(&self) -> Result<()> {
+        self.provider.shutdown().await.map_err(storage_error)
+    }
+}
+
+/// One durable stream shard's log, as the broker uses it.
+#[derive(Debug, Clone)]
+pub struct StreamLog {
+    log: DiskLog,
+}
+
+impl StreamLog {
+    /// Wrap a log this handle did not open.
+    ///
+    /// For a cache shard, whose log belongs to the cache store rather than to
+    /// the stream provider. Everything replication does — tail, read, apply,
+    /// divergence — is the same work on either, so it is the same type.
+    pub fn from_log(log: DiskLog) -> Self {
+        Self { log }
+    }
+
+    /// Write a publish batch and return its offsets *before* waiting for
+    /// durability.
+    ///
+    /// The caller must pair this with [`StreamLog::commit`]. The split exists
+    /// so the broker can claim the batch's place in the stream's commit order
+    /// the instant its offsets are consumed: from that point the records are on
+    /// disk holding those offsets, and every later publish queues behind them
+    /// whether this one goes on to succeed, fail, or be cancelled.
+    pub async fn begin_append(&self, payloads: &[Bytes]) -> Result<PendingAppend> {
+        if payloads.is_empty() {
+            return Err(BrokerError::Storage(
+                "cannot append an empty publish batch".to_string(),
+            ));
+        }
+        let timestamp_micros = now_micros();
+        let records: Vec<AppendRecord> = payloads
+            .iter()
+            .map(|payload| AppendRecord {
+                payload: payload.clone(),
+                timestamp_micros,
+            })
+            .collect();
+        self.log
+            .append_pending(&records)
+            .await
+            .map_err(storage_error)
+    }
+
+    /// Wait until a batch from [`StreamLog::begin_append`] satisfies the
+    /// configured fsync policy.
+    pub async fn commit(&self, pending: &PendingAppend) -> Result<()> {
+        self.log.commit(pending).await.map_err(storage_error)
+    }
+
+    /// Persist a publish batch, returning the offsets it was assigned.
+    ///
+    /// Returns only once the configured durability policy is satisfied: under
+    /// `FsyncMode::OnCommit` the bytes are on the device before this resolves.
+    pub async fn append(&self, payloads: &[Bytes]) -> Result<AppendResult> {
+        if payloads.is_empty() {
+            return Err(BrokerError::Storage(
+                "cannot append an empty publish batch".to_string(),
+            ));
+        }
+        // One timestamp for the batch: the records were published together, and
+        // reading the clock per record costs more than the precision is worth.
+        let timestamp_micros = now_micros();
+        let records: Vec<AppendRecord> = payloads
+            .iter()
+            .map(|payload| AppendRecord {
+                payload: payload.clone(),
+                timestamp_micros,
+            })
+            .collect();
+        self.log.append(&records).await.map_err(storage_error)
+    }
+
+    /// Replay persisted records from `start`, bounded by `max_bytes`.
+    ///
+    /// A read below the base offset is reported as `CursorTooOld`, not as an
+    /// opaque storage failure: "those records existed and retention discarded
+    /// them" is a resume outcome the caller can act on, and it is the same
+    /// condition `subscribe_from` reports up front. Translating it here is what
+    /// makes a trim landing *mid-replay* surface as well, rather than a short
+    /// history that looks complete.
+    pub async fn read_from(&self, start: Offset, max_bytes: usize) -> Result<Vec<LogRecord>> {
+        self.log
+            .read_range(ReadRange { start, max_bytes })
+            .await
+            .map_err(|err| match err {
+                felix_storage::StorageError::Trimmed { requested, oldest } => {
+                    BrokerError::CursorTooOld { oldest, requested }
+                }
+                other => storage_error(other),
+            })
+    }
+
+    /// Offset the next published record will take.
+    pub async fn tail_offset(&self) -> Result<Offset> {
+        self.log.tail_offset().await.map_err(storage_error)
+    }
+
+    /// Oldest offset still on disk.
+    ///
+    /// Rises as retention trims the head, so this is the floor a resuming
+    /// subscriber can ask for: anything below it has been discarded and must be
+    /// reported rather than silently skipped.
+    /// Drop every record at or after `offset`.
+    ///
+    /// For replication's divergence repair, which is the only caller: a
+    /// follower discards an uncommitted suffix left by a leader that is gone.
+    /// Bounded by the generation history — see `docs/replication-design.md`.
+    pub async fn truncate(&self, offset: Offset) -> Result<()> {
+        self.log.truncate(offset).await.map_err(storage_error)
+    }
+
+    /// Discard this log and start again, empty, at `base_offset`.
+    ///
+    /// For a follower rebuilding a diverged copy of a shard; see
+    /// `DiskLog::reset_to`.
+    pub async fn rebuild_at(&self, base_offset: Offset) -> Result<()> {
+        self.log.reset_to(base_offset).await.map_err(storage_error)
+    }
+
+    /// Note that `generation` begins at `start_offset`.
+    pub fn record_generation(&self, generation: u64, start_offset: Offset) -> Result<bool> {
+        self.log
+            .record_generation(generation, start_offset)
+            .map_err(storage_error)
+    }
+
+    /// Where each leadership generation began here, oldest first.
+    pub fn generations(&self) -> Vec<felix_storage::log::Epoch> {
+        self.log.generations()
+    }
+
+    pub fn base_offset(&self) -> Offset {
+        self.log.base_offset()
+    }
+
+    /// Run one retention pass now rather than waiting for the timer.
+    ///
+    /// Returns the number of segments deleted. Retention normally runs on its
+    /// own schedule; this exists so an operator can reclaim space immediately,
+    /// and so tests can observe a trim deterministically.
+    pub async fn enforce_retention_now(&self) -> Result<usize> {
+        self.log
+            .enforce_retention_now()
+            .await
+            .map(|outcome| outcome.segments_deleted)
+            .map_err(storage_error)
+    }
+
+    /// Exclusive bound on offsets that survive a crash right now.
+    pub fn durable_offset(&self) -> Offset {
+        self.log.durable_offset()
+    }
+
+    /// Bytes written but not yet flushed to the device.
+    pub fn unsynced_bytes(&self) -> u64 {
+        self.log.unsynced_bytes()
+    }
+
+    /// Force a flush regardless of the configured policy.
+    pub async fn sync(&self) -> Result<()> {
+        self.log.sync().await.map_err(storage_error)
+    }
+}
+
+fn storage_error(err: felix_storage::StorageError) -> BrokerError {
+    BrokerError::Storage(err.to_string())
+}
+
+fn now_micros() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests;

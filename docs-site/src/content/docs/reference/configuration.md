@@ -803,10 +803,10 @@ Felix validates configuration at startup:
 
 ```bash
 # Test configuration
-cargo run --release -p broker -- --dry-run
+cargo run --release -p felix-broker-service -- --dry-run
 
 # Explicit config file
-FELIX_BROKER_CONFIG=/path/to/config.yml cargo run --release -p broker
+FELIX_BROKER_CONFIG=/path/to/config.yml cargo run --release -p felix-broker-service
 ```
 
 **Common validation errors**:

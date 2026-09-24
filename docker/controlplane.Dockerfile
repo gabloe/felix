@@ -16,7 +16,7 @@ ARG BIN=felix-controlplane
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/felix/target \
-    cargo build --release --locked -p controlplane --bin "${BIN}" \
+    cargo build --release --locked -p felix-controlplane-service --bin "${BIN}" \
     && strip "target/release/${BIN}" \
     && cp "target/release/${BIN}" /usr/local/bin/felix-controlplane
 

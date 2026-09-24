@@ -73,8 +73,8 @@ not show that the publisher and the subscriber are talking about the same one.
 
 `subscribe` defaults to the owner, because the owner is the only broker that
 serves a subscription today. `--on` a different broker is allowed and says
-plainly that nothing will arrive — subscribe routing is M6, decided in
-[subscribe routing](subscribe-routing.md).
+plainly that nothing will arrive; [subscribe routing](subscribe-routing.md)
+covers how a subscribe reaches the owner.
 
 A burst, for filling a subscriber's panel:
 
@@ -119,7 +119,7 @@ transport, and stopping one is a real process exit.
 needs a credential, and the only way to obtain one today is an OIDC token
 exchange against a real identity provider. Holding the store in process lets the
 harness mint node and client tokens against the tenant's signing keys, which is
-what `services/broker/tests/membership_lifecycle.rs` already does for the same
+what `services/felix-broker-service/tests/membership_lifecycle.rs` already does for the same
 reason.
 
 The consequence, stated plainly: the control plane's router, store, placement,
@@ -199,7 +199,7 @@ than committing to a shard someone else now leads. Unix only; there is no
 equivalent elsewhere that leaves the process holding its state, and a test that
 quietly did something weaker would be worse than one that does not run.
 
-`crates/felix-cluster/tests/faults.rs` asserts each fault is the fault it
+`crates/testing/felix-cluster/tests/failures/faults.rs` asserts each fault is the fault it
 claims — a paused broker stops answering *and* stays alive, a resumed one comes
 back, a kill returns immediately — because a scenario built on a fault that is
 really something else passes for the wrong reason. It also pins that teardown
@@ -301,7 +301,7 @@ being discarded, so that reason exists to be quoted.
 
 ## The conformance suite
 
-`crates/felix-cluster/tests/conformance.rs` runs one set of assertions against
+`crates/testing/felix-cluster/tests/conformance.rs` runs one set of assertions against
 **both** a single broker and a three-node cluster. That equivalence is the
 claim being tested: a client must not be able to tell how many brokers there
 are, or which one it connected to.
@@ -344,7 +344,7 @@ generation, stops serving the shard the moment its watch delivers that, and
 reports once its log has stopped growing; the successor is named only after
 that report. In between, publishes to the shard are refused. `move_shard`
 drives exactly this, and `a_moved_shard_converges_on_the_new_owner` asserts the
-old owner ends up forwarding to the new one; `tests/rebalance.rs` asserts that
+old owner ends up forwarding to the new one; `tests/routing/rebalance.rs` asserts that
 nothing acknowledged across the move is lost.
 
 ## Using it from a test

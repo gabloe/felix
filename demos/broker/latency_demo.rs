@@ -10,10 +10,10 @@
 //! - `--sub-dedicated-thread` runs the primary subscriber on a dedicated
 //!   current-thread Tokio runtime to isolate scheduler contention.
 use anyhow::{Context, Result};
-use broker::timings as broker_timings;
 use bytes::Bytes;
 use felix_broker::timings as broker_publish_timings;
 use felix_broker::{Broker, StreamMetadata};
+use felix_broker_service::observability::timings as broker_timings;
 use felix_client::timings as client_timings;
 use felix_client::{Client, ClientConfig, PublishSharding, Publisher, Subscription};
 use felix_storage::EphemeralCache;
@@ -29,7 +29,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
-type DemoAuthResult = Result<(Arc<broker::auth::BrokerAuth>, Option<(String, String)>)>;
+type DemoAuthResult = Result<(
+    Arc<felix_broker_service::serving::auth::BrokerAuth>,
+    Option<(String, String)>,
+)>;
 
 /// Counts measured deliveries and remembers when the last one landed.
 ///
@@ -646,7 +649,7 @@ fn print_usage() {
     println!("  --matrix --payloads <csv> --fanouts <csv> --all --binary");
     println!();
     println!(
-        "Throughput starvation repro:\n  cargo run --release -p broker --bin latency-demo --all-features -- --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1"
+        "Throughput starvation repro:\n  cargo run --release -p felix-broker-service --bin latency-demo --all-features -- --warmup 200 --total 5000 --payload 256 --fanout 1 --batch 64 --pub-conns 4 --pub-streams-per-conn 2 --pub-stream-count 1"
     );
     println!("Fairness A/B:\n  ... --pub-yield-every-batches 1\n  ... --sub-dedicated-thread");
 }
@@ -750,7 +753,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     }
     #[cfg(feature = "telemetry")]
     {
-        broker::quic::reset_frame_counters();
+        felix_broker_service::serving::quic::reset_frame_counters();
         felix_client::reset_frame_counters();
     }
     let (server_config, cert) = build_server_config().context("build server config")?;
@@ -760,7 +763,7 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
         TransportConfig::default(),
     )?);
     let addr = server.local_addr()?;
-    let mut broker_config = broker::config::BrokerConfig::from_env()?;
+    let mut broker_config = felix_broker_service::config::BrokerConfig::from_env()?;
     broker_config.fanout_batch_size = config.batch_size.max(1);
     // Tune the pipeline by delivery semantics. Only the single-message JSON path
     // waits for per-message acknowledgements; binary publishes are fire-and-forget
@@ -835,15 +838,19 @@ async fn run_case(config: DemoConfig) -> Result<(DemoResult, Option<TimingSummar
     }
     if let Some(shard) = config.sub_lane_shard.as_deref() {
         broker_config.subscriber_lane_shard = match shard {
-            "auto" => broker::config::SubscriberLaneShard::Auto,
-            "subscriber_id_hash" => broker::config::SubscriberLaneShard::SubscriberIdHash,
-            "connection_id_hash" => broker::config::SubscriberLaneShard::ConnectionIdHash,
-            "round_robin_pin" => broker::config::SubscriberLaneShard::RoundRobinPin,
+            "auto" => felix_broker_service::config::SubscriberLaneShard::Auto,
+            "subscriber_id_hash" => {
+                felix_broker_service::config::SubscriberLaneShard::SubscriberIdHash
+            }
+            "connection_id_hash" => {
+                felix_broker_service::config::SubscriberLaneShard::ConnectionIdHash
+            }
+            "round_robin_pin" => felix_broker_service::config::SubscriberLaneShard::RoundRobinPin,
             _ => broker_config.subscriber_lane_shard,
         };
     }
     let (auth, auth_override) = resolve_demo_auth(&broker_config)?;
-    let server_task = tokio::spawn(broker::quic::serve(
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
         Arc::clone(&server),
         broker,
         broker_config,
@@ -1720,9 +1727,9 @@ fn print_timing_summary(_summary: Option<TimingSummary>) {}
 #[cfg(feature = "telemetry")]
 fn print_frame_counters() -> (
     felix_client::FrameCountersSnapshot,
-    broker::quic::FrameCountersSnapshot,
+    felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
-    let broker = broker::quic::frame_counters_snapshot();
+    let broker = felix_broker_service::serving::quic::frame_counters_snapshot();
     let client = felix_client::frame_counters_snapshot();
     println!(
         "  frame_counters: client frames_in_ok={} frames_in_err={} frames_out_ok={} bytes_in={} bytes_out={} pub_out_ok={} pub_out_err={} pub_items_out_ok={} pub_items_out_err={} pub_batches_out_ok={} pub_batches_out_err={} sub_in_ok={} sub_items_in_ok={} sub_batches_in_ok={} ack_in_ok={} ack_items_in_ok={} binary_encode_reallocs={} text_encode_reallocs={}",
@@ -1777,12 +1784,12 @@ fn print_frame_counters() -> (
 #[cfg(not(feature = "telemetry"))]
 fn print_frame_counters() -> (
     felix_client::FrameCountersSnapshot,
-    broker::quic::FrameCountersSnapshot,
+    felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
     println!("  frame_counters: telemetry disabled");
     (
         felix_client::frame_counters_snapshot(),
-        broker::quic::frame_counters_snapshot(),
+        felix_broker_service::serving::quic::frame_counters_snapshot(),
     )
 }
 
@@ -1791,7 +1798,7 @@ fn print_sanity_checks(
     config: &DemoConfig,
     result: &DemoResult,
     client: &felix_client::FrameCountersSnapshot,
-    broker: &broker::quic::FrameCountersSnapshot,
+    broker: &felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
     let expected_items = config.warmup + config.total;
     let expected_batches = if config.batch_size == 0 {
@@ -1869,7 +1876,7 @@ fn print_sanity_checks(
     _config: &DemoConfig,
     _result: &DemoResult,
     _client: &felix_client::FrameCountersSnapshot,
-    _broker: &broker::quic::FrameCountersSnapshot,
+    _broker: &felix_broker_service::serving::quic::FrameCountersSnapshot,
 ) {
 }
 
@@ -2236,15 +2243,17 @@ fn build_client_config(cert: CertificateDer<'static>) -> Result<ClientConfig> {
     Ok(config)
 }
 
-fn resolve_demo_auth(config: &broker::config::BrokerConfig) -> DemoAuthResult {
+fn resolve_demo_auth(config: &felix_broker_service::config::BrokerConfig) -> DemoAuthResult {
     if let Some(controlplane_url) = config.controlplane_url.clone() {
         return Ok((
-            Arc::new(broker::auth::BrokerAuth::new(controlplane_url)),
+            Arc::new(felix_broker_service::serving::auth::BrokerAuth::new(
+                controlplane_url,
+            )),
             None,
         ));
     }
 
-    let demo = broker::auth_demo::demo_auth_for_tenant("t1")?;
+    let demo = felix_broker_service::serving::auth::demo::demo_auth_for_tenant("t1")?;
     Ok((demo.auth, Some((demo.tenant_id, demo.token))))
 }
 
@@ -2782,7 +2791,7 @@ mod tests {
                 binary_encode_reallocs: 0,
                 text_encode_reallocs: 0,
             };
-            let broker = broker::quic::FrameCountersSnapshot {
+            let broker = felix_broker_service::serving::quic::FrameCountersSnapshot {
                 frames_in_ok: 0,
                 frames_in_err: 0,
                 frames_out_ok: 0,

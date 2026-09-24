@@ -3,7 +3,7 @@ title: "Process lifecycle and graceful shutdown"
 ---
 
 Covers how the broker and control plane start, and — mostly — how they stop.
-Implemented in `crates/felix-common/src/lifecycle.rs`, which both services share.
+Implemented in `crates/server/felix-common/src/lifecycle.rs`, which both services share.
 
 ## Termination signals
 
@@ -148,11 +148,11 @@ Tracked under [#139](https://github.com/gabloe/felix/issues/139):
 - The "an acknowledged publish is never lost solely because SIGTERM arrived"
   guarantee is not yet verified by a test.
 - Broker coverage is at the accept-loop and readiness level
-  (`services/broker/tests/graceful_shutdown.rs`). There is no process-level test
+  (`services/felix-broker-service/tests/graceful_shutdown.rs`). There is no process-level test
   that spawns the real broker binary, sends it SIGTERM under active
   publish/subscribe traffic, and asserts a bounded clean exit. The control plane
-  has both halves: `services/controlplane/tests/main_runtime.rs` sends the real
+  has both halves: `services/felix-controlplane-service/tests/main_runtime.rs` sends the real
   binary a SIGTERM and asserts the ordering above, and
-  `services/controlplane/tests/rolling_restart.rs` restarts every instance of a
+  `services/felix-controlplane-service/tests/rolling_restart.rs` restarts every instance of a
   two-instance deployment — and kills one outright — under continuous broker
   heartbeat and watch traffic, asserting zero failed calls.

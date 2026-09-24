@@ -242,7 +242,7 @@ fn build_server_config() -> Result<(quinn::ServerConfig, CertificateDer<'static>
 /// queue blocks -> fanout stalls -> publish worker -> ingress (`pub_ingress_wait`).
 fn client_config(
     cert: &CertificateDer<'static>,
-    auth: &broker::auth_demo::DemoAuth,
+    auth: &felix_broker_service::serving::auth::demo::DemoAuth,
     policy: Policy,
     queue_capacity: usize,
 ) -> Result<ClientConfig> {
@@ -304,7 +304,7 @@ mod tokio_util_shim {
 }
 
 async fn start_broker(
-    auth: &broker::auth_demo::DemoAuth,
+    auth: &felix_broker_service::serving::auth::demo::DemoAuth,
     policy: Policy,
     queue_capacity: usize,
     phase_secs: u64,
@@ -334,7 +334,7 @@ async fn start_broker(
         Policy::DropNew => SubQueuePolicy::DropNew,
         Policy::Block => SubQueuePolicy::Block,
     };
-    let mut config = broker::config::BrokerConfig::from_env()?;
+    let mut config = felix_broker_service::config::BrokerConfig::from_env()?;
     config.subscriber_queue_capacity = queue_capacity;
     config.subscriber_queue_policy = broker_policy;
     // Checkpoint 4 waits in both arms so ingress shedding cannot be mistaken for
@@ -364,7 +364,7 @@ async fn start_broker(
         tokio::spawn(async move {
             tokio::select! {
                 _ = shutdown.cancelled() => {}
-                result = broker::quic::serve(server, core, config, auth) => {
+                result = felix_broker_service::serving::quic::serve(server, core, config, auth) => {
                     if let Err(err) = result {
                         eprintln!("accept loop exited: {err}");
                     }
@@ -427,7 +427,7 @@ pub async fn run_once<F>(config: RunConfig, mut on_tick: F) -> Result<RunOutcome
 where
     F: FnMut(&LiveState) -> Result<bool>,
 {
-    let auth = broker::auth_demo::demo_auth_for_tenant(TENANT)?;
+    let auth = felix_broker_service::serving::auth::demo::demo_auth_for_tenant(TENANT)?;
     let harness = start_broker(
         &auth,
         config.policy,

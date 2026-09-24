@@ -28,15 +28,15 @@
 //! Run it with:
 //!
 //! ```text
-//! cargo run --release -p broker --bin queue-semantics-demo
+//! cargo run --release -p felix-broker-service --bin queue-semantics-demo
 //! ```
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
-use felix_broker::consumer_groups::ConsumerGroups;
-use felix_broker::dead_letters::DeadLetters;
-use felix_broker::group_reader::{Claimed, GroupKey, GroupReader};
-use felix_broker::{Broker, DurableStorage, StreamMetadata};
+use felix_broker::{
+    Broker, Claimed, ConsumerGroups, DeadLetters, DurableStorage, GroupKey, GroupReader,
+    StreamMetadata,
+};
 use felix_storage::EphemeralCache;
 use felix_storage::log::{FsyncMode, LogConfig};
 use std::collections::HashMap;

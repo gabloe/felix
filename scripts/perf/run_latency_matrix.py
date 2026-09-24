@@ -322,12 +322,12 @@ def main():
 
     if args.dry_run:
         for item in matrix:
+            # Selected by binary, not by package, so the same command runs the
+            # baseline revision in perf-pr.yml even across a package rename.
             cmd = [
                 "cargo",
                 "run",
                 "--release",
-                "-p",
-                "broker",
                 "--bin",
                 "latency-demo",
                 "--all-features",
@@ -399,8 +399,6 @@ def main():
                 "cargo",
                 "run",
                 "--release",
-                "-p",
-                "broker",
                 "--bin",
                 "latency-demo",
                 "--all-features",

@@ -55,29 +55,30 @@ crates/
 - Connection lifecycle management
 
 **Key modules**:
-- `broker.rs`: The `Broker` aggregate, construction, and the publish/subscribe data path
-- `registry.rs`: Tenant / namespace / stream / cache registries
-- `stream_state.rs`: Per-stream subscriber registry, publish snapshot, and replay log
-- `subscription.rs`: Subscriber-facing receive handles and the unregister guard
-- `delivery.rs`: Shared delivery batches and subscriber queue-depth accounting
-- `commit_order.rs`: `CommitSequencer`, which holds a publish behind the ones that took their offsets before it
+- `broker.rs`: The `Broker` struct, its construction and accessors. What it does is split under `broker/`:
+  - `registry.rs`: Tenant / namespace / stream / cache registries
+  - `shards.rs`: Resolving a stream shard to its state, and `StreamHandle`
+  - `publish.rs`: The publish path — claim offsets, wait for durability, append, fan out
+  - `subscribe.rs`: Live subscriptions, resuming from a position, and paging history off disk
+  - `shard_logs.rs`: `LogKind` and the hooks replication calls
+  - `metadata.rs` / `keys.rs`: Stream and cache metadata; map keys plus their borrowed lookup twins
+- `stream/`: One shard in memory — `state.rs` (subscriber registry, publish snapshot, replay ring), `delivery.rs` (shared delivery batches, queue-depth accounting, `SubQueuePolicy`), `subscription.rs` (receive handles and the unregister guard), `producers.rs` (idempotent producer sequences)
+- `cache/watch.rs`: Cache-watch fanout over a cache shard's write order
+- `queue/`: Consumer groups — `reader.rs` joins the stream's log, the cursor and the tracker into poll / ack / nack; `cursors.rs` is a group's durable cursor; `tracker.rs` holds in-flight claims, the visibility timeout and attempt counts; `dead_letters.rs` records offsets a group gave up on, as pointers into the stream's log rather than copies
 - `durable.rs`: The `DurableStorage` / `StreamLog` seam between the broker and a shard's log
-- `replication.rs`: Leader-side shipping and follower-side acceptance of committed records
-- `consumer_groups.rs`: A group's durable cursor, a key → latest-value projection over its own log
-- `group_delivery.rs`: `GroupTracker` — in-flight claims, the visibility timeout, attempt counts, and the contiguous-run advance
-- `group_reader.rs`: Joins the stream's log, the cursor and the tracker into poll / ack / nack
-- `dead_letters.rs`: Offsets a group gave up on, stored as pointers into the stream's log rather than copies
-- `keys.rs`: Map keys plus their borrowed lookup twins
-- `config.rs` / `error.rs` / `telemetry.rs`: Capacity defaults and queue policy, `BrokerError`, cfg-gated metrics shims
+- `replication.rs`: Follower-side acceptance of records a leader shipped
+- `error.rs` / `telemetry.rs` / `timings.rs`: `BrokerError`, cfg-gated metrics shims, sampled publish timings
 
-Everything public is re-exported from `lib.rs`, so downstream code addresses these
-types as `felix_broker::<Name>` regardless of which module defines them.
+`CommitSequencer`, which holds a publish behind the ones that took their offsets
+before it, lives in `felix-storage`.
+
+Apart from the `replication` and `timings` modules, everything public is
+re-exported from `lib.rs`, so downstream code addresses these types as
+`felix_broker::<Name>`.
 
 **Dependencies**:
 - `felix-wire`: Protocol framing
-- `felix-transport`: QUIC abstraction
 - `felix-storage`: Data persistence
-- `felix-common`: Shared types
 
 #### felix-wire
 
@@ -86,23 +87,28 @@ types as `felix_broker::<Name>` regardless of which module defines them.
 **Responsibilities**:
 - Frame type definitions
 - Binary batch encoding/decoding
-- Protocol versioning
+- Capability negotiation (frame flags and feature bits)
 - Frame validation
+- The broker-to-broker protocol
 
 **Key modules**:
-- `frame.rs`: Protocol constants, `FrameHeader`, and `Frame`
-- `message.rs`: The `Message` enum and its JSON codec
-- `text.rs`: Hand-rolled zero-copy JSON writer for the publish-batch hot path
-- `binary.rs`: Binary batch codec for publish and event batches
-- `error.rs` / `base64_serde.rs`: Wire `Error` type, base64 serde adapters
+- `client/frame.rs`: Protocol constants, `FrameHeader`, and `Frame`
+- `client/flags.rs` / `client/features.rs`: Frame-flag bits and feature bits
+- `client/message.rs`: The `Message` enum and its JSON codec; the types its fields carry are in `client/message/fields.rs`
+- `client/text.rs`: Hand-rolled zero-copy JSON writer for the publish-batch hot path
+- `client/binary.rs`: Binary batch codec, one submodule per frame (publish, acked publish, publish ack, event batch)
+- `internal.rs`: The protocol brokers speak to each other, split by message family under `internal/`
+- `routing.rs`: Which shard a routing key belongs to
+- `error.rs`: Wire `Error` type
 
 **Key types**:
 - `Frame` / `FrameHeader`: Top-level frame and its 12-byte header
 - `Message`: The v1 message enum carried in JSON control frames
 - `binary::PublishBatch` / `binary::EventBatch`: Binary batch frame formats
 
-`frame`, `message`, and `error` items are re-exported at the crate root; `text` and
-`binary` are addressed through their module paths (`felix_wire::binary::…`).
+Frame, flag, feature, message, and error items are re-exported at the crate root;
+`text`, `binary`, `internal`, and `routing` are addressed through their module paths
+(`felix_wire::binary::…`).
 
 **Protocol layers**:
 1. **Envelope**: Version, type, length
@@ -110,20 +116,32 @@ types as `felix_broker::<Name>` regardless of which module defines them.
 
 #### felix-transport
 
-**Purpose**: QUIC transport abstraction and connection pooling.
+**Purpose**: QUIC endpoints and connections, and the transport tuning shared by
+the client and the broker.
 
 **Responsibilities**:
-- QUIC client/server setup
-- Connection lifecycle
-- Stream management
-- TLS certificate handling
-- Flow control configuration
+- QUIC client/server endpoint setup
+- Connection and stream lifetime
+- Flow-control, MTU, and UDP socket configuration
+- Dedicated I/O runtimes for quinn's driver tasks
+
+TLS is configured by the caller: endpoints are built from a quinn server or client
+config. Connection pooling lives in `felix-client`, not here.
+
+**Key modules**:
+- `server.rs` / `client.rs`: `QuicServer` and `QuicClient`
+- `connection.rs`: `QuicConnection`, `ConnectionId`, `ConnectionInfo`
+- `config.rs`: `TransportConfig`, its defaults and environment overrides;
+  `config/quinn_settings.rs` turns it into quinn settings and `config/loopback.rs`
+  holds the loopback MTU pin
+- `socket.rs`: UDP socket setup and the buffer sizes the OS actually granted
+- `io_runtime.rs`: the runtime pool quinn's driver tasks run on
 
 **Key types**:
-- `QuicClient`: Client-side connection
+- `QuicClient`: Client-side endpoint
 - `QuicServer`: Server-side listener
-- `StreamPool`: Connection pooling
-- `QuicConfig`: Transport configuration
+- `QuicConnection`: An established connection; opens and accepts streams
+- `TransportConfig`: Transport configuration
 
 **Based on**: `quinn` (QUIC implementation)
 
@@ -159,8 +177,16 @@ types as `felix_broker::<Name>` regardless of which module defines them.
 - `Client`: Main client interface
 - `Publisher`: Publishing handle
 - `Subscription`: Subscription handle
-- `InProcessClient`: Embedded testing client
 - `ClientConfig`: Client configuration
+
+**Key modules**:
+- `client.rs`, `client/`: `Client`, with its API split by area
+- `connection.rs`, `connection/`: where pooled connections go, stream authentication, event stream routing
+- `publish.rs`, `publish/`: `Publisher`, its writer tasks, admission, acks, and the idempotent producer
+- `subscribe.rs`, `subscribe/`: `Subscription` and the pipeline that feeds it
+- `cache.rs`, `cache/`: cache workers and cache watches
+- `cluster.rs`, `cluster/`: `ClusterClient` and the sharded subscription, group and watch views
+- `config.rs`, `config/`: `ClientConfig`, its defaults, and the env and YAML overrides
 
 **Example usage**:
 ```rust
@@ -182,28 +208,23 @@ publisher
 
 #### felix-common
 
-**Purpose**: Shared types and utilities used across crates.
+**Purpose**: What two crates that do not depend on each other must agree on exactly.
 
 **Contents**:
-- `types.rs`: Common type definitions
-- `error.rs`: Error types
-- `ids.rs`: ID types (TenantId, StreamId, etc.)
-- `config.rs`: Configuration types
-- `time.rs`: Time utilities
+- `membership.rs`: The broker-to-control-plane membership shapes
+- `env_registry.rs`: Every `FELIX_*` variable the workspace reads
+- `lifecycle.rs`: Termination signals, readiness gating and bounded drain (feature `lifecycle`)
+- `ids.rs` / `error.rs`: `RegionId` and its parse error
 
 **Principle**: Minimal dependencies, stable API.
 
 #### felix-router
 
-**Purpose**: Region-aware routing and locality policies.
+**Purpose**: Which node serves a shard, and whether traffic may reach it.
 
-**Responsibilities**:
-- Region topology
-- Locality-based routing
-- Cross-region bridge configuration
-- Request routing logic
-
-**Future**: Control plane integration for dynamic routing.
+**Contents**:
+- `shard.rs` with `shard/table.rs` and `shard/router.rs`: The routing table the control plane's assignments are built into, and `ShardRouter`, which resolves a shard against it
+- `region.rs`: `RegionRouter`, the cross-region bridge allowlist
 
 #### felix-authz
 
@@ -235,13 +256,21 @@ The `services/` directory contains runnable binaries:
 
 ```
 services/
-├── broker/              # Broker service
+├── felix-broker-service/        # Broker service
 │   ├── src/
-│   │   ├── main.rs      # Broker entrypoint
-│   │   ├── config.rs    # Configuration loading
+│   │   ├── main.rs              # Thin entrypoint: --print-config, then node::run_with_shutdown
+│   │   ├── node.rs, node/       # Startup order, readiness gating, the shutdown drain
+│   │   ├── serving/             # Client-facing QUIC, auth, forwarding to shard owners
+│   │   ├── cluster/             # Membership, lease, credential, catalog sync
+│   │   ├── shards/              # Shard ownership: watch, lifecycle, ingress routing
+│   │   ├── replication.rs, replication/  # Leader-side shipping and follower-side apply
+│   │   ├── peer.rs, peer/       # Broker-to-broker transport
+│   │   ├── config.rs, config/   # Configuration loading and validation
+│   │   ├── observability.rs, observability/  # Tracing, metrics, sampled timings
+│   │   └── bin/soak/            # Resource-leak and lifecycle soak harness
 │   ├── Cargo.toml
-│   └── README.md        # Performance profiles
-└── controlplane/        # Control plane service
+│   └── README.md                # Performance profiles
+└── felix-controlplane-service/  # Control plane service
 
 demos/
 ├── broker/              # Demo binaries for the broker crate
@@ -258,16 +287,19 @@ demos/
 
 ### Broker Service
 
-**Location**: `services/broker/`
+**Location**: `services/felix-broker-service/`
 
-**Entrypoint**: `src/main.rs`
+**Entrypoint**: `src/main.rs`, which hands off to `node::run_with_shutdown`
 
-**Responsibilities**:
-- Load configuration from env/YAML
-- Initialize broker runtime
-- Start QUIC listener
-- Expose metrics endpoint
-- Handle graceful shutdown
+**Modules**:
+- `node/`: Runs the process as a broker node. `run_with_shutdown` calls the startup steps in order — `storage.rs` (durable storage, cache, consumer groups, counters), `listeners.rs` (QUIC listeners and accept loops), `sync.rs` (catalog sync and the readiness flip), `membership.rs`, `cluster.rs` (shard state, peer transport, shard and replication tasks) — then `shutdown.rs` waits for the signal and drains
+- `serving/`: Serving clients — `quic/` (connections, streams, publish and subscribe handlers), `auth.rs`, `forward.rs` (forwarding to a shard's owner), `core_shards.rs`, `group_ops.rs`, `cache_routing.rs`
+- `cluster/`: Belonging to a cluster — `membership.rs`, `lease.rs`, `credential.rs`, `catalog_sync.rs`, `node_catalog.rs`, `client_endpoints.rs`
+- `shards/`: Owning shards — `watch.rs` (assignments from the control plane), `lifecycle.rs`, `routing.rs` (ingress dispatch)
+- `replication.rs` / `replication/`: Shipping to followers (`driver.rs`, `ship.rs`, `quorum.rs`, `rebuild.rs`, `reporter.rs`) and applying as one (`replica.rs`)
+- `peer.rs` / `peer/`: The broker-internal transport — connection pool, listener, mTLS
+- `config.rs` / `config/`: `BrokerConfig` from env and YAML, durable storage config, validation
+- `observability.rs` / `observability/`: Tracing, the metrics server, sampled timings
 
 **Demo binaries** (see `demos/broker/`):
 

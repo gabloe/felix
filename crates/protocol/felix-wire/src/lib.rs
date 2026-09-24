@@ -1,0 +1,42 @@
+//! Wire format for framing Felix protocol messages.
+//!
+//! Defines the frame header layout, message enums, and JSON/binary encoders
+//! used by broker and client transports to communicate over QUIC.
+//!
+//! # Design notes
+//! The format balances readability (JSON control frames) with throughput
+//! (binary batch frames) while enforcing size limits for safety.
+//!
+//! # Module layout
+//! - The client protocol: [`Frame`] and its header flags, the feature bits,
+//!   the [`Message`] enum and its JSON codec, the hand-rolled [`text`] writer
+//!   for the publish-batch hot path, and the [`binary`] batch codec. All but
+//!   `text` and `binary` are re-exported at the crate root.
+//! - [`internal`]: the protocol brokers speak to each other.
+//! - [`routing`]: which shard a routing key belongs to.
+
+mod client;
+mod error;
+
+pub mod internal;
+pub mod routing;
+
+pub use client::features::{
+    FEATURE_CACHE_DELETE, FEATURE_CACHE_SHARDS, FEATURE_CACHE_WATCH, FEATURE_CACHE_WATCH_RETAINED,
+    FEATURE_CONSUMER_GROUP, FEATURE_COUNTERS, FEATURE_GROUP_DEAD_LETTERS,
+    FEATURE_IDEMPOTENT_PRODUCER, FEATURE_REDIRECT, FEATURE_STREAM_SHARDS, FEATURE_TOPOLOGY,
+    KNOWN_FEATURES, supports_feature,
+};
+pub use client::flags::{
+    FLAG_BINARY_EVENT_BATCH, FLAG_BINARY_EVENT_BATCH_SHARED, FLAG_BINARY_PUBLISH_ACK,
+    FLAG_BINARY_PUBLISH_ACK_OWNER, FLAG_BINARY_PUBLISH_ACKED, FLAG_BINARY_PUBLISH_BATCH,
+    FLAG_BINARY_PUBLISH_IDEMPOTENT, FLAG_BINARY_PUBLISH_KEYED, FLAG_EVENT_BATCH_OFFSETS,
+    KNOWN_FLAGS, ORIGINAL_V1_FLAGS, has_unknown_flags, supports,
+};
+pub use client::frame::{Frame, FrameHeader, MAGIC, VERSION};
+pub use client::message::{
+    AckMode, BrokerEndpoint, CursorErrorReason, GroupRecord, Message, PublishRefusalReason,
+    StartPosition,
+};
+pub use client::{binary, text};
+pub use error::{Error, Result};

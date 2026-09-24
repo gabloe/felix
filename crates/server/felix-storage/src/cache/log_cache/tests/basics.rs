@@ -1,0 +1,187 @@
+use super::*;
+
+#[tokio::test]
+async fn a_value_reads_back() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    cache
+        .put(T, NS, C, 0, "k", Bytes::from_static(b"v"), None)
+        .await;
+
+    assert_eq!(
+        cache.get(T, NS, C, 0, "k").await.as_deref(),
+        Some(&b"v"[..])
+    );
+}
+
+#[tokio::test]
+async fn a_missing_key_reads_as_absent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+    assert!(cache.get(T, NS, C, 0, "nothing").await.is_none());
+}
+
+#[tokio::test]
+async fn a_later_write_wins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    cache
+        .put(T, NS, C, 0, "k", Bytes::from_static(b"first"), None)
+        .await;
+    cache
+        .put(T, NS, C, 0, "k", Bytes::from_static(b"second"), None)
+        .await;
+
+    assert_eq!(
+        cache.get(T, NS, C, 0, "k").await.as_deref(),
+        Some(&b"second"[..]),
+        "the log is append-only, so the *newest* record has to win",
+    );
+}
+
+#[tokio::test]
+async fn a_delete_hides_the_value_and_returns_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    cache
+        .put(T, NS, C, 0, "k", Bytes::from_static(b"v"), None)
+        .await;
+    assert_eq!(
+        cache.delete(T, NS, C, 0, "k").await.as_deref(),
+        Some(&b"v"[..])
+    );
+    assert!(cache.get(T, NS, C, 0, "k").await.is_none());
+}
+
+/// Caches are scoped, so the same key in two of them is two entries.
+#[tokio::test]
+async fn caches_do_not_share_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    cache
+        .put(T, NS, "a", 0, "k", Bytes::from_static(b"a"), None)
+        .await;
+    cache
+        .put(T, NS, "b", 0, "k", Bytes::from_static(b"b"), None)
+        .await;
+
+    assert_eq!(
+        cache.get(T, NS, "a", 0, "k").await.as_deref(),
+        Some(&b"a"[..])
+    );
+    assert_eq!(
+        cache.get(T, NS, "b", 0, "k").await.as_deref(),
+        Some(&b"b"[..])
+    );
+}
+
+/// Tenants are the outermost boundary, and the disk layout has to honour it.
+#[tokio::test]
+async fn tenants_do_not_share_keys() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    cache
+        .put("t1", NS, C, 0, "k", Bytes::from_static(b"one"), None)
+        .await;
+    cache
+        .put("t2", NS, C, 0, "k", Bytes::from_static(b"two"), None)
+        .await;
+
+    assert_eq!(
+        cache.get("t1", NS, C, 0, "k").await.as_deref(),
+        Some(&b"one"[..])
+    );
+    assert_eq!(
+        cache.get("t2", NS, C, 0, "k").await.as_deref(),
+        Some(&b"two"[..])
+    );
+}
+
+/// **A cache survives a restart.** The point of the whole design: the entries
+/// are on disk, and the index is rebuilt from them rather than being the only
+/// place they ever lived.
+#[tokio::test]
+async fn a_cache_survives_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let cache = cache(dir.path()).await;
+        cache
+            .put(T, NS, C, 0, "a", Bytes::from_static(b"1"), None)
+            .await;
+        cache
+            .put(T, NS, C, 0, "b", Bytes::from_static(b"2"), None)
+            .await;
+        cache
+            .put(T, NS, C, 0, "a", Bytes::from_static(b"3"), None)
+            .await;
+        cache.delete(T, NS, C, 0, "b").await;
+        cache.shutdown().await.expect("shutdown");
+    }
+
+    let reopened = cache(dir.path()).await;
+    assert_eq!(
+        reopened.get(T, NS, C, 0, "a").await.as_deref(),
+        Some(&b"3"[..]),
+        "the newest value for a key has to survive, not the first",
+    );
+    assert!(
+        reopened.get(T, NS, C, 0, "b").await.is_none(),
+        "a delete has to survive too, or a restart resurrects deleted keys",
+    );
+}
+
+/// Records can reach a cache's log without going through `put`.
+///
+/// That is exactly what replication does to a follower: it appends to the log
+/// directly, and the follower may later be promoted and asked to serve what it
+/// was shipped. An index built once and trusted forever would answer those
+/// reads as misses — a value that is on disk, reported absent.
+#[tokio::test]
+async fn the_index_catches_up_with_records_appended_behind_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cache = cache(dir.path()).await;
+
+    // Read once so the index exists and believes it is complete.
+    cache
+        .put_checked(T, NS, C, 0, "first", Bytes::from_static(b"1"), None)
+        .await
+        .expect("put");
+    assert_eq!(
+        cache.get_checked(T, NS, C, 0, "first").await.expect("get"),
+        Some(Bytes::from_static(b"1")),
+    );
+
+    // Now append straight to the log, the way a replica is shipped records.
+    let log = cache.shard_log(T, NS, C, 0).await.expect("shard log");
+    let payload = CacheOp::Put {
+        key: "shipped".to_string(),
+        value: Bytes::from_static(b"2"),
+        expires_at_millis: 0,
+    }
+    .encode();
+    log.append(&[AppendRecord {
+        payload,
+        timestamp_micros: 0,
+    }])
+    .await
+    .expect("append");
+
+    assert_eq!(
+        cache
+            .get_checked(T, NS, C, 0, "shipped")
+            .await
+            .expect("get"),
+        Some(Bytes::from_static(b"2")),
+        "a record on disk was reported absent",
+    );
+    // And the record that was already indexed is still there.
+    assert_eq!(
+        cache.get_checked(T, NS, C, 0, "first").await.expect("get"),
+        Some(Bytes::from_static(b"1")),
+    );
+}

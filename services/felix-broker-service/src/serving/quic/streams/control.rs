@@ -1,0 +1,757 @@
+//! Control stream (bi-directional QUIC stream)
+//!
+//! This module implements the *read side* of the broker's bidirectional control stream.
+//! The control stream is the request/response path used by clients for:
+//!   - Publish / PublishBatch (optionally requesting an ack)
+//!   - Subscribe (establishing a subscription and spawning a uni-directional event stream)
+//!   - CachePut / CacheGet (request/response cache API)
+//!
+//! Key design points:
+//!   1) Single-writer response path (implemented elsewhere): the read loop never writes to the
+//!      SendStream directly; it enqueues `Outgoing` responses into an outbound channel drained by a
+//!      dedicated writer task.
+//!
+//!   2) Fast-path binary batching: when a frame is marked with FLAG_BINARY_PUBLISH_BATCH we bypass
+//!      JSON decoding and dispatch to a specialized handler. This keeps the hot path cheap.
+//!
+//!   3) Cooperative cancellation: `cancel_rx_read` (watch) allows the writer or other tasks to
+//!      request the control loop stop (e.g., writer detects the peer closed, or backpressure logic
+//!      decides to tear down).
+//!
+//!   4) Backpressure / throttling coordination: `ack_throttle_rx/tx` is a watch channel used to
+//!      communicate whether the outbound response queue is in a throttled state (watermarks are
+//!      enforced in the writer/enqueue helpers). The control loop passes the current throttled state
+//!      into publish handlers so they can adjust behavior.
+//!
+//!   5) Ack-on-commit mode: when `config.ack_on_commit` is enabled, publish handlers may defer the
+//!      ack until the publish worker commits. `ack_waiters` bounds in-flight waiters and
+//!      `ack_waiter_tx` delivers waiter work to the background ack-waiter task.
+//!
+//! Return value convention:
+//!   Ok(true)  => graceful close / stream should be considered "done" (no error)
+//!   Ok(false) => protocol error or peer sent Error/unexpected message
+//!   Err(_)    => hard failure (decode/IO/etc.)
+
+mod authz;
+mod cache;
+mod counter;
+mod discovery;
+mod group;
+mod publish;
+mod responder;
+mod session;
+mod subscribe;
+
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use bytes::BytesMut;
+use felix_broker::Broker;
+use felix_wire::Message;
+use tokio::sync::{Mutex, Semaphore, mpsc, watch};
+
+use super::frame_source::FrameSource;
+use crate::config::BrokerConfig;
+use crate::observability::timings;
+use crate::serving::auth::{AuthContext, BrokerAuth};
+use crate::serving::quic::handlers::publish::{
+    AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
+    handle_ack_enqueue_result, handle_acked_binary_publish_batch_control,
+    handle_binary_publish_batch_control, send_outgoing_critical,
+};
+use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
+use responder::{Responder, send_control_error};
+
+/// Main control loop: read frames, decode messages, and dispatch to handlers.
+///
+/// The loop is intentionally structured as:
+///   read frame -> (optional fast-path) -> decode -> dispatch.
+///
+/// Important parameters:
+///   - `source`: abstract frame source (RecvStream in prod, test doubles in unit tests).
+///   - `stream_cache` / `stream_cache_key`: per-connection cache of stream scope lookups used by
+///     publish handlers to avoid repeatedly touching shared metadata for hot streams.
+///   - `out_ack_tx` / `out_ack_depth`: outbound response queue + depth gauge used for backpressure.
+///   - `ack_throttle_rx/tx`: shared throttling state; this loop reads current state, handlers/writer
+///     update it.
+///   - `ack_timeout_state`: shared state used to detect/report ack enqueue timeouts.
+///   - `ack_waiters` / `ack_waiter_tx`: bounds and routes "ack when commit finishes" work.
+///   - `frame_scratch`: reusable buffer to avoid per-frame allocations.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
+    source: &mut S,
+    broker: Arc<Broker>,
+    connection: felix_transport::QuicConnection,
+    config: BrokerConfig,
+    auth: Arc<BrokerAuth>,
+    publish_ctx: PublishContext,
+    stream_cache: StreamHandleCache,
+    stream_cache_key: String,
+    out_ack_tx: mpsc::Sender<Outgoing>,
+    out_ack_depth: Arc<AtomicUsize>,
+    ack_throttle_rx: watch::Receiver<bool>,
+    ack_throttle_tx: watch::Sender<bool>,
+    ack_timeout_state: Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: watch::Sender<bool>,
+    mut cancel_rx_read: watch::Receiver<bool>,
+    ack_waiters: Arc<Semaphore>,
+    ack_waiter_tx: mpsc::Sender<AckWaiterMessage>,
+    ack_wait_timeout: Duration,
+    frame_scratch: &mut BytesMut,
+) -> Result<bool> {
+    // If we observe EOF from the peer (source returns None), we treat it as a graceful close.
+    // Otherwise, we will cancel downstream tasks and tear down the connection cooperatively.
+    let mut graceful_close = false;
+    let mut session = Session {
+        auth_ctx: None,
+        peer_flags: felix_wire::ORIGINAL_V1_FLAGS,
+        peer_features: 0,
+        stream_cache,
+        stream_cache_key,
+    };
+    let authz_ctx = Responder {
+        out_ack_tx: &out_ack_tx,
+        out_ack_depth: &out_ack_depth,
+        ack_throttle_tx: &ack_throttle_tx,
+        ack_timeout_state: &ack_timeout_state,
+        cancel_tx: &cancel_tx,
+    };
+    loop {
+        if *cancel_rx_read.borrow() {
+            break;
+        }
+        // Snapshot current throttling state (set by writer/enqueue helpers when outbound queue
+        // crosses watermarks). Handlers may use this to shed work or alter ack behavior.
+        let throttled = *ack_throttle_rx.borrow();
+        let sample = t_should_sample();
+        let read_start = t_now_if(sample);
+        // We need to be responsive to cancellation even while blocked on network reads.
+        // `watch::Receiver::changed()` wakes when the cancel flag flips.
+        let frame = tokio::select! {
+            changed = cancel_rx_read.changed() => {
+                if changed.is_err() || *cancel_rx_read.borrow() {
+                    break;
+                }
+                continue;
+            }
+            frame = source.next_frame(config.max_frame_bytes, frame_scratch) => {
+                match frame? {
+                    Some(frame) => frame,
+                    // EOF: the peer cleanly finished the control stream.
+                    None => {
+                        graceful_close = true;
+                        break;
+                    }
+                }
+            }
+        };
+        let read_ns = read_start.map(|start| start.elapsed().as_nanos() as u64);
+        // Flag bits select the payload layout, so an unrecognised bit means we do
+        // not know how to parse the body. Reject rather than mask it off and
+        // misparse — see `felix_wire::KNOWN_FLAGS`.
+        //
+        // This is a per-frame error, not a stream-fatal one: the frame reader has
+        // already consumed exactly `header.length` bytes, so the stream is sitting
+        // on the next frame boundary and stays parseable. Answering and continuing
+        // means the peer actually receives the diagnostic — tearing the stream down
+        // here would race the writer task and usually deliver EOF instead.
+        if felix_wire::has_unknown_flags(frame.header.flags) {
+            send_control_error(
+                &out_ack_tx,
+                &out_ack_depth,
+                &ack_throttle_tx,
+                &ack_timeout_state,
+                &cancel_tx,
+                "unsupported frame flags",
+            )
+            .await?;
+            continue;
+        }
+        // Fast-path: binary publish batch frames avoid JSON decode/allocations.
+        if frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_BATCH != 0 {
+            let acked = frame.header.flags & felix_wire::FLAG_BINARY_PUBLISH_ACKED != 0;
+            if session.auth_ctx.is_none() {
+                send_control_error(
+                    &out_ack_tx,
+                    &out_ack_depth,
+                    &ack_throttle_tx,
+                    &ack_timeout_state,
+                    &cancel_tx,
+                    "auth required",
+                )
+                .await?;
+                return Ok(false);
+            }
+            if acked {
+                handle_acked_binary_publish_batch_control(
+                    &broker,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
+                    &publish_ctx,
+                    &frame,
+                    session.auth_ctx.as_ref(),
+                    throttled,
+                    config.ack_on_commit,
+                    sample,
+                    &out_ack_tx,
+                    &out_ack_depth,
+                    &ack_throttle_tx,
+                    &ack_timeout_state,
+                    &cancel_tx,
+                    &ack_waiters,
+                    &ack_waiter_tx,
+                    session.peer_flags,
+                )
+                .await?;
+            } else {
+                handle_binary_publish_batch_control(
+                    &broker,
+                    &mut session.stream_cache,
+                    &mut session.stream_cache_key,
+                    &publish_ctx,
+                    &frame,
+                    session.auth_ctx.as_ref(),
+                    sample,
+                    &cancel_tx,
+                )
+                .await?;
+            }
+            continue;
+        }
+        // Slow-path: decode JSON control message. Decode errors are considered fatal protocol
+        // violations and terminate the stream.
+        let decode_start = t_now_if(sample);
+        let message = match Message::decode(frame.clone()).context("decode message") {
+            Ok(message) => message,
+            Err(err) => {
+                #[cfg(feature = "telemetry")]
+                {
+                    let counters = crate::serving::quic::telemetry::frame_counters();
+                    counters.frames_in_err.fetch_add(1, Ordering::Relaxed);
+                    counters.pub_frames_in_err.fetch_add(1, Ordering::Relaxed);
+                    counters.pub_batches_in_err.fetch_add(1, Ordering::Relaxed);
+                }
+                crate::serving::quic::telemetry::log_decode_error("control_message", &err, &frame);
+                return Err(err);
+            }
+        };
+        let decode_ns = decode_start.map(|start| start.elapsed().as_nanos() as u64);
+        if let Some(decode_ns) = decode_ns {
+            timings::record_decode_ns(decode_ns);
+            t_histogram!("felix_broker_decode_ns").record(decode_ns as f64);
+        }
+        let cx = Ctx {
+            broker: &broker,
+            connection: &connection,
+            config: &config,
+            auth: &auth,
+            publish_ctx: &publish_ctx,
+            authz_ctx: &authz_ctx,
+            out_ack_tx: &out_ack_tx,
+            out_ack_depth: &out_ack_depth,
+            ack_throttle_tx: &ack_throttle_tx,
+            ack_timeout_state: &ack_timeout_state,
+            cancel_tx: &cancel_tx,
+            ack_waiters: &ack_waiters,
+            ack_waiter_tx: &ack_waiter_tx,
+            ack_wait_timeout,
+            throttled,
+            sample,
+            read_ns,
+            decode_ns,
+        };
+        // Dispatch by message type. Most handlers are responsible for enqueuing responses into
+        // `out_ack_tx` rather than writing directly to the network.
+        let step = match message {
+            Message::Auth {
+                tenant_id,
+                token,
+                client_flags,
+                client_features,
+            } => {
+                session::authenticate(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    token,
+                    client_flags,
+                    client_features,
+                )
+                .await?
+            }
+            Message::Publish {
+                tenant_id,
+                namespace,
+                stream,
+                payload,
+                key,
+                request_id,
+                ack,
+            } => {
+                publish::publish(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    payload,
+                    key,
+                    request_id,
+                    ack,
+                )
+                .await?
+            }
+            Message::PublishBatch {
+                tenant_id,
+                namespace,
+                stream,
+                payloads,
+                key,
+                request_id,
+                ack,
+            } => {
+                publish::publish_batch(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    payloads,
+                    key,
+                    request_id,
+                    ack,
+                )
+                .await?
+            }
+            Message::PublishIdempotent {
+                tenant_id,
+                namespace,
+                stream,
+                payloads,
+                key,
+                request_id,
+                producer_id,
+                sequence,
+            } => {
+                publish::publish_idempotent(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    payloads,
+                    key,
+                    request_id,
+                    producer_id,
+                    sequence,
+                )
+                .await?
+            }
+            Message::ProducerInit { request_id } => {
+                publish::producer_init(&cx, &mut session, request_id).await?
+            }
+            Message::Topology => discovery::topology(&cx, &mut session).await?,
+            Message::StreamShards {
+                tenant_id,
+                namespace,
+                stream,
+                request_id,
+            } => {
+                discovery::stream_shards(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    request_id,
+                )
+                .await?
+            }
+            Message::CacheShards {
+                tenant_id,
+                namespace,
+                cache,
+                request_id,
+            } => {
+                discovery::cache_shards(&cx, &mut session, tenant_id, namespace, cache, request_id)
+                    .await?
+            }
+            Message::Subscribe {
+                tenant_id,
+                namespace,
+                stream,
+                subscription_id,
+                start,
+                shard,
+            } => {
+                subscribe::subscribe(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    subscription_id,
+                    start,
+                    shard,
+                )
+                .await?
+            }
+            // Broker -> client only; a client sending one is a protocol error.
+            Message::SubscribeCursorError { .. } => {
+                subscribe::subscribe_cursor_error(&cx, &mut session).await?
+            }
+            Message::CachePut {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                value,
+                request_id,
+                ttl_ms,
+            } => {
+                cache::cache_put(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    value,
+                    request_id,
+                    ttl_ms,
+                )
+                .await?
+            }
+            Message::CacheGet {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                request_id,
+            } => {
+                cache::cache_get(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    request_id,
+                )
+                .await?
+            }
+            Message::CacheWatch {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                prefix,
+                shard,
+                from_offset,
+                retained,
+                subscription_id,
+            } => {
+                cache::cache_watch(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    prefix,
+                    shard,
+                    from_offset,
+                    retained,
+                    subscription_id,
+                )
+                .await?
+            }
+            Message::CounterAdd {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                delta,
+                request_id,
+            } => {
+                counter::counter_add(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    delta,
+                    request_id,
+                )
+                .await?
+            }
+            Message::CounterGet {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                request_id,
+            } => {
+                counter::counter_get(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupPoll {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                max_records,
+                wait_ms,
+                request_id,
+            } => {
+                group::group_poll(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    max_records,
+                    wait_ms,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupAck {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                offset,
+                request_id,
+            } => {
+                group::group_ack(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupNack {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                offset,
+                request_id,
+            } => {
+                group::group_nack(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupDeadLetters {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                request_id,
+            } => {
+                group::group_dead_letters(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupDiscard {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                offset,
+                request_id,
+            } => {
+                group::group_discard(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupRedrive {
+                tenant_id,
+                namespace,
+                stream,
+                shard,
+                group,
+                offset,
+                request_id,
+            } => {
+                group::group_redrive(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    shard,
+                    group,
+                    offset,
+                    request_id,
+                )
+                .await?
+            }
+            Message::CacheDelete {
+                tenant_id,
+                namespace,
+                cache,
+                key,
+                request_id,
+            } => {
+                cache::cache_delete(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    request_id,
+                )
+                .await?
+            }
+            Message::GroupRecords { .. }
+            | Message::GroupDeadLetterList { .. }
+            | Message::CacheValue { .. }
+            | Message::CacheOk { .. }
+            | Message::CounterValue { .. }
+            | Message::CacheWatchStarted { .. }
+            | Message::CacheEvent { .. }
+            | Message::CacheWatchLagged { .. }
+            | Message::Event { .. }
+            | Message::EventBatch { .. }
+            | Message::Subscribed { .. }
+            | Message::EventStreamHello { .. }
+            | Message::PublishOk { .. }
+            | Message::PublishError { .. }
+            | Message::PublishRefused { .. }
+            | Message::ProducerInitOk { .. }
+            | Message::AuthOk { .. }
+            | Message::TopologyView { .. }
+            | Message::StreamShardsView { .. }
+            | Message::CacheShardsView { .. }
+            | Message::NotLeader { .. }
+            | Message::Ok => {
+                // Protocol hygiene: these message types should never arrive on the control stream
+                // from the client. Treat as a protocol violation and close.
+                handle_ack_enqueue_result(
+                    send_outgoing_critical(
+                        &out_ack_tx,
+                        &out_ack_depth,
+                        "felix_broker_out_ack_depth",
+                        &ack_throttle_tx,
+                        Outgoing::Message(Message::Error {
+                            message: "unexpected message type".to_string(),
+                        }),
+                    )
+                    .await,
+                    &ack_timeout_state,
+                    &ack_throttle_tx,
+                    &cancel_tx,
+                )
+                .await?;
+                Step::Close(false)
+            }
+            Message::Error { .. } => Step::Close(false),
+        };
+        if let Step::Close(graceful) = step {
+            return Ok(graceful);
+        }
+    }
+    // `graceful_close` only tracks EOF from the peer. Any other early-exit path returns false
+    // (protocol error) or Err (hard failure).
+    Ok(graceful_close)
+}
+
+/// What an arm tells the loop to do next.
+enum Step {
+    /// Read the next frame.
+    Next,
+    /// End the stream; `true` is a graceful close, as `run_control_loop` returns.
+    Close(bool),
+}
+
+/// The per-stream state the arms change.
+struct Session {
+    auth_ctx: Option<AuthContext>,
+    /// Frame-flag bits the client understands. Narrowed to the pre-negotiation
+    /// set until an `Auth` says otherwise.
+    peer_flags: u16,
+    /// Optional messages this client understands. Nothing until an `Auth` says
+    /// otherwise.
+    peer_features: u32,
+    stream_cache: StreamHandleCache,
+    stream_cache_key: String,
+}
+
+/// What every arm reads: the connection's shared handles and this frame's
+/// sampling state.
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
+    broker: &'a Arc<Broker>,
+    connection: &'a felix_transport::QuicConnection,
+    config: &'a BrokerConfig,
+    auth: &'a Arc<BrokerAuth>,
+    publish_ctx: &'a PublishContext,
+    authz_ctx: &'a Responder<'a>,
+    out_ack_tx: &'a mpsc::Sender<Outgoing>,
+    out_ack_depth: &'a Arc<AtomicUsize>,
+    ack_throttle_tx: &'a watch::Sender<bool>,
+    ack_timeout_state: &'a Arc<Mutex<AckTimeoutState>>,
+    cancel_tx: &'a watch::Sender<bool>,
+    ack_waiters: &'a Arc<Semaphore>,
+    ack_waiter_tx: &'a mpsc::Sender<AckWaiterMessage>,
+    ack_wait_timeout: Duration,
+    throttled: bool,
+    sample: bool,
+    read_ns: Option<u64>,
+    decode_ns: Option<u64>,
+}

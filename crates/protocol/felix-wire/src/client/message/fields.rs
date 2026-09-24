@@ -1,0 +1,113 @@
+//! The structured values carried inside a [`Message`](super::Message)'s fields.
+
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+
+/// Somewhere a client may connect, as one broker understands the cluster.
+///
+/// Carries only what a client needs in order to connect: an identity to
+/// recognise it by and an address to dial. Deliberately not the control plane's
+/// node record -- placement, capacity, and liveness detail are the cluster's
+/// business, and a tenant's client has no standing to read them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrokerEndpoint {
+    pub node_id: String,
+    /// `host:port`, as the broker was configured to advertise to clients.
+    pub addr: String,
+}
+
+/// How a publish asks to be acknowledged. `None` asks for no answer at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AckMode {
+    None,
+    PerMessage,
+    PerBatch,
+}
+
+/// Why a `publish_idempotent` was not appended.
+///
+/// Each names a different remedy, which is why they are not one string. A
+/// gap means the producer skipped ahead and must not continue as if it had
+/// not; an unknown producer means this broker holds nothing to check against
+/// and the producer must start again with a new id; an expired sequence is a
+/// re-send from further back than the broker remembers; and not-leader means
+/// the batch went to a broker that does not hold the shard's sequences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublishRefusalReason {
+    /// The sequence is past the next one expected; what was skipped is lost
+    /// to this broker and the producer must not carry on past it.
+    SequenceGap {
+        /// The sequence the broker would have appended.
+        expected: u64,
+    },
+    /// The broker holds no sequence for this producer on this shard and the
+    /// batch was not its first. Nothing can be checked against, so nothing
+    /// is appended; the producer needs a new id.
+    UnknownProducer,
+    /// The sequence is older than the window the broker keeps, so whether it
+    /// was appended cannot be told any more.
+    SequenceExpired,
+    /// This broker does not lead the shard, and only the leader holds the
+    /// sequences; the batch has to go to the broker named here.
+    NotLeader {
+        /// Who leads it.
+        node_id: String,
+        /// `host:port` the leader serves clients on, or absent when the
+        /// cluster has not been told where clients reach it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        addr: Option<String>,
+    },
+}
+
+/// Where a subscription should begin.
+///
+/// Serde's default tagging spells these `"latest"`, `"earliest"` and
+/// `{"offset": 42}`, which keeps the common cases short in a JSON control
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartPosition {
+    /// The live tail: deliver only what is published from now on. Identical to
+    /// omitting the field, and spelled out for clients that prefer to be
+    /// explicit.
+    Latest,
+    /// The oldest record the broker still retains.
+    ///
+    /// Deliberately not "offset 0": for a stream whose head has been trimmed,
+    /// offset 0 is gone and asking for it is an error, whereas `earliest` means
+    /// "as far back as you can" and always succeeds.
+    Earliest,
+    /// Resume at an exact log offset — the first record the client has *not*
+    /// seen, so a client checkpoints the offset it last handled plus one.
+    Offset(u64),
+}
+
+/// Why a subscribe could not start at the requested position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorErrorReason {
+    /// The offset has been discarded by retention, or has fallen out of an
+    /// in-memory stream's replay ring.
+    TooOld,
+    /// The offset is past the end of the stream.
+    InFuture,
+}
+
+/// One record handed to a consumer, with the offset it must acknowledge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupRecord {
+    pub offset: u64,
+    #[serde(with = "crate::client::message::base64_serde::base64_bytes_bytes")]
+    pub payload: Bytes,
+    /// How many times this record has been handed out, this delivery included.
+    /// `1` is a first attempt; anything higher is a redelivery, so a consumer
+    /// can treat a retry differently.
+    ///
+    /// `0` means the broker did not report it — absent rather than first, since
+    /// claiming a first attempt for an unknown one would have a consumer skip
+    /// exactly the retry handling it wanted.
+    #[serde(default)]
+    pub attempts: u32,
+}

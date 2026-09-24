@@ -310,5 +310,5 @@ task cluster:failover
 It starts three brokers, configures a `Quorum` stream, connects a client with
 **one** address, shows it discovering the other two, kills the broker that
 acknowledged the writes, and reads every record back from the broker that took
-over. `crates/felix-cluster/tests/` uses the same harness, and those tests are
+over. `crates/testing/felix-cluster/tests/` uses the same harness, and those tests are
 the worked examples for everything on this page.

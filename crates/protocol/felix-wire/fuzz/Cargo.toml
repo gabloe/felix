@@ -1,0 +1,57 @@
+# libFuzzer targets for the protocol decoders.
+#
+# The storage format is written by Felix itself; these bytes are written by
+# whoever connects, which is why they are fuzzed separately and why the
+# properties below are about refusing rather than about recovering.
+#
+# Excluded from the workspace on purpose: `cargo-fuzz` needs nightly and links
+# libFuzzer, neither of which belongs in the default `cargo build --workspace`.
+# The deterministic subset runs in the normal test suite as
+# `crates/protocol/felix-wire/tests/wire_fuzz.rs`.
+#
+#     cargo install cargo-fuzz
+#     cargo +nightly fuzz run frame            -- -max_total_time=300
+#     cargo +nightly fuzz run internal_message -- -max_total_time=300
+[package]
+name = "felix-wire-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+felix-wire = { path = ".." }
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "internal_message"
+path = "fuzz_targets/internal_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "binary_payload"
+path = "fuzz_targets/binary_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_message"
+path = "fuzz_targets/client_message.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

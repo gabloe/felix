@@ -1,0 +1,205 @@
+//! The client-facing QUIC listeners and their accept loops.
+//!
+//! `build_server_config()` currently creates a **dev-only self-signed**
+//! certificate. Production deployments should use a real certificate chain and
+//! should not re-generate keys on each start.
+
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use felix_broker::Broker;
+use felix_transport::{QuicServer, TransportConfig};
+use quinn::ServerConfig;
+use rcgen::generate_simple_self_signed;
+use rustls::pki_types::PrivatePkcs8KeyDer;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+
+use crate::cluster::client_endpoints::ClientEndpoints;
+use crate::cluster::lease::LeaseState;
+use crate::config::BrokerConfig;
+use crate::peer::PeerPool;
+use crate::replication::quorum::QuorumMarks;
+use crate::serving::{auth::BrokerAuth, quic};
+use crate::shards::routing::IngressRouter;
+
+/// Bind one QUIC listener per configured address.
+pub(super) fn bind(config: &BrokerConfig) -> Result<Vec<Arc<QuicServer>>> {
+    // `build_server_config` currently uses a self-signed certificate suitable
+    // for local development.
+    let server_config = build_server_config().context("build QUIC server config")?;
+
+    // Apply transport-level configuration (flow control windows, pooling behavior, etc.)
+    // derived from broker config.
+    let transport =
+        crate::serving::quic::cache_transport_config(config, TransportConfig::default());
+
+    // One `QuicServer` per configured listener. Each owns its own UDP socket and
+    // therefore its own `quinn` endpoint driver -- the single task that reads
+    // every datagram for that socket and routes it by connection id. That task
+    // is the per-broker throughput ceiling (#557): it cannot use more than one
+    // core, and it saturates while the rest of the machine idles. N sockets are
+    // N drivers. Default is one, so a deployment that has not asked for more
+    // binds exactly what it always did.
+    let mut quic_servers = Vec::with_capacity(config.quic_listeners);
+    for bind_addr in config.quic_binds() {
+        let server = QuicServer::bind(bind_addr, server_config.clone(), transport.clone())
+            .with_context(|| format!("bind QUIC listener on {bind_addr}"))?;
+        tracing::info!(addr = %server.local_addr()?, "quic listener started");
+        quic_servers.push(Arc::new(server));
+    }
+    Ok(quic_servers)
+}
+
+/// What every accept loop shares.
+pub(super) struct AcceptLoops<'a> {
+    pub(super) broker: &'a Arc<Broker>,
+    pub(super) config: &'a BrokerConfig,
+    pub(super) auth: &'a Arc<BrokerAuth>,
+    pub(super) accept_shutdown: &'a CancellationToken,
+    pub(super) connections: &'a TaskTracker,
+    pub(super) seeded: &'a CancellationToken,
+    pub(super) gate_readiness_on_sync: bool,
+    pub(super) ingress_router: &'a Option<Arc<IngressRouter>>,
+    pub(super) peers: &'a Option<Arc<PeerPool>>,
+    pub(super) lease: &'a Option<Arc<LeaseState>>,
+    pub(super) quorum_marks: &'a Arc<QuorumMarks>,
+    pub(super) client_endpoints: &'a Arc<ClientEndpoints>,
+}
+
+/// Start accepting QUIC connections, one background task per listener. If an
+/// accept loop exits due to an error, it is logged and shutdown continues
+/// normally.
+///
+/// The loops share everything behind them -- the same broker, the same
+/// connection registry, the same shutdown token -- and differ only in the
+/// socket they read from.
+pub(super) fn spawn_accept_loops(
+    quic_servers: &[Arc<QuicServer>],
+    shared: AcceptLoops<'_>,
+) -> Vec<JoinHandle<()>> {
+    let AcceptLoops {
+        broker,
+        config,
+        auth,
+        accept_shutdown,
+        connections,
+        seeded,
+        gate_readiness_on_sync,
+        ingress_router,
+        peers,
+        lease,
+        quorum_marks,
+        client_endpoints,
+    } = shared;
+    quic_servers
+        .iter()
+        .map(|server| {
+            let quic_server = Arc::clone(server);
+            let broker = Arc::clone(broker);
+            let quic_config = config.clone();
+            let auth = Arc::clone(auth);
+            let accept_shutdown = accept_shutdown.clone();
+            let connections = connections.clone();
+            let seeded = seeded.clone();
+            let ingress_router = ingress_router.clone();
+            let peers_for_accept = peers.clone();
+            let lease_for_accept = lease.clone();
+            let marks_for_accept = Arc::clone(quorum_marks);
+            let endpoints_for_accept = Arc::clone(client_endpoints);
+            tokio::spawn(async move {
+                // A durable broker does not accept until its streams exist.
+                // Readiness alone only steers orchestrated traffic; a client with
+                // the address in hand would otherwise connect during recovery and
+                // be told its durable stream does not exist. Waiting is the honest
+                // answer, and shutdown still wins the race so a broker told to stop
+                // during recovery stops.
+                if gate_readiness_on_sync {
+                    tokio::select! {
+                        biased;
+                        _ = accept_shutdown.cancelled() => {
+                            tracing::info!("shutdown before initial sync; not accepting");
+                            return;
+                        }
+                        _ = seeded.cancelled() => {
+                            tracing::info!("initial sync applied; accepting connections");
+                        }
+                    }
+                }
+                if let Err(err) = quic::serve_with_shutdown(
+                    quic_server,
+                    broker,
+                    quic_config,
+                    auth,
+                    accept_shutdown,
+                    connections,
+                    quic::ClusterContext {
+                        ingress: ingress_router,
+                        peers: peers_for_accept,
+                        lease: lease_for_accept,
+                        marks: Some(Arc::clone(&marks_for_accept)),
+                        client_endpoints: Some(Arc::clone(&endpoints_for_accept)),
+                    },
+                )
+                .await
+                {
+                    tracing::warn!(error = %err, "quic accept loop exited");
+                }
+            })
+        })
+        .collect()
+}
+
+/// Build the QUIC server TLS configuration.
+///
+/// Current behavior:
+/// - Generates a fresh self-signed certificate for `localhost` at startup.
+/// - Configures Quinn/Rustls with that certificate.
+///
+/// This is convenient for local development but **not appropriate for production**.
+/// Production should load a real certificate chain and private key (and should avoid
+/// regenerating keys on each start).
+pub(super) fn build_server_config() -> Result<ServerConfig> {
+    // Dev-only self-signed TLS config for QUIC endpoints.
+    let cert = generate_simple_self_signed(vec!["localhost".into()])?;
+    let cert_der = cert.cert.der().clone();
+    let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+
+    // A generated certificate nothing can name is a certificate only a client
+    // that skips verification can use, which is how "just disable TLS
+    // verification in dev" becomes a habit. Writing it out gives every client
+    // -- including the ones that are not Rust and cannot reach into this
+    // process -- a real CA file to trust.
+    if let Ok(path) = std::env::var("FELIX_TLS_CERT_EXPORT")
+        && !path.trim().is_empty()
+    {
+        export_certificate(&cert.cert.pem(), &path)?;
+    }
+
+    Ok(ServerConfig::with_single_cert(
+        vec![cert_der],
+        key_der.into(),
+    )?)
+}
+
+/// Write the broker's certificate where a client can trust it from.
+///
+/// Fails startup rather than warning: a deployment that asked for the export
+/// is a deployment whose clients are configured to read it, and coming up
+/// without it produces connection failures whose cause is nowhere near the
+/// symptom.
+fn export_certificate(pem: &str, path: &str) -> Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create the directory for FELIX_TLS_CERT_EXPORT {path}"))?;
+    }
+    std::fs::write(path, pem).with_context(|| format!("write the broker certificate to {path}"))?;
+    tracing::info!(
+        path,
+        "wrote the broker's self-signed certificate for clients to trust"
+    );
+    Ok(())
+}

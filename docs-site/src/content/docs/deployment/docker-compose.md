@@ -676,7 +676,7 @@ services:
     volumes:
       - .:/src
       - cargo-cache:/usr/local/cargo/registry
-    command: cargo watch -x 'run --release -p broker'
+    command: cargo watch -x 'run --release -p felix-broker-service'
     
 volumes:
   cargo-cache:

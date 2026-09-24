@@ -1,0 +1,143 @@
+//! Feature bits: optional requests a broker may serve, advertised in `AuthOk`.
+//!
+//! A *feature* bit is not a frame flag. Frame flags say how a payload is laid
+//! out and travel on every frame; these say only that a request exists, and
+//! never appear on a frame at all. They are numbered separately for that
+//! reason -- sharing the space would have a client offering to receive a frame
+//! shape it has no encoder for.
+//!
+//! A client must not send a featured request to a broker that did not advertise
+//! the bit: an unrecognised message type is a fatal protocol error to the
+//! broker's control loop, so probing costs the connection.
+
+/// The broker answers `topology`: which brokers a client may connect to.
+pub const FEATURE_TOPOLOGY: u32 = 0x0000_0001;
+
+/// The peer understands `NotLeader`.
+///
+/// Offered by a *client*, and read by the broker, which is the direction that
+/// matters here: `NotLeader` travels broker to client, and a client that cannot
+/// decode it would lose the connection to a message meant to help it. A broker
+/// talking to a client that did not offer this bit answers with an ordinary
+/// error instead.
+pub const FEATURE_REDIRECT: u32 = 0x0000_0002;
+
+/// The broker understands `CacheDelete`.
+///
+/// Advertised by a *broker*, because this is a request rather than a response:
+/// a client that sent it to a broker predating it would be sending an
+/// unrecognised message type, which is fatal to the broker's control loop. A
+/// client that does not see this bit reports that the broker cannot delete
+/// rather than trying and losing the connection.
+pub const FEATURE_CACHE_DELETE: u32 = 0x0000_0004;
+
+/// The broker serves consumer groups: `group_poll`, `group_ack`, `group_nack`.
+///
+/// Advertised by a *broker*, like `FEATURE_CACHE_DELETE` and for the same
+/// reason: these are requests, and sending one to a broker that has no arm for
+/// it ends that broker's control loop rather than returning an error.
+///
+/// A broker with no durable storage never advertises it. A group whose position
+/// is lost on restart redelivers everything it had already finished, so there is
+/// nothing useful to offer.
+pub const FEATURE_CONSUMER_GROUP: u32 = 0x0000_0008;
+
+/// The broker serves the dead-letter requests: `group_dead_letters`,
+/// `group_discard`, `group_redrive`.
+///
+/// A bit of its own rather than folded into `FEATURE_CONSUMER_GROUP`. That bit
+/// already means "serves poll, ack and nack" to every broker that advertises
+/// it, and a broker built before these requests existed would have no arm for
+/// them — which ends its control loop rather than returning an error. A feature
+/// bit says one set of requests exists, and widening what an existing bit
+/// promises is the one thing that cannot be done safely.
+pub const FEATURE_GROUP_DEAD_LETTERS: u32 = 0x0000_0010;
+
+/// The broker answers `stream_shards`: how many shards a stream was placed with.
+///
+/// A subscription reads one shard, so a client that wants a whole multi-shard
+/// stream has to know how many there are. Nothing else on the wire tells it:
+/// `topology` names brokers, not streams.
+///
+/// Advertised by a *broker*, and a separate bit rather than folded into
+/// `FEATURE_TOPOLOGY` for the usual reason — that bit already means "names the
+/// brokers" to every broker that advertises it, and a broker built before this
+/// request existed has no arm for it.
+pub const FEATURE_STREAM_SHARDS: u32 = 0x0000_0020;
+
+/// The broker serves `cache_watch`: a subscription to changes for one cache
+/// key or key prefix.
+///
+/// Advertised by a *broker*, like `FEATURE_CACHE_DELETE` and for the same
+/// reason: this is a request, and sending it to a broker that has no arm for
+/// it ends that broker's control loop rather than returning an error.
+///
+/// Only a broker whose cache is log-backed advertises it. A watch's contract is
+/// built on log offsets — resume, duplicate detection, and the lag signal all
+/// name them — and a cache with no log has none to offer.
+pub const FEATURE_CACHE_WATCH: u32 = 0x0000_0040;
+
+/// The broker serves *retained* delivery on a `cache_watch`: each matching
+/// key's current value first, then live changes.
+///
+/// A bit of its own rather than folded into `FEATURE_CACHE_WATCH`, for the
+/// reason the dead-letter bit is not folded into the consumer-group bit: a bit
+/// says which requests exist, and widening what an existing bit promises is
+/// the one change that cannot be made safely. A broker built when
+/// `FEATURE_CACHE_WATCH` meant live-and-resume only would ignore the unknown
+/// `retained` field and serve a live-only watch — the client silently missing
+/// exactly the state it joined for.
+pub const FEATURE_CACHE_WATCH_RETAINED: u32 = 0x0000_0080;
+
+/// The broker serves counters: `counter_add` and `counter_get`.
+///
+/// Advertised by a *broker*, like every request-shaped feature: sending either
+/// to a broker with no arm for it ends that broker's control loop rather than
+/// returning an error.
+///
+/// Only a broker with durable storage advertises it. A counter is a fold over
+/// a log — the sum is rebuilt from the deltas on recovery — and a broker with
+/// nowhere to write the log would be offering a sum that any restart resets,
+/// which is worse than refusing to count at all.
+pub const FEATURE_COUNTERS: u32 = 0x0000_0100;
+
+/// The broker assigns producer ids (`producer_init`) and accepts
+/// `publish_idempotent`: a batch carrying a producer id and a sequence number,
+/// which it appends once however many times it arrives. A re-send of a batch
+/// the broker already holds is acknowledged with the original's outcome rather
+/// than appended again, and a refusal comes back as `publish_refused` with a
+/// reason a client can act on.
+///
+/// Both messages exist only under this bit: a client offers the bit in its own
+/// features to say it can decode `publish_refused`, and sends the requests
+/// only to a broker that advertised it.
+pub const FEATURE_IDEMPOTENT_PRODUCER: u32 = 0x0000_0200;
+
+/// The broker answers `cache_shards`: how many shards a cache was placed with.
+///
+/// A prefix watch reads one shard, so watching a prefix across a multi-shard
+/// cache means one watch per shard, and the client has to know how many there
+/// are. A bit of its own rather than a field on `stream_shards`: a broker that
+/// predates it would ignore the field and answer for a stream of the same name.
+pub const FEATURE_CACHE_SHARDS: u32 = 0x0000_0400;
+
+/// Every feature bit this version implements.
+pub const KNOWN_FEATURES: u32 = FEATURE_TOPOLOGY
+    | FEATURE_REDIRECT
+    | FEATURE_CACHE_DELETE
+    | FEATURE_CONSUMER_GROUP
+    | FEATURE_GROUP_DEAD_LETTERS
+    | FEATURE_STREAM_SHARDS
+    | FEATURE_CACHE_WATCH
+    | FEATURE_CACHE_WATCH_RETAINED
+    | FEATURE_COUNTERS
+    | FEATURE_IDEMPOTENT_PRODUCER
+    | FEATURE_CACHE_SHARDS;
+
+/// True if `features` advertises `feature`.
+pub fn supports_feature(features: u32, feature: u32) -> bool {
+    features & feature == feature
+}
+
+#[cfg(test)]
+mod tests;

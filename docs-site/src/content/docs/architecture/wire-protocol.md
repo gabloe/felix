@@ -880,7 +880,7 @@ All Felix client and server implementations must pass the shared conformance tes
 
 ### Test Vectors
 
-Test vectors are located in `crates/felix-wire/tests/vectors/`:
+Test vectors are located in `crates/protocol/felix-wire/tests/vectors/`:
 
 - `frame_valid.json`: Valid frame encodings
 - `frame_invalid.json`: Invalid frames that must be rejected

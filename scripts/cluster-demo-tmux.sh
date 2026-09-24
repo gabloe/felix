@@ -21,7 +21,7 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BIN="$REPO_ROOT/target/debug/felix-cluster"
 
 command -v tmux >/dev/null || { echo "tmux is not installed" >&2; exit 1; }
-[[ -x $BIN ]] || { echo "build first: cargo build -p felix-cluster -p broker" >&2; exit 1; }
+[[ -x $BIN ]] || { echo "build first: cargo build -p felix-cluster -p felix-broker-service" >&2; exit 1; }
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 

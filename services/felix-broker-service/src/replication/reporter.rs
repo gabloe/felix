@@ -1,0 +1,237 @@
+//! Replica reports, batched the way the storage layer batches fsyncs.
+//!
+//! A report has to reach the control plane before the shard's quorum mark
+//! moves, so it sits on the path of every `Quorum` publish. One POST per shard
+//! per pass meant a broker leading many shards spent that path on round trips
+//! that differ only in which shard they name — and the endpoint has always
+//! taken a list, so they were single-element batches by habit rather than by
+//! need.
+//!
+//! **Group commit, not a timer.** A window would add its own wait to a pass
+//! that has only one shard to report, which is the common small deployment and
+//! the one least able to spare it. Instead a flush takes everything queued at
+//! that moment and sends it; reports arriving while that request is in flight
+//! queue behind it and go together in the next one. Batches grow under load,
+//! which is when they are worth having, and an idle broker waits for nothing.
+//! `disk_log/sync.rs` makes the same trade for the same reason.
+use felix_common::membership::{
+    ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
+};
+use felix_router::ShardKey;
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+
+use super::{FollowerCursor, caught_up};
+
+/// Most reports in one request.
+///
+/// The bound is the control plane's request size, not the broker's appetite: a
+/// pass ships at most `SHARD_CONCURRENCY` shards at once, so this is only
+/// reached when passes overlap or a broker leads a great many shards.
+const MAX_BATCH: usize = 256;
+
+/// How many reports may wait for a flush before submitting blocks.
+///
+/// Blocking is the right answer when it is reached — the caller is a shard
+/// waiting to publish its mark, and dropping its report would release a
+/// `Quorum` publish on a report nobody sent.
+const QUEUE_DEPTH: usize = 1024;
+
+struct Pending {
+    report: ShardReport,
+    landed: oneshot::Sender<bool>,
+}
+
+/// Submits replica reports and tells each caller whether its own landed.
+#[derive(Clone)]
+pub struct Reporter {
+    tx: mpsc::Sender<Pending>,
+}
+
+impl Reporter {
+    /// Start the flushing task. It runs until `shutdown`, or until every
+    /// `Reporter` handle is dropped.
+    pub fn spawn(to: ReportTo, shutdown: CancellationToken) -> (Self, tokio::task::JoinHandle<()>) {
+        let (tx, rx) = mpsc::channel(QUEUE_DEPTH);
+        let task = tokio::spawn(flush_loop(to, rx, shutdown));
+        (Self { tx }, task)
+    }
+
+    /// Submit `report` and wait until it has reached the control plane.
+    ///
+    /// `false` means it did not, and the caller must leave its quorum mark
+    /// where it was: releasing a publish on a report the control plane never
+    /// saw is the window the report-before-mark ordering exists to close.
+    pub async fn send(&self, report: ShardReport) -> bool {
+        let (landed, answer) = oneshot::channel();
+        if self.tx.send(Pending { report, landed }).await.is_err() {
+            // The flushing task is gone, which means the broker is shutting
+            // down. Nothing will carry this report, so it did not land.
+            return false;
+        }
+        answer.await.unwrap_or(false)
+    }
+}
+
+/// Where a leader sends its replica reports.
+///
+/// Optional: a broker with no control plane has nobody to tell, and the reports
+/// are only ever read by one.
+pub struct ReportTo {
+    pub client: reqwest::Client,
+    pub base_url: String,
+    pub node_id: String,
+    /// Held, not copied: this reports for the life of the process, across
+    /// however many access tokens that spans.
+    pub token: Option<crate::cluster::credential::NodeCredential>,
+    pub incarnation: u64,
+}
+
+/// One shard's replicas, as this leader currently sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardReport {
+    pub key: ShardKey,
+    pub generation: u64,
+    pub caught_up: Vec<String>,
+    /// How far each follower had got. Sent as well as `caught_up` because
+    /// "caught up" is only true of the tail it was measured against, and a
+    /// leader that reports and then writes more before dying leaves a report
+    /// that says every replica was level without saying level with what.
+    pub offsets: Vec<(String, u64)>,
+    /// This broker has stopped serving the shard and its log will not grow,
+    /// so `caught_up` is measured against the final tail.
+    pub drained: bool,
+}
+
+/// Who could take this shard over, as of `tail`.
+pub(super) fn shard_report(
+    key: &ShardKey,
+    generation: u64,
+    tail: u64,
+    followers: &[FollowerCursor],
+    drained: bool,
+) -> ShardReport {
+    ShardReport {
+        key: key.clone(),
+        generation,
+        caught_up: caught_up(tail, followers),
+        offsets: followers
+            .iter()
+            .filter(|follower| follower.halted.is_none())
+            .map(|follower| (follower.node_id.clone(), follower.next_offset))
+            .collect(),
+        drained,
+    }
+}
+
+async fn flush_loop(to: ReportTo, mut rx: mpsc::Receiver<Pending>, shutdown: CancellationToken) {
+    loop {
+        let first = tokio::select! {
+            _ = shutdown.cancelled() => break,
+            received = rx.recv() => match received {
+                Some(pending) => pending,
+                // Every handle dropped.
+                None => break,
+            },
+        };
+
+        // Everything already waiting joins this request. Nothing is waited
+        // *for*: what queues while the request is in flight goes in the next.
+        let mut batch = vec![first];
+        while batch.len() < MAX_BATCH {
+            match rx.try_recv() {
+                Ok(pending) => batch.push(pending),
+                Err(_) => break,
+            }
+        }
+
+        metrics::histogram!(super::metrics::REPORTS_PER_REQUEST).record(batch.len() as f64);
+        let reports: Vec<ShardReport> =
+            batch.iter().map(|pending| pending.report.clone()).collect();
+        let landed = send_reports(&to, &reports).await;
+
+        // One answer for the whole request, which is what the endpoint gives:
+        // it walks the list, skips a shard it will not accept, and answers for
+        // the request as a whole. A shard it skipped is not an error to the
+        // caller either way — the next pass sends a fresher report.
+        for pending in batch {
+            let _ = pending.landed.send(landed);
+        }
+    }
+
+    // Anything still queued will never be sent, and a caller blocked on an
+    // answer must not wait out its publish timeout for one that is not coming.
+    rx.close();
+    while let Ok(pending) = rx.try_recv() {
+        let _ = pending.landed.send(false);
+    }
+}
+
+/// Tell the control plane which replicas could take each shard over, and say
+/// whether it took the report.
+///
+/// Not retried here: the next pass sends a fresher one, and a queue of stale
+/// reports is worse than none, since promotion is gated on *recent* positions.
+/// The answer instead gates the quorum mark, so "could not tell" reads as
+/// false — see the caller.
+async fn send_reports(to: &ReportTo, reports: &[ShardReport]) -> bool {
+    if reports.is_empty() {
+        return true;
+    }
+    // The shared type, not a `json!` literal: the control plane parses this
+    // same definition, so a field renamed on one side stops compiling instead
+    // of quietly arriving as a missing one.
+    let body = ReplicaStatusRequest {
+        incarnation: to.incarnation,
+        shards: reports
+            .iter()
+            .map(|report| ShardReplicaStatus {
+                tenant_id: report.key.tenant_id.clone(),
+                namespace: report.key.namespace.clone(),
+                stream: report.key.stream.clone(),
+                shard: report.key.shard,
+                // Without the kind the control plane files a cache's report
+                // under the stream of the same name, so placement finds no
+                // caught-up replica for the cache and its shard is never
+                // promoted -- the contents are unreachable after a failover.
+                kind: match report.key.kind {
+                    felix_router::ShardKind::Cache => WireShardKind::Cache,
+                    felix_router::ShardKind::Stream => WireShardKind::Stream,
+                },
+                generation: report.generation,
+                caught_up: report.caught_up.to_vec(),
+                drained: report.drained,
+                replica_offsets: report
+                    .offsets
+                    .iter()
+                    .map(|(node_id, durable_offset)| ReplicaOffset {
+                        node_id: node_id.clone(),
+                        durable_offset: *durable_offset,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    let url = format!("{}/v1/nodes/{}/replica-status", to.base_url, to.node_id);
+    let mut request = to.client.post(&url).json(&body);
+    if let Some(token) = &to.token {
+        request = request.bearer_auth(token.bearer());
+    }
+    match request.send().await {
+        Ok(response) if response.status().is_success() => true,
+        Ok(response) => {
+            tracing::warn!(
+                status = %response.status(),
+                "the control plane refused a replica report",
+            );
+            false
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "could not send a replica report");
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

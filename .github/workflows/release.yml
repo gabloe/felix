@@ -48,8 +48,8 @@ jobs:
       - name: Build release binaries
         run: |
           cargo build --release --locked \
-            -p broker --bin felix-broker \
-            -p controlplane --bin felix-controlplane
+            -p felix-broker-service --bin felix-broker \
+            -p felix-controlplane-service --bin felix-controlplane
 
       - name: Package release archive
         run: |
@@ -251,7 +251,7 @@ jobs:
       # The suite drives real brokers over real QUIC; these are what it starts.
       - name: Build the broker and cluster harness
         run: |
-          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-broker-service --bin felix-broker
           cargo build --locked -p felix-cluster --bin felix-cluster
 
       # `maturin develop` installs into an *active* virtualenv and refuses to
@@ -263,13 +263,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install ./crates/felix-python
+          python -m pip install ./crates/sdk/felix-python
           python -c "import felix; print('felix binding imported OK')"
 
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/python-conformance.json
-        run: cd crates/felix-python && pytest -q
+        run: cd crates/sdk/felix-python && pytest -q
 
       # The verdict, not the test exit code: a suite that passed while skipping
       # a required scenario is not conformance, and this is what says so.
@@ -321,7 +321,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.maturin }}
-          args: --release --out dist --manifest-path crates/felix-python/Cargo.toml
+          args: --release --out dist --manifest-path crates/sdk/felix-python/Cargo.toml
           manylinux: auto
 
       - name: Upload wheel
@@ -345,7 +345,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist --manifest-path crates/felix-python/Cargo.toml
+          args: --out dist --manifest-path crates/sdk/felix-python/Cargo.toml
 
       - uses: actions/upload-artifact@v7
         with:
@@ -421,20 +421,20 @@ jobs:
       # The suite drives real brokers over real QUIC; these are what it starts.
       - name: Build the broker and cluster harness
         run: |
-          cargo build --locked -p broker --bin felix-broker
+          cargo build --locked -p felix-broker-service --bin felix-broker
           cargo build --locked -p felix-cluster --bin felix-cluster
 
       # No napi CLI here: `napi build` is mostly a rename of this cdylib, and
       # the package loads it from the target directory either way. Keeping the
       # gate off the CLI keeps it off a registry too.
       - name: Build the addon
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: cargo build --locked
 
       - name: Run the conformance suite
         env:
           FELIX_CONFORMANCE_RESULTS: ${{ github.workspace }}/ts-conformance.json
-        run: cd crates/felix-typescript && node --test test/conformance.test.mjs
+        run: cd crates/sdk/felix-typescript && node --test test/conformance.test.mjs
 
       # The verdict, not the test exit code: a suite that passed while skipping
       # a required scenario is not conformance, and this is what says so.
@@ -495,7 +495,7 @@ jobs:
         run: npm install -g @napi-rs/cli@2
 
       - name: Build the addon
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: napi build --platform --release --target ${{ matrix.target }}
 
       # The addon is named by platform (felix.darwin-arm64.node and so on), so
@@ -504,7 +504,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: napi-${{ matrix.target }}
-          path: crates/felix-typescript/*.node
+          path: crates/sdk/felix-typescript/*.node
           if-no-files-found: error
 
   typescript-release-assets:
@@ -600,17 +600,17 @@ jobs:
         with:
           pattern: napi-*
           merge-multiple: true
-          path: crates/felix-typescript/artifacts
+          path: crates/sdk/felix-typescript/artifacts
 
       - name: Install the napi CLI
         run: npm install -g @napi-rs/cli@2
 
       - name: Move each binary into its platform package
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: napi artifacts
 
       - name: What is about to be published
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: ls -la npm/*/
 
       # `npm publish` per package rather than `napi prepublish`. What that
@@ -624,7 +624,7 @@ jobs:
       # dependencies, so publishing it first leaves a window where an install
       # resolves to nothing.
       - name: ${{ inputs.npm_stage && 'Stage, platform packages first' || 'Publish, platform packages first' }}
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         env:
           # Only in staging mode, and only then: trusted publishing is the
           # normal path and a token present alongside it is a second way in
@@ -651,7 +651,7 @@ jobs:
       # question only when something was actually published.
       - name: The registry must actually have them
         if: ${{ !inputs.npm_stage }}
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
@@ -668,7 +668,7 @@ jobs:
 
       - name: What a maintainer needs to promote
         if: ${{ inputs.npm_stage }}
-        working-directory: crates/felix-typescript
+        working-directory: crates/sdk/felix-typescript
         run: |
           set -euo pipefail
           version=$(node -p "require('./package.json').version")
@@ -722,13 +722,9 @@ jobs:
   # must stay one; `cargo publish` waits for the index between crates on its
   # own, so the sequence is the whole mechanism.
   #
-  # felix-broker and felix-storage are AGPL-3.0 and are on the list anyway,
-  # because felix-client's `in-process` feature declares them as optional
-  # dependencies and crates.io requires an optional dependency to resolve like
-  # any other. Publishing them changes nothing about the licence split: the
-  # default felix-client build still pulls no AGPL-3.0 code, which is what
-  # LICENSING.md promises. The excluded set is the one `check_publish_metadata.py`
-  # calls not-publishable — the service binaries and the dev/CI tools.
+  # Only the client and the two crates it depends on are published. Everything
+  # else is `publish = false`; `check_publish_metadata.py` keeps this list and
+  # those flags in agreement.
   #
   # To turn it on: set the repository variable PUBLISH_CRATES to "true" and add
   # a CARGO_REGISTRY_TOKEN secret with publish rights. Check the names are
@@ -772,8 +768,7 @@ jobs:
           # Re-running a release must not fail on the crates that already
           # landed: a publish that dies halfway leaves the earlier tiers up,
           # and crates.io answers a repeat with an error rather than a no-op.
-          for crate in felix-authz felix-common felix-storage felix-transport \
-                       felix-wire felix-broker felix-router felix-client; do
+          for crate in felix-transport felix-wire felix-client; do
             status=$(curl -sS -o /dev/null -w '%{http_code}' \
               -A "felix-release/${version}" \
               "https://crates.io/api/v1/crates/${crate}/${version}")

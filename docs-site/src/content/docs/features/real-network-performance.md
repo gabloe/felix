@@ -56,7 +56,7 @@ mean.
 | **Broker storage** | Premium SSD (`Premium_LRS`), 128 GiB |
 | **Artifacts under test** | broker `v0.3.0` release tarball; control plane a `v0.3.1`-candidate build (see [What we found and fixed](#what-we-found-and-fixed)) |
 | **Identity** | Microsoft Entra ID app registration, client-credentials grant, **RS256** — verified on every token exchange, not demo auth |
-| **Instrument** | `felix-loadgen` (`crates/felix-loadgen`), built once on the load-gen VM, driving the cluster over its real routed paths |
+| **Instrument** | `felix-loadgen` (`crates/testing/felix-loadgen`), built once on the load-gen VM, driving the cluster over its real routed paths |
 
 **Honesty rules**, carried over from the local suite and enforced here:
 compare only within one provisioned session (cloud VMs are a hardware lottery);

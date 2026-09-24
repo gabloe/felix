@@ -65,6 +65,65 @@ for what the current release actually guarantees.
   placement pass to brokers that hold none of their log. Its shards are moved
   instead, which takes a few passes; the harness's `move_shard` steps
   placement until the move completes.
+- `felix_router::shard` is no longer public. Everything in it was already
+  re-exported at the crate root, so `felix_router::ShardRouter` and friends
+  are the paths to use.
+- `felix-common` drops what nothing used: `NodeConfig`, `LimitsConfig`,
+  `Error::Config`, and every id type but `RegionId`.
+- `felix-broker`'s `cache_watch`, `consumer_groups`, `dead_letters`,
+  `durable`, `group_delivery` and `group_reader` modules are private. Their
+  public types are at the crate root (`felix_broker::ConsumerGroups`,
+  `felix_broker::GroupReader`, `felix_broker::DurableStorage`, ...), and the
+  group tracker that `group_delivery` exposed is internal. `replication` and
+  `timings` stay public modules. `ClaimedPublish` is now exported, since
+  `Broker::claim_publish` returns it. The registry keys (`CacheKey`,
+  `NamespaceKey`, `StreamKey`, `TopicKey`) are no longer public; nothing
+  outside the broker used them.
+- **The workspace is grouped by role.** Crates live under
+  `crates/{protocol,server,sdk,testing}/` and the service packages are renamed
+  `felix-broker-service` and `felix-controlplane-service` (binaries unchanged),
+  so `cargo test -p broker` is now `cargo test -p felix-broker-service`. Crate
+  internals are reorganised by domain; `CONTRIBUTING.md` has the rules.
+- `felix-storage` paths: `CacheOp` is `felix_storage::cache::CacheOp`, `Epoch`
+  is `felix_storage::log::Epoch`, the `Corruption*` types are only at the crate
+  root, and the modules nothing outside the crate used (`commit_order`,
+  `segment::io`, `disk_log::{epochs, recovery, retention, segments, sync}`) are
+  private.
+- `felix-controlplane-service` paths: the router and `AppState` are in `api`
+  (was `app`), readiness is `api::readiness`, TLS is `server::tls`,
+  `membership` and `placement` (with `ReplicaPositions`) are under `cluster`,
+  the Raft store is `store::raft` with `command` and `state_machine` beneath it,
+  metadata export is `store::export`, and `now_millis` is `clock::now_millis`.
+  Two integration tests are renamed: `readiness_pg` is `pg_readiness` and
+  `meta_raft` is `raft_state_machine`.
+- `felix-broker-service` modules are grouped by job, so their paths changed:
+  - `quic`/`transport::quic`, `auth` (with `auth_demo` as `auth::demo`) and
+    `core_shards` are under `serving::`, as is forwarding to a shard's owner
+    (`serving::forward`, from `peer::forward` and `peer::handler`).
+  - `credential`, `membership`, `lease`, `node_catalog` and `client_endpoints`
+    are under `cluster::`, and `controlplane` is `cluster::catalog_sync`.
+  - `shard_watch`, `shard_lifecycle` and `shard_routing` are `shards::watch`,
+    `shards::lifecycle` and `shards::routing`.
+  - `peer::replica` is `replication::replica`, `peer::dispatch` is
+    `node::peer_dispatch`, `durable_config` is `config::durable`, and `timings`
+    is `observability::timings`. `peer` is now only the broker-to-broker
+    transport.
+  - Startup moved out of the binary into `node::run_with_shutdown`.
+    `cache_routing` and `group_ops` are no longer public.
+  - Log targets follow module paths, so a `RUST_LOG` filter such as
+    `felix_broker_service::quic=debug` becomes
+    `felix_broker_service::serving::quic=debug`.
+- Only `felix-wire`, `felix-transport` and `felix-client` are published to
+  crates.io. The server crates were only there because of the `in-process`
+  feature below.
+
+### Removed
+
+- **`felix-client`'s `in-process` feature and `InProcessClient`.** It wrapped
+  an embedded `felix_broker::Broker` for two smoke tests and nothing else used
+  it, but it made `felix-broker` and `felix-storage` optional dependencies of
+  the client, and so forced them onto crates.io. Test against a broker over
+  QUIC instead; `felix-cluster` starts one.
 
 ## [0.6.0-preview] - 2026-09-20
 

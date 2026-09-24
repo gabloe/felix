@@ -61,17 +61,17 @@ jobs:
         uses: swatinem/rust-cache@v2
 
       - name: Build soak harness
-        run: cargo build --release -p broker --bin soak
+        run: cargo build --release -p felix-broker-service --bin soak
 
       - name: Repeat concurrency-sensitive tests
         run: |
           set -euo pipefail
           for attempt in $(seq 1 10); do
             echo "concurrency test pass ${attempt}/10"
-            cargo test -p broker --lib transport::quic::handlers::subscribe::tests
-            cargo test -p broker --test quic_publish
-            cargo test -p broker --test quic_subscribe
-            cargo test -p broker --test graceful_shutdown
+            cargo test -p felix-broker-service --lib serving::quic::handlers::subscribe::tests
+            cargo test -p felix-broker-service --test quic_publish
+            cargo test -p felix-broker-service --test quic_subscribe
+            cargo test -p felix-broker-service --test graceful_shutdown
           done
 
       - name: Raise file descriptor limit

@@ -72,10 +72,12 @@ Each module owns one decision:
 | Module | Owns |
 | --- | --- |
 | `segment/format` | the byte layout and every corruption verdict |
-| `segment/io` | positioned reads, preallocation, device flush |
+| `io` | positioned reads, preallocation, device flush |
 | `segment/index` | the sparse index and how a seek position is chosen |
 | `segment/writer` | appending to one file; nothing about rollover |
-| `segment/reader` | validating scans and bounded range reads |
+| `segment/scan` | validating scans, and whether damage is a repairable tail |
+| `segment/reader` | bounded range reads |
+| `disk_log/append` | the append path, and when it rolls a segment |
 | `disk_log/segments` | rollover, which segment holds an offset, truncation |
 | `disk_log/recovery` | startup discovery, validation, torn-tail repair |
 | `disk_log/sync` | when a flush happens and who waits for it |
@@ -471,7 +473,7 @@ two distributions.
 ```sh
 FELIX_DURABLE_STORAGE_DIR=/var/lib/felix/streams \
 FELIX_DURABLE_FSYNC_MODE=on_commit \
-  cargo run --release -p broker --bin felix-broker
+  cargo run --release -p felix-broker-service --bin felix-broker
 ```
 
 ## Observability
@@ -504,7 +506,7 @@ felix-log-tool bench  --dir /tmp/bench --records 20000 --concurrency 8 --fsync o
 The end-to-end demo — publish, crash, restart, recover — is:
 
 ```sh
-cargo run --release -p broker --bin durable-restart-demo
+cargo run --release -p felix-broker-service --bin durable-restart-demo
 ```
 
 It verifies its own claims rather than narrating them, so a regression makes it
@@ -522,25 +524,18 @@ fail rather than print the wrong numbers.
 
 ## Limits today
 
-- **One log per stream.** `StreamMetadata::shards` is carried through to the
-  shard key but the data path is not yet sharded, so every stream uses shard 0.
 - **Retention is off unless configured.** `retention_bytes` and `retention_age`
   are both unset by default, so an existing deployment keeps growing without
   bound exactly as before. Setting either bounds the log: whole sealed segments
   are deleted from the head, `base_offset` rises, and offsets below it report
   `Trimmed` (storage) or `CursorTooOld` (broker) rather than a short read. See
   [Retention](#retention) below.
-- **No tiered storage.** [`tiered.rs`](../crates/felix-storage/src/tiered.rs) is
+- **No tiered storage.** [`tiered.rs`](../crates/server/felix-storage/src/tiered.rs) is
   still trait scaffolding — `TieredStore`, `OffloadedSegment`, `ColdCacheConfig`
   and `RetentionPolicy` are declared, and nothing implements them. There is no
   hot/cold split, no offload, and no cold-tier read path; every read comes from
-  local segments. See [Tiered storage](#tiered-storage-what-m1-set-up-for-it)
-  below for what this milestone deliberately left in place for it.
-- **Single node.** Replication (M5) is what `seal`'s checksum and `read_range`'s
-  bounded paging exist to serve. They are the primitives of *log shipping*, which
-  is what [the replication design](replication-design.md) selects — and the
-  never-rewritten invariant below is the reason it selects that over per-shard
-  Raft.
+  local segments. See [Tiered storage](#tiered-storage-what-is-already-in-place)
+  below for what the log already provides for it.
 
 ## Retention
 
@@ -582,10 +577,9 @@ a trimmed stream instead of becoming an error.
 An operator can force a pass with `StreamLog::enforce_retention_now` instead of
 waiting out the interval.
 
-## Tiered storage: what M1 set up for it
+## Tiered storage: what is already in place
 
-Tiering is not in this milestone and has no issue or milestone of its own yet.
-What M1 did do is make the eventual implementation a matter of adding a tier
+Tiering is not built. The log is shaped so that adding it means adding a tier
 rather than reworking the log:
 
 - **Sealed segments are immutable and self-describing.** Once sealed, a segment
@@ -608,4 +602,4 @@ rather than reworking the log:
 The open questions tiering still has to answer — when a segment becomes cold, how
 much local cache to keep, and what a cold read costs in tail latency — are design
 work, not refactoring. Tracked as
-[#172](https://github.com/gabloe/felix/issues/172) (`M1.9`).
+[#172](https://github.com/gabloe/felix/issues/172).

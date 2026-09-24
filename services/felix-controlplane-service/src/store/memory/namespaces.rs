@@ -1,0 +1,158 @@
+//! Namespaces, and the cascade that deleting one sets off.
+use super::InMemoryStore;
+use crate::model::{
+    CacheChange, CacheChangeOp, Namespace, NamespaceChange, NamespaceChangeOp, NamespaceKey,
+    StreamChange, StreamChangeOp,
+};
+use crate::store::{ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult};
+
+pub(super) async fn list_namespaces(
+    store: &InMemoryStore,
+    tenant_id: &str,
+) -> StoreResult<Vec<Namespace>> {
+    let items = store
+        .namespaces
+        .read()
+        .await
+        .values()
+        .filter(|ns| ns.tenant_id == tenant_id)
+        .cloned()
+        .collect();
+    Ok(items)
+}
+
+pub(super) async fn create_namespace(
+    store: &InMemoryStore,
+    namespace: Namespace,
+) -> StoreResult<Namespace> {
+    // Namespaces are scoped to a tenant; we reject creation if the parent tenant doesn't exist.
+    if !store.tenant_exists(&namespace.tenant_id).await? {
+        return Err(StoreError::NotFound("tenant".into()));
+    }
+    let key = NamespaceKey {
+        tenant_id: namespace.tenant_id.clone(),
+        namespace: namespace.namespace.clone(),
+    };
+    let mut namespaces = store.namespaces.write().await;
+    if namespaces.contains_key(&key) {
+        return Err(StoreError::Conflict("namespace exists".into()));
+    }
+    namespaces.insert(key.clone(), namespace.clone());
+    store
+        .namespace_changes
+        .write()
+        .await
+        .record(|seq| NamespaceChange {
+            seq,
+            op: NamespaceChangeOp::Created,
+            key,
+            namespace: Some(namespace.clone()),
+        });
+    Ok(namespace)
+}
+
+pub(super) async fn delete_namespace(store: &InMemoryStore, key: &NamespaceKey) -> StoreResult<()> {
+    if !store.tenant_exists(&key.tenant_id).await? {
+        return Err(StoreError::NotFound("tenant".into()));
+    }
+    let mut namespaces = store.namespaces.write().await;
+    let removed = namespaces.remove(key);
+    drop(namespaces);
+    if removed.is_none() {
+        return Err(StoreError::NotFound("namespace".into()));
+    }
+    store
+        .namespace_changes
+        .write()
+        .await
+        .record(|seq| NamespaceChange {
+            seq,
+            op: NamespaceChangeOp::Deleted,
+            key: key.clone(),
+            namespace: None,
+        });
+    // Cascading delete: removing a namespace also removes its streams and caches.
+    let mut streams = store.streams.write().await;
+    let mut stream_keys: Vec<_> = streams
+        .keys()
+        .filter(|k| k.tenant_id == key.tenant_id && k.namespace == key.namespace)
+        .cloned()
+        .collect();
+    // Sorted for the same reason as the tenant cascade: identical seq
+    // assignment on every Raft replica.
+    stream_keys.sort_by(|a, b| {
+        (&a.tenant_id, &a.namespace, &a.stream).cmp(&(&b.tenant_id, &b.namespace, &b.stream))
+    });
+    for stream_key in &stream_keys {
+        if let Some(stream) = streams.remove(stream_key) {
+            store
+                .stream_changes
+                .write()
+                .await
+                .record(|seq| StreamChange {
+                    seq,
+                    op: StreamChangeOp::Deleted,
+                    key: stream_key.clone(),
+                    stream: Some(stream),
+                });
+        }
+    }
+    metrics::gauge!("felix_streams_total").set(streams.len() as f64);
+
+    let mut caches = store.caches.write().await;
+    let mut cache_keys: Vec<_> = caches
+        .keys()
+        .filter(|k| k.tenant_id == key.tenant_id && k.namespace == key.namespace)
+        .cloned()
+        .collect();
+    cache_keys.sort_by(|a, b| {
+        (&a.tenant_id, &a.namespace, &a.cache).cmp(&(&b.tenant_id, &b.namespace, &b.cache))
+    });
+    for cache_key in &cache_keys {
+        if let Some(cache) = caches.remove(cache_key) {
+            store.cache_changes.write().await.record(|seq| CacheChange {
+                seq,
+                op: CacheChangeOp::Deleted,
+                key: cache_key.clone(),
+                cache: Some(cache),
+            });
+        }
+    }
+    metrics::gauge!("felix_caches_total").set(caches.len() as f64);
+    Ok(())
+}
+
+pub(super) async fn namespace_snapshot(store: &InMemoryStore) -> StoreResult<Snapshot<Namespace>> {
+    // `next_seq` is the checkpoint a consumer should use as `since` on its first changes poll.
+    let items = store.namespaces.read().await.values().cloned().collect();
+    let next_seq = store.namespace_changes.read().await.next_seq;
+    Ok(Snapshot { items, next_seq })
+}
+
+pub(super) async fn namespace_changes(
+    store: &InMemoryStore,
+    since: u64,
+) -> StoreResult<ChangeSet<NamespaceChange>> {
+    // We filter by `seq >= since` (inclusive) and apply a page limit.
+    // If the caller's `since` is older than the retained window, it will receive a partial
+    // history and should fall back to `*_snapshot()` to re-bootstrap.
+    let guard = store.namespace_changes.read().await;
+    let items = guard
+        .items
+        .iter()
+        .filter(|item| item.seq >= since)
+        .take(store.limit())
+        .cloned()
+        .collect();
+    Ok(ChangeSet {
+        items,
+        next_seq: guard.next_seq,
+    })
+}
+
+pub(super) async fn namespace_exists(
+    store: &InMemoryStore,
+    key: &NamespaceKey,
+) -> StoreResult<bool> {
+    Ok(store.namespaces.read().await.contains_key(key))
+}

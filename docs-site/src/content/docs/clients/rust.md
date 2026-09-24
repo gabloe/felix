@@ -22,7 +22,6 @@ Or in `Cargo.toml`:
 ```toml
 [dependencies]
 felix-client = "0.5"
-felix-common = "0.5"  # error types and shared identifiers
 ```
 
 Optional features:
@@ -35,9 +34,6 @@ felix-client = { version = "0.5", features = ["telemetry"] }
 **Features**:
 
 - `telemetry`: per-operation timing and frame counters (adds overhead)
-- `in-process`: embeds a broker directly, for tests without a network. Pulls in
-  AGPL-3.0 code; the default build does not. See
-  [LICENSING.md](https://github.com/gabloe/felix/blob/main/LICENSING.md)
 
 ## Quick Start
 
@@ -872,35 +868,6 @@ opens one watch per shard and merges them. The retained version sends
 `ShardedCacheWatchItem::StateComplete` once every shard's current values have
 arrived. Needs `FEATURE_CACHE_SHARDS`.
 
-## In-Process Client
-
-For testing and embedded scenarios, use the in-process client:
-
-```rust
-use bytes::Bytes;
-use felix_client::InProcessClient;
-use felix_broker::Broker;
-
-// Create embedded broker
-let broker = Broker::new(broker_config).await?;
-
-// Create in-process client (no network)
-let client = InProcessClient::new(broker.clone());
-
-// Same API as network client
-client
-    .publish("acme", "prod", "test", Bytes::from_static(b"data"))
-    .await?;
-let mut sub = client.subscribe("acme", "prod", "test").await?;
-```
-
-**Use cases**:
-
-- Unit tests
-- Integration tests
-- Embedded applications
-- Benchmarking without network overhead
-
 ## Connection Management
 
 ### Automatic Reconnection
@@ -970,10 +937,10 @@ use felix_client::{frame_counters_snapshot, reset_frame_counters};
 
 // Get current frame counters
 let counters = frame_counters_snapshot();
-println!("Publish frames: {}", counters.publish_frames);
-println!("Event frames: {}", counters.event_frames);
-println!("Cache put frames: {}", counters.cache_put_frames);
-println!("Cache get frames: {}", counters.cache_get_frames);
+println!("Frames out: {}", counters.frames_out_ok);
+println!("Frames in: {}", counters.frames_in_ok);
+println!("Publish batches acked: {}", counters.pub_batches_out_ok);
+println!("Events received: {}", counters.sub_items_in_ok);
 
 // Reset counters
 reset_frame_counters();
@@ -984,13 +951,15 @@ reset_frame_counters();
 ```rust
 use felix_client::timings;
 
-// Get timing snapshots
-let publish_timings = timings::publish_timings_snapshot();
-println!("Publish p50: {:?}", publish_timings.p50);
-println!("Publish p99: {:?}", publish_timings.p99);
-
-let subscribe_timings = timings::subscribe_timings_snapshot();
-println!("Event delivery p50: {:?}", subscribe_timings.p50);
+// Sample one operation in every 100, then drain what was recorded. Each
+// field of the returned tuple is one stage's samples in nanoseconds; the
+// order is documented on `timings::ClientTimingSamples`.
+timings::enable_collection(100);
+// ... run the workload ...
+if let Some(samples) = timings::take_samples() {
+    let e2e_latency_ns = &samples.17;
+    println!("end-to-end samples: {}", e2e_latency_ns.len());
+}
 ```
 
 :::caution[Telemetry Overhead]
@@ -1053,11 +1022,10 @@ async fn publish_with_retry(
     unreachable!()
 }
 
-fn is_retriable(error: &felix_common::Error) -> bool {
-    matches!(error,
-        felix_common::Error::Timeout { .. } |
-        felix_common::Error::ConnectionLost
-    )
+// Client calls return `anyhow::Error`. What counts as transient is the
+// application's call; inspect the error chain to decide.
+fn is_retriable(_error: &anyhow::Error) -> bool {
+    true
 }
 ```
 
@@ -1107,31 +1075,6 @@ async fn batching_publisher(client: &Client) -> Result<()> {
 ```
 
 ## Testing
-
-### Unit Tests with In-Process Client
-
-```rust
-#[tokio::test]
-async fn test_publish_subscribe() {
-    use bytes::Bytes;
-
-    let broker = Broker::new(BrokerConfig::default()).await.unwrap();
-    let client = InProcessClient::new(broker);
-    
-    // Subscribe first
-    let mut sub = client.subscribe("test", "ns", "stream").await.unwrap();
-    
-    // Publish
-    client
-        .publish("test", "ns", "stream", Bytes::from_static(b"hello"))
-        .await
-        .unwrap();
-    
-    // Receive
-    let event = sub.recv().await.unwrap();
-    assert_eq!(event, Bytes::from_static(b"hello"));
-}
-```
 
 ### Integration Tests
 
@@ -1193,6 +1136,5 @@ else is a knob to turn off a measurement; see
 | Cache put | `cache_put()` | Store with TTL |
 | Cache get | `cache_get()` | Retrieve value |
 | Publisher | `Client::publisher()` | Streaming publish |
-| In-process | `InProcessClient::new()` | Testing, embedded |
 
 For complete API documentation, see the [rustdoc](https://docs.rs/felix-client).

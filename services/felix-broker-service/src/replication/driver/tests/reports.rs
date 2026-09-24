@@ -1,0 +1,374 @@
+//! What the leader tells the control plane about its replicas.
+
+use super::*;
+
+/// A pass reports the shard, its generation, and who could take it over.
+#[tokio::test]
+async fn a_pass_reports_who_could_take_the_shard_over() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let pass = replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert_eq!(pass.reports.len(), 1);
+    let report = &pass.reports[0];
+    assert_eq!(report.key, key());
+    assert_eq!(report.generation, 4);
+    assert_eq!(report.caught_up, vec!["broker-b".to_string()]);
+}
+
+/// **A follower that did not keep up is not reported as able to lead.**
+/// This is the whole point of the signal: the control plane promotes on it,
+/// and a follower named here while behind would be promoted into a shard it
+/// cannot serve.
+#[tokio::test]
+async fn a_follower_that_refused_is_not_reported_as_able_to_lead() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = RefusingFollower;
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let pass = replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert_eq!(pass.reports.len(), 1);
+    assert!(
+        pass.reports[0].caught_up.is_empty(),
+        "a follower holding nothing was reported as able to lead",
+    );
+}
+
+/// A shard this broker only follows is not reported on. Reporting about a
+/// shard it does not lead would be an opinion it has no basis for.
+#[tokio::test]
+async fn a_shard_led_elsewhere_is_not_reported() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router("broker-b", &[LOCAL], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let pass = replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert!(pass.reports.is_empty());
+}
+
+/// A shard with no replicas reports nobody rather than an empty promise.
+#[tokio::test]
+async fn a_shard_with_no_replicas_is_not_reported() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &[], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    let pass = replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert!(pass.reports.is_empty());
+}
+
+/// A follower that refuses everything, so it never advances.
+struct RefusingFollower;
+
+impl PeerRequester for RefusingFollower {
+    async fn request(
+        &self,
+        _node_id: &str,
+        _addr: SocketAddr,
+        _message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        Err(PeerError::Unavailable {
+            node_id: "broker-b".to_string(),
+            detail: "not now".to_string(),
+        })
+    }
+}
+
+/// A quorum mark is not published when the replica report did not land.
+///
+/// The mark is what releases a `Quorum` publish, and promotion reads the
+/// report. Releasing on a report that never arrived is the same window the
+/// report-then-publish ordering exists to close, reached by a different route:
+/// a client is told its record is on a majority while the control plane knows
+/// nothing about which replica holds it.
+#[tokio::test]
+async fn a_failed_replica_report_holds_the_quorum_mark_back() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let follower = AcceptingFollower::default();
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    // A control plane that refuses every report.
+    let app = axum::Router::new().route(
+        "/v1/nodes/{node_id}/replica-status",
+        axum::routing::post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+
+    let report_shutdown = CancellationToken::new();
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        report_shutdown.clone(),
+    );
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        Some(&reporter),
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    // Replication itself succeeded — the follower took every record — so this
+    // is specifically about the report, not about shipping.
+    assert_eq!(
+        follower.batches().len(),
+        1,
+        "the records should still have been shipped: {:?}",
+        follower.batches(),
+    );
+    // TimedOut, not Reached: the publish waits and the client is told a
+    // timeout, which is the honest answer when this broker cannot make the
+    // acknowledgement good at failover.
+    assert!(
+        matches!(
+            marks
+                .wait_for(&watch_key(&key()), 4, 1, Duration::from_millis(50))
+                .await,
+            crate::replication::quorum::QuorumWait::TimedOut
+                | crate::replication::quorum::QuorumWait::NotLeading
+        ),
+        "the mark was published on a report the control plane never took, so a \
+         client would be told its record is on a majority the control plane \
+         cannot find at failover",
+    );
+
+    server.abort();
+}
+
+/// The report a broker sends parses as the type the control plane reads.
+///
+/// That is the whole point of sharing the definition rather than building the
+/// body with `json!`: a field renamed on one side used to arrive at the other
+/// as a missing one, with nothing failing to compile and nothing failing at
+/// runtime until promotion went looking for a replica it could not find.
+#[test]
+fn a_report_body_is_the_shape_the_control_plane_parses() {
+    let sent = ReplicaStatusRequest {
+        incarnation: 2,
+        shards: vec![ShardReplicaStatus {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            shard: 3,
+            kind: WireShardKind::Cache,
+            generation: 9,
+            caught_up: vec!["broker-b".to_string()],
+            replica_offsets: vec![ReplicaOffset {
+                node_id: "broker-b".to_string(),
+                durable_offset: 41,
+            }],
+            drained: false,
+        }],
+    };
+
+    let json = serde_json::to_value(&sent).expect("serialise");
+    // The field names the control plane's handler reads, spelled out rather
+    // than derived, so a rename has to be made deliberately here too.
+    let shard = &json["shards"][0];
+    assert_eq!(json["incarnation"], 2);
+    assert_eq!(shard["tenant_id"], "t1");
+    assert_eq!(shard["namespace"], "ns");
+    assert_eq!(shard["stream"], "orders");
+    assert_eq!(shard["shard"], 3);
+    assert_eq!(shard["kind"], "cache");
+    assert_eq!(shard["generation"], 9);
+    assert_eq!(shard["caught_up"][0], "broker-b");
+    assert_eq!(shard["replica_offsets"][0]["node_id"], "broker-b");
+    assert_eq!(shard["replica_offsets"][0]["durable_offset"], 41);
+
+    assert_eq!(
+        serde_json::from_value::<ReplicaStatusRequest>(json).expect("parse"),
+        sent,
+    );
+}
+
+/// Records when each follower was reached, with one of them answering late
+/// enough that it needs a wake-up after the first has already finished.
+struct TimingFollower {
+    late: &'static str,
+    delay: Duration,
+    started: tokio::time::Instant,
+    reached: Mutex<Vec<(String, Duration)>>,
+}
+
+impl PeerRequester for TimingFollower {
+    async fn request(
+        &self,
+        node_id: &str,
+        _addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        let InternalMessage::ReplicateRecords(batch) = message else {
+            panic!("the driver sent something other than a replication batch");
+        };
+        if node_id == self.late {
+            tokio::time::sleep(self.delay).await;
+        }
+        self.reached.lock().expect("lock").push((
+            node_id.to_string(),
+            tokio::time::Instant::now().duration_since(self.started),
+        ));
+        Ok(InternalMessage::ReplicateOk(ReplicateOk {
+            correlation_id: 0,
+            durable_offset: batch.first_offset + batch.payloads.len() as u64,
+        }))
+    }
+}
+
+/// **The replica report runs beside the followers, not in front of them.**
+///
+/// The report has to reach the control plane before the mark is published, so
+/// it is awaited — but awaiting it inside the drain loop suspends every
+/// follower still in flight. A slow control plane would then stall replication
+/// to the rest of the replica set, which is the head-of-line block this whole
+/// change exists to remove, just moved onto the reporting hop.
+#[tokio::test(start_paused = true)]
+async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
+    const SLOW: Duration = Duration::from_secs(30);
+    // Well under the control plane's delay, and long enough that this follower
+    // needs a wake-up of its own after the first one has finished — which is
+    // the only way to tell "shipped beside the report" from "shipped after it".
+    const LATE: Duration = Duration::from_secs(5);
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = TimingFollower {
+        late: "broker-c",
+        delay: LATE,
+        started: tokio::time::Instant::now(),
+        reached: Mutex::new(Vec::new()),
+    };
+    let marks = QuorumMarks::new();
+
+    // A control plane that takes half a minute to answer.
+    let app = axum::Router::new().route(
+        "/v1/nodes/{node_id}/replica-status",
+        axum::routing::post(|| async {
+            tokio::time::sleep(SLOW).await;
+            axum::http::StatusCode::NO_CONTENT
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+
+    let report_shutdown = CancellationToken::new();
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        report_shutdown.clone(),
+    );
+
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        Some(&reporter),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    let reached = follower.reached.lock().expect("lock").clone();
+    assert_eq!(
+        reached.len(),
+        2,
+        "both followers should have been shipped to"
+    );
+    for (node, at) in reached {
+        assert!(
+            at < SLOW,
+            "{node} was not reached until {at:?}, so it waited behind the \
+             control plane rather than shipping beside it",
+        );
+    }
+
+    server.abort();
+}

@@ -68,7 +68,7 @@ if [ -n "${IDP_AUDIENCE:-}" ] && [ "$IDP_AUDIENCE" != "$AUD" ]; then
   echo ">> note: registering the token's aud ($AUD), not IDP_AUDIENCE ($IDP_AUDIENCE)"
 fi
 # The control plane keys RBAC on principal_id = hex(sha256(issuer|subject))
-# (services/controlplane/src/auth/principal.rs), NOT a human-readable string.
+# (services/felix-controlplane-service/src/auth/principal.rs), NOT a human-readable string.
 # Registering the admin/role grouping under anything else yields a validated
 # token with zero permissions (403 "no permissions"). Compute the same id here
 # so the seed's groupings match what the exchange evaluates. subject_claim is

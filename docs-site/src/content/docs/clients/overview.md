@@ -72,7 +72,7 @@ task conformance:fixture       # a cluster to run a suite against
 task conformance:verify -- results.json
 ```
 
-The catalogue (`crates/felix-conformance/scenarios.toml`) is deliberately
+The catalogue (`crates/testing/felix-conformance/scenarios.toml`) is deliberately
 weighted toward the semantics a second client approximates rather than
 implements. A few, so the flavour is clear:
 
@@ -128,6 +128,6 @@ workloads actually live. Each is gated on passing the conformance suite.
 
 If you want to write one sooner, the things you need are all public: the
 [wire protocol](/felix/architecture/wire-protocol/) if you are implementing
-natively, the conformance catalogue either way, and `crates/felix-python` or
-`crates/felix-typescript` as worked examples of the binding approach — a few
+natively, the conformance catalogue either way, and `crates/sdk/felix-python` or
+`crates/sdk/felix-typescript` as worked examples of the binding approach — a few
 hundred lines of Rust over a client that already works.

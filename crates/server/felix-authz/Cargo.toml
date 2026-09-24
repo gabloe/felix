@@ -1,0 +1,27 @@
+[package]
+name = "felix-authz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Tenant-scoped token issuance and authorization for Felix"
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["felix", "authorization", "jwt"]
+categories = ["network-programming", "authentication"]
+# Built into the services, not consumed from a registry.
+publish = false
+
+[dependencies]
+ed25519-dalek = { workspace = true }
+jsonwebtoken = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

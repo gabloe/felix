@@ -149,7 +149,7 @@ on the old leader are ended when it releases the shard; a client with a seed
 list reconnects and is routed to the new owner.
 
 Every publish acknowledged before or during a move is on the new owner. The
-tests behind that claim are in `crates/felix-cluster/tests/rebalance.rs`.
+tests behind that claim are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`.
 
 ## Tuning
 
