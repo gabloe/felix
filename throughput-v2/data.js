@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790246481754,
+  "lastUpdate": 1790250457277,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14508,6 +14508,58 @@ window.BENCHMARK_DATA = {
             "range": "8464.23",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 942883.35\nmean: 937615.97\nstdev: 8464.23\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5c31d58fecbcfc889a665f32cbe46a4915d280d5",
+          "message": "Placement writes are conditional on the generation they were planned from (#660)\n\n* feat(controlplane): conditional shard assignment writes\n\nput_shard_assignment_if writes only if the shard is still at the\ngeneration the caller read (or still has no assignment), and otherwise\nreports it stale without writing or publishing a change.\n\nMemory checks under the shards lock; Postgres checks under the existing\nFOR UPDATE row lock and uses ON CONFLICT DO NOTHING when it expects no\nrow, since there is nothing to lock yet. Raft carries it as a new\nPutShardAssignmentIf command so a follower that predates it refuses it\ninstead of applying it unconditionally and diverging. The shared store\ncontract holds all three to it, including racing writers.\n\n* fix(controlplane): plan-then-write placement cannot undo a newer step\n\nEvery instance runs the placement reconciler unless the store is Raft,\nand each wrote its plan unconditionally. An instance that planned a\nfence, then stalled, could write it after another instance had fenced\nand cut over, handing the shard back to the old leader after the new\none may already have acknowledged writes; a failover promotion planned\nfrom an old read had the same race.\n\nPlacements, promotions and every move step are now written with the\ngeneration the pass planned from. A shard that moved on is not an\nerror: the write is skipped, counted in\nfelix_shard_assignment_write_conflicts_total, and the next pass\nre-plans. The pass is split into plan and apply so a test can\ninterleave two instances deterministically.\n\n* test(controlplane): a promotion planned from an old read is not written later\n\nSpec-Unaffected: test only; the spec change for conditional placement writes is in its own commit.\n\n* docs(formal): model placement deciding from a held read\n\nA placement decision now either reads and writes in one step or comes\nfrom a read a planner took earlier and still holds (cpView). Every\nassignment write bumps the store's generation, and CasWrites makes it\nland only at the generation its read saw.\n\nFelixShardStalePlanner.cfg (a move) and FelixShardStalePromotion.cfg (a\nfailover) hold one read across the other instance's writes without the\ncomparison, and TLC finds two brokers serving. Their Cas companions pass\nevery invariant. The existing configurations run with no held reads\nand keep their outcomes.\n\n* docs: conditional placement writes and the conflicts metric\n\nSpec-Unaffected: prose only; the model change is in the previous commit.",
+          "timestamp": "2026-09-24T04:44:46-07:00",
+          "tree_id": "2c5028a9979f5a76feaf965e8e0cbbede0b48fbf",
+          "url": "https://github.com/gabloe/felix/commit/5c31d58fecbcfc889a665f32cbe46a4915d280d5"
+        },
+        "date": 1790250456490,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 399263.79,
+            "range": "11229.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 399263.79\nmean: 395810.74\nstdev: 11229.42\ncv: 2.84%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 399263.79,
+            "range": "11229.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 399263.79\nmean: 395810.74\nstdev: 11229.42\ncv: 2.84%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93113.2,
+            "range": "590.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93113.20\nmean: 93172.11\nstdev: 590.00\ncv: 0.63%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 931132.01,
+            "range": "5900.00",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 931132.01\nmean: 931721.10\nstdev: 5900.00\ncv: 0.63%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
