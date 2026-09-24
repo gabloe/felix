@@ -37,8 +37,8 @@ use crate::store::memory::InMemoryStore;
 use crate::store::raft::command::{MetaCommand, MetaResponse, decode_result, encode_command};
 use crate::store::raft::state_machine::MetadataStateMachine;
 use crate::store::{
-    AssignmentWrite, AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult,
-    TenantAuthSeed,
+    AssignmentWrite, AuthStore, ChangeSet, ControlPlaneStore, PlacementLease, Snapshot, StoreError,
+    StoreResult, TenantAuthSeed,
 };
 
 pub struct RaftStore {
@@ -322,11 +322,13 @@ impl ControlPlaneStore for RaftStore {
         &self,
         assignment: ShardAssignment,
         expected_generation: Option<u64>,
+        fence: u64,
     ) -> StoreResult<AssignmentWrite> {
         match self
-            .propose(MetaCommand::PutShardAssignmentIf {
+            .propose(MetaCommand::PutShardAssignmentFenced {
                 assignment,
                 expected_generation,
+                fence,
             })
             .await?
         {
@@ -334,6 +336,7 @@ impl ControlPlaneStore for RaftStore {
             MetaResponse::StaleAssignment { current_generation } => Ok(AssignmentWrite::Stale {
                 current: current_generation,
             }),
+            MetaResponse::FencedAssignment { token } => Ok(AssignmentWrite::Fenced { token }),
             _ => Err(unexpected_shape("assignment")),
         }
     }
@@ -393,6 +396,43 @@ impl ControlPlaneStore for RaftStore {
             MetaResponse::Unit => Ok(()),
             _ => Err(unexpected_shape("unit")),
         }
+    }
+
+    async fn placement_token(&self) -> StoreResult<u64> {
+        self.local().placement_token().await
+    }
+
+    /// The caller is the confirmed leader (`LeadershipGate`), so it takes the
+    /// lease whatever the expiry. Proposed only when the holder changes: a
+    /// renewal needs no log entry, since nobody else takes a lease here.
+    async fn acquire_placement_lease(
+        &self,
+        holder: &str,
+        _ttl_millis: u64,
+    ) -> StoreResult<Option<PlacementLease>> {
+        if self.local().placement_holder().await.as_deref() == Some(holder) {
+            return Ok(Some(PlacementLease {
+                token: self.local().placement_token().await?,
+                taken: false,
+            }));
+        }
+        match self
+            .propose(MetaCommand::TakePlacementLease {
+                holder: holder.to_string(),
+            })
+            .await?
+        {
+            MetaResponse::PlacementLease { token, taken } => {
+                Ok(Some(PlacementLease { token, taken }))
+            }
+            _ => Err(unexpected_shape("placement lease")),
+        }
+    }
+
+    /// Nothing to give up: the next leader takes the lease when it is
+    /// confirmed.
+    async fn release_placement_lease(&self, _holder: &str) -> StoreResult<()> {
+        Ok(())
     }
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {

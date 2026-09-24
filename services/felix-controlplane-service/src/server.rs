@@ -86,12 +86,14 @@ where
     );
 
     // Shard placement runs on the API token like expiry: it stops admitting work
-    // at the same point the listener does.
+    // at the same point the listener does. The holder id is per process, so a
+    // restarted instance is a new holder and advances the placement token.
     let reconcile_task = placement::spawn_reconciler(
         Arc::clone(&state.store) as Arc<dyn store::ControlPlaneStore + Send + Sync>,
         state.node_liveness.clone(),
         config.shard_moves,
         Duration::from_millis(state.node_liveness.shard_reconcile_interval_ms),
+        uuid::Uuid::new_v4().to_string(),
         leadership,
         Arc::clone(&state.placement_wakes),
         api_shutdown.clone(),

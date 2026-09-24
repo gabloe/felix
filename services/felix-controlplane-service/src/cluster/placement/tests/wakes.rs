@@ -35,6 +35,7 @@ async fn a_requested_pass_runs_without_waiting_for_the_interval() {
         Default::default(),
         MovePolicy::default(),
         Duration::from_secs(3600),
+        "test-holder".to_string(),
         crate::raft::LeadershipGate::Always,
         Arc::clone(&wakes),
         shutdown.clone(),

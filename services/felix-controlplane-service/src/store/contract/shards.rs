@@ -101,7 +101,13 @@ pub(crate) async fn seed(store: &dyn ControlPlaneStore) {
     }
 }
 
-async fn clear(store: &dyn ControlPlaneStore) {
+/// The placement token now, for a write whose fencing is not what the case is
+/// about.
+pub(crate) async fn token(store: &dyn ControlPlaneStore) -> u64 {
+    store.placement_token().await.expect("placement token")
+}
+
+pub(crate) async fn clear(store: &dyn ControlPlaneStore) {
     for assignment in store.list_shard_assignments().await.expect("list") {
         store
             .delete_shard_assignment(&assignment.key)
@@ -237,13 +243,14 @@ async fn concurrent_conditional_writes_have_one_winner(store: Arc<dyn ControlPla
         if expected.is_none() {
             clear(store.as_ref()).await;
         }
+        let fence = token(store.as_ref()).await;
         let writers: Vec<_> = (0..WRITERS)
             .map(|i| {
                 let store = Arc::clone(&store);
                 tokio::spawn(async move {
                     let leader = if i % 2 == 0 { "broker-x" } else { "broker-y" };
                     store
-                        .put_shard_assignment_if(assignment(0, leader), expected)
+                        .put_shard_assignment_if(assignment(0, leader), expected, fence)
                         .await
                         .expect("conditional put")
                 })
@@ -562,7 +569,7 @@ async fn a_conditional_write_lands_only_at_the_expected_generation(store: &dyn C
     clear(store).await;
 
     let first = store
-        .put_shard_assignment_if(assignment(0, "broker-x"), None)
+        .put_shard_assignment_if(assignment(0, "broker-x"), None, token(store).await)
         .await
         .expect("create");
     let AssignmentWrite::Written(first) = first else {
@@ -577,21 +584,21 @@ async fn a_conditional_write_lands_only_at_the_expected_generation(store: &dyn C
 
     assert_eq!(
         store
-            .put_shard_assignment_if(assignment(0, "broker-y"), None)
+            .put_shard_assignment_if(assignment(0, "broker-y"), None, token(store).await)
             .await
             .expect("create again"),
         AssignmentWrite::Stale { current: Some(0) },
     );
     assert_eq!(
         store
-            .put_shard_assignment_if(assignment(0, "broker-y"), Some(7))
+            .put_shard_assignment_if(assignment(0, "broker-y"), Some(7), token(store).await)
             .await
             .expect("wrong generation"),
         AssignmentWrite::Stale { current: Some(0) },
     );
     assert_eq!(
         store
-            .put_shard_assignment_if(assignment(1, "broker-y"), Some(0))
+            .put_shard_assignment_if(assignment(1, "broker-y"), Some(0), token(store).await)
             .await
             .expect("no assignment"),
         AssignmentWrite::Stale { current: None },
@@ -616,7 +623,7 @@ async fn a_conditional_write_lands_only_at_the_expected_generation(store: &dyn C
     );
 
     let second = store
-        .put_shard_assignment_if(assignment(0, "broker-y"), Some(0))
+        .put_shard_assignment_if(assignment(0, "broker-y"), Some(0), token(store).await)
         .await
         .expect("update");
     let AssignmentWrite::Written(second) = second else {
@@ -630,14 +637,14 @@ async fn a_conditional_write_lands_only_at_the_expected_generation(store: &dyn C
     let mut draining = second.clone();
     draining.state = ShardState::Draining;
     store
-        .put_shard_assignment_if(draining, Some(1))
+        .put_shard_assignment_if(draining, Some(1), token(store).await)
         .await
         .expect("drain");
     let mut active = second;
     active.state = ShardState::Active;
     assert_eq!(
         store
-            .put_shard_assignment_if(active, Some(1))
+            .put_shard_assignment_if(active, Some(1), token(store).await)
             .await
             .expect("stale and disallowed"),
         AssignmentWrite::Stale { current: Some(2) },
@@ -662,14 +669,18 @@ async fn a_fence_planned_before_a_cut_over_is_refused_after_it(store: &dyn Contr
     let mut fence = read.clone();
     fence.state = ShardState::Draining;
     let fenced = store
-        .put_shard_assignment_if(fence.clone(), Some(read.generation))
+        .put_shard_assignment_if(fence.clone(), Some(read.generation), token(store).await)
         .await
         .expect("fence");
     let AssignmentWrite::Written(fenced) = fenced else {
         panic!("the first fence lands: {fenced:?}");
     };
     let cut_over = store
-        .put_shard_assignment_if(assignment(0, "broker-y"), Some(fenced.generation))
+        .put_shard_assignment_if(
+            assignment(0, "broker-y"),
+            Some(fenced.generation),
+            token(store).await,
+        )
         .await
         .expect("cut over");
     let AssignmentWrite::Written(cut_over) = cut_over else {
@@ -678,7 +689,7 @@ async fn a_fence_planned_before_a_cut_over_is_refused_after_it(store: &dyn Contr
 
     assert_eq!(
         store
-            .put_shard_assignment_if(fence, Some(read.generation))
+            .put_shard_assignment_if(fence, Some(read.generation), token(store).await)
             .await
             .expect("late fence"),
         AssignmentWrite::Stale {

@@ -23,6 +23,12 @@
 //! bounded by `MovePolicy`. An operator may also start or cancel a move, and
 //! pause placement's own (`operator`).
 //!
+//! **Who places.** The holder of the placement lease runs the timed passes
+//! (`spawn_reconciler`), and a woken pass runs wherever it was woken. Every
+//! write, an operator's included, is conditional on the shard's generation
+//! and on the placement token read before the pass decided, so the move
+//! limits hold however many instances write. See `docs/control-plane.md`.
+//!
 //! `NodeCapacity::weight` is ignored: weighted rendezvous needs a logarithm,
 //! and floating point that must agree bit-for-bit across instances is a bad
 //! foundation for a decision that has to be identical everywhere.
@@ -50,7 +56,8 @@ pub use operator::{
 };
 pub use plan::{Plan, ShardPlan, assignment_for, plan, plan_with};
 pub use reconciler::{
-    PlacementRead, RECONCILE_FAILURES_TOTAL, ReconcileOutcome,
+    PLACEMENT_LEASE_HELD, PLACEMENT_LEASE_INTERVALS, PLACEMENT_LEASE_TAKEOVERS_TOTAL,
+    PLACEMENT_WRITES_FENCED_TOTAL, PlacementRead, RECONCILE_FAILURES_TOTAL, ReconcileOutcome,
     SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL, SHARD_MOVE_STEPS_TOTAL, SHARD_MOVES_TIMED_OUT_TOTAL,
     SHARD_MOVES_WAITING, SHARDS_PLACED_TOTAL, SHARDS_UNPLACEABLE, reconcile_once, spawn_reconciler,
 };

@@ -50,6 +50,18 @@ pub struct ExportedState {
     /// was.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) moves_paused: bool,
+    /// The placement token and lease holder. In a Raft snapshot because a
+    /// fenced write's outcome depends on them, and every replica has to
+    /// decide it the same way. Absent from older snapshots, as for
+    /// `moves_paused`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) placement_token: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) placement_holder: Option<String>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl ExportedState {
@@ -252,5 +264,10 @@ pub async fn export_state_from(
         rbac_groupings,
         auth_bootstrapped,
         moves_paused: store.moves_paused().await?,
+        // Not the holder: whoever runs placement against the new store takes
+        // the lease there, and advancing past this token fences every write
+        // planned against the old one.
+        placement_token: store.placement_token().await?,
+        placement_holder: None,
     })
 }

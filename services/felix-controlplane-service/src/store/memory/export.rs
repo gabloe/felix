@@ -1,7 +1,7 @@
 //! Exporting and importing the whole store, for Raft snapshots and `migrate`.
 use std::collections::HashMap;
 
-use super::{InMemoryStore, NodeState, ShardState};
+use super::{InMemoryStore, NodeState, PlacementState, ShardState};
 use crate::model::{
     Cache, CacheKey, Namespace, NamespaceKey, ShardAssignment, ShardKey, Stream, StreamKey,
 };
@@ -60,7 +60,7 @@ impl InMemoryStore {
             )
         };
 
-        let (shards, shard_changes) = {
+        let (shards, shard_changes, placement_token, placement_holder) = {
             let state = self.shards.read().await;
             let mut records: Vec<(ShardKey, ShardAssignment)> = state
                 .records
@@ -83,7 +83,12 @@ impl InMemoryStore {
                         b.0.shard,
                     ))
             });
-            (records, ExportedLog::from_log(&state.changes))
+            (
+                records,
+                ExportedLog::from_log(&state.changes),
+                state.placement.token,
+                state.placement.holder.clone(),
+            )
         };
 
         ExportedState {
@@ -106,6 +111,8 @@ impl InMemoryStore {
             rbac_groupings: sorted_by_string_key(&*self.rbac_groupings.read().await),
             auth_bootstrapped: sorted_by_string_key(&*self.auth_bootstrapped.read().await),
             moves_paused: *self.moves_paused.read().await,
+            placement_token,
+            placement_holder,
         }
     }
 
@@ -136,6 +143,11 @@ impl InMemoryStore {
         *self.shards.write().await = ShardState {
             records: state.shards.into_iter().collect(),
             changes: state.shard_changes.into_log(capacity),
+            placement: PlacementState {
+                token: state.placement_token,
+                holder: state.placement_holder,
+                expires_at_millis: 0,
+            },
         };
         *self.tenant_changes.write().await = state.tenant_changes.into_log(capacity);
         *self.namespace_changes.write().await = state.namespace_changes.into_log(capacity);

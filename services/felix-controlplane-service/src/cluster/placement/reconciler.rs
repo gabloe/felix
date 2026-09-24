@@ -34,6 +34,25 @@ pub const SHARD_MOVES_WAITING: &str = "felix_shard_moves_waiting";
 pub const SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL: &str =
     "felix_shard_assignment_write_conflicts_total";
 
+/// Passes and operator requests not written because another placement write
+/// landed after they read the store. The rest of the pass is dropped and the
+/// next one re-plans; an operator's request is decided again.
+pub const PLACEMENT_WRITES_FENCED_TOTAL: &str = "felix_placement_writes_fenced_total";
+
+/// 1 while this instance holds the placement lease and runs the timed passes.
+/// Across instances the sum is 1, or 0 for up to a lease period after the
+/// holder stops without releasing it.
+pub const PLACEMENT_LEASE_HELD: &str = "felix_placement_lease_held";
+
+/// Times this instance took the placement lease: from another holder, or
+/// first.
+pub const PLACEMENT_LEASE_TAKEOVERS_TOTAL: &str = "felix_placement_lease_takeovers_total";
+
+/// The placement lease lasts this many reconcile intervals. The holder renews
+/// it every pass, so it has to outlast a tick and a slow pass; a holder that
+/// stops without releasing it holds the timed passes up for this long.
+pub const PLACEMENT_LEASE_INTERVALS: u64 = 3;
+
 /// What one reconciliation pass did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReconcileOutcome {
@@ -48,10 +67,16 @@ pub struct ReconcileOutcome {
     /// Writes skipped because another writer changed the shard after this
     /// pass read it.
     pub conflicts: usize,
+    /// Whether another placement write landed after this pass read the
+    /// store, so the rest of the pass was not written.
+    pub fenced: bool,
 }
 
 /// A plan, and the generation of every assignment it was planned from.
 pub(super) struct PlannedPass {
+    /// The placement token read before anything else, which the pass's first
+    /// write must find.
+    fence: u64,
     plan: Plan,
     /// Absent for a shard that had no assignment when the pass read.
     read: HashMap<ShardKey, u64>,
@@ -64,6 +89,13 @@ impl PlannedPass {
     pub(super) fn plan(&self) -> &Plan {
         &self.plan
     }
+
+    /// This pass as if planned at `fence`, for a test of the generation
+    /// check alone.
+    #[cfg(test)]
+    pub(super) fn at_token(self, fence: u64) -> Self {
+        Self { fence, ..self }
+    }
 }
 
 /// Plan against the current catalog and write what the plan calls for.
@@ -75,9 +107,10 @@ impl PlannedPass {
 /// Idempotent. A pass over an already-placed cluster writes nothing, so running
 /// it on a timer does not churn the persisted rows or the changefeed.
 ///
-/// Safe to run on several instances at once: each write lands only if the
-/// shard is still at the generation this pass read, and one that is not is
-/// counted in `conflicts` and left to the next pass.
+/// Safe to run on several instances at once: each write lands only if no
+/// other placement write landed since this pass read the store, and only if
+/// the shard is still at the generation this pass read. One that is not is
+/// counted and left to the next pass.
 pub async fn reconcile_once(
     store: &dyn crate::store::ControlPlaneStore,
     liveness: &crate::config::NodeLivenessConfig,
@@ -109,6 +142,17 @@ pub struct PlacementRead {
 }
 
 impl PlacementRead {
+    /// The placement token, then [`Self::load`]. The token has to come
+    /// first: a placement write that lands between the two reads is then
+    /// either in the catalog or something the reader's writes are fenced by.
+    pub async fn load_fenced(
+        store: &dyn crate::store::ControlPlaneStore,
+        liveness: &crate::config::NodeLivenessConfig,
+    ) -> crate::store::StoreResult<(u64, Self)> {
+        let fence = store.placement_token().await?;
+        Ok((fence, Self::load(store, liveness).await?))
+    }
+
     /// Read the catalog, the reports and the pause switch.
     pub async fn load(
         store: &dyn crate::store::ControlPlaneStore,
@@ -170,7 +214,7 @@ pub(super) async fn plan_pass(
     liveness: &crate::config::NodeLivenessConfig,
     policy: MovePolicy,
 ) -> Option<PlannedPass> {
-    let read = match PlacementRead::load(store, liveness).await {
+    let read = match PlacementRead::load_fenced(store, liveness).await {
         Ok(read) => read,
         Err(err) => {
             tracing::error!(error = %err, "could not read the catalog to place shards");
@@ -178,6 +222,7 @@ pub(super) async fn plan_pass(
             return None;
         }
     };
+    let (fence, read) = read;
     let plan = read.plan(policy);
     let existing = read.existing;
     let read = existing
@@ -189,11 +234,20 @@ pub(super) async fn plan_pass(
         .filter(|assignment| assignment.successor.is_some())
         .map(|assignment| assignment.key.clone())
         .collect();
-    Some(PlannedPass { plan, read, staged })
+    Some(PlannedPass {
+        fence,
+        plan,
+        read,
+        staged,
+    })
 }
 
 /// Write what a planned pass calls for, timing the moves it advances and
 /// waking this instance's long-polls on every write.
+///
+/// The writes chain the token: each lands only if the one before it was the
+/// last placement write. The first that finds another writer got in ends the
+/// pass, since everything after it was planned from the same read.
 pub(super) async fn apply_pass(
     store: &dyn crate::store::ControlPlaneStore,
     pass: &PlannedPass,
@@ -201,6 +255,7 @@ pub(super) async fn apply_pass(
     wakes: &PlacementWakes,
 ) -> ReconcileOutcome {
     let plan = &pass.plan;
+    let mut fence = pass.fence;
     clock.forget_changed(&pass.read);
     let mut outcome = ReconcileOutcome {
         kept: plan.kept(),
@@ -212,14 +267,20 @@ pub(super) async fn apply_pass(
     // from the old state must not undo a newer one.
     for (key, step, assignment) in plan.moves() {
         match store
-            .put_shard_assignment_if(assignment.clone(), pass.read.get(key).copied())
+            .put_shard_assignment_if(assignment.clone(), pass.read.get(key).copied(), fence)
             .await
         {
+            Ok(AssignmentWrite::Fenced { token }) => {
+                outcome.fenced = true;
+                fenced(key, step.label(), fence, token);
+                break;
+            }
             Ok(AssignmentWrite::Stale { current }) => {
                 outcome.conflicts += 1;
                 conflict(key, step.label(), pass.read.get(key).copied(), current);
             }
             Ok(AssignmentWrite::Written(written)) => {
+                fence += 1;
                 wakes.assignment_written();
                 outcome.moved += 1;
                 if let Some(times) = clock.written(
@@ -282,18 +343,27 @@ pub(super) async fn apply_pass(
     }
 
     for (key, leader, replicas) in plan.to_place() {
+        if outcome.fenced {
+            break;
+        }
         match store
             .put_shard_assignment_if(
                 assignment_for(key, leader, replicas.to_vec()),
                 pass.read.get(key).copied(),
+                fence,
             )
             .await
         {
+            Ok(AssignmentWrite::Fenced { token }) => {
+                outcome.fenced = true;
+                fenced(key, "place", fence, token);
+            }
             Ok(AssignmentWrite::Stale { current }) => {
                 outcome.conflicts += 1;
                 conflict(key, "place", pass.read.get(key).copied(), current);
             }
             Ok(AssignmentWrite::Written(assignment)) => {
+                fence += 1;
                 wakes.assignment_written();
                 outcome.placed += 1;
                 tracing::info!(
@@ -337,6 +407,7 @@ pub(super) async fn apply_pass(
 
     metrics::counter!(SHARDS_PLACED_TOTAL).increment(outcome.placed as u64);
     metrics::counter!(SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL).increment(outcome.conflicts as u64);
+    metrics::counter!(PLACEMENT_WRITES_FENCED_TOTAL).increment(u64::from(outcome.fenced));
     metrics::gauge!(SHARDS_UNPLACEABLE).set(outcome.unplaceable as f64);
     metrics::gauge!(SHARD_MOVES_WAITING).set(outcome.waiting as f64);
     outcome
@@ -345,39 +416,89 @@ pub(super) async fn apply_pass(
 /// Place shards on an interval, and whenever `wakes` asks for a pass, until
 /// `shutdown` fires.
 ///
+/// The timed passes run on the instance holding the placement lease, as
+/// `holder`; the others only try to take it. A wake runs a pass wherever it
+/// arrives, so a report or an operator's request does not wait for the
+/// holder's tick. That is safe because every write is fenced by the token
+/// its pass read, whoever holds the lease: the lease keeps instances from
+/// planning the same moves on every tick, and the token keeps the limits.
+///
 /// One pass at a time: a wake that arrives mid-pass runs one more pass after
 /// it, however many arrived.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_reconciler(
     store: std::sync::Arc<dyn crate::store::ControlPlaneStore + Send + Sync>,
     liveness: crate::config::NodeLivenessConfig,
     policy: MovePolicy,
     interval: std::time::Duration,
+    holder: String,
     gate: crate::raft::LeadershipGate,
     wakes: std::sync::Arc<PlacementWakes>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
+    let ttl_millis = (interval.as_millis() as u64).saturating_mul(PLACEMENT_LEASE_INTERVALS);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
         // A pass that overruns must not then run back-to-back catching up.
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut clock = MoveClock::default();
+        let mut held = false;
         loop {
-            tokio::select! {
-                _ = shutdown.cancelled() => return,
-                _ = ticker.tick() => {}
-                _ = wakes.pass_requested() => {}
-            }
+            let woken = tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = ticker.tick() => false,
+                _ = wakes.pass_requested() => true,
+            };
             // Placement decides from what it reads; under Raft the gate's
             // linearizable check also guarantees those reads are current
             // before any assignment is proposed.
             if !gate.holds().await {
+                held = hold(&holder, held, None);
+                continue;
+            }
+            let lease = match store.acquire_placement_lease(&holder, ttl_millis).await {
+                Ok(lease) => lease,
+                Err(err) => {
+                    tracing::warn!(error = %err, "could not take or renew the placement lease");
+                    None
+                }
+            };
+            held = hold(&holder, held, lease);
+            if !held && !woken {
                 continue;
             }
             if let Some(pass) = plan_pass(store.as_ref(), &liveness, policy).await {
                 apply_pass(store.as_ref(), &pass, &mut clock, &wakes).await;
             }
         }
+        if held {
+            // Hand over now rather than when the lease runs out.
+            if let Err(err) = store.release_placement_lease(&holder).await {
+                tracing::warn!(error = %err, "could not release the placement lease");
+            }
+            metrics::gauge!(PLACEMENT_LEASE_HELD).set(0.0);
+        }
     })
+}
+
+/// Whether this instance holds the lease after an acquire, logged when that
+/// changes.
+fn hold(holder: &str, held: bool, lease: Option<crate::store::PlacementLease>) -> bool {
+    let holds = lease.is_some();
+    if let Some(lease) = lease
+        && lease.taken
+    {
+        metrics::counter!(PLACEMENT_LEASE_TAKEOVERS_TOTAL).increment(1);
+        tracing::info!(
+            holder,
+            token = lease.token,
+            "this instance runs placement now"
+        );
+    } else if held && !holds {
+        tracing::info!(holder, "this instance no longer runs placement");
+    }
+    metrics::gauge!(PLACEMENT_LEASE_HELD).set(if holds { 1.0 } else { 0.0 });
+    holds
 }
 
 async fn load(
@@ -388,6 +509,18 @@ async fn load(
     let nodes = store.list_nodes().await?;
     let existing = store.list_shard_assignments().await?;
     Ok((streams, caches, nodes, existing))
+}
+
+fn fenced(key: &ShardKey, step: &str, fence: u64, token: u64) {
+    tracing::info!(
+        kind = %key.kind,
+        name = %key.stream,
+        shard = key.shard,
+        step,
+        fence,
+        token,
+        "another placement write landed since this pass read the store; the next pass re-plans",
+    );
 }
 
 fn conflict(key: &ShardKey, step: &str, planned_from: Option<u64>, current: Option<u64>) {

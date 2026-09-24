@@ -321,8 +321,9 @@ impl ControlPlaneStore for PostgresStore {
         &self,
         assignment: ShardAssignment,
         expected_generation: Option<u64>,
+        fence: u64,
     ) -> StoreResult<crate::store::AssignmentWrite> {
-        shards::put_shard_assignment_if(self, assignment, expected_generation).await
+        shards::put_shard_assignment_if(self, assignment, expected_generation, fence).await
     }
 
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
@@ -369,6 +370,22 @@ impl ControlPlaneStore for PostgresStore {
 
     async fn set_moves_paused(&self, paused: bool) -> StoreResult<()> {
         shards::set_moves_paused(self, paused).await
+    }
+
+    async fn placement_token(&self) -> StoreResult<u64> {
+        shards::placement_token(self).await
+    }
+
+    async fn acquire_placement_lease(
+        &self,
+        holder: &str,
+        ttl_millis: u64,
+    ) -> StoreResult<Option<crate::store::PlacementLease>> {
+        shards::acquire_placement_lease(self, holder, ttl_millis).await
+    }
+
+    async fn release_placement_lease(&self, holder: &str) -> StoreResult<()> {
+        shards::release_placement_lease(self, holder).await
     }
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {

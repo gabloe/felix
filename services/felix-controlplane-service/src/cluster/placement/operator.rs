@@ -1,10 +1,12 @@
 //! Moves an operator starts or cancels.
 //!
 //! Each is one assignment write, decided like a placement step from the store
-//! and fresh reports. The caller writes it only at the generation it was
-//! decided from (`put_shard_assignment_if`), so a cancel or start decided just
-//! before another instance's step lands nothing rather than undoing it; the
-//! caller re-reads and decides again.
+//! and fresh reports. The caller writes it only at the placement token and
+//! generation it was decided from (`put_shard_assignment_if`), so a cancel or
+//! start decided just before another step lands nothing rather than undoing
+//! it or taking a slot that step took; the caller re-reads and decides again.
+//! That is how a request on any instance keeps to the same limits as the
+//! lease holder's placement.
 use super::moves::{AtGeneration, MovePolicy, Moves, start, undo_replacement, undo_staged};
 use super::{Blocked, CaughtUp, MoveStep};
 use crate::model::{
@@ -30,6 +32,14 @@ pub struct OperatorStep {
     /// The generation it was decided from, and the only one it may be
     /// written over.
     pub expected_generation: u64,
+}
+
+/// An [`OperatorStep`] and the placement token read before the catalog it was
+/// decided from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct FencedStep {
+    pub(super) step: OperatorStep,
+    pub(super) fence: u64,
 }
 
 /// Why a request was refused.
@@ -292,10 +302,15 @@ fn roles_on(catalog: &Catalog<'_>, node_id: &str) -> u32 {
         .count() as u32
 }
 
-/// How many times a request is decided again after another writer changed
-/// the shard first. Placement writes a shard at most once a pass, so losing
-/// this many races in a row means something is writing it in a loop.
+/// How many times a request is decided again after another writer got in
+/// first. Placement writes a shard at most once a pass, and a pass is a burst
+/// of writes, so losing this many races in a row means something is writing
+/// in a loop.
 const ATTEMPTS: usize = 5;
+
+/// Pause before deciding again after a placement pass got in first, so the
+/// rest of its burst lands before the next read rather than during it.
+const FENCED_BACKOFF: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// Why an operator's request was not carried out.
 #[derive(Debug)]
@@ -319,41 +334,68 @@ pub async fn run_operator(
     decide: impl Fn(&Catalog<'_>) -> Result<OperatorStep, Refused>,
 ) -> Result<(MoveStep, ShardAssignment), OperatorError> {
     for _ in 0..ATTEMPTS {
-        let read = super::PlacementRead::load(store, liveness)
+        let (fence, read) = super::PlacementRead::load_fenced(store, liveness)
             .await
             .map_err(OperatorError::Store)?;
-        let decided = decide(&read.catalog(policy)).map_err(OperatorError::Refused)?;
+        let step = decide(&read.catalog(policy)).map_err(OperatorError::Refused)?;
+        let decided = FencedStep { step, fence };
         match write_operator_step(store, &decided)
             .await
             .map_err(OperatorError::Store)?
         {
-            Some(written) => {
+            OperatorWrite::Written(written) => {
                 wakes.assignment_written();
                 // The next step, a fence or the move this one freed a slot
                 // for, need not wait for the tick.
                 wakes.request_pass();
-                return Ok((decided.step, written));
+                return Ok((decided.step.step, *written));
             }
-            None => continue,
+            OperatorWrite::Stale => continue,
+            OperatorWrite::Fenced => tokio::time::sleep(FENCED_BACKOFF).await,
         }
     }
     Err(OperatorError::Contended)
 }
 
-/// Write one decided step, only over the generation it was decided from.
-/// `None` when the shard had moved on and nothing was written.
+/// What [`write_operator_step`] did.
+#[derive(Debug)]
+pub(super) enum OperatorWrite {
+    Written(Box<ShardAssignment>),
+    /// The shard moved on since the read.
+    Stale,
+    /// Another placement write landed since the read.
+    Fenced,
+}
+
+/// Write one decided step, only at the token and generation it was decided
+/// from.
 pub(super) async fn write_operator_step(
     store: &dyn crate::store::ControlPlaneStore,
-    decided: &OperatorStep,
-) -> crate::store::StoreResult<Option<ShardAssignment>> {
+    fenced: &FencedStep,
+) -> crate::store::StoreResult<OperatorWrite> {
+    let decided = &fenced.step;
     let key = &decided.assignment.key;
     match store
         .put_shard_assignment_if(
             decided.assignment.clone(),
             Some(decided.expected_generation),
+            fenced.fence,
         )
         .await?
     {
+        crate::store::AssignmentWrite::Fenced { token } => {
+            metrics::counter!(super::PLACEMENT_WRITES_FENCED_TOTAL).increment(1);
+            tracing::info!(
+                kind = %key.kind,
+                name = %key.stream,
+                shard = key.shard,
+                step = decided.step.label(),
+                fence = fenced.fence,
+                token,
+                "another placement write landed while an operator's request was decided; deciding again",
+            );
+            Ok(OperatorWrite::Fenced)
+        }
         crate::store::AssignmentWrite::Written(written) => {
             metrics::counter!(super::SHARD_MOVE_STEPS_TOTAL, "step" => decided.step.label())
                 .increment(1);
@@ -368,7 +410,7 @@ pub(super) async fn write_operator_step(
                 generation = written.generation,
                 "shard move changed by an operator",
             );
-            Ok(Some(written))
+            Ok(OperatorWrite::Written(Box::new(written)))
         }
         crate::store::AssignmentWrite::Stale { current } => {
             metrics::counter!(super::SHARD_ASSIGNMENT_WRITE_CONFLICTS_TOTAL).increment(1);
@@ -381,7 +423,7 @@ pub(super) async fn write_operator_step(
                 current = ?current,
                 "shard changed while an operator's request was decided; deciding again",
             );
-            Ok(None)
+            Ok(OperatorWrite::Stale)
         }
     }
 }

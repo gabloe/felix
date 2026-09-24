@@ -160,6 +160,7 @@ impl InMemoryStore {
             shards: Arc::new(RwLock::new(ShardState {
                 records: HashMap::new(),
                 changes: ChangeLog::new(capacity),
+                placement: PlacementState::default(),
             })),
             replica_reports: Arc::new(RwLock::new(HashMap::new())),
             tenant_changes: Arc::new(RwLock::new(ChangeLog::new(capacity))),
@@ -378,8 +379,9 @@ impl ControlPlaneStore for InMemoryStore {
         &self,
         assignment: ShardAssignment,
         expected_generation: Option<u64>,
+        fence: u64,
     ) -> StoreResult<crate::store::AssignmentWrite> {
-        shards::put_shard_assignment_if(self, assignment, expected_generation).await
+        shards::put_shard_assignment_if(self, assignment, expected_generation, Some(fence)).await
     }
 
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
@@ -426,6 +428,25 @@ impl ControlPlaneStore for InMemoryStore {
 
     async fn set_moves_paused(&self, paused: bool) -> StoreResult<()> {
         *self.moves_paused.write().await = paused;
+        Ok(())
+    }
+
+    async fn placement_token(&self) -> StoreResult<u64> {
+        Ok(self.shards.read().await.placement.token)
+    }
+
+    async fn acquire_placement_lease(
+        &self,
+        holder: &str,
+        ttl_millis: u64,
+    ) -> StoreResult<Option<crate::store::PlacementLease>> {
+        let now = self.now_millis().await?;
+        Ok(shards::acquire_placement_lease(self, holder, ttl_millis, now).await)
+    }
+
+    async fn release_placement_lease(&self, holder: &str) -> StoreResult<()> {
+        let now = self.now_millis().await?;
+        shards::release_placement_lease(self, holder, now).await;
         Ok(())
     }
 
@@ -587,6 +608,19 @@ impl NodeState {
 struct ShardState {
     records: HashMap<ShardKey, ShardAssignment>,
     changes: ChangeLog<ShardAssignmentChange>,
+    /// Under the same lock as the records, so a fenced write checks and
+    /// advances the token in the same step as it writes.
+    placement: PlacementState,
+}
+
+/// The placement lease and token (`ControlPlaneStore::acquire_placement_lease`).
+#[derive(Debug, Default)]
+struct PlacementState {
+    token: u64,
+    holder: Option<String>,
+    /// Process clock. Not exported: under Raft the leader holds the lease
+    /// and expiry is not used.
+    expires_at_millis: u64,
 }
 
 impl ShardState {

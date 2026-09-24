@@ -29,6 +29,15 @@ async fn satisfies_the_shard_store_contract() {
     crate::store::contract::shards::run_shard_concurrency_contract(store).await;
 }
 
+/// The same suite Postgres runs, with both instances on one store.
+#[tokio::test]
+async fn satisfies_the_placement_contract() {
+    let store: std::sync::Arc<dyn crate::store::ControlPlaneStore> =
+        std::sync::Arc::new(store_with_limits(100, 1000));
+    crate::store::contract::placement::run_placement_contract(store.clone(), store.clone()).await;
+    crate::store::contract::placement::run_expiring_lease_contract(store.clone(), store).await;
+}
+
 fn store_with_limits(changes_limit: u64, retention: i64) -> InMemoryStore {
     InMemoryStore::new(StoreConfig {
         changes_limit,

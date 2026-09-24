@@ -7,7 +7,7 @@ use crate::model::{
     MoveReason, ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp,
     ShardKey, ShardKind, ShardState, ShardValidationError,
 };
-use crate::store::{AssignmentWrite, ChangeSet, Snapshot, StoreError, StoreResult};
+use crate::store::{AssignmentWrite, ChangeSet, PlacementLease, Snapshot, StoreError, StoreResult};
 
 #[derive(Debug, Clone, FromRow)]
 struct DbShardAssignment {
@@ -57,9 +57,11 @@ pub(super) async fn put_shard_assignment(
     store: &PostgresStore,
     assignment: ShardAssignment,
 ) -> StoreResult<ShardAssignment> {
-    match write_shard_assignment(store, assignment, None).await? {
+    match write_shard_assignment(store, assignment, None, None).await? {
         AssignmentWrite::Written(stored) => Ok(stored),
-        AssignmentWrite::Stale { .. } => unreachable!("an unconditional write is never stale"),
+        AssignmentWrite::Stale { .. } | AssignmentWrite::Fenced { .. } => {
+            unreachable!("an unconditional write is never stale")
+        }
     }
 }
 
@@ -67,19 +69,39 @@ pub(super) async fn put_shard_assignment_if(
     store: &PostgresStore,
     assignment: ShardAssignment,
     expected_generation: Option<u64>,
+    fence: u64,
 ) -> StoreResult<AssignmentWrite> {
-    write_shard_assignment(store, assignment, Some(expected_generation)).await
+    write_shard_assignment(store, assignment, Some(expected_generation), Some(fence)).await
 }
 
 /// `expected`: `None` writes unconditionally, `Some(generation)` only over
 /// that generation (`Some(None)`: only where there is no assignment).
+/// `fence`: the placement token the write must find.
 async fn write_shard_assignment(
     store: &PostgresStore,
     assignment: ShardAssignment,
     expected: Option<Option<u64>>,
+    fence: Option<u64>,
 ) -> StoreResult<AssignmentWrite> {
     assignment.validate().map_err(invalid_shard)?;
     let mut tx = store.pool.begin().await?;
+
+    // First, so fenced writes queue on this one row and in one order, and
+    // the token only moves if the whole transaction commits.
+    if let Some(fence) = fence {
+        let advanced: Option<i64> = sqlx::query_scalar(
+            "UPDATE placement_lease SET token = token + 1 WHERE id = 1 AND token = $1 RETURNING token",
+        )
+        .bind(fence as i64)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if advanced.is_none() {
+            drop(tx);
+            return Ok(AssignmentWrite::Fenced {
+                token: placement_token(store).await?,
+            });
+        }
+    }
 
     // The shard bound comes from whichever of the two the key names, chosen
     // by the kind rather than by trying one and falling back to the other:
@@ -579,6 +601,69 @@ pub(super) async fn set_moves_paused(store: &PostgresStore, paused: bool) -> Sto
            ON CONFLICT (id) DO UPDATE SET moves_paused = EXCLUDED.moves_paused, updated_at = now()"#,
     )
     .bind(paused)
+    .execute(&store.pool)
+    .await?;
+    Ok(())
+}
+
+/// A missing row reads as zero. The migration inserts it, and acquiring the
+/// lease puts it back.
+pub(super) async fn placement_token(store: &PostgresStore) -> StoreResult<u64> {
+    let token: Option<i64> = sqlx::query_scalar("SELECT token FROM placement_lease WHERE id = 1")
+        .fetch_optional(&store.pool)
+        .await?;
+    Ok(token.unwrap_or(0) as u64)
+}
+
+pub(super) async fn acquire_placement_lease(
+    store: &PostgresStore,
+    holder: &str,
+    ttl_millis: u64,
+) -> StoreResult<Option<PlacementLease>> {
+    sqlx::query("INSERT INTO placement_lease (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
+        .execute(&store.pool)
+        .await?;
+    let mut tx = store.pool.begin().await?;
+    // Expiry is judged by the database's clock, the one every instance
+    // shares, never by the instance's own.
+    let (current, lapsed, token): (Option<String>, bool, i64) = sqlx::query_as(
+        r#"SELECT holder, expires_at IS NULL OR expires_at <= clock_timestamp(), token
+           FROM placement_lease WHERE id = 1 FOR UPDATE"#,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let ours = current.as_deref() == Some(holder);
+    if !ours && current.is_some() && !lapsed {
+        return Ok(None);
+    }
+    let token = if ours { token } else { token + 1 };
+    sqlx::query(
+        r#"UPDATE placement_lease SET holder = $1, token = $2,
+               expires_at = clock_timestamp() + make_interval(secs => $3::double precision / 1000)
+           WHERE id = 1"#,
+    )
+    .bind(holder)
+    .bind(token)
+    .bind(ttl_millis as f64)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(PlacementLease {
+        token: token as u64,
+        taken: !ours,
+    }))
+}
+
+pub(super) async fn release_placement_lease(
+    store: &PostgresStore,
+    holder: &str,
+) -> StoreResult<()> {
+    // The holder stays named, so whoever takes it next still advances the
+    // token.
+    sqlx::query(
+        "UPDATE placement_lease SET expires_at = clock_timestamp() WHERE id = 1 AND holder = $1",
+    )
+    .bind(holder)
     .execute(&store.pool)
     .await?;
     Ok(())

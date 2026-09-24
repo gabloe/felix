@@ -122,6 +122,21 @@ pub enum MetaCommand {
         assignment: ShardAssignment,
         expected_generation: Option<u64>,
     },
+    /// `PutShardAssignmentIf`, also only at placement token `fence`
+    /// (`ControlPlaneStore::put_shard_assignment_if`). Its own variant for the
+    /// same reason: a follower that predates the token must refuse it rather
+    /// than apply it unfenced. The older variant stays so a log written
+    /// before it replays as it applied.
+    PutShardAssignmentFenced {
+        assignment: ShardAssignment,
+        expected_generation: Option<u64>,
+        fence: u64,
+    },
+    /// The placement lease goes to `holder`, advancing the token if it
+    /// changes hands. Proposed only by a confirmed leader, so no expiry.
+    TakePlacementLease {
+        holder: String,
+    },
     DeleteShardAssignment {
         key: ShardKey,
     },
@@ -259,6 +274,14 @@ pub enum MetaResponse {
     /// `PutShardAssignmentIf` found another generation and wrote nothing.
     StaleAssignment {
         current_generation: Option<u64>,
+    },
+    /// `PutShardAssignmentFenced` found another placement token.
+    FencedAssignment {
+        token: u64,
+    },
+    PlacementLease {
+        token: u64,
+        taken: bool,
     },
     SigningKeys {
         keys: TenantSigningKeys,

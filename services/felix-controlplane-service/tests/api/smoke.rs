@@ -1061,6 +1061,7 @@ impl ControlPlaneStore for FailingStore {
         &self,
         _assignment: ShardAssignment,
         _expected_generation: Option<u64>,
+        _fence: u64,
     ) -> StoreResult<felix_controlplane_service::store::AssignmentWrite> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
@@ -1097,6 +1098,22 @@ impl ControlPlaneStore for FailingStore {
     }
 
     async fn set_moves_paused(&self, _paused: bool) -> StoreResult<()> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn placement_token(&self) -> StoreResult<u64> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn acquire_placement_lease(
+        &self,
+        _holder: &str,
+        _ttl_millis: u64,
+    ) -> StoreResult<Option<felix_controlplane_service::store::PlacementLease>> {
+        Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
+    }
+
+    async fn release_placement_lease(&self, _holder: &str) -> StoreResult<()> {
         Err(StoreError::Unexpected(anyhow::anyhow!("fail")))
     }
 

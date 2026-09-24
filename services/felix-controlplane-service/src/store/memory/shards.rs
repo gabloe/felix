@@ -4,24 +4,29 @@ use crate::model::{
     CacheKey, ReplicaReport, ShardAssignment, ShardAssignmentChange, ShardAssignmentChangeOp,
     ShardKey, ShardKind, StreamKey,
 };
-use crate::store::{AssignmentWrite, ChangeSet, Snapshot, StoreError, StoreResult};
+use crate::store::{AssignmentWrite, ChangeSet, PlacementLease, Snapshot, StoreError, StoreResult};
 
 pub(super) async fn put_shard_assignment(
     store: &InMemoryStore,
     assignment: ShardAssignment,
 ) -> StoreResult<ShardAssignment> {
-    match write_shard_assignment(store, assignment, None).await? {
+    match write_shard_assignment(store, assignment, None, None).await? {
         AssignmentWrite::Written(stored) => Ok(stored),
-        AssignmentWrite::Stale { .. } => unreachable!("an unconditional write is never stale"),
+        AssignmentWrite::Stale { .. } | AssignmentWrite::Fenced { .. } => {
+            unreachable!("an unconditional write is never stale")
+        }
     }
 }
 
+/// `fence`: `None` only for a Raft log entry written before placement
+/// writes were fenced, which must apply as it did then.
 pub(super) async fn put_shard_assignment_if(
     store: &InMemoryStore,
     assignment: ShardAssignment,
     expected_generation: Option<u64>,
+    fence: Option<u64>,
 ) -> StoreResult<AssignmentWrite> {
-    write_shard_assignment(store, assignment, Some(expected_generation)).await
+    write_shard_assignment(store, assignment, Some(expected_generation), fence).await
 }
 
 /// `expected`: `None` writes unconditionally, `Some(generation)` only over
@@ -30,6 +35,7 @@ async fn write_shard_assignment(
     store: &InMemoryStore,
     assignment: ShardAssignment,
     expected: Option<Option<u64>>,
+    fence: Option<u64>,
 ) -> StoreResult<AssignmentWrite> {
     assignment.validate().map_err(invalid_shard)?;
 
@@ -75,6 +81,13 @@ async fn write_shard_assignment(
     }
 
     let mut state = store.shards.write().await;
+    if let Some(fence) = fence
+        && fence != state.placement.token
+    {
+        return Ok(AssignmentWrite::Fenced {
+            token: state.placement.token,
+        });
+    }
     let current = state.records.get(&assignment.key).map(|a| a.generation);
     if let Some(expected) = expected
         && expected != current
@@ -107,6 +120,9 @@ async fn write_shard_assignment(
     };
     state.records.insert(stored.key.clone(), stored.clone());
     state.record(op, &stored.key, Some(stored.clone()));
+    if fence.is_some() {
+        state.placement.token += 1;
+    }
     metrics::counter!("felix_shard_assignment_changes_total", "op" => match op {
         ShardAssignmentChangeOp::Assigned => "assigned",
         ShardAssignmentChangeOp::Updated => "updated",
@@ -247,4 +263,66 @@ fn invalid_shard(err: crate::model::ShardValidationError) -> StoreError {
 /// Sort key giving a stable stream-then-shard order.
 fn shard_order(key: &ShardKey) -> (&str, &str, &str, u32) {
     (&key.tenant_id, &key.namespace, &key.stream, key.shard)
+}
+
+pub(super) async fn acquire_placement_lease(
+    store: &InMemoryStore,
+    holder: &str,
+    ttl_millis: u64,
+    now_millis: u64,
+) -> Option<PlacementLease> {
+    let placement = &mut store.shards.write().await.placement;
+    let ours = placement.holder.as_deref() == Some(holder);
+    if !ours && placement.holder.is_some() && placement.expires_at_millis > now_millis {
+        return None;
+    }
+    if !ours {
+        placement.holder = Some(holder.to_string());
+        placement.token += 1;
+    }
+    placement.expires_at_millis = now_millis.saturating_add(ttl_millis);
+    Some(PlacementLease {
+        token: placement.token,
+        taken: !ours,
+    })
+}
+
+pub(super) async fn release_placement_lease(store: &InMemoryStore, holder: &str, now_millis: u64) {
+    let placement = &mut store.shards.write().await.placement;
+    // The holder stays named, so whoever takes it next still advances the
+    // token.
+    if placement.holder.as_deref() == Some(holder) {
+        placement.expires_at_millis = now_millis;
+    }
+}
+
+impl InMemoryStore {
+    /// The Raft leader taking the lease: whatever the expiry, since
+    /// leadership is the lease there. Deterministic, as a Raft apply must be.
+    pub(crate) async fn take_placement_lease(&self, holder: &str) -> PlacementLease {
+        let placement = &mut self.shards.write().await.placement;
+        let taken = placement.holder.as_deref() != Some(holder);
+        if taken {
+            placement.holder = Some(holder.to_string());
+            placement.token += 1;
+        }
+        PlacementLease {
+            token: placement.token,
+            taken,
+        }
+    }
+
+    /// Who holds the lease, as this store last applied it.
+    pub(crate) async fn placement_holder(&self) -> Option<String> {
+        self.shards.read().await.placement.holder.clone()
+    }
+
+    /// A conditional write from a Raft log entry that predates fencing.
+    pub(crate) async fn put_shard_assignment_unfenced_if(
+        &self,
+        assignment: ShardAssignment,
+        expected_generation: Option<u64>,
+    ) -> StoreResult<AssignmentWrite> {
+        put_shard_assignment_if(self, assignment, expected_generation, None).await
+    }
 }

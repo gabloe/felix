@@ -181,10 +181,20 @@ pub trait ControlPlaneStore: Send + Sync {
     /// written, and the caller re-plans from a fresh read. It is checked before
     /// the state transition, so a stale write is reported as stale rather than
     /// as a transition the model disallows.
+    ///
+    /// It is also fenced: it lands only if the placement token is still
+    /// `fence`, and landing advances the token by one. A generation guards one
+    /// shard, but the move limits are about all of them, and two writers that
+    /// each read a free slot would otherwise start moves on two different
+    /// shards. The caller reads [`ControlPlaneStore::placement_token`] before
+    /// it reads anything it decides from, and a write that finds another
+    /// placement write since is [`AssignmentWrite::Fenced`]. Checked before the
+    /// generation, under the same lock or log entry as the write.
     async fn put_shard_assignment_if(
         &self,
         assignment: ShardAssignment,
         expected_generation: Option<u64>,
+        fence: u64,
     ) -> StoreResult<AssignmentWrite>;
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment>;
     /// Every assignment, ordered by stream then shard.
@@ -227,6 +237,29 @@ pub trait ControlPlaneStore: Send + Sync {
     /// Pause or resume placement's moves. Setting the value it already has is
     /// not an error.
     async fn set_moves_paused(&self, paused: bool) -> StoreResult<()>;
+
+    /// The placement token: advanced by every placement write, and by every
+    /// change of lease holder. See [`ControlPlaneStore::put_shard_assignment_if`].
+    async fn placement_token(&self) -> StoreResult<u64>;
+    /// Take or renew the placement lease for `holder`, until `ttl_millis` from
+    /// now by the store's clock. `None` while another holder's lease is
+    /// unexpired.
+    ///
+    /// The lease decides which instance runs placement's timed passes, so
+    /// several instances do not plan the same moves over and over. It is not
+    /// what keeps them safe: the token is. A new holder advances it, so an
+    /// ex-holder that paused past its lease finds its next write fenced.
+    ///
+    /// Under Raft the confirmed leader is the holder and takes the lease at
+    /// once; `ttl_millis` is not used.
+    async fn acquire_placement_lease(
+        &self,
+        holder: &str,
+        ttl_millis: u64,
+    ) -> StoreResult<Option<PlacementLease>>;
+    /// Give up the lease if `holder` has it, so another instance takes over
+    /// without waiting for it to expire.
+    async fn release_placement_lease(&self, holder: &str) -> StoreResult<()>;
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool>;
     async fn namespace_exists(&self, key: &NamespaceKey) -> StoreResult<bool>;
@@ -409,6 +442,21 @@ pub enum AssignmentWrite {
         /// The generation it is at, or `None` if it has no assignment.
         current: Option<u64>,
     },
+    /// Another placement write landed since the caller read the token, and
+    /// nothing was written.
+    Fenced {
+        /// The token now.
+        token: u64,
+    },
+}
+
+/// What [`ControlPlaneStore::acquire_placement_lease`] granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlacementLease {
+    /// The placement token as of the grant.
+    pub token: u64,
+    /// Whether the lease changed hands, rather than being renewed.
+    pub taken: bool,
 }
 
 #[derive(Debug, Clone)]

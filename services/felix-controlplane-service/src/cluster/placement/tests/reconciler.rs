@@ -223,6 +223,8 @@ async fn a_fence_planned_before_a_cut_over_is_not_written_after_it() {
         .expect("get");
     assert_eq!(cut_over.leader, "broker-y");
 
+    // At the current token, so it is the generation that stops it.
+    let stale = stale.at_token(store.placement_token().await.expect("token"));
     let late = super::super::reconciler::apply_pass(
         &store,
         &stale,
@@ -266,6 +268,8 @@ async fn a_placement_planned_against_no_assignment_does_not_overwrite_one() {
         3
     );
     let placed = store.list_shard_assignments().await.expect("list");
+    // At the current token, so it is the generation that stops it.
+    let second = second.at_token(store.placement_token().await.expect("token"));
     let late = super::super::reconciler::apply_pass(
         &store,
         &second,
@@ -353,6 +357,8 @@ async fn a_promotion_planned_from_an_old_read_is_not_written_later() {
         .expect("get");
     assert_ne!(again.leader, first);
 
+    // At the current token, so it is the generation that stops it.
+    let stale = stale.at_token(store.placement_token().await.expect("token"));
     let late = super::super::reconciler::apply_pass(
         &store,
         &stale,
