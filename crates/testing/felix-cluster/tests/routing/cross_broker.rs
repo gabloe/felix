@@ -1,4 +1,4 @@
-//! M4's completion signal: a three-node cluster delivers across node boundaries.
+//! A three-node cluster delivers across node boundaries.
 //!
 //! These start real broker processes, so they are slower than a unit test and
 //! deliberately few. What they cover is the seam nothing else can: the wiring
@@ -103,7 +103,7 @@ async fn a_publish_through_the_owner_is_not_forwarded() {
 
 /// A stopped broker leaves the cluster, and the harness can tell when.
 ///
-/// This is the primitive the M5-M10 failure tests need: without it every such
+/// This is the primitive the failure tests need: without it every such
 /// test races the expiry sweep.
 #[serial]
 #[tokio::test]

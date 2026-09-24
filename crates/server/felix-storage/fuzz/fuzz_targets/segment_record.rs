@@ -1,6 +1,6 @@
 //! Record decoding against arbitrary bytes.
 //!
-//! Once M5 lands, segment bytes arrive over the network from a peer, so the
+//! Segment bytes also arrive over the network from a replication peer, so the
 //! decoder is an attack surface: it must never panic, never allocate on the
 //! strength of an unvalidated length, and never report a record it did not
 //! actually verify.

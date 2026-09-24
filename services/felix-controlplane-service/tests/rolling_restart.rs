@@ -1,5 +1,5 @@
 #![cfg(feature = "pg-tests")]
-//! The M7 completion signal, run for real: two control-plane instances over
+//! Control-plane high availability, run for real: two control-plane instances over
 //! one Postgres, a broker's traffic (heartbeats and the shard-assignment
 //! watch) flowing continuously, and every instance restarted in turn — with
 //! zero failed calls.

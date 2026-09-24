@@ -4,7 +4,7 @@
 //!
 //! Mounted on the internal listener, deliberately not a new port: the group
 //! is small, elections are rare, and one less listener is one less surface
-//! for M8 to secure.
+//! to secure.
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};

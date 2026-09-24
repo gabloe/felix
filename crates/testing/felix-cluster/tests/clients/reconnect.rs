@@ -1,7 +1,7 @@
 //! A publisher that outlives the broker it was using.
 //!
-//! M5 made the cluster survive losing a leader; a client holding connection
-//! pools to that broker did not. These cover the seam an application actually
+//! The cluster survives losing a leader; a client holding connection pools to
+//! that broker has to survive it too. These cover the seam an application actually
 //! sits on: not "did the cluster recover" but "could the program carry on".
 //!
 //! Run with `cargo test -p felix-cluster --test clients reconnect::`.

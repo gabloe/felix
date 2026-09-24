@@ -45,8 +45,8 @@ pub(crate) async fn subscribe(args: &[String]) -> Result<()> {
     };
 
     // Defaults to the owner, because that is the only broker that serves a
-    // subscription today -- a non-owner has no copy to read from, and routing a
-    // subscribe is M6 (see docs/subscribe-routing.md).
+    // subscription today -- a non-owner has no copy to read from. How a
+    // subscribe is routed is in docs/subscribe-routing.md.
     let owner = owner_of(&session, &stream).await?;
     let node_id = flag(args, "--on")?.unwrap_or_else(|| owner.clone());
     let node = session
@@ -62,7 +62,7 @@ pub(crate) async fn subscribe(args: &[String]) -> Result<()> {
     if node_id != owner {
         println!(
             "  note: {node_id} does not own this shard, so it has nothing to deliver.\n\
-             \x20       subscribe routing is M6; see docs/subscribe-routing.md."
+             \x20       see docs/subscribe-routing.md for how subscribes are routed."
         );
     }
     println!("waiting for events. Ctrl-C to stop.\n");

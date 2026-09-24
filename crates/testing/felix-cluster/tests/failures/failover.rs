@@ -1,7 +1,7 @@
-//! M5's completion signal: what survives losing a leader.
+//! What survives losing a leader.
 //!
 //! These start real broker processes and kill one mid-flight, so they are slow
-//! and deliberately few. What they cover is the claim the whole milestone rests
+//! and deliberately few. What they cover is the claim replication rests
 //! on — that a record acknowledged under `Quorum` is still there after the
 //! broker that acknowledged it is gone.
 //!

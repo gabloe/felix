@@ -1,9 +1,9 @@
-//! The M13 completion signal, and the faults only a consensus group can
-//! have — run against three real `felix-controlplane` binaries on the raft
+//! What the Raft backend has to survive: the faults only a consensus group
+//! can have — run against three real `felix-controlplane` binaries on the raft
 //! backend, with **no database anywhere**.
 //!
 //! The client plays the load balancer of the supported deployment, exactly
-//! as the M7 rolling-restart test does: an instance is in rotation while its
+//! as the rolling-restart test does: an instance is in rotation while its
 //! readiness probe answers 200, a connection that dies before answering is
 //! retried through another in-rotation instance (a failover, never a
 //! failure), and — new under raft — a moment where *no* instance is ready

@@ -85,7 +85,11 @@ fn malformed_node_identities_are_rejected() {
 fn an_assignment_with_no_replicas_is_valid() {
     let mut a = assignment();
     a.replicas.clear();
-    assert_eq!(a.validate(), Ok(()), "replication does not exist until M5");
+    assert_eq!(
+        a.validate(),
+        Ok(()),
+        "an assignment without replicas is valid"
+    );
 }
 
 /// A drain is entered from either serving state and left only through a

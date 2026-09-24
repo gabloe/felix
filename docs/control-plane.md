@@ -543,7 +543,7 @@ locally", because that is a broker writing a shard it does not own:
 | Outcome | Meaning |
 | --- | --- |
 | `Local` | this node leads the shard; handle it here |
-| `Remote` | another node leads it, with the address to reach it. M4 forwards; until then it is a typed refusal, distinguishable from failure |
+| `Remote` | another node leads it, with the address to reach it. A publish is forwarded there |
 | `Stale` | the caller knows a newer generation than this router does. Wait for the watch, do not fail the stream |
 | `Unavailable::NoAssignment` | placement has not assigned it |
 | `Unavailable::LeaderUnknown` | the assignment names a node with no known address |

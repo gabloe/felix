@@ -99,7 +99,7 @@ where
 
     let app = build_router(state.clone());
     // The Raft RPC routes ride the main listener — the design's "no new
-    // port": one less listener to secure in M8.
+    // port": one less listener to secure.
     let app = match &raft_handle {
         Some(handle) => app.merge(handle.rpc_router()),
         None => app,

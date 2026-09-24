@@ -1,8 +1,8 @@
 # Storage fuzzing
 
 libFuzzer targets for the durable segment format. They exist because segment
-bytes are untrusted input: today from a disk that may have rotted or been cut
-mid-write, and from M5 onward from a replication peer over the network. A panic
+bytes are untrusted input: from a disk that may have rotted or been cut mid-write,
+and from a replication peer over the network. A panic
 in this decoder is a remote crash.
 
 ## Targets

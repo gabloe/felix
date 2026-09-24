@@ -1,6 +1,6 @@
 //! Restart-and-recover demo for durable streams.
 //!
-//! Shows the M1 guarantee end to end: a durable stream acknowledges a publish
+//! Shows the durability guarantee end to end: a durable stream acknowledges a publish
 //! only once the record is on disk, so an abrupt process death loses nothing
 //! that was acknowledged — while a non-durable stream on the same broker loses
 //! everything, which is the trade being made.

@@ -12,7 +12,7 @@ Located in `demos/broker/` and built from the `felix-broker-service` package:
 - `latency-demo`: Latency and throughput measurement harness.
 - `pubsub-demo-notifications`: Multi-tenant real-time alerts demo.
 - `pubsub-demo-orders`: Orders/payments pipeline demo.
-- `durable-restart-demo`: Publish, crash, restart, recover — the M1 durability guarantee end to end.
+- `durable-restart-demo`: Publish, crash, restart, recover — the durability guarantee end to end.
 
 ### Run
 

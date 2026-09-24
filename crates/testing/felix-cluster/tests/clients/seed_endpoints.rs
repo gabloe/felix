@@ -1,6 +1,6 @@
 //! A client given several brokers rather than one.
 //!
-//! M5 made the cluster survive losing a leader. A client pointed at a single
+//! The cluster survives losing a leader. A client pointed at a single
 //! address does not: the broker it was given can be the one that just died,
 //! while every other broker sits there able to serve. These cover the seam
 //! between "the cluster is fine" and "the application can tell".

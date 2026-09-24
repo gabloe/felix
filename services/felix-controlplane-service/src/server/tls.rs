@@ -6,10 +6,9 @@
 //! certificate signed by the configured CA — an unauthenticated caller never
 //! reaches the router, so there is no request to mis-handle.
 //!
-//! This is the control plane's half of the mTLS story; M8 extends the same
-//! certificate model to broker-to-broker traffic. The material loading here
-//! (`load_server_config`) is deliberately plain PEM-file plumbing so that work
-//! can reuse it rather than invent a second format.
+//! Broker-to-broker traffic uses the same certificate model. The material
+//! loading here (`load_server_config`) is deliberately plain PEM files, the
+//! format operators already have.
 use std::sync::Arc;
 
 use anyhow::{Context, Result};

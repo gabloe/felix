@@ -73,8 +73,8 @@ not show that the publisher and the subscriber are talking about the same one.
 
 `subscribe` defaults to the owner, because the owner is the only broker that
 serves a subscription today. `--on` a different broker is allowed and says
-plainly that nothing will arrive — subscribe routing is M6, decided in
-[subscribe routing](subscribe-routing.md).
+plainly that nothing will arrive; [subscribe routing](subscribe-routing.md)
+covers how a subscribe reaches the owner.
 
 A burst, for filling a subscriber's panel:
 
