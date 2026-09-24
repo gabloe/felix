@@ -138,9 +138,10 @@ what a client sees.
 - **A publish is held, not refused.** One that arrives between the fence and
   the cut-over waits until the broker's routes show the new owner, then goes
   there. It is refused as `shard_unavailable` / `moving`, not written, only
-  past `FELIX_SHARD_MOVE_HOLD_MS` or `FELIX_SHARD_MOVE_HOLD_MAX`. Cache writes,
-  counter adds and consumer-group writes are not held; they are refused
-  retryably for the length of the switch-over.
+  past `FELIX_SHARD_MOVE_HOLD_MS` or `FELIX_SHARD_MOVE_HOLD_MAX`. Cache and
+  counter operations are held and forwarded the same way. Consumer-group
+  operations are held and then redirected to the new owner, which
+  `ClusterClient::group_sharded` follows.
 - **Subscriptions follow.** The old leader ends each after the writes in
   flight have fanned out, and sends `shard_moved` with the offset to resume
   from. A `ClusterClient` subscription resumes on the new owner at

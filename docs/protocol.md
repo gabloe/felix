@@ -993,9 +993,12 @@ longer than `FELIX_SHARD_MOVE_HOLD_MS` (2 s by default), or a burst beyond
 `FELIX_SHARD_MOVE_HOLD_MAX` held publishes, is answered with
 `shard_unavailable` / `moving`. A client without `FEATURE_ERROR_CODES` gets the
 same `publish_error` text it always did for a shard it cannot reach. Cache
-writes, counter adds and consumer-group writes are not held: they are refused
-while the shard moves, as `moving` by the broker that was fenced, and the
-client retries.
+and counter operations are held and forwarded the same way, under the same
+bounds. A consumer-group operation is held too, and once the move cuts over is
+answered with `NotLeader` naming the new owner (an error with code
+`not_leader` to a client without `FEATURE_REDIRECT`), because group operations
+are served only by the shard's leader and never forwarded. A group poll that
+is waiting for records when its shard moves away answers with no records.
 
 `quorum_timeout`, `leadership_lost` and `unacknowledged` are what separate "the
 broker refused this" from "the broker cannot say": a client resending a

@@ -26,6 +26,22 @@ for what the current release actually guarantees.
   `felix_broker_shutdown_handoff_duration_ms`. The Helm chart adds
   `broker.shutdown.handoffTimeoutMs` and counts it in the derived grace
   period; a grace period set by hand must now cover it too.
+- **Cache, counter and consumer-group operations are no longer refused during
+  a shard move.** A cache put, delete or read and a counter add or read that
+  arrives between a move's fence and its cut-over is held and sent to the new
+  owner, as a publish already was, on the broker it reached and on an owner a
+  forward reached. A consumer-group poll, ack, nack or dead-letter change is
+  held and then answered with `NotLeader` naming the new owner, which
+  `ClusterClient::group_sharded` follows; group operations are still served
+  only by the shard's leader. A group poll waiting for records when its shard
+  moves away now answers with no records instead of an error. Bounded by the
+  same `FELIX_SHARD_MOVE_HOLD_MS` and `FELIX_SHARD_MOVE_HOLD_MAX`.
+- **`routable` in the node listing.** `GET /v1/nodes` now says whether other
+  brokers may send a node requests for the shards it leads: live or draining,
+  heartbeat inside the window. Brokers forward on it instead of on
+  `eligible`, so writes through another broker to a draining broker's shards
+  are no longer refused before each shard's turn to move.
+
 - **Idempotent producers keep their sequences across a leader change**
   (#608). On a durable stream each record of a producer's batch is now stored
   with its producer id and sequence, and replicated with them, so a leader
