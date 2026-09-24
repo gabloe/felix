@@ -109,6 +109,7 @@ pub(super) async fn subscribe(
         start,
         shard,
         session.peer_flags,
+        session.peer_features,
     )
     .await?;
     if done {

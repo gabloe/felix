@@ -194,7 +194,8 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
     } = deps;
     match (cluster, &config.controlplane_url, durable_storage) {
         (Some((router, ingress, lifecycle, ownership)), Some(base_url), storage) => {
-            let readers = shard_lifecycle::ShardReaders::new(Arc::clone(broker));
+            let readers = shard_lifecycle::ShardReaders::new(Arc::clone(broker))
+                .with_endpoints(Arc::clone(client_endpoints));
             let store: Arc<dyn shard_lifecycle::ShardStore> = match storage {
                 Some(storage) => Arc::new(
                     shard_lifecycle::DurableShardStore::new(Arc::new(storage.clone()))

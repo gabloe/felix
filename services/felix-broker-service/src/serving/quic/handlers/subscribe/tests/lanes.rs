@@ -59,6 +59,7 @@ async fn lane_fanout_preserves_order_for_multiple_subscribers() -> Result<()> {
                 None,
                 None,
                 felix_wire::ORIGINAL_V1_FLAGS,
+                0,
             )
             .await?;
         }
@@ -250,6 +251,7 @@ async fn lane_unregister_cleans_up_after_teardown_already_removed_the_mapping() 
             LaneCommand::Unregister {
                 subscriber_id,
                 connection_id: Some(connection_id),
+                last: None,
             },
         )
         .await

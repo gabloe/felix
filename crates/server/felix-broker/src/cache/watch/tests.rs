@@ -151,7 +151,7 @@ async fn ending_a_shard_drains_then_closes_its_watchers() {
     hub.cache_changed(change("a", 0));
     hub.cache_changed(change("b", 1));
 
-    assert_eq!(hub.end_shard("t1", "ns", "sessions", 0), 1);
+    assert_eq!(hub.end_shard("t1", "ns", "sessions", 0, None), 1);
 
     assert_eq!(watch.recv().await.expect("queued").offset, 0);
     assert_eq!(watch.recv().await.expect("queued").offset, 1);
@@ -161,4 +161,30 @@ async fn ending_a_shard_drains_then_closes_its_watchers() {
         matches!(other.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
         "a watcher on another shard was ended"
     );
+}
+
+/// A watch ended by a move drains what it had and then says where to resume.
+#[tokio::test]
+async fn a_watch_ended_by_a_move_says_where_to_resume() {
+    let hub = CacheWatchHub::new();
+    let mut watch = register(&hub, CacheWatchFilter::Prefix(String::new()));
+    hub.cache_changed(change("a", 3));
+    let moved = crate::ShardMoved {
+        resume_from: Some(4),
+        to: crate::ShardHandoff {
+            node_id: Some("broker-b".to_string()),
+            addr: None,
+            generation: 2,
+        },
+    };
+
+    assert_eq!(
+        hub.end_shard("t1", "ns", "sessions", 0, Some(moved.clone())),
+        1
+    );
+
+    assert_eq!(watch.recv().await.expect("queued").offset, 3);
+    assert!(watch.recv().await.is_none());
+    assert_eq!(watch.moved(), Some(&moved));
+    assert_eq!(watch.lagged(), None);
 }

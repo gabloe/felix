@@ -10,6 +10,7 @@ async fn run_event_writer_single_closes_on_channel_close() -> Result<()> {
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
         offsets_enabled: false,
+        shard_moved_enabled: false,
         subscription_id: 1,
         max_events: 1,
         max_bytes: 1024,
@@ -50,6 +51,7 @@ async fn run_event_writer_single_binary_uses_batch_encoding() -> Result<()> {
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
         offsets_enabled: false,
+        shard_moved_enabled: false,
         subscription_id: 9,
         max_events: 1,
         max_bytes: 1024,
@@ -90,6 +92,7 @@ async fn run_event_writer_batches_with_pending_payload() -> Result<()> {
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
         offsets_enabled: false,
+        shard_moved_enabled: false,
         subscription_id: 7,
         max_events: 10,
         max_bytes: 5,
@@ -142,6 +145,7 @@ async fn run_event_writer_flushes_by_count_and_deadline() -> Result<()> {
     let (tx, rx) = mpsc::channel(8);
     let config = EventWriterConfig {
         offsets_enabled: false,
+        shard_moved_enabled: false,
         subscription_id: 44,
         max_events: 2,
         max_bytes: 1024,
@@ -192,6 +196,7 @@ async fn run_event_writer_flushes_on_channel_close() -> Result<()> {
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
         offsets_enabled: false,
+        shard_moved_enabled: false,
         subscription_id: 55,
         max_events: 8,
         max_bytes: 1024,
@@ -217,6 +222,7 @@ async fn run_event_writer_single_event_mode_writes_multiple_frames() -> Result<(
     let (tx, rx) = mpsc::channel(4);
     let config = EventWriterConfig {
         offsets_enabled: false,
+        shard_moved_enabled: false,
         subscription_id: 66,
         max_events: 2,
         max_bytes: 1024,

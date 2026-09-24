@@ -211,16 +211,39 @@ pub(super) async fn run_lane_feeder(
         }
     }
     if let Some(manager) = manager.upgrade() {
-        let _ = manager
+        let last = match event_rx.moved() {
+            Some(moved) if config.shard_moved_enabled => {
+                match shard_moved_frame(config.subscription_id, moved) {
+                    Ok(frame) => Some(frame),
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            subscriber_id = config.subscription_id,
+                            "encode shard_moved failed"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+        // The lane forgets the subscriber when it handles this, after the
+        // deliveries queued ahead of it. Forgetting it here instead would
+        // race those deliveries, which the lane routes by that mapping.
+        let unregistered = manager
             .enqueue(
                 lane_idx,
                 LaneCommand::Unregister {
                     subscriber_id: config.subscription_id,
                     connection_id,
+                    last,
                 },
             )
-            .await;
-        manager.unregister_subscriber(config.subscription_id, connection_id);
+            .await
+            .is_ok();
+        if !unregistered {
+            manager.unregister_subscriber(config.subscription_id, connection_id);
+        }
     }
     subscriptions.release();
 }
@@ -243,4 +266,19 @@ pub(super) async fn enqueue_lane_frame(
     if manager.enqueue(lane_idx, cmd).await.is_err() {
         metrics::counter!("felix_subscriber_lane_dropped_total").increment(1);
     }
+}
+
+/// The last frame of a subscription whose shard moved away.
+pub(super) fn shard_moved_frame(
+    subscription_id: u64,
+    moved: &felix_broker::ShardMoved,
+) -> felix_wire::Result<Bytes> {
+    let message = felix_wire::Message::ShardMoved {
+        subscription_id,
+        resume_from: moved.resume_from,
+        node_id: moved.to.node_id.clone(),
+        addr: moved.to.addr.clone(),
+        generation: moved.to.generation,
+    };
+    Ok(message.encode()?.encode())
 }

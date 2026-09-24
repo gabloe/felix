@@ -42,20 +42,23 @@ impl Broker {
     ///
     /// Each subscriber still receives what was already queued for it; its feed
     /// then ends, which is how a client learns to resubscribe elsewhere once
-    /// the shard has moved. Call only after writes to the shard have stopped,
-    /// or a publish landing afterwards reaches nobody. Returns how many ended.
+    /// the shard has moved. With a `handoff`, each feed also records where the
+    /// shard went and the exact offset to resume from, which
+    /// [`crate::SubscriptionReceiver::moved`] reports once the feed is drained.
+    /// Returns how many ended.
     pub async fn end_subscriptions(
         &self,
         tenant_id: &str,
         namespace: &str,
         stream: &str,
         shard: u32,
+        handoff: Option<crate::ShardHandoff>,
     ) -> usize {
         self.topics
             .read()
             .await
             .get(&TopicKeyRef::new(tenant_id, namespace, stream, shard))
-            .map_or(0, |state| state.end_subscribers())
+            .map_or(0, |state| state.end_subscribers(handoff))
     }
 
     pub(super) async fn get_stream_state(

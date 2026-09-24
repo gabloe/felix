@@ -188,7 +188,7 @@ async fn ending_subscribers_drains_then_closes_each_one() {
     }
     drop(snapshot);
 
-    assert_eq!(state.end_subscribers(), 2);
+    assert_eq!(state.end_subscribers(None), 2);
 
     for rx in [&mut first_rx, &mut second_rx] {
         assert!(rx.recv().await.is_some(), "queued delivery was dropped");
