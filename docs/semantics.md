@@ -184,6 +184,11 @@ throughput rather than correctness.
   inferred.
 - **A subscription can resume.** `Subscribe` takes `latest`, `earliest`, or an
   offset; stored history joins live delivery with no gap.
+- **Replayed history is never dropped.** The overflow policy governs live
+  records only. History below the join's `live_offset` is read off disk for
+  that subscriber alone, so there is no publisher to protect: it waits for room
+  in the client's queue instead, and a slow reader slows the replay rather than
+  losing part of it.
 - **A subscription reads one shard.** Shards of a stream can have different
   owners and a subscription is bound to one connection, so reading a whole
   multi-shard stream means one subscription per shard. Offsets are per shard,

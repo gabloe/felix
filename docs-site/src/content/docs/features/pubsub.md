@@ -143,6 +143,12 @@ This is the trade the whole design turns on. Under the default a publisher never
 waits on a subscriber, which is exactly why one stalled consumer cannot degrade
 the rest — and exactly why a subscriber can silently miss records.
 
+The overflow policy covers live records only. A subscription resumed from an
+earlier offset reads history the broker pages off disk for it alone, with no
+publisher to protect, so history below the subscription's `live_offset` is
+never dropped: the client waits for room in its queue, and a slow reader slows
+the replay instead of losing part of it.
+
 `DropOld` is accepted in configuration and counted separately, but it currently
 behaves as `DropNew`: the arriving record is the one discarded. The metric
 `felix_sub_queue_drop_old_emulated_total` is what tells you that happened.

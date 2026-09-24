@@ -220,6 +220,7 @@ impl Client {
             event_conn_index: connection_index,
             event_conn_counts: Arc::clone(&self.event_conn_counts),
             max_frame_bytes: self.runtime_config.max_frame_bytes,
+            live_offset,
             #[cfg(feature = "telemetry")]
             bench_embed_ts: self.runtime_config.bench_embed_ts,
         })

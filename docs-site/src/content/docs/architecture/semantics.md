@@ -669,6 +669,10 @@ In a clustered deployment:
 2. **Buffer fills**: New events start getting dropped for that subscriber
 3. **Other subscribers unaffected**: Fast subscribers continue normally
 
+Drops apply to live records only. A subscription resumed from an earlier
+offset is never dropped from while it replays history: the client waits for
+room in its queue, so a slow reader slows the replay instead.
+
 **Detection, today**: the broker counts drops per subscriber queue
 (`felix_sub_queue_dropped_total`) and logs when a subscriber falls behind.
 On a durable stream the subscriber itself can detect loss from an offset gap

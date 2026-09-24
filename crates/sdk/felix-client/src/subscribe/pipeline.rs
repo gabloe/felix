@@ -41,6 +41,9 @@ pub(crate) struct SubscriptionPipelineConfig {
     pub(crate) event_conn_index: usize,
     pub(crate) event_conn_counts: Arc<Vec<AtomicUsize>>,
     pub(crate) max_frame_bytes: usize,
+    /// The tail when the broker registered this subscription. Records below it
+    /// are history the application asked for, and are never dropped.
+    pub(crate) live_offset: Option<u64>,
     #[cfg(feature = "telemetry")]
     pub(crate) bench_embed_ts: bool,
 }
@@ -61,6 +64,7 @@ impl Subscription {
             config.queue_policy,
             capacity,
             config.max_frame_bytes,
+            config.live_offset,
         ));
         tokio::spawn(run_subscription_dispatch_task(
             frame_rx,
@@ -69,6 +73,7 @@ impl Subscription {
             capacity,
             config.subscription_id,
             Arc::clone(&shard_moved),
+            config.live_offset,
         ));
 
         Self {
@@ -100,6 +105,7 @@ async fn run_subscription_io_task(
     queue_policy: ClientSubQueuePolicy,
     queue_capacity: usize,
     max_frame_bytes: usize,
+    live_offset: Option<u64>,
 ) {
     let mut frame_scratch = BytesMut::with_capacity(64 * 1024);
     #[cfg(feature = "telemetry")]
@@ -126,13 +132,19 @@ async fn run_subscription_io_task(
                 }
             };
         let control = first.header.flags == 0;
+        let history = is_history(
+            felix_wire::binary::peek_event_batch_base_offset(&first),
+            live_offset,
+        );
         let queued = QueuedFrame {
             frame: first,
             enqueued_at: Instant::now(),
         };
         // Events come in binary batches; a JSON frame can be `shard_moved`,
         // and dropping that would lose where to resume, so it waits for room.
-        let sent = if control {
+        // So does replayed history: waiting here stops reading the stream,
+        // which slows the broker's disk reads to the application's pace.
+        let sent = if control || history {
             frame_tx.send(queued).await.is_ok()
         } else {
             enqueue_frame(&frame_tx, queued, queue_policy, queue_capacity).await
@@ -150,6 +162,7 @@ async fn run_subscription_dispatch_task(
     queue_capacity: usize,
     subscription_id: u64,
     shard_moved: Arc<OnceLock<ShardMoved>>,
+    live_offset: Option<u64>,
 ) {
     while let Some(queued_frame) = frame_rx.recv().await {
         let queue_wait_ns = queued_frame.enqueued_at.elapsed().as_nanos() as u64;
@@ -356,10 +369,15 @@ async fn run_subscription_dispatch_task(
             // Offsets in a batch are contiguous by construction, so each event's
             // offset is the batch base plus its position.
             let offset = base_offset.map(|base| base + index as u64);
+            let policy = if is_history(offset, live_offset) {
+                ClientSubQueuePolicy::Block
+            } else {
+                queue_policy
+            };
             if !enqueue_event(
                 &event_tx,
                 QueuedEvent::Payload(payload, offset),
-                queue_policy,
+                policy,
                 queue_capacity,
             )
             .await
@@ -374,6 +392,15 @@ async fn run_subscription_dispatch_task(
             t_histogram!("sub_dispatch_ns").record(dispatch_ns as f64);
         }
     }
+}
+
+/// Whether a record (or the first of a batch) is history rather than live.
+///
+/// The overflow policy exists so a publisher never waits on a slow reader.
+/// History has no publisher waiting on it: the broker reads it off disk for
+/// this subscription alone, so dropping it only loses what was asked for.
+fn is_history(offset: Option<u64>, live_offset: Option<u64>) -> bool {
+    matches!((offset, live_offset), (Some(offset), Some(live)) if offset < live)
 }
 
 async fn enqueue_frame(

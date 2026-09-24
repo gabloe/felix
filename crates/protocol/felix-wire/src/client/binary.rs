@@ -17,7 +17,7 @@ pub use event_batch::{
     EncodedEventBatchParts, EventBatch, SharedEventBatch, decode_event_batch,
     decode_shared_event_batch, encode_event_batch_bytes, encode_event_batch_bytes_with_offset,
     encode_event_batch_parts, encode_shared_event_batch_bytes,
-    encode_shared_event_batch_bytes_with_offset,
+    encode_shared_event_batch_bytes_with_offset, peek_event_batch_base_offset,
 };
 pub use publish::{
     EncodeStats, PublishBatch, decode_publish_batch, encode_publish_batch,

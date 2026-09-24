@@ -232,6 +232,17 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **A long replay lost records and could look stalled.** A subscription
+  resumed from an early offset dropped history even when the application read
+  every event promptly: the broker writes history as fast as it reads it, and
+  the client drained it into its bounded queues under the default `drop_new`
+  policy. A replay of 5,000 records typically delivered the first 256 and a
+  scattered few after; when the tail was among the drops, the subscription
+  went quiet until the next live publish. History below the subscription's
+  `live_offset` now waits for room in the client's queues whatever the policy,
+  so a replay is paced by its reader and never dropped. Live records past
+  `live_offset` keep the configured policy.
+
 - **A subscription's last events could be dropped when it ended.** The
   subscriber's connection writer dropped deliveries queued in the same batch
   as its unregister, and the feeder forgot the subscriber's connection before
