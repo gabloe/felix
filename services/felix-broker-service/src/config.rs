@@ -117,6 +117,9 @@ pub struct BrokerConfig {
     /// How long to keep accepting connections after readiness goes false, so a
     /// load balancer polling `/ready` has time to stop routing here.
     pub shutdown_predrain_ms: u64,
+    /// How long a clustered broker waits for its shards to move to other
+    /// brokers before it stops. `0` skips the handoff.
+    pub shutdown_handoff_timeout_ms: u64,
     /// Cache connection flow-control window.
     pub cache_conn_recv_window: u64,
     /// Cache stream flow-control window.
@@ -299,6 +302,7 @@ impl Default for BrokerConfig {
             control_stream_drain_timeout_ms: DEFAULT_CONTROL_STREAM_DRAIN_TIMEOUT_MS,
             shutdown_drain_timeout_ms: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS,
             shutdown_predrain_ms: DEFAULT_SHUTDOWN_PREDRAIN_MS,
+            shutdown_handoff_timeout_ms: DEFAULT_SHUTDOWN_HANDOFF_TIMEOUT_MS,
             cache_conn_recv_window: DEFAULT_CACHE_CONN_RECV_WINDOW,
             cache_stream_recv_window: DEFAULT_CACHE_STREAM_RECV_WINDOW,
             cache_send_window: DEFAULT_CACHE_SEND_WINDOW,

@@ -10,6 +10,7 @@ mod groups;
 mod metrics;
 mod ownership;
 mod placement;
+mod restarts;
 mod startup;
 mod streams;
 

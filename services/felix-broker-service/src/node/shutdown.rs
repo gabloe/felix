@@ -1,7 +1,8 @@
 //! Waiting for shutdown, then the bounded drain.
 //!
-//! The drain runs in a fixed order: readiness goes false, the listener keeps
-//! admitting for the optional hold-off, then stops; in-flight connections
+//! The drain runs in a fixed order: readiness goes false, a clustered broker
+//! hands its shards off, the listener keeps admitting for the optional
+//! hold-off, then stops; in-flight connections
 //! finish, peers and background tasks stop, durable logs are flushed, and the
 //! metrics server goes last so an operator can watch the whole thing.
 
@@ -12,19 +13,23 @@ use std::time::Duration;
 use anyhow::Result;
 use felix_broker::DurableStorage;
 use felix_common::lifecycle::{self, DrainBudget, Readiness};
+use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::cluster::ShardTasks;
+use super::handoff::Handoff;
 use crate::cluster::credential::NodeCredential;
 use crate::cluster::membership::{self, MembershipTask};
 use crate::config::BrokerConfig;
 use crate::peer::PeerPool;
+use crate::shards::watch::ShardOwnership;
 
 /// Everything a running node has to stop, in the fields the drain reads.
 pub(super) struct Running {
     pub(super) config: BrokerConfig,
+    pub(super) ownership: Option<Arc<RwLock<ShardOwnership>>>,
     pub(super) readiness: Readiness,
     pub(super) draining: CancellationToken,
     pub(super) accept_shutdown: CancellationToken,
@@ -74,6 +79,7 @@ impl Running {
     pub(super) async fn drain(self, membership_rejected: bool) -> Result<()> {
         let Running {
             config,
+            ownership,
             readiness,
             draining,
             accept_shutdown,
@@ -102,9 +108,32 @@ impl Running {
         readiness.begin_draining();
         tracing::info!("readiness set to draining");
 
+        // Step 1a: hand the shards this broker leads to others, still accepting
+        // and serving: a move needs the old leader forwarding until it cuts
+        // over, and clients told `shard_moved` may reconnect here first.
+        // Readiness is already off, so no new client is sent here meanwhile.
+        let mut forced = false;
+        if let (Some(ownership), Some(membership_config), Some(base_url)) =
+            (ownership, &config.membership, &config.controlplane_url)
+            && config.shutdown_handoff_timeout_ms > 0
+            && !membership_rejected
+        {
+            let outcome = Handoff {
+                client: membership_client.clone(),
+                base_url: base_url.clone(),
+                node_id: membership_config.node_id.clone(),
+                credential: credential.clone(),
+                ownership,
+                timeout: Duration::from_millis(config.shutdown_handoff_timeout_ms),
+            }
+            .run(lifecycle::termination_signal())
+            .await;
+            forced = outcome.interrupted();
+        }
+
         // Step 1b: keep accepting while a load balancer polling `/ready` notices.
         // Without it the listener stops admitting in the same breath as the flip.
-        if config.shutdown_predrain_ms > 0 {
+        if config.shutdown_predrain_ms > 0 && !forced {
             tracing::info!(
                 hold_off_ms = config.shutdown_predrain_ms,
                 "serving while unready so load balancers can drop this broker"

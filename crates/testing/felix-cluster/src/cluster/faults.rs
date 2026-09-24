@@ -193,7 +193,7 @@ impl Cluster {
     }
 
     #[cfg(unix)]
-    fn signal(&self, node_id: &str, signal: libc::c_int, what: &str) -> Result<()> {
+    pub(super) fn signal(&self, node_id: &str, signal: libc::c_int, what: &str) -> Result<()> {
         let node = self
             .node(node_id)
             .ok_or_else(|| anyhow!("unknown node {node_id}"))?;

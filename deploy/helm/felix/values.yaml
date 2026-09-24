@@ -194,9 +194,14 @@ broker:
     # preStop sleep, so the endpoints controller removes the pod before
     # SIGTERM starts the drain.
     preStopSeconds: 15
+    # How long a stopping broker waits for its shards to move to the others
+    # before it drains, so a rolling restart moves shards instead of failing
+    # them over. 0 turns the handoff off.
+    handoffTimeoutMs: 30000
     drainTimeoutMs: 40000
-    # Defaults to preStopSeconds + drainTimeoutMs / 1000 + 5. Setting it below
-    # what those need is a render error: SIGKILL would arrive mid-drain.
+    # Defaults to preStopSeconds + (handoffTimeoutMs + drainTimeoutMs) / 1000
+    # + 5. Setting it below what those need is a render error: SIGKILL would
+    # arrive mid-handoff or mid-drain.
     terminationGracePeriodSeconds: ""
   resources:
     requests:

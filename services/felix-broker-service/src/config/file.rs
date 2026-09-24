@@ -96,6 +96,9 @@ impl BrokerConfig {
         if let Some(value) = override_cfg.shutdown_predrain_ms {
             config.shutdown_predrain_ms = value;
         }
+        if let Some(value) = override_cfg.shutdown_handoff_timeout_ms {
+            config.shutdown_handoff_timeout_ms = value;
+        }
         if let Some(value) = override_cfg.cache_conn_recv_window
             && value > 0
         {
@@ -242,6 +245,7 @@ pub(super) struct BrokerConfigOverride {
     control_stream_drain_timeout_ms: Option<u64>,
     shutdown_drain_timeout_ms: Option<u64>,
     shutdown_predrain_ms: Option<u64>,
+    shutdown_handoff_timeout_ms: Option<u64>,
     cache_conn_recv_window: Option<u64>,
     cache_stream_recv_window: Option<u64>,
     cache_send_window: Option<u64>,

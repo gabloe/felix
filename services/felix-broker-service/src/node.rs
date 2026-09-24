@@ -8,7 +8,9 @@
 //!   `docker stop` send, so handling only SIGINT would abort in-flight work on every
 //!   rolling update.
 //! - Shutdown then runs a bounded drain, in order: readiness goes false so load
-//!   balancers stop routing here, the listener keeps admitting for
+//!   balancers stop routing here, a clustered broker hands its shards to others
+//!   for up to `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` while it keeps serving, the
+//!   listener keeps admitting for
 //!   `FELIX_SHUTDOWN_PREDRAIN_MS` (off by default) while they notice, then stops,
 //!   in-flight connections finish, and finally the metrics server stops. Anything
 //!   still running when `FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS` expires is force-cancelled
@@ -19,6 +21,7 @@
 //! why.
 
 mod cluster;
+mod handoff;
 mod listeners;
 mod membership;
 pub mod peer_dispatch;
@@ -241,8 +244,15 @@ where
         sync_shutdown: &sync_shutdown,
     });
 
+    // Only while the shard watch runs is there anything to hand off, and
+    // anything to tell this broker when it is done.
+    let ownership = shard_tasks
+        .as_ref()
+        .and(cluster.as_ref())
+        .map(|(_, _, _, ownership)| Arc::clone(ownership));
     let running = shutdown::Running {
         config,
+        ownership,
         readiness,
         draining,
         accept_shutdown,

@@ -69,7 +69,7 @@ and `values.schema.json` rejects a misspelt key rather than ignoring it.
 | `broker.clientAdvertiseAddr` | pod DNS name on the client port | What discovery hands clients for each broker. `$(POD_NAME)` and `$(POD_NAMESPACE)` expand per pod. |
 | `broker.clientService.type` | `ClusterIP` | The first hop for clients. `LoadBalancer` needs a provider that balances UDP. |
 | `broker.peerTls.enabled` | `false` | Mutual TLS on the internal port, issued per pod by cert-manager's CSI driver from `issuerName`/`issuerKind`. |
-| `broker.shutdown.preStopSeconds` / `drainTimeoutMs` | `15` / `40000` | The endpoints controller's head start, then the drain. The grace period is derived; an explicit one that is too short is refused. |
+| `broker.shutdown.preStopSeconds` / `handoffTimeoutMs` / `drainTimeoutMs` | `15` / `30000` / `40000` | The endpoints controller's head start, then the shard handoff, then the drain. The grace period is derived; an explicit one that is too short is refused. |
 | `broker.podDisruptionBudget.maxUnavailable` | `1` | Must be below `replicas`, and at most one once there are three or more. |
 | `broker.antiAffinity` / `topologySpread` | `soft` / zone, `ScheduleAnyway` | `hard` refuses to co-locate; `DoNotSchedule` refuses to skew. |
 | `broker.networkPolicy.enabled` | `true` | Needs a CNI that enforces NetworkPolicy; otherwise it is inert. |

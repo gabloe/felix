@@ -170,6 +170,7 @@
           "additionalProperties": false,
           "properties": {
             "preStopSeconds": { "type": "integer", "minimum": 0 },
+            "handoffTimeoutMs": { "type": "integer", "minimum": 0 },
             "drainTimeoutMs": { "type": "integer", "minimum": 0 },
             "terminationGracePeriodSeconds": { "$ref": "#/definitions/optionalPositiveInteger" }
           }
