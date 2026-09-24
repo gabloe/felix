@@ -16,7 +16,7 @@ about reciprocity, not about who is allowed to make money.
 | `crates/sdk/felix-python/`, `crates/sdk/felix-typescript/` | Apache-2.0 | The Python and Node.js bindings over the Rust client. |
 | `crates/protocol/felix-transport/` | Apache-2.0 | Generic QUIC transport plumbing, not Felix-specific server logic. |
 | `crates/server/felix-common/` | Apache-2.0 | Membership shapes, the env-var registry, and process lifecycle shared by the services. |
-| `crates/testing/felix-conformance/` | Apache-2.0 | Conformance test runner and wire-format test vectors, so third-party client/server implementations can validate interop. (It links against the AGPL-3.0 crates below to run its checks against the reference broker — that's normal for a dev/CI tool and doesn't change its own license.) |
+| `crates/testing/felix-conformance/` | Apache-2.0 | The client conformance kit: the scenario catalogue and the verifier, so third-party clients can show they interoperate. (It links against the AGPL-3.0 crates below to run its checks against the reference broker — that's normal for a dev/CI tool and doesn't change its own license.) |
 | `crates/server/felix-broker/`, `felix-storage`, `felix-authz`, `felix-router` | AGPL-3.0-only | Server-side core logic. |
 | `services/felix-broker-service/`, `services/felix-controlplane-service/` | AGPL-3.0-only | The runnable server binaries. |
 | `crates/testing/felix-cluster/` | AGPL-3.0-only | Local multi-node cluster harness for integration and failure tests. It embeds the control plane and drives the broker, so unlike `felix-conformance` it is internal tooling rather than something a third-party implementer runs. Not published. |

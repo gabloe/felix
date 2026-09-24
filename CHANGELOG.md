@@ -89,6 +89,13 @@ for what the current release actually guarantees.
   root, and the modules nothing outside the crate used (`commit_order`,
   `segment::io`, `disk_log::{epochs, recovery, retention, segments, sync}`) are
   private.
+- `felix-controlplane-service` paths: the router and `AppState` are in `api`
+  (was `app`), readiness is `api::readiness`, TLS is `server::tls`,
+  `membership` and `placement` (with `ReplicaPositions`) are under `cluster`,
+  the Raft store is `store::raft` with `command` and `state_machine` beneath it,
+  metadata export is `store::export`, and `now_millis` is `clock::now_millis`.
+  Two integration tests are renamed: `readiness_pg` is `pg_readiness` and
+  `meta_raft` is `raft_state_machine`.
 - Only `felix-wire`, `felix-transport` and `felix-client` are published to
   crates.io. The server crates were only there because of the `in-process`
   feature below.

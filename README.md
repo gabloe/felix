@@ -39,14 +39,10 @@ Shards are placed across brokers by the control plane, replicated by leader leas
 and log shipping, and survive losing a leader; a publish can be made to wait for a
 quorum of the replica set before it is acknowledged.
 
-Core components
-- `felix-wire`: framed binary protocol for all clients and brokers.
-- `felix-transport`: QUIC abstraction layer (client/server, pools, stream lifecycle).
-- `felix-broker`: pub/sub logic, cache and queue projections, stream registry, fanout.
-- `felix-client`: publisher/subscriber/cache APIs over QUIC with connection/stream pooling.
-- `felix-storage`: storage layer for broker.
-- `services/felix-broker-service`: runnable broker node.
-- `services/felix-controlplane-service`: runnable control plane node.
+Two processes run a cluster: brokers, which hold the data and serve clients over
+QUIC, and a control plane, which holds the metadata and decides which broker
+leads each shard. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code: what each
+crate is, where things live, and the invariants that hold across them.
 
 Pub/sub data flow (happy path)
 - Client opens a bidirectional control stream to publish/subscribe and receive acks.
@@ -115,7 +111,9 @@ wire protocol, configuration/environment-variable reference, benchmarks,
 and (for contributors) function-by-function internals walkthroughs of the
 publish path, subscribe/fanout path, and backpressure/concurrency model.
 
-In-repo design docs (`docs/`):
+In the repository:
+- `ARCHITECTURE.md` — a map of the code, for anyone about to change it
+- `CONTRIBUTING.md` — how to contribute, and how the code is organized
 - `docs/architecture.md` — system architecture
 - `docs/protocol.md` — wire protocol specification
 - `docs/control-plane.md` — control plane. Opens with the original Raft sketch, marked as such, then points at the design that was actually built
@@ -147,6 +145,11 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   negotiation on the wire. Its metadata store is Postgres or an embedded Raft
   group (`FELIX_CONTROLPLANE_STORAGE_BACKEND=raft`), so availability need not
   rest on an external database
+- Online rebalancing: a shard with a live leader is moved by staging the
+  destination as a replica, fencing the leader and cutting over once the copy
+  is level. Draining a broker and adding one both work this way. Publishes to a
+  moving shard are refused for a few sync intervals around the cut-over, and
+  subscriptions on the old leader end rather than migrate
 - Mutually authenticated broker-to-broker QUIC, with each certificate's name
   checked against the node id in both directions
   (`FELIX_INTERNAL_TLS_CERT` / `_KEY` / `_CA`). Left unset, the peer link is
@@ -158,8 +161,6 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   Retention itself works, but it is configured per broker
   (`FELIX_DURABLE_RETENTION_BYTES` / `_SECONDS`) and is off unless set, so by
   default a log grows until the disk does
-- Rebalancing: a shard whose leader is alive is never moved, however uneven that
-  leaves the cluster
 - Tiered storage, cross-region bridges, encryption at rest, and audit logging
 - Clients beyond Rust, Python and TypeScript. All three wrap the same
   implementation and publish under the same name — `felix-client` on
@@ -168,58 +169,6 @@ latency/backpressure behavior early to keep p99/p999 predictable.
 
 The [status table](https://gabloe.github.io/felix/getting-started/what-felix-is-for/)
 is kept current per capability and is the page to trust when another disagrees.
-
----
-
-## Repository Layout (High-Level)
-
-```
-crates/                  # libraries and tools, grouped by role (see crates/README.md)
-  protocol/
-    felix-wire           # frame codec and message types
-    felix-transport      # QUIC transport
-  server/
-    felix-broker         # broker core: streams, caches, consumer groups over one log
-    felix-storage        # segment store, durable log, cache stores
-    felix-router         # which node serves a shard
-    felix-authz          # tokens and permissions
-    felix-common         # shapes the broker and control plane share
-  sdk/
-    felix-client         # Rust client SDK
-    felix-python         # Python bindings over the Rust client
-    felix-typescript     # Node.js/TypeScript bindings over the Rust client
-  testing/
-    felix-cluster        # local multi-node cluster harness and CLI
-    felix-conformance    # client conformance kit
-    felix-loadgen        # load generator for the real-network perf suite
-
-services/
-  felix-broker-service       # the felix-broker binary
-  felix-controlplane-service # the felix-controlplane binary
-
-demos/
-  broker             # broker demo binaries
-  rbac-live          # live RBAC mutation demo (control plane + broker)
-  cross_tenant_isolation # cross-tenant isolation demo (Postgres + control plane + broker)
-
-docs/
-  architecture.md    # system architecture
-  control-plane.md   # control plane (opens with the original Raft sketch)
-  protocol.md        # wire protocol specification
-  design.md          # product + protocol design notes
-  todos.md           # the original MVP checklist (historical)
-  assets/            # documentation images (logo, diagrams)
-
-docs-site/           # Astro Starlight site sources
-docker/              # local Docker assets
-scripts/             # developer tooling and utilities
-charts/              # Helm charts
-data/                # sample data and artifacts
-.github/             # CI workflows and repo metadata
-Taskfile.yml         # task runner shortcuts
-Cargo.toml           # workspace manifest
-deny.toml            # cargo-deny policy
-```
 
 ---
 
@@ -243,10 +192,11 @@ Run the wire protocol conformance runner:
 cargo run -p felix-conformance
 ```
 
-The conformance runner validates that the wire framing and binary message encoding
-match the shared test vectors. It exists to keep client implementations honest:
-any client or server that passes the suite can interoperate without guessing at
-edge cases or relying on Rust-specific behavior.
+With no arguments the conformance runner drives a real broker over QUIC and
+checks publish, subscribe and cache behaviour against the protocol. With
+`verify <results.json>` it checks a client's results against the scenario
+catalogue every Felix client is held to, which is how the Python and TypeScript
+clients prove they behave like the Rust one.
 
 Felix runs as a cluster of brokers over a control plane, and as a single broker for development. Neither has been run in production by anyone.
 
@@ -275,7 +225,7 @@ chart, and Python and TypeScript clients over the Rust one.
 Next, roughly in order:
 
 - Per-stream retention, so a stream's declared policy is the one enforced
-- Rebalancing
+- Moving a shard without pausing its publishes or ending its subscriptions
 - Tiered storage and cold-tier reads
 - Explicit cross-region bridges
 - Encryption at rest, audit logging, and the compliance surface around them
@@ -287,10 +237,10 @@ site is the authority.
 
 ## License
 
-Felix uses a split license: the wire protocol (`felix-wire`), client SDK
-(`felix-client`), transport layer (`felix-transport`), shared types
-(`felix-common`), and conformance suite (`felix-conformance`) are
-Apache-2.0. The broker and control-plane server components are AGPL-3.0:
+Felix uses a split license: the wire protocol (`felix-wire`), transport layer
+(`felix-transport`), client SDK (`felix-client` and its Python and TypeScript
+bindings), the shapes the services share (`felix-common`), and the conformance
+kit (`felix-conformance`) are Apache-2.0. The broker and control-plane server components are AGPL-3.0:
 open source, but running a modified Felix as a network service means
 publishing your changes. See [LICENSING.md](LICENSING.md) for the full
 breakdown and rationale.
