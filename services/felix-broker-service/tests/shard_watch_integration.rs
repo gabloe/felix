@@ -78,6 +78,7 @@ impl Cluster {
                 )),
             ),
             in_flight: Default::default(),
+            placement_wakes: Default::default(),
         };
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

@@ -88,6 +88,7 @@ async fn harness(region_id: &str) -> Harness {
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     Harness {
         app: build_router(state).into_service(),
@@ -1269,6 +1270,7 @@ async fn system_health_reports_unavailable_on_store_failure() {
             )),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1321,6 +1323,7 @@ async fn tenant_endpoints_report_internal_error_on_store_failure() {
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1400,6 +1403,7 @@ async fn stream_and_cache_endpoints_report_internal_error_after_scope_checks() {
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1535,6 +1539,7 @@ async fn stream_and_cache_create_report_not_found_when_store_reports_missing_nam
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_router(state).into_service();
@@ -1603,6 +1608,7 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     let app: axum::routing::RouterIntoService<axum::body::Body, ()> =
         build_bootstrap_router(state).into_service();

@@ -408,6 +408,16 @@ no eligible leader is left unplaced and logged with the reason — an empty
 cluster and a full one are reported differently, because they need different
 fixes.
 
+**A pass also runs as soon as a move can advance**, not only on the timer. When
+an instance records a replica report that is exactly what a move is waiting
+for — a leader reporting `drained` at a fenced generation, or a report listing
+the staged successor as caught up — it wakes its own reconciler. Wakes
+coalesce: however many arrive while a pass is pending or running, one more
+pass follows, and only one pass is ever in flight. The wake changes when a pass
+runs, never what it decides; the pass reads the store and judges the report
+itself like any other. It is local: a report that reaches an instance which
+does not run placement (a Raft follower) waits for the leader's next tick.
+
 | Setting | Env | Default |
 | --- | --- | --- |
 | `node_liveness.shard_reconcile_interval_ms` | `FELIX_SHARD_RECONCILE_INTERVAL_MS` | 5000 |
@@ -466,6 +476,16 @@ nothing: a drain waits and an imbalance stays, both visibly.
 | `felix_shard_move_steps_total{step}` | move steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or the move limit holding a drain back |
 | `felix_shard_assignment_write_conflicts_total` | placements and move steps not written because another instance changed the shard after this pass read it; the next pass re-plans |
+| `felix_shard_move_duration_seconds` | histogram: from a move's first step (the stage, or the fence when the destination was already caught up) to its cut-over |
+| `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over — the window in which the shard is not served |
+
+The two histograms are **per-instance observations**, timed from the steps
+the instance itself wrote; assignments carry no timestamps. A move is observed
+only by the instance that wrote both its fence and its cut-over, and its full
+duration only if that instance staged it too. With a single placement writer
+(one instance, or the Raft leader) that is every move; with several instances
+over Postgres, a move whose steps were written by different instances is
+missing from some or all of them.
 
 The fence and the broker's side of it are described in
 [replication-design.md](replication-design.md#planned-handoff).
@@ -477,6 +497,24 @@ The fence and the broker's side of it are described in
 there. A broker applies the snapshot and then polls, and the two together
 describe every committed change exactly once — the snapshot is read at a
 consistent point and `next_seq` is the log position at that same point.
+
+**Long-poll.** `changes?since=N&wait_ms=M` waits, when there is nothing new,
+for up to `M` ms (capped at 25 000, under the 30 s idle timeout common to
+proxies and HTTP clients) and answers as soon as there is. "Nothing new" means
+an empty page with `next_seq` equal to `since`; anything else — a change, or
+any of the re-snapshot signals below — answers at once, and the page is read
+exactly as it is without `wait_ms`, so retention, the page limit and the
+snapshot fallback are unchanged. A wait that runs out answers the same empty
+page an immediate request would have. Without `wait_ms` (or with `0`) the
+request never waits.
+
+A waiting request holds no store connection: it re-reads the store every 50 ms,
+each read taking a connection only for itself, which is how it sees a write by
+another instance. A write by the instance serving the request (its own
+placement pass) wakes it at once rather than at the next re-check. Each
+waiting request costs about 20 small reads a second while it waits. A waiting
+request answers as soon as the instance begins to drain, so long-polls never
+hold a shutdown open.
 
 Three things can break that, and a broker has to notice each rather than carry
 on from a checkpoint the control plane can no longer honour:
@@ -649,6 +687,8 @@ Control plane:
 | `felix_shard_move_steps_total{step}` | planned-move steps written |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_assignment_write_conflicts_total` | placement writes skipped because the shard changed after the pass read it |
+| `felix_shard_move_duration_seconds` | histogram: stage (or fence) to cut-over, as this instance observed it |
+| `felix_shard_move_fence_seconds` | histogram: fence to cut-over, as this instance observed it |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
 | `felix_controlplane_auth_rejected_total{reason}` | credentials turned away by any authenticated endpoint: `missing_token`, `malformed_token`, `invalid_token`, `tenant_mismatch`, `forbidden`. Each is also an `info` log line with the reason and the message the caller saw, never the token. A rising `invalid_token` or `forbidden` is a broker with a stale credential, or something that is not a broker |
 

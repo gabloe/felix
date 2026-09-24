@@ -161,6 +161,12 @@ pub(crate) async fn report_replica_status(
             continue;
         }
 
+        let advances = advances_move(
+            &assignment,
+            shard.generation,
+            shard.drained,
+            &shard.caught_up,
+        );
         match state
             .store
             .record_replica_report(crate::model::ReplicaReport {
@@ -177,6 +183,9 @@ pub(crate) async fn report_replica_status(
             })
             .await
         {
+            // The next step of a move waits on exactly this report, so
+            // placement runs now rather than at its next tick.
+            Ok(()) if advances => state.placement_wakes.request_pass(),
             Ok(()) => {}
             // The assignment went between the read above and the write: the
             // shard is nobody's to report on any more.
@@ -186,3 +195,27 @@ pub(crate) async fn report_replica_status(
     }
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
+
+/// Whether a report is the one a move in progress is waiting for: a caught-up
+/// successor lets it fence, a drained leader lets it cut over.
+///
+/// Only a hint for when placement runs. The pass judges the report itself,
+/// so a wrong answer here costs a pass or some latency, never a decision.
+fn advances_move(
+    assignment: &crate::model::ShardAssignment,
+    generation: u64,
+    drained: bool,
+    caught_up: &[String],
+) -> bool {
+    if generation != assignment.generation {
+        return false;
+    }
+    match (&assignment.state, &assignment.successor) {
+        (crate::model::ShardState::Draining, _) => drained,
+        (_, Some(successor)) => caught_up.contains(successor),
+        (_, None) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests;

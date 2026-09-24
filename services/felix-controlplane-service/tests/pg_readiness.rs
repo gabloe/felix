@@ -232,6 +232,7 @@ fn router_over(store: Arc<PostgresStore>) -> axum::Router {
             Duration::from_millis(50),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     api::build_router(state)
 }

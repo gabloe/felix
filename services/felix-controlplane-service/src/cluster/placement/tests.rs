@@ -6,6 +6,7 @@ mod moves;
 mod reconciler;
 mod rendezvous;
 mod replicas;
+mod wakes;
 
 use std::collections::{BTreeMap, BTreeSet};
 

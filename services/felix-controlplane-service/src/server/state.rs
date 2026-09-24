@@ -4,11 +4,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use felix_common::lifecycle::Readiness;
+use tokio_util::sync::CancellationToken;
 
 use crate::api::AppState;
 use crate::api::readiness::StoreProbe;
 use crate::api::types::{FeatureFlags, Region};
 use crate::auth::oidc::UpstreamOidcValidator;
+use crate::cluster::placement::PlacementWakes;
 use crate::config::{ControlPlaneConfig, RaftBackendConfig, StorageBackend};
 use crate::raft::{AppStateMachine, RaftHandle, RaftSettings};
 use crate::store::memory::InMemoryStore;
@@ -21,6 +23,7 @@ use crate::store::{ControlPlaneAuthStore, StoreConfig};
 pub(super) async fn build_state(
     config: ControlPlaneConfig,
     lifecycle_readiness: Readiness,
+    api_shutdown: &CancellationToken,
 ) -> anyhow::Result<(AppState, Option<RaftHandle>)> {
     let (store, raft_handle) = open_store(&config).await?;
 
@@ -49,6 +52,7 @@ pub(super) async fn build_state(
             store,
             readiness,
             in_flight: Default::default(),
+            placement_wakes: Arc::new(PlacementWakes::new(api_shutdown.child_token())),
             oidc_validator: UpstreamOidcValidator::new_with_allowed_algorithms(
                 Duration::from_secs(3600),
                 Duration::from_secs(3600),

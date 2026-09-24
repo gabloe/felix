@@ -132,6 +132,8 @@ Metrics on the control plane:
 | `felix_shard_move_steps_total{step}` | steps written: `stage`, `fence`, `cut_over`, `abandon`, `reseat` |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_assignment_write_conflicts_total` | steps not written because another control-plane instance changed the shard after this pass read it |
+| `felix_shard_move_duration_seconds` | histogram: from a move's first step to its cut-over |
+| `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over, the window in which the shard is not served |
 
 Every step is written only if the shard is still at the generation the pass
 planned from, so two control-plane instances running placement at once
@@ -174,11 +176,13 @@ fence and its tests are in `services/felix-broker-service/src/shards/lifecycle/f
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `FELIX_SHARD_MOVES_MAX_CONCURRENT` | `1` | Moves in flight across the cluster. Each is a full copy of a shard's log; raise it to drain a broker with many shards faster, at the cost of that much more replication traffic at once. `0` holds every move. |
-| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often a move advances a step. |
+| `FELIX_SHARD_RECONCILE_INTERVAL_MS` | `5000` | How often placement runs on its own. A report a move is waiting for (the successor caught up, the leader drained) runs a pass straight away when the control-plane instance that receives it is the one running placement. |
 | `FELIX_CONTROLPLANE_SYNC_INTERVAL_MS` (broker) | `5000` | How quickly brokers see each step. Bounds the refused-publish window. |
 
-A drain of `n` shards at the default policy takes roughly three placement
-intervals per shard plus the time to copy each log.
+A drain of `n` shards at the default policy takes up to one placement
+interval per shard to start its move, plus the time to copy each log. The
+fence and the cut-over follow the reports that allow them rather than the
+interval.
 
 ## Troubleshooting
 

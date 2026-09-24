@@ -58,6 +58,7 @@ async fn harness() -> Harness {
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     Harness {
         app: build_router(state).into_service(),

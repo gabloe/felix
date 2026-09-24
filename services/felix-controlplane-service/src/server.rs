@@ -47,7 +47,9 @@ where
     // below stay separate because the metrics endpoint has to outlive the API
     // drain — that is how an operator watches the drain happen.
     let readiness = Readiness::ready();
-    let (state, raft_handle) = build_state(config.clone(), readiness.clone()).await?;
+    let api_shutdown = CancellationToken::new();
+    let (state, raft_handle) =
+        build_state(config.clone(), readiness.clone(), &api_shutdown).await?;
     let _backend_name = state.store.backend_name();
     // Under Raft, singleton background work runs only on the (freshly
     // confirmed) leader; the other backends keep every instance sweeping,
@@ -56,7 +58,6 @@ where
         Some(handle) => LeadershipGate::Leader(handle.clone()),
         None => LeadershipGate::Always,
     };
-    let api_shutdown = CancellationToken::new();
     let metrics_shutdown = CancellationToken::new();
 
     let metrics_task = {
@@ -94,6 +95,7 @@ where
         },
         Duration::from_millis(state.node_liveness.shard_reconcile_interval_ms),
         leadership,
+        Arc::clone(&state.placement_wakes),
         api_shutdown.clone(),
     );
 

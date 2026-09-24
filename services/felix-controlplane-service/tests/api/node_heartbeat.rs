@@ -90,6 +90,7 @@ async fn app_with(store: Arc<InMemoryStore>) -> axum::routing::RouterIntoService
             std::sync::Arc::new(felix_controlplane_service::api::readiness::AlwaysReady),
         )),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     };
     build_router(state).into_service()
 }

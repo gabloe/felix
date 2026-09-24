@@ -27,14 +27,18 @@
 //! foundation for a decision that has to be identical everywhere.
 mod caught_up;
 mod decision;
+mod metrics;
 mod moves;
 mod plan;
 mod reconciler;
 mod rendezvous;
 mod replica_positions;
+mod wakes;
 
 pub use caught_up::{CaughtUp, NothingCaughtUp};
 pub use decision::{Blocked, Decision, MoveStep, Unplaceable};
+pub(crate) use metrics::{MOVE_DURATION_BUCKETS, MOVE_FENCE_BUCKETS};
+pub use metrics::{SHARD_MOVE_DURATION_SECONDS, SHARD_MOVE_FENCE_SECONDS};
 pub use moves::{DEFAULT_MAX_CONCURRENT_MOVES, MovePolicy};
 pub use plan::{Plan, ShardPlan, assignment_for, plan, plan_with};
 pub use reconciler::{
@@ -43,6 +47,7 @@ pub use reconciler::{
     reconcile_once, spawn_reconciler,
 };
 pub use replica_positions::ReplicaPositions;
+pub use wakes::PlacementWakes;
 
 #[cfg(test)]
 mod tests;

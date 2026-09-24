@@ -24,4 +24,6 @@ pub struct AppState {
     pub readiness: Arc<crate::api::readiness::Readiness>,
     /// Requests currently being served, so a drain can say what it waited for.
     pub in_flight: felix_common::lifecycle::InFlight,
+    /// Wakes this instance's placement loop and assignment long-polls.
+    pub placement_wakes: Arc<crate::cluster::placement::PlacementWakes>,
 }

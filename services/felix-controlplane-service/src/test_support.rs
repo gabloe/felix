@@ -32,6 +32,7 @@ pub(crate) fn app_state(
         node_liveness: Default::default(),
         readiness: Arc::new(Readiness::new(probe)),
         in_flight: Default::default(),
+        placement_wakes: Default::default(),
     }
 }
 
@@ -39,4 +40,106 @@ pub(crate) fn app_state(
 /// existing caller wanted before one of them needed to say otherwise.
 pub(crate) fn app_state_ready(store: Arc<dyn ControlPlaneAuthStore + Send + Sync>) -> AppState {
     app_state(store, Arc::new(AlwaysReady))
+}
+
+/// A tenant `t1` with signing keys, a one-shard durable stream `t1/ns/orders`
+/// replicated twice, and live brokers `broker-x` and `broker-y`. Nothing is
+/// placed.
+pub(crate) async fn one_shard_cluster() -> (
+    Arc<crate::store::memory::InMemoryStore>,
+    crate::auth::felix_token::TenantSigningKeys,
+) {
+    use crate::model::{
+        ConsistencyLevel, DeliveryGuarantee, Namespace, Node, NodeCapacity, NodeLifecycle,
+        NodeSpec, NodeStatus, RetentionPolicy, Stream, StreamKind, Tenant,
+    };
+    use crate::store::{AuthStore, ControlPlaneStore, StoreConfig};
+
+    let store = Arc::new(crate::store::memory::InMemoryStore::new(StoreConfig {
+        changes_limit: 1000,
+        change_retention_max_rows: Some(1000),
+    }));
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "T".to_string(),
+        })
+        .await
+        .expect("tenant");
+    let keys = crate::auth::keys::generate_signing_keys().expect("keys");
+    store
+        .set_tenant_signing_keys("t1", keys.clone())
+        .await
+        .expect("keys");
+    store
+        .create_namespace(Namespace {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            display_name: "NS".to_string(),
+        })
+        .await
+        .expect("namespace");
+    store
+        .create_stream(Stream {
+            tenant_id: "t1".to_string(),
+            namespace: "ns".to_string(),
+            stream: "orders".to_string(),
+            kind: StreamKind::Stream,
+            shards: 1,
+            replication_factor: 2,
+            retention: RetentionPolicy {
+                max_age_seconds: None,
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Leader,
+            delivery: DeliveryGuarantee::AtMostOnce,
+            durable: true,
+        })
+        .await
+        .expect("stream");
+    for (i, id) in ["broker-x", "broker-y"].into_iter().enumerate() {
+        store
+            .register_node(Node {
+                node_id: id.to_string(),
+                spec: NodeSpec {
+                    advertise_addr: format!("10.0.0.4:{}", 7100 + i),
+                    client_addr: None,
+                    region: "local".to_string(),
+                    labels: Default::default(),
+                    capacity: NodeCapacity::default(),
+                },
+                status: NodeStatus {
+                    lifecycle: NodeLifecycle::Live,
+                    last_heartbeat_at_millis: crate::clock::now_millis(),
+                    registered_at_millis: 1,
+                    incarnation: 0,
+                },
+            })
+            .await
+            .expect("node");
+    }
+    (store, keys)
+}
+
+/// The key of `t1/ns/orders` shard 0.
+pub(crate) fn shard_zero() -> crate::model::ShardKey {
+    crate::model::ShardKey {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "orders".to_string(),
+        shard: 0,
+        kind: crate::model::ShardKind::Stream,
+    }
+}
+
+/// A credential for `t1` carrying `perms`.
+pub(crate) fn token(keys: &crate::auth::felix_token::TenantSigningKeys, perms: &[&str]) -> String {
+    crate::auth::felix_token::mint_token(
+        keys,
+        "t1",
+        "p:test",
+        perms.iter().map(|perm| perm.to_string()).collect(),
+        std::time::Duration::from_secs(900),
+    )
+    .expect("token")
 }
