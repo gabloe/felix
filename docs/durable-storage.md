@@ -424,6 +424,15 @@ Four properties:
    is rebuilt from its segment, and a rebuilt index is byte-identical to one
    written during append.
 
+Idempotent producers' state is derived the same way, before the log takes its
+first append: each producer's place comes from the marks its records carry,
+replayed from the `producers` snapshot saved at the last rollover. The marks
+after the snapshot are in the active segment, which the full scan above has
+already read, so a current snapshot adds nothing to startup. A missing or
+stale one is replaced by reading the sealed segments' marks, which
+`felix_storage_producer_state_rebuilt_total` counts. See
+`docs/storage-format.md`, "`producers` — the producer snapshot".
+
 ### What is validated at startup
 
 Fully checksumming every segment is `O(bytes on disk)` — minutes for a large
@@ -493,6 +502,7 @@ FELIX_DURABLE_FSYNC_MODE=on_commit \
 | `felix_storage_segment_roll_total` | rollover rate |
 | `felix_storage_recovery_duration_seconds` | startup cost |
 | `felix_storage_recovery_truncated_bytes` | bytes discarded from a torn tail |
+| `felix_storage_producer_state_rebuilt_total` | opens or truncations that read sealed segments to rebuild idempotent producers' state, because the snapshot was missing or out of date |
 
 The first two together answer the question that actually comes up: *is durability
 the bottleneck?* If sync dominates append, the fsync policy is the cost.

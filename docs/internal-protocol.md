@@ -353,6 +353,20 @@ resplit batch is a different set of records, which is exactly the divergence the
 checksum is there to catch. `felix_wire::internal::batch_checksum` is the single
 definition, so the two sides cannot compute it differently.
 
+**Producer marks** ride with the records they belong to. A record an
+idempotent producer wrote carries its producer, sequence and batch length (see
+`docs/storage-format.md`, "Producer marks"), and a follower has to store them
+exactly as the leader did: they are how a promoted replica, or a move's
+destination, answers the producer's re-send. A batch with any marked record
+travels as `ReplicateMarkedRecords` (kind 25): the `ReplicateRecords` body
+followed by one mark per payload — a byte, `0` none, `1` opens a batch, `2`
+continues one, the opening byte followed by `producer_id u64`, `sequence u64`
+and `len u32`. The batch checksum covers the marks after the payloads, only
+when there are any, so an unmarked batch is byte for byte what it always was.
+A follower that predates the kind refuses it, and the leader stops shipping to
+it and says so, rather than the follower storing records without their marks.
+Two records with the same bytes and different marks are a `LogConflict`.
+
 `LogConflict` does not converge by *retrying* — the same batch meets the same
 bytes. It can be repaired, and the follower does it without an exchange: a
 conflict from a **newer** generation than the one this follower last accepted,
@@ -437,8 +451,9 @@ Typed, because they need different responses:
 | `FencedEpoch` | the sender named an epoch older than the responder's | do not retry; it is no longer the leader |
 | `UnsupportedKind` | the responder predates the kind that was sent | do not retry with that kind; a forwarder falls back to the legacy forward kind once |
 
-`ReplicateBootstrap` is kind 10 and `ReplicateRebuild` kind 24. A peer that
-predates either rejects the kind rather than misreading the body, which is why
+`ReplicateBootstrap` is kind 10, `ReplicateRebuild` kind 24 and
+`ReplicateMarkedRecords` kind 25. A peer that predates any of them rejects the
+kind rather than misreading the body, which is why
 each is a new kind rather than a field on `ReplicateRecords`: this protocol
 freezes existing body layouts.
 

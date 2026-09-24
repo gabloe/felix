@@ -13,6 +13,20 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Idempotent producers keep their sequences across a leader change**
+  (#608). On a durable stream each record of a producer's batch is now stored
+  with its producer id and sequence, and replicated with them, so a leader
+  promoted after a failover, a planned move's destination and a restarted
+  broker answer a re-send of the batch in flight from the records they hold,
+  and the producer carries on instead of being refused as `unknown_producer`.
+  A batch whose leader stopped partway through it is finished by the re-send
+  rather than written twice. A producer is remembered while any of its
+  batches is in the log, so retention now decides when one is forgotten, on
+  every replica alike. In-memory streams keep sequences in the leader's
+  memory as before. Opening a shard reads no more than before: the producer
+  state is saved at each rollover and the rest comes from the active segment
+  recovery already scans. New metric `felix_storage_producer_state_rebuilt_total`
+  counts opens that had to read sealed segments to rebuild it.
 - **Subscriptions follow a moved shard.** A broker that stops serving a shard
   now ends each of its subscriptions and cache watches with a final
   `shard_moved` frame: the offset to resume from, the broker taking the shard
@@ -154,6 +168,20 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **Storage format v3.** A record's length word now carries two flag bits
+  and, for the first record of an idempotent producer's batch, a 20-byte tag
+  (see `docs/storage-format.md`, "Producer marks"). v2 segments are still read
+  and an unmarked record is byte for byte a v2 record, but new segments are
+  written as v3, which a v2 build refuses to open: downgrading past this needs
+  the data directory discarded. A shard directory may also hold a `producers`
+  snapshot beside `epochs`.
+- **Internal protocol kind 25, `ReplicateMarkedRecords`**, ships records
+  together with their producer marks. A batch without marks still travels as
+  `ReplicateRecords`, unchanged; a follower that predates the kind refuses it
+  and is halted rather than storing records without their marks. The API
+  changed with it: `ReplicateRecords` has a `marks` field, `batch_checksum`
+  takes the marks, `AppendRecord` and `LogRecord` have a `mark`, and
+  `felix_broker::replication::apply` takes the marks.
 - **Breaking for Rust callers: `ClusterClient::subscribe` and `subscribe_from`
   take `self: &Arc<Self>` and return a `ClusterSubscription`** instead of a
   `(client, Subscription)` pair, so the subscription can follow its shard.

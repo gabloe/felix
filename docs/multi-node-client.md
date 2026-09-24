@@ -94,11 +94,15 @@ When the broker in use goes away:
 
 **`idempotent_producer` reconnects, resends, and does not duplicate.** The
 producer takes an id from the broker and numbers its batches; a batch re-sent
-under the same number is answered from what the leader remembers rather than
+under the same number is answered from what the shard already holds rather than
 appended again, so the ambiguous publish above stops being ambiguous. A batch
 for a shard led elsewhere is refused with the leader's address and the
-producer follows it. The one case it does not cover is a leader change while
-a batch is in flight: the new leader knows no producers and says so, and the
+producer follows it. On a durable stream that holds across a leader change:
+the sequences are stored in the log and replicated with it, so the broker
+leading next answers the batch in flight, whether it got there by failover or
+by a planned move, and the producer carries on. What it does not cover is a
+producer the shard has forgotten — retention removed all its batches — or an
+in-memory stream's new leader: the broker says `unknown_producer`, and the
 producer ends on that stream with a typed refusal rather than guessing. See
 `docs/protocol.md`, "Idempotent producers".
 

@@ -64,7 +64,7 @@
   <text class="sub" x="368" y="99">0x464C5347  "FLSG"</text>
   <rect class="cell id" x="64" y="108" width="304" height="46" rx="3"/>
   <text class="label" x="216" y="129">version</text>
-  <text class="sub" x="216" y="145">u16 = 1</text>
+  <text class="sub" x="216" y="145">u16 = 3</text>
   <rect class="cell id" x="368" y="108" width="304" height="46" rx="3"/>
   <text class="label" x="520" y="129">flags</text>
   <text class="sub" x="520" y="145">u16 = 0</text>

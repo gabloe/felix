@@ -76,9 +76,12 @@ been attempted too many times.
 **Idempotent producers are implemented; exactly-once delivery is not.** A
 producer takes an id from the broker and numbers its batches, and a batch
 re-sent after a lost acknowledgement lands once: the shard's leader answers a
-sequence it already holds from memory rather than appending it again. That
-closes the ambiguous-outcome gap on the publish side (`ClusterClient::idempotent_producer`,
-negotiated as `FEATURE_IDEMPOTENT_PRODUCER`). It does not make delivery
+sequence it already holds rather than appending it again. That closes the
+ambiguous-outcome gap on the publish side (`ClusterClient::idempotent_producer`,
+negotiated as `FEATURE_IDEMPOTENT_PRODUCER`). On a durable stream the
+sequences are stored in the log with the records and replicated with them, so a
+re-send is answered the same way after a failover, a planned move or a restart;
+on an in-memory stream they last as long as the leader. It does not make delivery
 exactly-once: a consumer can still see a record twice on redelivery, and
 end-to-end exactly-once would also need transactional coordination across the
 log and the consumer's own state, and deduplication on receive — which has to
