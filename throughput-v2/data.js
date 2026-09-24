@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790265644786,
+  "lastUpdate": 1790266026229,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14664,6 +14664,58 @@ window.BENCHMARK_DATA = {
             "range": "10949.80",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 914039.84\nmean: 910377.76\nstdev: 10949.80\ncv: 1.20%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "00ca6be8f077c6278d39ea0f0f37913056779647",
+          "message": "Shard moves advance on reports, not the reconciler's timer (#662)\n\n* feat(controlplane): long-poll the shard assignment changes feed\n\n`GET /v1/shard-assignments/changes` takes an optional `wait_ms`. With nothing\nnewer than `since`, the request waits up to that long (capped at 25 s, under\nthe usual 30 s proxy idle timeout) and answers as soon as a change lands. Any\nother page, including the re-snapshot signals, answers at once and is read\nexactly as before; without `wait_ms` nothing changes.\n\nA waiting request holds no store connection. It re-reads the store every\n50 ms, which is how it sees another instance's writes, and this instance's\nown placement writes wake it directly through `PlacementWakes` on AppState.\nIt answers as soon as the instance starts to drain.\n\nTests cover the timeout, the cap, the immediate paths, both wake routes and\nthe drain; each fails with its mechanism disabled. A Postgres test runs 20\nwaiters on a 5-connection pool and checks a write still goes through and\nwakes all of them.\n\nSpec-Unaffected: waking long-polls changes when a reader hears of a placement write, not what placement decides or writes\n\n* feat(controlplane): run placement when a move's awaited report lands\n\nA move's fence waits for its successor to be reported caught up, and its\ncut-over for the leader to report drained. Both used to wait for the next\nreconcile tick after the report arrived, up to the full interval each.\n\n`report_replica_status` now asks for a pass when the report it just recorded\nis at the assignment's generation and is exactly what the move waits on: a\ndrained leader of a draining shard, or a staged successor listed as caught\nup. The reconciler runs on its timer or on a request. Requests go through a\nNotify, so they coalesce and one pass runs at a time. The request is only a\nhint: the pass reads the store and judges the report like any other.\n\nTests: which reports ask for a pass; a requested pass cuts over with the\ninterval an hour away; and end to end, a drained report posted over the API\ncuts the shard over. Both wake paths fail their tests when disabled.\n\nSpec-Unaffected: the wake changes when a placement pass runs, not what it decides or writes\n\n* feat(controlplane): time shard moves\n\nTwo histograms: `felix_shard_move_duration_seconds`, from a move's first\nstep (the stage, or the fence when the destination was already caught up)\nto its cut-over, and `felix_shard_move_fence_seconds`, from the fence to the\ncut-over, the window in which the shard is not served.\n\nAssignments carry no timestamps, so each instance times the steps it wrote\nitself, in memory. A move counts only on the instance that wrote its fence\nand cut-over, and its full duration only if that instance staged it too.\nTimings are dropped when another writer changes the shard in between. With\none placement writer that is every move; docs/control-plane.md says so.\n\nSpec-Unaffected: the metrics only observe the steps placement already writes",
+          "timestamp": "2026-09-24T09:04:09-07:00",
+          "tree_id": "d2bbdcf841f6e5fe89b72f16fd1888a56cf30fa0",
+          "url": "https://github.com/gabloe/felix/commit/00ca6be8f077c6278d39ea0f0f37913056779647"
+        },
+        "date": 1790266025508,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 391347.64,
+            "range": "16531.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391347.64\nmean: 392107.73\nstdev: 16531.82\ncv: 4.22%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 391347.64,
+            "range": "16531.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 391347.64\nmean: 392107.73\nstdev: 16531.82\ncv: 4.22%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93161.67,
+            "range": "892.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93161.67\nmean: 93324.93\nstdev: 892.11\ncv: 0.96%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 931616.66,
+            "range": "8921.11",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 931616.66\nmean: 933249.29\nstdev: 8921.11\ncv: 0.96%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
