@@ -334,20 +334,6 @@ impl ControlPlaneStore for RaftStore {
         self.local().list_shard_assignments().await
     }
 
-    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
-        match self
-            .propose(MetaCommand::RecordReplicaReport { report })
-            .await?
-        {
-            MetaResponse::Unit => Ok(()),
-            _ => Err(unexpected_shape("unit")),
-        }
-    }
-
-    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
-        self.local().list_replica_reports().await
-    }
-
     async fn list_shard_assignments_for_node(
         &self,
         node_id: &str,
@@ -370,6 +356,20 @@ impl ControlPlaneStore for RaftStore {
         since: u64,
     ) -> StoreResult<ChangeSet<ShardAssignmentChange>> {
         self.local().shard_assignment_changes(since).await
+    }
+
+    async fn record_replica_report(&self, report: ReplicaReport) -> StoreResult<()> {
+        match self
+            .propose(MetaCommand::RecordReplicaReport { report })
+            .await?
+        {
+            MetaResponse::Unit => Ok(()),
+            _ => Err(unexpected_shape("unit")),
+        }
+    }
+
+    async fn list_replica_reports(&self) -> StoreResult<Vec<ReplicaReport>> {
+        self.local().list_replica_reports().await
     }
 
     async fn tenant_exists(&self, tenant_id: &str) -> StoreResult<bool> {
@@ -536,6 +536,7 @@ impl AuthStore for RaftStore {
             _ => Err(unexpected_shape("signing keys")),
         }
     }
+
     async fn insert_refresh_token(&self, token: RefreshToken) -> StoreResult<()> {
         self.propose(MetaCommand::InsertRefreshToken { token })
             .await
