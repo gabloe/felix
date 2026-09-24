@@ -144,11 +144,13 @@ pub async fn ship_once<R: PeerRequester>(
         Ok(answer) => answer,
         Err(err) => {
             metrics::record_shipped(unreachable_outcome(&err));
+            cursor.stalled = true;
             return Progress::Retry;
         }
     };
 
     let progress = read_answer(&answer);
+    cursor.stalled = progress == Progress::Retry;
     match progress {
         Progress::Stored { durable_offset } => {
             // The follower's own account of where it is, since it did the

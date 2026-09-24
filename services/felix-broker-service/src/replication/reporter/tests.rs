@@ -193,3 +193,19 @@ async fn shutdown_answers_everyone_still_waiting() {
 
     server.abort();
 }
+
+/// A follower the leader cannot reach is left out of the offsets, so its
+/// last position does not look like a copy about to finish; one that is
+/// merely behind is reported with the tail it is behind.
+#[test]
+fn a_follower_that_is_not_reached_is_not_reported_as_close() {
+    let addr: std::net::SocketAddr = "10.0.0.1:7000".parse().expect("addr");
+    let mut unreachable = FollowerCursor::new("broker-b", addr, 9);
+    unreachable.stalled = true;
+    let behind = FollowerCursor::new("broker-c", addr, 7);
+    let key = report("orders").key;
+
+    let report = shard_report(&key, 4, 10, &[unreachable, behind], false);
+    assert_eq!(report.offsets, vec![("broker-c".to_string(), 7)]);
+    assert_eq!(report.tail, 10);
+}
