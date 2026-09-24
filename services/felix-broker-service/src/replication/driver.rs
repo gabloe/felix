@@ -21,7 +21,7 @@ use super::halted::{HaltedReplica, HaltedReplicas};
 use super::quorum::QuorumMarks;
 use super::reporter::Reporter;
 use super::reporter::ShardReport;
-use super::{RebuildPolicy, Rebuilds, metrics};
+use super::{MoveThrottle, RebuildPolicy, Rebuilds, metrics};
 use crate::peer::PeerRequester;
 use crate::shards::lifecycle::fence::ShardFence;
 use shard::{AuxCursors, ShardCursors, ShardPass, replicate_shard, watch_key};
@@ -59,6 +59,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     interval: Duration,
     routes_changed: Arc<tokio::sync::Notify>,
     rebuild_policy: RebuildPolicy,
+    move_throttle: MoveThrottle,
     shutdown: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -112,6 +113,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 &mut dead_letter_cursors,
                 &mut counter_cursors,
                 &rebuilds,
+                &move_throttle,
             )
             .await;
             // Replaced wholesale, so a halt that has since resolved stops being
@@ -154,12 +156,14 @@ pub async fn replicate_once<R: PeerRequester>(
         dead_letter_cursors,
         counter_cursors,
         &Rebuilds::disabled(),
+        &MoveThrottle::unlimited(),
     )
     .await
 }
 
-/// [`replicate_once`] with halted followers rebuilt under `rebuilds`, and a
-/// draining shard held back until `fence` says its writes have stopped.
+/// [`replicate_once`] with halted followers rebuilt under `rebuilds`, a move's
+/// destination paced by `throttle`, and a draining shard held back until
+/// `fence` says its writes have stopped.
 #[allow(clippy::too_many_arguments)]
 pub async fn replicate_once_with<R: PeerRequester>(
     requester: &R,
@@ -173,6 +177,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
     dead_letter_cursors: &mut HashMap<ShardKey, ShardCursors>,
     counter_cursors: &mut HashMap<ShardKey, ShardCursors>,
     rebuilds: &Rebuilds,
+    throttle: &MoveThrottle,
 ) -> Pass {
     if broker.durable_storage().is_none() {
         // Nothing to replicate from. Without durable storage a broker's streams
@@ -246,7 +251,8 @@ pub async fn replicate_once_with<R: PeerRequester>(
     let passes: Vec<ShardPass> =
         futures::stream::iter(work.into_iter().map(|(key, route, entry, aux)| {
             replicate_shard(
-                requester, broker, fence, marks, reporter, rebuilds, key, route, entry, aux,
+                requester, broker, fence, marks, reporter, rebuilds, throttle, key, route, entry,
+                aux,
             )
         }))
         .buffer_unordered(SHARD_CONCURRENCY)

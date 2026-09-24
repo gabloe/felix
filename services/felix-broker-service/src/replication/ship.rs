@@ -157,6 +157,7 @@ pub async fn ship_once<R: PeerRequester>(
             // has compared nothing beyond that, so accepting a higher answer
             // means resuming past records neither side has checked.
             cursor.next_offset = durable_offset.min(batch_end);
+            cursor.shipped_bytes += batch_bytes as u64;
             metrics::record_shipped(metrics::OUTCOME_OK);
             // A rebuild is a full transfer, and the policy may say how fast.
             // Paced after the batch landed, so the follower is never waiting

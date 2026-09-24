@@ -23,6 +23,7 @@ async fn drain_pass(
         &mut HashMap::new(),
         &mut HashMap::new(),
         &Rebuilds::disabled(),
+        &MoveThrottle::unlimited(),
     )
     .await
 }
@@ -170,6 +171,7 @@ async fn aux_pass(
         &mut cursors.dead_letters,
         &mut cursors.counters,
         &Rebuilds::disabled(),
+        &MoveThrottle::unlimited(),
     )
     .await
     .reports

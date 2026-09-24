@@ -11,6 +11,7 @@ mod learner;
 mod quorum;
 mod reports;
 mod shipping;
+mod throttle;
 
 use std::collections::HashMap as Map;
 use std::net::SocketAddr;
