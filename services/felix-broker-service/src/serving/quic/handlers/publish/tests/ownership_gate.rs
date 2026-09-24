@@ -167,10 +167,43 @@ async fn an_owned_but_unopened_shard_is_refused() {
         0,
     )
     .await;
-    assert!(
-        matches!(route, PublishRoute::Refused),
-        "an unopened shard must not accept writes",
+    let PublishRoute::Refused(refusal) = route else {
+        panic!("an unopened shard must not accept writes");
+    };
+    // And the client is told why, in a form it can act on.
+    let felix_wire::Message::Error { code, detail, .. } = refusal.into_message() else {
+        unreachable!()
+    };
+    assert_eq!(code, Some(felix_wire::ErrorCode::ShardUnavailable));
+    assert_eq!(detail.and_then(|d| d.reason).as_deref(), Some("not_ready"));
+}
+
+/// A subscribe to a shard nobody can serve names the reason, not only prose.
+#[tokio::test]
+async fn an_unservable_subscribe_is_shard_unavailable() {
+    let ingress = ingress_for("broker-a", false);
+    let answer = crate::serving::quic::handlers::redirect::redirect_for(
+        Some(&ingress),
+        None,
+        "t1",
+        "ns",
+        "stream",
+        0,
+        crate::shards::ShardKind::Stream,
+        felix_wire::FEATURE_ERROR_CODES,
     );
+    let Some(felix_wire::Message::Error {
+        code,
+        retry,
+        detail,
+        ..
+    }) = answer
+    else {
+        panic!("expected an error, got {answer:?}");
+    };
+    assert_eq!(code, Some(felix_wire::ErrorCode::ShardUnavailable));
+    assert_eq!(retry, Some(felix_wire::RetryClass::Retry));
+    assert_eq!(detail.and_then(|d| d.reason).as_deref(), Some("not_ready"));
 }
 
 /// Ownership is checked outside the handle cache, so a reassignment takes

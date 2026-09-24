@@ -11,6 +11,7 @@ use felix_transport::{QuicConnection, QuicServer};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use super::client_error::ClientError;
 use super::handlers::publish::{PublishContext, build_publish_context};
 use super::streams::{handle_stream, handle_uni_stream};
 use crate::config::BrokerConfig;
@@ -297,7 +298,11 @@ pub(crate) async fn handle_connection_with_shutdown(
     let grace =
         Duration::from_millis(config.shutdown_drain_timeout_ms / 2).max(Duration::from_secs(1));
     streams.close();
-    if tokio::time::timeout(grace, streams.wait()).await.is_err() {
+    let drained = tokio::select! {
+        drained = tokio::time::timeout(grace, streams.wait()) => drained,
+        never = refuse_new_streams(&connection, config.max_frame_bytes) => match never {},
+    };
+    if drained.is_err() {
         tracing::info!(
             ?grace,
             stats = ?connection.stats(),
@@ -309,6 +314,61 @@ pub(crate) async fn handle_connection_with_shutdown(
     // it can reconnect elsewhere instead of waiting out an idle timeout.
     connection.close(0u32.into(), b"broker shutting down");
     Ok(())
+}
+
+/// Answer control streams opened while this connection drains.
+///
+/// A client that offered `FEATURE_ERROR_CODES` is told `draining` in answer to
+/// its `Auth`, so it can go to another broker now rather than wait out the
+/// grace window. Any other client gets what it always got: no answer until the
+/// connection closes. Never returns; the caller stops polling it once the grace
+/// window ends.
+async fn refuse_new_streams(
+    connection: &QuicConnection,
+    max_frame_bytes: usize,
+) -> std::convert::Infallible {
+    while let Ok((send, recv)) = connection.accept_bi().await {
+        // Not tracked: these hold no work, and waiting on them would stretch
+        // the drain to its full grace window every time.
+        tokio::spawn(answer_draining(
+            connection.clone(),
+            send,
+            recv,
+            max_frame_bytes,
+        ));
+    }
+    std::future::pending().await
+}
+
+async fn answer_draining(
+    connection: QuicConnection,
+    mut send: quinn::SendStream,
+    mut recv: quinn::RecvStream,
+    max_frame_bytes: usize,
+) {
+    let mut scratch = bytes::BytesMut::new();
+    let first = super::codec::read_message_limited(&mut recv, max_frame_bytes, &mut scratch).await;
+    let asked = matches!(
+        first,
+        Ok(Some(felix_wire::Message::Auth {
+            client_features: Some(features),
+            ..
+        })) if felix_wire::supports_feature(features, felix_wire::FEATURE_ERROR_CODES)
+    );
+    if asked {
+        let refusal = ClientError::draining("broker is shutting down; connect to another broker");
+        if super::codec::write_message(&mut send, refusal.into_message())
+            .await
+            .is_ok()
+        {
+            let _ = send.finish();
+            // Hold the stream until the client has read the answer or the
+            // connection goes; dropping it early could reset it first.
+            let _ = tokio::time::timeout(Duration::from_secs(5), send.stopped()).await;
+        }
+        return;
+    }
+    connection.closed().await;
 }
 
 #[cfg(test)]

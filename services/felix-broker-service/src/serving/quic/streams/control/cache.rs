@@ -11,6 +11,7 @@ use felix_wire::Message;
 use super::authz::authorize_cache;
 use super::{Ctx, Session, Step};
 use crate::observability::timings;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_best_effort, send_outgoing_critical,
@@ -71,9 +72,12 @@ pub(super) async fn cache_put(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::error(format!(
-                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
-                ))),
+                Outgoing::CacheMessage(
+                    ClientError::not_found(format!(
+                        "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                    ))
+                    .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -120,7 +124,11 @@ pub(super) async fn cache_put(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::error(format!("cache put not served: {reason}"))),
+                Outgoing::CacheMessage(
+                    ClientError::from_anyhow(&reason)
+                        .prefixed("cache put not served")
+                        .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -216,9 +224,12 @@ pub(super) async fn cache_get(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::error(format!(
-                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
-                ))),
+                Outgoing::CacheMessage(
+                    ClientError::not_found(format!(
+                        "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                    ))
+                    .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -267,9 +278,11 @@ pub(super) async fn cache_get(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::error(format!(
-                        "cache get not served: {reason}"
-                    ))),
+                    Outgoing::CacheMessage(
+                        ClientError::from_anyhow(&reason)
+                            .prefixed("cache get not served")
+                            .into_message(),
+                    ),
                 )
                 .await,
                 ack_timeout_state,
@@ -354,9 +367,12 @@ pub(super) async fn cache_delete(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::error(format!(
-                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
-                ))),
+                Outgoing::CacheMessage(
+                    ClientError::not_found(format!(
+                        "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                    ))
+                    .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -399,9 +415,11 @@ pub(super) async fn cache_delete(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::error(format!(
-                        "cache delete not served: {reason}"
-                    ))),
+                    Outgoing::CacheMessage(
+                        ClientError::from_anyhow(&reason)
+                            .prefixed("cache delete not served")
+                            .into_message(),
+                    ),
                 )
                 .await,
                 ack_timeout_state,

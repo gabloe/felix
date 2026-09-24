@@ -58,6 +58,7 @@ use super::frame_source::FrameSource;
 use crate::config::BrokerConfig;
 use crate::observability::timings;
 use crate::serving::auth::{AuthContext, BrokerAuth};
+use crate::serving::quic::client_error::{ClientError, ErrorCodeSupport};
 use crate::serving::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
     handle_ack_enqueue_result, handle_acked_binary_publish_batch_control,
@@ -102,6 +103,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
     ack_waiter_tx: mpsc::Sender<AckWaiterMessage>,
     ack_wait_timeout: Duration,
     frame_scratch: &mut BytesMut,
+    error_codes: Arc<ErrorCodeSupport>,
 ) -> Result<bool> {
     // If we observe EOF from the peer (source returns None), we treat it as a graceful close.
     // Otherwise, we will cancel downstream tasks and tear down the connection cooperatively.
@@ -110,6 +112,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
         auth_ctx: None,
         peer_flags: felix_wire::ORIGINAL_V1_FLAGS,
         peer_features: 0,
+        error_codes,
         stream_cache,
         stream_cache_key,
     };
@@ -166,7 +169,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 &ack_throttle_tx,
                 &ack_timeout_state,
                 &cancel_tx,
-                "unsupported frame flags",
+                ClientError::invalid("unsupported frame flags"),
             )
             .await?;
             continue;
@@ -181,7 +184,7 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                     &ack_throttle_tx,
                     &ack_timeout_state,
                     &cancel_tx,
-                    "auth required",
+                    ClientError::unauthenticated("auth required"),
                 )
                 .await?;
                 return Ok(false);
@@ -688,7 +691,9 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                         &out_ack_depth,
                         "felix_broker_out_ack_depth",
                         &ack_throttle_tx,
-                        Outgoing::Message(Message::error("unexpected message type")),
+                        Outgoing::Message(
+                            ClientError::invalid("unexpected message type").into_message(),
+                        ),
                     )
                     .await,
                     &ack_timeout_state,
@@ -726,6 +731,8 @@ struct Session {
     /// Optional messages this client understands. Nothing until an `Auth` says
     /// otherwise.
     peer_features: u32,
+    /// Shared with the writer, which shapes every error to what `Auth` offered.
+    error_codes: Arc<ErrorCodeSupport>,
     stream_cache: StreamHandleCache,
     stream_cache_key: String,
 }

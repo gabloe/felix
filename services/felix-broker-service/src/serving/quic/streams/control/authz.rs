@@ -5,10 +5,10 @@ use anyhow::Result;
 use felix_authz::{
     Action, CacheScope, Namespace, StreamName, TenantId, cache_resource, stream_resource,
 };
-use felix_wire::Message;
 
 use super::responder::{Responder, send_control_error};
 use crate::serving::auth::AuthContext;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
@@ -29,7 +29,7 @@ pub(super) async fn authorize_stream(
             ctx.ack_throttle_tx,
             ctx.ack_timeout_state,
             ctx.cancel_tx,
-            "auth required",
+            ClientError::unauthenticated("auth required"),
         )
         .await?;
         return Ok(false);
@@ -41,7 +41,7 @@ pub(super) async fn authorize_stream(
             ctx.ack_throttle_tx,
             ctx.ack_timeout_state,
             ctx.cancel_tx,
-            "tenant mismatch",
+            ClientError::forbidden("tenant mismatch"),
         )
         .await?;
         return Ok(false);
@@ -55,8 +55,10 @@ pub(super) async fn authorize_stream(
         return Ok(true);
     }
     let outgoing = match request_id {
-        Some(request_id) => Outgoing::Message(Message::publish_error(request_id, "forbidden")),
-        None => Outgoing::Message(Message::error("forbidden")),
+        Some(request_id) => {
+            Outgoing::Message(ClientError::forbidden("forbidden").into_publish_error(request_id))
+        }
+        None => Outgoing::Message(ClientError::forbidden("forbidden").into_message()),
     };
     handle_ack_enqueue_result(
         send_outgoing_critical(
@@ -90,7 +92,7 @@ pub(super) async fn authorize_stream_simple(
             ctx.ack_throttle_tx,
             ctx.ack_timeout_state,
             ctx.cancel_tx,
-            "auth required",
+            ClientError::unauthenticated("auth required"),
         )
         .await?;
         return Ok(false);
@@ -102,7 +104,7 @@ pub(super) async fn authorize_stream_simple(
             ctx.ack_throttle_tx,
             ctx.ack_timeout_state,
             ctx.cancel_tx,
-            "tenant mismatch",
+            ClientError::forbidden("tenant mismatch"),
         )
         .await?;
         return Ok(false);
@@ -121,7 +123,7 @@ pub(super) async fn authorize_stream_simple(
         ctx.ack_throttle_tx,
         ctx.ack_timeout_state,
         ctx.cancel_tx,
-        "forbidden",
+        ClientError::forbidden("forbidden"),
     )
     .await?;
     Ok(false)
@@ -142,7 +144,7 @@ pub(super) async fn authorize_cache(
             ctx.ack_throttle_tx,
             ctx.ack_timeout_state,
             ctx.cancel_tx,
-            "auth required",
+            ClientError::unauthenticated("auth required"),
         )
         .await?;
         return Ok(false);
@@ -154,7 +156,7 @@ pub(super) async fn authorize_cache(
             ctx.ack_throttle_tx,
             ctx.ack_timeout_state,
             ctx.cancel_tx,
-            "tenant mismatch",
+            ClientError::forbidden("tenant mismatch"),
         )
         .await?;
         return Ok(false);
@@ -173,7 +175,7 @@ pub(super) async fn authorize_cache(
         ctx.ack_throttle_tx,
         ctx.ack_timeout_state,
         ctx.cancel_tx,
-        "forbidden",
+        ClientError::forbidden("forbidden"),
     )
     .await?;
     Ok(false)

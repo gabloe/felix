@@ -230,9 +230,32 @@ mod fence {
 
     use super::*;
     use crate::serving::forward::CacheRequest;
+    use crate::serving::quic::client_error::ClientError;
     use crate::test_support::leader::{self, Leader};
 
-    async fn cache_op(leader: &Leader, request: CacheRequest) -> Result<Option<Bytes>, String> {
+    /// Refused at the fence: nothing was written, so the client may retry
+    /// against the new owner.
+    fn assert_fenced(refused: ClientError, what: &str) {
+        assert_eq!(
+            refused.code(),
+            &felix_wire::ErrorCode::ShardUnavailable,
+            "{what}"
+        );
+        assert_eq!(refused.retry(), felix_wire::RetryClass::Retry, "{what}");
+        let felix_wire::Message::Error { detail, .. } = refused.into_message() else {
+            unreachable!()
+        };
+        assert_eq!(
+            detail.and_then(|detail| detail.reason).as_deref(),
+            Some(felix_wire::shard_unavailable_reason::FENCED),
+            "{what}"
+        );
+    }
+
+    async fn cache_op(
+        leader: &Leader,
+        request: CacheRequest,
+    ) -> Result<Option<Bytes>, ClientError> {
         apply_cache_op(
             &leader.broker,
             (None, std::time::Duration::from_secs(1)),
@@ -246,9 +269,13 @@ mod fence {
             request,
         )
         .await
+        .map_err(|err| ClientError::from_anyhow(&err))
     }
 
-    async fn counter_op(leader: &Leader, request: CacheRequest) -> Result<Option<i64>, String> {
+    async fn counter_op(
+        leader: &Leader,
+        request: CacheRequest,
+    ) -> Result<Option<i64>, ClientError> {
         apply_counter_op(
             &leader.broker,
             Some(&leader.ingress),
@@ -261,6 +288,7 @@ mod fence {
             request,
         )
         .await
+        .map_err(|err| ClientError::from_anyhow(&err))
     }
 
     #[tokio::test]
@@ -271,15 +299,17 @@ mod fence {
             .expect("served before the move");
 
         leader.fence_move(&leader::cache_key());
-        assert!(
+        assert_fenced(
             cache_op(&leader, put_request(Bytes::from_static(b"v2"), None))
                 .await
-                .is_err(),
-            "a put landed after the fence closed"
+                .expect_err("a put landed after the fence closed"),
+            "put",
         );
-        assert!(
-            cache_op(&leader, CacheRequest::Delete).await.is_err(),
-            "a delete landed after the fence closed"
+        assert_fenced(
+            cache_op(&leader, CacheRequest::Delete)
+                .await
+                .expect_err("a delete landed after the fence closed"),
+            "delete",
         );
         assert_eq!(
             cache_op(&leader, CacheRequest::Get).await,
@@ -297,11 +327,11 @@ mod fence {
         );
 
         leader.fence_move(&leader::cache_key());
-        assert!(
+        assert_fenced(
             counter_op(&leader, CacheRequest::CounterAdd { delta: 5 })
                 .await
-                .is_err(),
-            "a counter add landed after the fence closed"
+                .expect_err("a counter add landed after the fence closed"),
+            "counter add",
         );
         assert_eq!(
             counter_op(&leader, CacheRequest::CounterGet).await,

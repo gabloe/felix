@@ -60,6 +60,7 @@
 //! - Cancellation: cancel signals are delivered via watch channels and are cooperative; code must check
 //!   them in all long waits to avoid hanging tasks.
 
+pub(crate) mod client_error;
 mod codec;
 mod conn;
 mod errors;

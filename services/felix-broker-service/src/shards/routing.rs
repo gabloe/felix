@@ -69,6 +69,19 @@ pub enum Reason {
     Stale { have: u64, wanted: u64 },
 }
 
+impl Reason {
+    /// The `reason` a `shard_unavailable` error carries to the client.
+    pub fn wire_name(&self) -> &'static str {
+        use felix_wire::shard_unavailable_reason as wire;
+        match self {
+            Self::NotAssigned => wire::NOT_ASSIGNED,
+            Self::OwnerUnavailable(_) => wire::OWNER_UNAVAILABLE,
+            Self::NotReady => wire::NOT_READY,
+            Self::Stale { .. } => wire::STALE,
+        }
+    }
+}
+
 impl std::fmt::Display for Reason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

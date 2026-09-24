@@ -2,6 +2,8 @@
 
 use felix_wire::Message;
 
+use crate::serving::quic::client_error::ClientError;
+
 /// What to answer a subscribe with, when this broker should not serve it.
 ///
 /// `None` means serve it here: either this broker owns the shard, or it has no
@@ -51,9 +53,15 @@ pub(crate) fn redirect_for(
                 // A client that cannot decode `NotLeader` would lose the
                 // connection to a message meant to help it. An error says the
                 // same thing in a shape every client has always understood.
-                return Some(Message::error(format!(
-                    "stream {stream} is served by {node_id}; this broker does not own it"
-                )));
+                return Some(
+                    ClientError::new(
+                        felix_wire::ErrorCode::NotLeader,
+                        format!(
+                            "stream {stream} is served by {node_id}; this broker does not own it"
+                        ),
+                    )
+                    .into_message(),
+                );
             }
             let addr = client_endpoints.and_then(|endpoints| {
                 endpoints
@@ -68,8 +76,12 @@ pub(crate) fn redirect_for(
                 generation,
             })
         }
-        Dispatch::Unavailable(reason) => Some(Message::error(format!(
-            "stream {stream} cannot be subscribed to right now: {reason}"
-        ))),
+        Dispatch::Unavailable(reason) => Some(
+            ClientError::unavailable(
+                &reason,
+                format!("stream {stream} cannot be subscribed to right now: {reason}"),
+            )
+            .into_message(),
+        ),
     }
 }

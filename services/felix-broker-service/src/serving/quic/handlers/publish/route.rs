@@ -10,6 +10,7 @@ use super::ingress::PublishTarget;
 use super::stream_cache::{StreamHandleCache, push_stream_cache_key};
 use crate::serving::forward::ForwardTarget;
 use crate::serving::quic::STREAM_CACHE_TTL;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::telemetry::t_counter;
 use crate::shards::routing::{Dispatch, IngressRouter, dispatch};
 use crate::shards::{ShardKey, ShardKind};
@@ -64,7 +65,9 @@ pub(crate) async fn resolve_route(
             stream,
             "publish refused: this broker no longer holds a lease on the shards it led",
         );
-        return PublishRoute::Refused;
+        return PublishRoute::Refused(ClientError::fenced(
+            "this broker no longer holds a lease on the shards it led",
+        ));
     }
 
     // Carried to the claim, where the fence refuses the write if this broker
@@ -101,7 +104,10 @@ pub(crate) async fn resolve_route(
                     reason = %reason,
                     "publish refused: shard is not servable here",
                 );
-                return PublishRoute::Refused;
+                return PublishRoute::Refused(ClientError::unavailable(
+                    &reason,
+                    reason.to_string(),
+                ));
             }
         }
     }
@@ -140,15 +146,15 @@ pub(crate) enum PublishRoute {
     },
     /// Another broker owns it.
     Forward(ForwardTarget),
-    /// Nobody can take it right now, or the stream does not resolve.
-    Refused,
+    /// Nobody can take it right now, or the stream does not resolve, and why.
+    Refused(ClientError),
 }
 
 impl PublishRoute {
     fn local(handle: Option<StreamHandle>, generation: u64) -> Self {
         match handle {
             Some(handle) => Self::Local { handle, generation },
-            None => Self::Refused,
+            None => Self::Refused(ClientError::not_found("stream does not resolve")),
         }
     }
 }
@@ -199,10 +205,10 @@ pub(crate) fn resolve_shard(
 
 /// Turn a resolved route into a publish target.
 ///
-/// `None` means this broker cannot serve the publish: the stream did not
-/// resolve, or the shard belongs to a peer this broker has no transport to.
-/// Callers answer that the same way they always answered an unresolvable
-/// stream.
+/// `Err` means this broker cannot serve the publish: the stream did not
+/// resolve, the shard is not servable, or it belongs to a peer this broker has
+/// no transport to. The error carries the code; callers keep the wording they
+/// always used for an unresolvable stream.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publish_target(
     route: PublishRoute,
@@ -219,9 +225,9 @@ pub(crate) fn publish_target(
     // The publisher's own token. It travels with a forward so the owner can
     // check it rather than trust that this broker did.
     credential: &str,
-) -> Option<PublishTarget> {
+) -> Result<PublishTarget, ClientError> {
     match route {
-        PublishRoute::Local { handle, generation } => Some(PublishTarget::Resolved {
+        PublishRoute::Local { handle, generation } => Ok(PublishTarget::Resolved {
             handle,
             shard: local_shard_key(publish_ctx, tenant_id, namespace, stream, shard),
             generation,
@@ -234,10 +240,13 @@ pub(crate) fn publish_target(
                     owner = %target.node_id,
                     "publish refused: shard is owned by another broker and this one cannot forward",
                 );
-                return None;
+                return Err(ClientError::new(
+                    felix_wire::ErrorCode::NotLeader,
+                    format!("shard is owned by {}", target.node_id),
+                ));
             }
             t_counter!("felix_publish_requests_total", "result" => "forwarded").increment(1);
-            Some(PublishTarget::Forward {
+            Ok(PublishTarget::Forward {
                 target,
                 key: crate::serving::forward::ForwardKey {
                     tenant_id: tenant_id.to_string(),
@@ -252,7 +261,7 @@ pub(crate) fn publish_target(
                 credential: credential.to_string(),
             })
         }
-        PublishRoute::Refused => None,
+        PublishRoute::Refused(refusal) => Err(refusal),
     }
 }
 

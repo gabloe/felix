@@ -16,6 +16,7 @@
 //! - Cancellation (cancel_rx) is checked both in the outer select loop and inside each waiter future
 //!   to ensure we can abort promptly even while waiting on a timeout.
 
+use crate::serving::quic::client_error::ClientError;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -242,7 +243,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            encoding.error(request_id, "publish worker dropped response".to_string()),
+                                            encoding.error(request_id, ClientError::internal("publish worker dropped response")),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -284,7 +285,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     &out_ack_depth_waiter,
                                     "felix_broker_out_ack_depth",
                                     &ack_throttle_tx_waiter,
-                                    encoding.error(request_id, "publish commit timeout".to_string()),
+                                    encoding.error(request_id, ClientError::new(felix_wire::ErrorCode::Unacknowledged, "publish commit timeout")),
                                 )
                                 .await,
                                 &ack_timeout_state_waiter,
@@ -363,7 +364,7 @@ pub(super) async fn run_ack_waiter_loop(
                                             &out_ack_depth_waiter,
                                             "felix_broker_out_ack_depth",
                                             &ack_throttle_tx_waiter,
-                                            encoding.error(request_id, "publish batch worker dropped response".to_string()),
+                                            encoding.error(request_id, ClientError::internal("publish batch worker dropped response")),
                                         )
                                         .await,
                                         &ack_timeout_state_waiter,
@@ -400,7 +401,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     &out_ack_depth_waiter,
                                     "felix_broker_out_ack_depth",
                                     &ack_throttle_tx_waiter,
-                                    encoding.error(request_id, "publish commit timeout".to_string()),
+                                    encoding.error(request_id, ClientError::new(felix_wire::ErrorCode::Unacknowledged, "publish commit timeout")),
                                 )
                                 .await,
                                 &ack_timeout_state_waiter,

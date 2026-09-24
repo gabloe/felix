@@ -1,0 +1,305 @@
+//! What a client is told when its request fails.
+//!
+//! Every failure site states a code through [`ClientError`], and the writer
+//! decides per control stream whether the code reaches the wire: only a client
+//! that offered `FEATURE_ERROR_CODES` gets it, so every other client sees the
+//! same frames it always did. See the error-code table in `docs/protocol.md`.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use felix_wire::{ErrorCode, ErrorDetail, Message, RetryClass};
+
+use crate::serving::forward::ForwardError;
+use crate::shards::lifecycle::fence::Fenced;
+use crate::shards::routing::Reason;
+
+/// A failed request, as the client will see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClientError {
+    code: ErrorCode,
+    retry: RetryClass,
+    detail: Option<ErrorDetail>,
+    message: String,
+}
+
+impl ClientError {
+    /// An error with the code's default retry class.
+    pub(crate) fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            retry: code.default_retry(),
+            code,
+            detail: None,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn unauthenticated(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Unauthenticated, message)
+    }
+
+    pub(crate) fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Forbidden, message)
+    }
+
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::NotFound, message)
+    }
+
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::InvalidRequest, message)
+    }
+
+    pub(crate) fn overloaded(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Overloaded, message)
+    }
+
+    pub(crate) fn limit_exceeded(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::LimitExceeded, message)
+    }
+
+    pub(crate) fn draining(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Draining, message)
+    }
+
+    /// A failure inside the broker whose effect on the request is unknown.
+    /// Sites where nothing could have been applied say so with
+    /// [`Self::with_retry`].
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, message)
+    }
+
+    /// The shard cannot be served right now, and why.
+    pub(crate) fn unavailable(reason: &Reason, message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ShardUnavailable, message).with_reason(reason.wire_name())
+    }
+
+    /// Put `context` in front of the message, as `"{context}: {message}"`.
+    pub(crate) fn prefixed(mut self, context: &str) -> Self {
+        self.message = format!("{context}: {}", self.message);
+        self
+    }
+
+    /// This broker's authority over the shard lapsed before it wrote anything.
+    pub(crate) fn fenced(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::ShardUnavailable, message)
+            .with_reason(felix_wire::shard_unavailable_reason::FENCED)
+    }
+
+    /// Keep the code, say it in `message`.
+    pub(crate) fn reworded(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
+
+    pub(crate) fn with_retry(mut self, retry: RetryClass) -> Self {
+        self.retry = retry;
+        self
+    }
+
+    fn with_reason(mut self, reason: &str) -> Self {
+        self.detail.get_or_insert_with(ErrorDetail::default).reason = Some(reason.to_string());
+        self
+    }
+
+    pub(crate) fn code(&self) -> &ErrorCode {
+        &self.code
+    }
+
+    pub(crate) fn retry(&self) -> RetryClass {
+        self.retry
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Classify an error that came up from below the serving layer.
+    ///
+    /// Looks through the whole chain for a type that says what happened; what
+    /// matches nothing is `internal`, whose retry class admits the request may
+    /// have been applied. The message is always the error's own text, so a
+    /// client without codes sees exactly what it saw before.
+    pub(crate) fn from_anyhow(err: &anyhow::Error) -> Self {
+        let message = err.to_string();
+        for cause in err.chain() {
+            if let Some(known) = cause.downcast_ref::<ClientError>() {
+                return known.clone();
+            }
+            if let Some(refused) = cause.downcast_ref::<Fenced>() {
+                return Self::from(*refused).reworded(message);
+            }
+            if let Some(broker) = cause.downcast_ref::<felix_broker::BrokerError>() {
+                return Self::classify_broker(broker, message);
+            }
+            if let Some(quorum) = cause.downcast_ref::<crate::replication::quorum::QuorumError>() {
+                let code = match quorum {
+                    crate::replication::quorum::QuorumError::TimedOut { .. } => {
+                        ErrorCode::QuorumTimeout
+                    }
+                    crate::replication::quorum::QuorumError::LeadershipLost { .. } => {
+                        ErrorCode::LeadershipLost
+                    }
+                };
+                return Self::new(code, message);
+            }
+            if let Some(forward) = cause.downcast_ref::<ForwardError>() {
+                return Self::classify_forward(forward, message);
+            }
+        }
+        Self::internal(message)
+    }
+
+    /// A publish that never reached the queue: the fence refused it at
+    /// admission, or the queue had no room.
+    pub(crate) fn not_enqueued(err: &anyhow::Error) -> Self {
+        match err.downcast_ref::<Fenced>() {
+            Some(refused) => Self::from(*refused),
+            None => Self::overloaded(err.to_string()),
+        }
+    }
+
+    /// Classify a broker-core error, keeping the text the caller already chose.
+    pub(crate) fn from_broker(err: &felix_broker::BrokerError, message: impl Into<String>) -> Self {
+        Self::classify_broker(err, message.into())
+    }
+
+    fn classify_broker(err: &felix_broker::BrokerError, message: String) -> Self {
+        use felix_broker::BrokerError as E;
+        match err {
+            E::StreamNotFound { .. }
+            | E::TenantNotFound(_)
+            | E::NamespaceNotFound { .. }
+            // The stream was removed or replaced under a cached handle; looking
+            // it up again is what the client's retry does.
+            | E::StreamHandleInactive(_) => Self::not_found(message),
+            E::CapacityTooLarge
+            | E::CursorTooOld { .. }
+            | E::CursorInFuture { .. }
+            | E::DurabilityChangeRequiresRecreate { .. }
+            | E::StreamNotDurable { .. }
+            | E::SequenceGap { .. }
+            | E::UnknownProducer { .. }
+            | E::SequenceExpired { .. } => Self::invalid(message),
+            // A broker configured without the storage the stream needs will
+            // answer the same way until someone changes its configuration.
+            E::DurableStorageNotConfigured { .. } => {
+                Self::internal(message).with_retry(RetryClass::Fatal)
+            }
+            E::Storage(_) => Self::new(ErrorCode::Storage, message),
+        }
+    }
+
+    fn classify_forward(err: &ForwardError, message: String) -> Self {
+        use felix_wire::internal::ErrorCode as Internal;
+        use felix_wire::shard_unavailable_reason as reason;
+        match err {
+            ForwardError::Indeterminate { .. } => Self::new(ErrorCode::Unacknowledged, message),
+            ForwardError::Refused { code, .. } => match code {
+                Some(Internal::Overload) => Self::overloaded(message),
+                Some(Internal::StaleRoute) => {
+                    Self::new(ErrorCode::ShardUnavailable, message).with_reason(reason::STALE)
+                }
+                Some(Internal::FencedEpoch) => {
+                    Self::new(ErrorCode::ShardUnavailable, message).with_reason(reason::FENCED)
+                }
+                Some(Internal::Unavailable) => {
+                    Self::new(ErrorCode::ShardUnavailable, message).with_reason(reason::NOT_READY)
+                }
+                // The owner checks the client's own credential on a forward.
+                Some(Internal::Unauthorized) => Self::forbidden(message),
+                Some(Internal::StorageFailed) => Self::new(ErrorCode::Storage, message),
+                Some(
+                    Internal::ProtocolVersion
+                    | Internal::Malformed
+                    | Internal::UnsupportedKind
+                    | Internal::LogGap
+                    | Internal::LogConflict,
+                ) => Self::internal(message).with_retry(RetryClass::Retry),
+                // Unreachable, redirected in a loop, or out of budget before
+                // anything was sent: the owner could not be reached.
+                None => Self::new(ErrorCode::ShardUnavailable, message)
+                    .with_reason(reason::OWNER_UNAVAILABLE),
+            },
+        }
+    }
+
+    /// As an `error` message, code included; the writer strips the code for a
+    /// client that did not ask for it.
+    pub(crate) fn into_message(self) -> Message {
+        Message::Error {
+            message: self.message,
+            code: Some(self.code),
+            retry: Some(self.retry),
+            detail: self.detail,
+        }
+    }
+
+    /// As a `publish_error` answering `request_id`.
+    pub(crate) fn into_publish_error(self, request_id: u64) -> Message {
+        Message::PublishError {
+            request_id,
+            message: self.message,
+            code: Some(self.code),
+            retry: Some(self.retry),
+            detail: self.detail,
+        }
+    }
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+/// Nothing was written: the fence refuses before the claim, so the write is
+/// safe to send again to the shard's new owner.
+impl From<Fenced> for ClientError {
+    fn from(refused: Fenced) -> Self {
+        Self::fenced(refused.to_string())
+    }
+}
+
+/// Whether this control stream's client reads error codes.
+///
+/// Set once when the stream authenticates and read by the writer, which is the
+/// one place every answer passes through. The flags are only ever set before
+/// the `AuthOk` is queued, and the queue orders everything after it.
+#[derive(Debug, Default)]
+pub(crate) struct ErrorCodeSupport {
+    json: AtomicBool,
+    binary_ack: AtomicBool,
+}
+
+impl ErrorCodeSupport {
+    /// Record what the client offered in `Auth`.
+    pub(crate) fn negotiate(&self, peer_features: u32, peer_flags: u16) {
+        self.json.store(
+            felix_wire::supports_feature(peer_features, felix_wire::FEATURE_ERROR_CODES),
+            Ordering::Relaxed,
+        );
+        self.binary_ack.store(
+            felix_wire::supports(peer_flags, felix_wire::FLAG_BINARY_PUBLISH_ACK_CODE),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// The message as this client should receive it.
+    pub(crate) fn shape(&self, message: Message) -> Message {
+        if self.json.load(Ordering::Relaxed) {
+            message
+        } else {
+            message.without_error_code()
+        }
+    }
+
+    /// Whether a failed binary ack may carry its code.
+    pub(crate) fn binary_ack(&self) -> bool {
+        self.binary_ack.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -76,6 +76,7 @@ async fn control_loop_cache_put_best_effort_closed_reports_error() -> Result<()>
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await;
     assert!(result.is_err());
@@ -271,6 +272,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         ack_waiter_tx.clone(),
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await?;
     assert!(result);
@@ -302,6 +304,7 @@ async fn control_loop_cache_put_best_effort_full_and_closed() -> Result<()> {
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await;
     assert!(err.is_err());
@@ -388,6 +391,7 @@ async fn control_loop_cache_get_records_lookup_timing() -> Result<()> {
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await?;
     assert!(result);
@@ -483,6 +487,7 @@ async fn control_loop_cache_timings_recorded() -> Result<()> {
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await?;
     assert!(result);
@@ -551,6 +556,7 @@ async fn control_loop_cache_get_missing_no_request_id_returns_true() -> Result<(
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await?;
     assert!(result);
@@ -621,6 +627,7 @@ async fn control_loop_cache_put_missing_no_request_id_returns_true() -> Result<(
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        Default::default(),
     )
     .await?;
     assert!(result);

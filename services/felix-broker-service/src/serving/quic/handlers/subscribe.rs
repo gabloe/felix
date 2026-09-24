@@ -47,6 +47,7 @@ use tokio::sync::mpsc;
 
 use super::publish::{Outgoing, SubscriptionLimiter, send_outgoing_critical};
 use crate::serving::quic::SUBSCRIPTION_ID;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::codec::write_message;
 use crate::serving::quic::telemetry::t_counter;
 use config::EventWriterConfig;
@@ -129,7 +130,10 @@ pub(crate) async fn handle_subscribe_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::error("max subscriptions per connection exceeded")),
+                Outgoing::Message(
+                    ClientError::limit_exceeded("max subscriptions per connection exceeded")
+                        .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -214,7 +218,11 @@ pub(crate) async fn handle_subscribe_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::error(err.to_string())),
+                    Outgoing::Message(
+                        ClientError::internal(err.to_string())
+                            .with_retry(felix_wire::RetryClass::Retry)
+                            .into_message(),
+                    ),
                 )
                 .await,
                 ack_timeout_state,
@@ -359,7 +367,10 @@ pub(crate) async fn handle_subscribe_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::error("subscriber lane queue full during register")),
+                Outgoing::Message(
+                    ClientError::overloaded("subscriber lane queue full during register")
+                        .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -432,7 +443,10 @@ fn subscribe_error_message(err: felix_broker::BrokerError) -> Message {
                 available: tail,
             }
         }
-        other => Message::error(other.to_string()),
+        other => {
+            let message = other.to_string();
+            ClientError::from_broker(&other, message).into_message()
+        }
     }
 }
 

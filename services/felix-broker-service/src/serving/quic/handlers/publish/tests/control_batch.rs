@@ -530,10 +530,15 @@ async fn handle_publish_batch_message_throttled_with_request_id_sends_error() {
         Outgoing::Message(Message::PublishError {
             request_id,
             message,
+            code,
+            retry,
             ..
         }) => {
             assert_eq!(request_id, 21);
             assert!(message.contains("overloaded"));
+            // Shed before any work, so nothing was applied.
+            assert_eq!(code, Some(felix_wire::ErrorCode::Overloaded));
+            assert_eq!(retry, Some(felix_wire::RetryClass::RetryAfter));
         }
         _ => panic!("unexpected outgoing"),
     }

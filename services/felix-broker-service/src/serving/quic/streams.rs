@@ -31,6 +31,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
 use crate::config::BrokerConfig;
 use crate::serving::auth::BrokerAuth;
+use crate::serving::quic::client_error::ErrorCodeSupport;
 use crate::serving::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, reset_local_depth_only,
 };
@@ -107,9 +108,13 @@ pub(crate) async fn handle_stream(
 
     // If the writer exits early, Outgoing messages still queued are dropped;
     // teardown reconciles the depth gauges via `reset_local_depth_only`.
+    // What the client said it can read, set at `Auth` and applied by the writer.
+    let error_codes = Arc::new(ErrorCodeSupport::default());
+
     let writer_handle = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Arc::clone(&error_codes),
         out_ack_depth_worker,
         ack_throttle_tx_writer,
         cancel_tx_writer,
@@ -151,6 +156,7 @@ pub(crate) async fn handle_stream(
         ack_waiter_tx.clone(),
         ack_wait_timeout,
         &mut frame_scratch,
+        error_codes,
     )
     .await;
 

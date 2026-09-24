@@ -159,10 +159,12 @@ mod fence {
             .await
             .expect("enqueue publish");
         let answer = response_rx.await.expect("worker response");
-        assert!(
-            answer.is_err(),
-            "a publish claimed after the fence closed was acknowledged"
-        );
+        let refused =
+            answer.expect_err("a publish claimed after the fence closed was acknowledged");
+        // Nothing was written, so the client is told it may retry elsewhere.
+        let refused = crate::serving::quic::client_error::ClientError::from_anyhow(&refused);
+        assert_eq!(refused.code(), &felix_wire::ErrorCode::ShardUnavailable);
+        assert_eq!(refused.retry(), felix_wire::RetryClass::Retry);
         let tail = leader.tail(stream).await;
         assert_eq!(tail, 0, "the refused publish was written anyway");
     }

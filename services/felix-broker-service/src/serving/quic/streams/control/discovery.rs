@@ -5,6 +5,7 @@ use felix_wire::Message;
 
 use super::responder::send_control_error;
 use super::{Ctx, Session, Step};
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
@@ -29,7 +30,7 @@ pub(super) async fn topology(cx: &Ctx<'_>, session: &mut Session) -> Result<Step
             ack_throttle_tx,
             ack_timeout_state,
             cancel_tx,
-            "not authenticated",
+            ClientError::unauthenticated("not authenticated"),
         )
         .await?;
         return Ok(Step::Close(false));
@@ -83,7 +84,7 @@ pub(super) async fn stream_shards(
             ack_throttle_tx,
             ack_timeout_state,
             cancel_tx,
-            "not authenticated",
+            ClientError::unauthenticated("not authenticated"),
         )
         .await?;
         return Ok(Step::Close(false));
@@ -95,7 +96,7 @@ pub(super) async fn stream_shards(
             ack_throttle_tx,
             ack_timeout_state,
             cancel_tx,
-            "tenant mismatch",
+            ClientError::forbidden("tenant mismatch"),
         )
         .await?;
         return Ok(Step::Close(false));
@@ -161,7 +162,7 @@ pub(super) async fn cache_shards(
             ack_throttle_tx,
             ack_timeout_state,
             cancel_tx,
-            "not authenticated",
+            ClientError::unauthenticated("not authenticated"),
         )
         .await?;
         return Ok(Step::Close(false));
@@ -173,7 +174,7 @@ pub(super) async fn cache_shards(
             ack_throttle_tx,
             ack_timeout_state,
             cancel_tx,
-            "tenant mismatch",
+            ClientError::forbidden("tenant mismatch"),
         )
         .await?;
         return Ok(Step::Close(false));

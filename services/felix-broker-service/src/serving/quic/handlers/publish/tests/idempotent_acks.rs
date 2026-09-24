@@ -60,7 +60,8 @@ fn plain_publishes_are_never_answered_with_a_refusal() {
         Outgoing::PublishAck {
             forwarded_to: _,
             request_id: 3,
-            error: Some(_)
+            error: Some(_),
+            ..
         }
     ));
 }

@@ -97,7 +97,7 @@ pub(super) async fn group_poll(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::error(format!("group poll not served: {reason}"))),
+                    Outgoing::Message(reason.prefixed("group poll not served").into_message()),
                 )
                 .await,
                 ack_timeout_state,
@@ -202,7 +202,7 @@ pub(super) async fn group_ack(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::error(format!("group ack not served: {reason}"))),
+                Outgoing::Message(reason.prefixed("group ack not served").into_message()),
             )
             .await,
             ack_timeout_state,
@@ -303,7 +303,7 @@ pub(super) async fn group_nack(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::error(format!("group nack not served: {reason}"))),
+                Outgoing::Message(reason.prefixed("group nack not served").into_message()),
             )
             .await,
             ack_timeout_state,
@@ -406,7 +406,7 @@ pub(super) async fn group_dead_letters(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::error(format!("dead letters not served: {reason}"))),
+                    Outgoing::Message(reason.prefixed("dead letters not served").into_message()),
                 )
                 .await,
                 ack_timeout_state,
@@ -511,9 +511,7 @@ pub(super) async fn group_discard(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::error(format!(
-                    "group discard not served: {reason}"
-                ))),
+                Outgoing::Message(reason.prefixed("group discard not served").into_message()),
             )
             .await,
             ack_timeout_state,
@@ -614,9 +612,7 @@ pub(super) async fn group_redrive(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::error(format!(
-                    "group redrive not served: {reason}"
-                ))),
+                Outgoing::Message(reason.prefixed("group redrive not served").into_message()),
             )
             .await,
             ack_timeout_state,

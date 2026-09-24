@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use felix_broker::{Broker, GroupKey};
 use felix_wire::GroupRecord;
 
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::PublishContext;
 use crate::shards::lifecycle::fence::{self, FenceGuard};
 use crate::shards::routing::{Dispatch, dispatch};
@@ -42,7 +43,7 @@ pub(crate) async fn poll(
     group: &str,
     max_records: usize,
     wait: Duration,
-) -> Result<Vec<GroupRecord>, String> {
+) -> Result<Vec<GroupRecord>, ClientError> {
     let (reader, log, owned) =
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
@@ -55,7 +56,7 @@ pub(crate) async fn poll(
         let claimed = reader
             .poll(&key, &log, max_records, Instant::now())
             .await
-            .map_err(|err| err.to_string());
+            .map_err(storage);
         drop(fenced);
         let claimed = claimed?;
         if !claimed.is_empty() {
@@ -91,14 +92,11 @@ pub(crate) async fn dead_letters(
     stream: &str,
     shard: u32,
     group: &str,
-) -> Result<Vec<u64>, String> {
+) -> Result<Vec<u64>, ClientError> {
     let (reader, _log, _owned) =
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
-    reader
-        .dead_lettered(&key)
-        .await
-        .map_err(|err| err.to_string())
+    reader.dead_lettered(&key).await.map_err(storage)
 }
 
 /// Drop a dead letter, or put it back in the queue.
@@ -113,7 +111,7 @@ pub(crate) async fn manage_dead_letter(
     group: &str,
     offset: u64,
     redrive: bool,
-) -> Result<(), String> {
+) -> Result<(), ClientError> {
     let (reader, _log, owned) =
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
@@ -123,14 +121,16 @@ pub(crate) async fn manage_dead_letter(
     } else {
         reader.discard(&key, offset).await
     }
-    .map_err(|err| err.to_string())?;
+    .map_err(storage)?;
     if taken {
         return Ok(());
     }
     // Refused rather than silently accepted. An operator told a redrive
     // succeeded when the offset was never dead-lettered would wait for a
     // delivery that is not coming.
-    Err(format!("offset {offset} is not a dead letter of {group}"))
+    Err(ClientError::invalid(format!(
+        "offset {offset} is not a dead letter of {group}"
+    )))
 }
 
 /// Finish a record, or hand it back.
@@ -145,15 +145,15 @@ pub(crate) async fn settle(
     group: &str,
     offset: u64,
     finish: bool,
-) -> Result<(), String> {
+) -> Result<(), ClientError> {
     let (reader, _log, owned) =
         reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
     let _fenced = owned.enter(publish_ctx)?;
     if finish {
-        reader.ack(&key, offset).await.map_err(|e| e.to_string())
+        reader.ack(&key, offset).await.map_err(storage)
     } else {
-        reader.nack(&key, offset).await.map_err(|e| e.to_string())
+        reader.nack(&key, offset).await.map_err(storage)
     }
 }
 
@@ -167,13 +167,13 @@ impl Owned {
     /// Enter the shard's write fence, right before a group write. Group state
     /// moves with the shard, so a write landing after the shard stopped
     /// serving here would be left behind.
-    fn enter(&self, publish_ctx: &PublishContext) -> Result<Option<FenceGuard>, String> {
+    fn enter(&self, publish_ctx: &PublishContext) -> Result<Option<FenceGuard>, ClientError> {
         fence::enter(
             publish_ctx.ingress.as_deref(),
             Some(&self.key),
             self.generation,
         )
-        .map_err(|refused| refused.to_string())
+        .map_err(ClientError::from)
     }
 }
 
@@ -184,7 +184,7 @@ fn owned_here(
     namespace: &str,
     stream: &str,
     shard: u32,
-) -> Result<Owned, String> {
+) -> Result<Owned, ClientError> {
     let key = ShardKey {
         tenant_id: tenant_id.to_string(),
         namespace: namespace.to_string(),
@@ -194,10 +194,11 @@ fn owned_here(
     };
     match dispatch(publish_ctx.ingress.as_deref(), &key) {
         Dispatch::Local { generation } => Ok(Owned { key, generation }),
-        Dispatch::Forward { node_id, .. } => {
-            Err(format!("shard {shard} of {stream} is served by {node_id}"))
-        }
-        Dispatch::Unavailable(reason) => Err(reason.to_string()),
+        Dispatch::Forward { node_id, .. } => Err(ClientError::new(
+            felix_wire::ErrorCode::NotLeader,
+            format!("shard {shard} of {stream} is served by {node_id}"),
+        )),
+        Dispatch::Unavailable(reason) => Err(ClientError::unavailable(&reason, reason.to_string())),
     }
 }
 
@@ -215,17 +216,17 @@ fn reader_and_log<'a>(
         felix_broker::StreamLog,
         Owned,
     ),
-    String,
+    ClientError,
 > {
     let owned = owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
-    let reader = broker
-        .group_reader()
-        .ok_or("this broker has no durable storage, so it serves no consumer groups")?;
+    let reader = broker.group_reader().ok_or_else(|| {
+        no_storage("this broker has no durable storage, so it serves no consumer groups")
+    })?;
     let log = broker
         .durable_storage()
-        .ok_or("this broker has no durable storage")?
+        .ok_or_else(|| no_storage("this broker has no durable storage"))?
         .open_stream(tenant_id, namespace, stream, shard)
-        .map_err(|err| err.to_string())?;
+        .map_err(storage)?;
     Ok((reader, log, owned))
 }
 
@@ -237,6 +238,15 @@ fn group_key(tenant_id: &str, namespace: &str, stream: &str, shard: u32, group: 
         shard,
         group: group.to_string(),
     }
+}
+
+fn storage(err: impl std::fmt::Display) -> ClientError {
+    ClientError::new(felix_wire::ErrorCode::Storage, err.to_string())
+}
+
+// Configuration, not state: asking again gets the same answer.
+fn no_storage(message: &str) -> ClientError {
+    ClientError::internal(message).with_retry(felix_wire::RetryClass::Fatal)
 }
 
 #[cfg(test)]

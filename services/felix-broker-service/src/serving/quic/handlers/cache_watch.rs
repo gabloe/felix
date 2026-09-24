@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 
 use super::publish::{Outgoing, PublishContext, send_outgoing_critical};
 use crate::serving::quic::SUBSCRIPTION_ID;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::codec::write_message;
 
 /// Changes queued per watcher before the watch is ended as lagged. A watch is
@@ -106,9 +107,10 @@ pub(crate) async fn handle_cache_watch_message(
         (None, Some(prefix)) => CacheWatchFilter::Prefix(prefix.clone()),
         _ => {
             responder
-                .send(Message::error(
-                    "cache_watch takes exactly one of key or prefix",
-                ))
+                .send(
+                    ClientError::invalid("cache_watch takes exactly one of key or prefix")
+                        .into_message(),
+                )
                 .await?;
             return Ok(true);
         }
@@ -119,10 +121,13 @@ pub(crate) async fn handle_cache_watch_message(
         .await
     {
         responder
-            .send(Message::error(format!(
-                "cache scope not found: {}/{}/{}",
-                request.tenant_id, request.namespace, request.cache
-            )))
+            .send(
+                ClientError::not_found(format!(
+                    "cache scope not found: {}/{}/{}",
+                    request.tenant_id, request.namespace, request.cache
+                ))
+                .into_message(),
+            )
             .await?;
         return Ok(true);
     }
@@ -152,11 +157,14 @@ pub(crate) async fn handle_cache_watch_message(
         // hash there and look like a working prefix watch: silently partial.
         (CacheWatchFilter::Prefix(_), None) => {
             responder
-                .send(Message::error(format!(
-                    "cache {} has {shards} shards and a prefix watch reads one; name the \
+                .send(
+                    ClientError::invalid(format!(
+                        "cache {} has {shards} shards and a prefix watch reads one; name the \
                          shard, and open one watch per shard to cover the prefix",
-                    request.cache
-                )))
+                        request.cache
+                    ))
+                    .into_message(),
+                )
                 .await?;
             return Ok(true);
         }
@@ -166,12 +174,15 @@ pub(crate) async fn handle_cache_watch_message(
     // from a quiet prefix.
     if shard >= shards.max(1) {
         responder
-            .send(Message::error(format!(
-                "cache {} has {} shard(s); shard {} does not exist",
-                request.cache,
-                shards.max(1),
-                shard
-            )))
+            .send(
+                ClientError::invalid(format!(
+                    "cache {} has {} shard(s); shard {} does not exist",
+                    request.cache,
+                    shards.max(1),
+                    shard
+                ))
+                .into_message(),
+            )
             .await?;
         return Ok(true);
     }
@@ -197,9 +208,12 @@ pub(crate) async fn handle_cache_watch_message(
         // Reachable only by a client that ignored negotiation: the feature bit
         // is advertised exactly when the hub exists.
         responder
-            .send(Message::error(
-                "this broker's cache is not log-backed, so it cannot serve watches",
-            ))
+            .send(
+                ClientError::invalid(
+                    "this broker's cache is not log-backed, so it cannot serve watches",
+                )
+                .into_message(),
+            )
             .await?;
         return Ok(true);
     };
@@ -209,7 +223,10 @@ pub(crate) async fn handle_cache_watch_message(
         .try_reserve(config.max_subscriptions_per_conn)
     {
         responder
-            .send(Message::error("max subscriptions per connection exceeded"))
+            .send(
+                ClientError::limit_exceeded("max subscriptions per connection exceeded")
+                    .into_message(),
+            )
             .await?;
         return Ok(true);
     }
@@ -241,7 +258,14 @@ pub(crate) async fn handle_cache_watch_message(
     else {
         subscriptions.release();
         responder
-            .send(Message::error("the cache shard's log could not be opened"))
+            .send(
+                ClientError::new(
+                    felix_wire::ErrorCode::Storage,
+                    "the cache shard's log could not be opened",
+                )
+                .with_retry(felix_wire::RetryClass::Retry)
+                .into_message(),
+            )
             .await?;
         return Ok(true);
     };
@@ -250,9 +274,14 @@ pub(crate) async fn handle_cache_watch_message(
         Err(err) => {
             subscriptions.release();
             responder
-                .send(Message::error(format!(
-                    "the cache shard's log could not be read: {err}"
-                )))
+                .send(
+                    ClientError::new(
+                        felix_wire::ErrorCode::Storage,
+                        format!("the cache shard's log could not be read: {err}"),
+                    )
+                    .with_retry(felix_wire::RetryClass::Retry)
+                    .into_message(),
+                )
                 .await?;
             return Ok(true);
         }
@@ -278,9 +307,10 @@ pub(crate) async fn handle_cache_watch_message(
             // shortcut, and delivering both would hand over every value twice.
             subscriptions.release();
             responder
-                .send(Message::error(
-                    "cache_watch takes retained or from_offset, not both",
-                ))
+                .send(
+                    ClientError::invalid("cache_watch takes retained or from_offset, not both")
+                        .into_message(),
+                )
                 .await?;
             return Ok(true);
         }
@@ -317,7 +347,11 @@ pub(crate) async fn handle_cache_watch_message(
                 Err(err) => {
                     subscriptions.release();
                     responder
-                        .send(Message::error(format!("cache snapshot failed: {err}")))
+                        .send(
+                            ClientError::internal(format!("cache snapshot failed: {err}"))
+                                .with_retry(felix_wire::RetryClass::Retry)
+                                .into_message(),
+                        )
                         .await?;
                     return Ok(true);
                 }
@@ -337,7 +371,13 @@ pub(crate) async fn handle_cache_watch_message(
         Ok(send) => send,
         Err(err) => {
             subscriptions.release();
-            responder.send(Message::error(err.to_string())).await?;
+            responder
+                .send(
+                    ClientError::internal(err.to_string())
+                        .with_retry(felix_wire::RetryClass::Retry)
+                        .into_message(),
+                )
+                .await?;
             return Ok(true);
         }
     };

@@ -49,7 +49,7 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
     )
     .await;
     assert!(
-        matches!(handle, PublishRoute::Refused),
+        matches!(handle, PublishRoute::Refused(_)),
         "no tenant/namespace yet"
     );
 
@@ -83,7 +83,7 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
     )
     .await;
     assert!(
-        matches!(cached, PublishRoute::Refused),
+        matches!(cached, PublishRoute::Refused(_)),
         "cached miss should be returned until cache expires or clears"
     );
 

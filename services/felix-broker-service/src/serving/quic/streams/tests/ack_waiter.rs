@@ -480,3 +480,76 @@ async fn ack_waiter_enqueue_failure_publish_batch_timeout() -> Result<()> {
     handle.await.expect("ack waiter");
     Ok(())
 }
+
+/// A quorum timeout reaches the client as `quorum_timeout`, outcome unknown,
+/// in both encodings: the leader wrote the batch, so it is not a refusal.
+#[tokio::test]
+async fn a_quorum_timeout_is_answered_as_outcome_unknown() -> Result<()> {
+    let (out_ack_tx, mut out_ack_rx) = mpsc::channel(8);
+    let (ack_waiter_tx, ack_waiter_rx) = mpsc::channel(8);
+    let (ack_throttle_tx, _ack_throttle_rx) = watch::channel(false);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let ack_waiter = tokio::spawn(run_ack_waiter_loop(
+        ack_waiter_rx,
+        out_ack_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ack_throttle_tx,
+        Arc::new(Mutex::new(AckTimeoutState::new(std::time::Instant::now()))),
+        cancel_tx,
+        cancel_rx,
+        Duration::from_secs(5),
+    ));
+    let waiters = Arc::new(Semaphore::new(10));
+    let timed_out = || {
+        anyhow::Error::from(crate::replication::quorum::QuorumError::TimedOut {
+            what: "batch",
+            timeout: Duration::from_millis(50),
+        })
+    };
+
+    for (request_id, encoding) in [(31, AckEncoding::Json), (32, AckEncoding::Binary)] {
+        let (tx, rx) = oneshot::channel();
+        ack_waiter_tx
+            .send(AckWaiterMessage::PublishBatch {
+                encoding,
+                request_id,
+                payload_bytes: vec![1],
+                response_rx: rx,
+                permit: waiters.clone().acquire_owned().await?,
+                forwarded_to: None,
+            })
+            .await?;
+        let _ = tx.send(Err(timed_out()));
+    }
+
+    match timeout(Duration::from_secs(2), out_ack_rx.recv()).await? {
+        Some(Outgoing::Message(Message::PublishError {
+            request_id: 31,
+            code,
+            retry,
+            ..
+        })) => {
+            assert_eq!(code, Some(felix_wire::ErrorCode::QuorumTimeout));
+            assert_eq!(retry, Some(felix_wire::RetryClass::OutcomeUnknown));
+        }
+        other => panic!("expected a json publish_error, got {other:?}"),
+    }
+    match timeout(Duration::from_secs(2), out_ack_rx.recv()).await? {
+        Some(Outgoing::PublishAck {
+            request_id: 32,
+            code,
+            error: Some(_),
+            ..
+        }) => assert_eq!(
+            code,
+            Some((
+                felix_wire::ErrorCode::QuorumTimeout,
+                felix_wire::RetryClass::OutcomeUnknown
+            ))
+        ),
+        other => panic!("expected a binary ack, got {other:?}"),
+    }
+    drop(ack_waiter_tx);
+    ack_waiter.await?;
+    Ok(())
+}

@@ -72,7 +72,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
         &batch.stream,
         batch.key.as_deref(),
     );
-    let Some(target) = publish_target(
+    let Ok(target) = publish_target(
         resolve_route(
             broker,
             publish_ctx.authority(),
@@ -151,7 +151,7 @@ pub(crate) async fn handle_publish_message_uni(
         counters.pub_batches_in_ok.fetch_add(1, Ordering::Relaxed);
         counters.pub_items_in_ok.fetch_add(1, Ordering::Relaxed);
     }
-    let Some(target) = publish_target(
+    let Ok(target) = publish_target(
         resolve_route(
             broker,
             publish_ctx.authority(),
@@ -229,7 +229,7 @@ pub(crate) async fn handle_publish_batch_message_uni(
             .pub_items_in_ok
             .fetch_add(payloads.len() as u64, Ordering::Relaxed);
     }
-    let Some(target) = publish_target(
+    let Ok(target) = publish_target(
         resolve_route(
             broker,
             publish_ctx.authority(),
