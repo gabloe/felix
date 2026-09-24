@@ -59,6 +59,7 @@ Field definitions:
   | `0x0040` | `BINARY_PUBLISH_KEYED` | Modifier on `0x0001`: the batch carries a routing key prefix |
   | `0x0080` | `BINARY_PUBLISH_ACK_OWNER` | Modifier on `0x0010`: the batch was forwarded, and the ack names the shard's owner |
   | `0x0100` | `BINARY_PUBLISH_IDEMPOTENT` | Modifier on `0x0008`: the batch carries an idempotent producer's id and sequence |
+  | `0x0200` | `BINARY_PUBLISH_ACK_CODE` | Modifier on `0x0010`: a failed ack carries an error code and retry class |
 
   Because these bits change how the payload is parsed, a receiver MUST reject a
   frame carrying any bit it does not recognise rather than masking it off — see
@@ -447,8 +448,18 @@ been placed yet counts as one shard, as it does for `cache_watch`.
 
 ### Error
 ```
-{ "type": "error", "message": "<string>" }
+{ "type": "error", "message": "<string>",
+  "code": "<error code>", "retry": "<retry class>",
+  "detail": { "reason": "<string>", "retry_after_ms": <u64> } }
 ```
+
+A request failed. `message` is prose for people. `code`, `retry` and `detail`
+are sent only to a client that offered `FEATURE_ERROR_CODES`; without them the
+frame is byte-identical to the one a broker that predates codes sends. Every
+field of `detail` is optional. See [Error codes](#error-codes).
+
+`publish_error` carries the same three optional fields next to its
+`request_id` and `message`, under the same negotiation.
 
 ## Semantics (v1)
 - Subscribe starts at the tail unless `start` asks otherwise; a durable stream
@@ -762,6 +773,18 @@ u16 message_len     0 when status = ok
 u8[message_len] message   UTF-8, error text
 ```
 
+With `0x0200` (`BINARY_PUBLISH_ACK_CODE`), set only on a failed ack and only for a
+client that offered the bit in `client_flags`, the error's code follows the
+message:
+
+```
+u16 code            see the table in Error codes
+u8  retry           1 retry, 2 retry_after, 3 redirect, 4 outcome_unknown, 5 fatal
+```
+
+A code number the client does not know is kept as unknown and its retry class
+still applies; a retry byte it does not know is read as `fatal`.
+
 This is the response to a `0x0008` publish. It carries exactly the information the
 JSON `publish_ok` / `publish_error` messages do; a client that published with the
 JSON encoding still receives those JSON messages instead.
@@ -838,6 +861,7 @@ Features are advertised in the same handshake, in an optional field:
 | `0x0100` | `FEATURE_COUNTERS` | The broker serves `counter_add` and `counter_get` |
 | `0x0200` | `FEATURE_IDEMPOTENT_PRODUCER` | The broker serves `producer_init` and `publish_idempotent`, and answers the latter's refusals as `publish_refused` |
 | `0x0400` | `FEATURE_CACHE_SHARDS` | The broker answers `cache_shards` |
+| `0x0800` | `FEATURE_ERROR_CODES` | The client reads `code`, `retry` and `detail` on `error` and `publish_error` |
 
 Features are advertised in **both** directions. A client offers its own in the
 `auth` it already sends:
@@ -889,6 +913,61 @@ supported. Silence means no.
 
 A broker advertises a feature only when it can actually answer it. A broker with
 no cluster behind it has no topology to report, and advertises `0`.
+
+## Error codes
+
+A client that offers `FEATURE_ERROR_CODES` in `auth` gets a typed `code` and a
+`retry` class on every `error` and `publish_error` the broker sends it, and on a
+failed binary ack if it also offered `BINARY_PUBLISH_ACK_CODE`. A client that did
+not offer the bit gets the same frames as before, with no new fields. The broker
+advertises the bit too, so a client can tell "no code applies" from "this broker
+predates codes". That includes a refused `auth`: the broker reads the offer
+before answering it.
+
+The code says what happened; the retry class says what the client may do. They
+travel separately so that a code the client does not know is still actionable:
+unlike an unknown frame flag, an unknown code MUST NOT fail the frame. A client
+keeps it as an unknown code and follows its retry class. An unknown retry class
+is read as `fatal`, the one reading that cannot duplicate a write.
+
+| Retry class | Meaning |
+| --- | --- |
+| `retry` | Nothing was applied; sending the request again is safe. |
+| `retry_after` | Nothing was applied; wait before sending again. `detail.retry_after_ms`, when present, says how long. |
+| `redirect` | Nothing was applied; send it to the broker that owns the shard. |
+| `outcome_unknown` | It may have been applied. Only an idempotent request is safe to send again. |
+| `fatal` | Sending it again will fail the same way. |
+
+The retry class in the table is the one the broker sends unless noted; a broker
+may send a different class for a particular failure when it knows better, and a
+client MUST act on the class it received, not on this table.
+
+| Code | Retry class | Number | Meaning | When sent |
+| --- | --- | --- | --- | --- |
+| `unauthenticated` | `fatal` | 1 | The stream has not authenticated, or the credential was refused. | A request before `auth`; a token that does not verify. |
+| `forbidden` | `fatal` | 2 | The credential does not grant this operation. | A missing permission, or a tenant other than the token's. Also a forward the owner refused on the client's credential. |
+| `not_found` | `retry_after` | 3 | The tenant, namespace, stream or cache does not exist on this broker. | An unknown stream or cache. Retryable because a broker learns streams from the control plane, and one promoted a moment ago says "not found" for a stream it is about to serve. |
+| `invalid_request` | `fatal` | 4 | The request can never succeed as sent. | A malformed frame or batch, unknown frame flags, a missing `request_id`, a second `auth`, a bad watch filter or shard. |
+| `shard_unavailable` | `retry` | 5 | Nobody can serve the shard right now. `detail.reason` says why: `not_assigned`, `owner_unavailable`, `not_ready`, `stale` or `fenced`. | The shard is unassigned, its owner unreachable, still opening, or the routing view is behind; `fenced` when this broker's lease lapsed, the owner's epoch was superseded, or the shard stopped serving here between admitting a write and claiming its place in the log (nothing was written). |
+| `not_leader` | `redirect` | 6 | Another broker owns the shard. | Only where the `not_leader` message cannot be sent: to a client without `FEATURE_REDIRECT`, or a publish this broker cannot forward. |
+| `quorum_timeout` | `outcome_unknown` | 7 | The leader wrote the batch; a majority did not confirm it in time. It may survive. | A write to a `Quorum` stream or cache. |
+| `leadership_lost` | `outcome_unknown` | 8 | Leadership moved after the leader wrote the batch and before a majority held it. | A write to a `Quorum` stream or cache during a move. |
+| `unacknowledged` | `outcome_unknown` | 9 | The broker stopped waiting for the write's outcome. | A forwarded batch whose answer never came; a commit that outlasted the ack wait. |
+| `overloaded` | `retry_after` | 10 | The broker is shedding load. | A full ingress queue or ack path. Sent as `outcome_unknown` when the batch was already queued for the worker before the broker ran out of room to track its ack. |
+| `limit_exceeded` | `fatal` | 11 | The request exceeds a configured limit. | Too many subscriptions on one connection. |
+| `draining` | `retry` | 12 | The broker is shutting down and takes no new work. | In answer to `auth` on a control stream opened while the connection drains. Connect to another broker. |
+| `internal` | `outcome_unknown` | 13 | Something failed inside the broker. | Anything not covered above. Sent as `retry` for reads and failures before any write, `fatal` for configuration the request cannot change. |
+| `storage` | `outcome_unknown` | 14 | The storage layer failed. | A durable write, a group's state, or a cache log that could not be read. `retry` for reads. |
+
+`Number` is the `u16` the binary ack carries. `0` is never sent.
+
+`quorum_timeout`, `leadership_lost` and `unacknowledged` are what separate "the
+broker refused this" from "the broker cannot say": a client resending a
+non-idempotent publish after one of them may write it twice. An idempotent
+producer can resend safely, which is what it is for.
+
+A client without `FEATURE_ERROR_CODES` that the broker is draining still gets no
+answer on a new stream until the connection closes, as it always did.
 
 ## Not-leader redirects
 

@@ -24,6 +24,19 @@ for what the current release actually guarantees.
   `felix_shard_move_duration_seconds` and `felix_shard_move_fence_seconds`
   time moves from the steps each control-plane instance writes.
 
+- **Typed error codes on the client wire.** A client that offers
+  `FEATURE_ERROR_CODES` (`0x0800`) gets a `code`, a `retry` class and an
+  optional `detail` on every `error` and `publish_error`, and on a failed binary
+  publish ack when it also offers `BINARY_PUBLISH_ACK_CODE` (`0x0200`). The
+  retry class says whether the request may have been applied: a quorum timeout
+  is now `quorum_timeout` with `outcome_unknown`, distinct from a refusal, and
+  `shard_unavailable` names its reason. An unknown code decodes with its retry
+  class instead of failing the frame. Clients that do not offer the bit get
+  byte-identical frames. A broker that is draining now answers `auth` on a new
+  control stream with `draining` for clients that offered the bit. The Rust
+  client offers it and exposes the code on `felix_client::BrokerError`. See
+  "Error codes" in `docs/protocol.md`.
+
 - **Online shard rebalancing** (#130). A shard whose leader is alive is now
   moved rather than reassigned. The control plane stages the destination as a
   replica and lets the leader catch it up, fences the leader once the copy is

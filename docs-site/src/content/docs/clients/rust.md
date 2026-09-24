@@ -312,6 +312,15 @@ match cluster.publish("acme", "prod", "events", payload, AckMode::PerMessage).aw
 | `SubscribeCursorError` | `downcast_ref` | the start offset is gone, or ahead of the tail |
 | `NotLeaderError` | `downcast_ref` | the broker does not own the shard — routing, not failure |
 | `PublishRefused` | `downcast_ref` | an idempotent publish the broker would not append, with the reason |
+| `BrokerError` | `downcast_ref` | any other refusal from a broker that sends error codes: the `code`, and a `retry` class saying whether the request may have been applied |
+
+`BrokerError.retry` is the field to branch on. `OutcomeUnknown` — a quorum
+timeout, say — means the publish may have landed, so resending a plain publish
+can write it twice; `Retry`, `RetryAfter` and `Redirect` mean nothing was
+applied. A broker that predates error codes returns the same failures as plain
+errors with the same text, so treat a missing `BrokerError` as "no code", not as
+success. The codes and their classes are listed under
+[Error codes](https://github.com/gabloe/felix/blob/main/docs/protocol.md#error-codes).
 
 `SubscribeCursorError` carries more than the other clients get:
 

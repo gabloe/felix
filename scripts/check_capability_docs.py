@@ -17,6 +17,9 @@ that are mechanical:
 2. **Every `Message` variant is mentioned in the protocol spec.** That document
    calls itself the source of truth for anyone implementing a client, so a
    message it does not mention is a hole in the spec.
+3. **Every client error code has a row in the spec's error-code table**, and
+   every row names a code that exists. A client decides whether to retry from
+   that table, so a code missing from it is one nobody can act on.
 
 Neither proves a page is *good*. They prove nothing was forgotten wholesale,
 which is the failure that actually keeps happening.
@@ -66,6 +69,17 @@ def message_variants() -> list[str]:
     return re.findall(r"^    ([A-Z][A-Za-z0-9]*)\s*[{,(]", body, re.M)
 
 
+def error_codes() -> list[str]:
+    """Wire names of `ErrorCode`, from its `as_str` arms."""
+    source = (REPO / "crates/protocol/felix-wire/src/client/error_code.rs").read_text()
+    return re.findall(r'ErrorCode::[A-Za-z]+ => "([a-z_]+)"', source)
+
+
+def error_code_table_rows() -> list[str]:
+    """Codes named in the first column of a table row in the spec."""
+    return re.findall(r"^\| `([a-z_]+)` \| `(?:retry|retry_after|redirect|outcome_unknown|fatal)`", SPEC.read_text(), re.M)
+
+
 def snake(name: str) -> str:
     """`StreamShardsView` -> `stream_shards_view`, the wire's `type` tag."""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
@@ -111,9 +125,26 @@ def main() -> int:
             f"docs/protocol.md, which is the spec a client implementer reads."
         )
 
+    codes = error_codes()
+    rows = error_code_table_rows()
+    for code in codes:
+        if code not in rows:
+            failures += 1
+            print(
+                f"{red('FAIL')} error code `{code}` has no row in the error-code "
+                f"table in docs/protocol.md, so no client can tell whether to retry it."
+            )
+    for row in rows:
+        if row not in codes:
+            failures += 1
+            print(
+                f"{red('FAIL')} docs/protocol.md lists error code `{row}`, which "
+                f"`felix_wire::ErrorCode` does not define."
+            )
+
     print(
-        f"{len(bits)} feature bit(s) and {len(variants)} message variant(s) checked, "
-        f"{failures} undocumented"
+        f"{len(bits)} feature bit(s), {len(variants)} message variant(s) and "
+        f"{len(codes)} error code(s) checked, {failures} undocumented"
     )
     return 1 if failures else 0
 
