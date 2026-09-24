@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790273351475,
+  "lastUpdate": 1790277941136,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18942,6 +18942,72 @@ window.BENCHMARK_DATA = {
             "range": "814.68",
             "unit": "us",
             "extra": "trials: 5\nmedian: 565.00\nmean: 1053.60\nstdev: 814.68\ncv: 77.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "933af8084bb57b8b656f3820bd79492fb2056773",
+          "message": "A moved shard's subscriptions follow it (#674)\n\n* feat(wire): a shard_moved frame and the feature bit that offers it\n\nA subscription or cache watch whose shard moves away ends. shard_moved is\nthe last frame on such a stream: the offset to resume from, the broker the\nshard went to when known, and the generation that moved it. A client\noffers FEATURE_SHARD_MOVED to receive it; one that does not keeps getting a\nstream that simply ends. The optional fields stay off the wire when absent.\n\n* feat(broker): tell a moved shard's readers where to resume\n\nA broker that stops serving a shard ends its subscriptions and cache\nwatches. It now also tells each one where the shard went and where to pick\nit up, as a shard_moved frame after its last event, to a client that\noffered FEATURE_SHARD_MOVED.\n\nresume_from for a durable stream is the replay ring's next sequence, read\nunder the log lock that each publish captures its fanout list under. Every\nrecord below it was offered to the subscriber, delivered or dropped by its\nqueue, and none at or above it was, so resuming at\nmax(last delivered + 1, resume_from) neither repeats nor skips a record.\nAn in-memory stream sends none. A cache watch resumes from the shard log's\ntail once the writes in flight have landed, and sends none if they had\nnot. The lifecycle remembers where the latest assignment sends the shard\n(the successor during a move, else the new leader), and the address comes\nfrom the client endpoints the redirect uses.\n\nTwo ways a subscription's last frames were lost on the way out, both now\nclosed. The connection writer dropped deliveries queued in the same batch\nas the subscriber's unregister; it now writes them first. And the feeder\nforgot the subscriber's connection right after queueing its unregister,\nso a delivery still in the lane queue found no connection and was\ndropped; the lane now forgets it after handling the unregister. The final\nframe rides on the unregister itself, which is sent with backpressure, so\na full lane cannot drop it.\n\nrun_connection_writer_writes_queued_frames_before_an_unregister fails\nwithout the writer change (the stream ends without the last frame), and\na_moved_subscription_ends_with_shard_moved_only_when_offered lost the last\nevent without the lane change.\n\nSpec-Unaffected: the lifecycle only remembers where the latest assignment sends a shard, to tell ended readers; ownership, the fence and the drained report are unchanged.\n\n* feat(client): a ClusterClient subscription follows its shard when it moves\n\nThe client reads shard_moved instead of failing on it. Subscription and\nCacheWatch surface it (Subscription::shard_moved,\nCacheWatchItem::ShardMoved); a JSON frame on the event stream is never\ndropped by the client queue policy, since it may be the last word.\n\nClusterClient::subscribe and subscribe_from now return a\nClusterSubscription that follows the move inside next_event: it subscribes\non the broker the frame names (or through the entry broker, which\nredirects) at max(last delivered + 1, resume_from), retrying until the new\nowner has taken over. On a durable stream nothing is repeated or skipped;\nan in-memory stream resumes at the tail, as a resubscribe would. Following\nis the default because following the cluster is what ClusterClient is for,\nand the resume is exact where the stream has offsets. Both methods now take\nself: &Arc<Self>.\n\nShardEvent is non_exhaustive and gains ShardMoved; a sharded subscription\nreports it and resumes the shard the same way, falling back to ShardLost\nand the reconnect loop if the new owner cannot be reached. A sharded cache\nwatch reports ShardedCacheWatchItem::ShardMoved and moves that shard's\nresume offset.\n\nrouting::subscriptions_follow reads a durable stream from its start while a\npublisher keeps writing and the shard moves; it checks every offset once and\nin order and every acknowledged record. Before this change it failed with\n\"unexpected message on subscription stream\"; it passes now.\n\n* feat(bindings): Python and TypeScript subscriptions follow a moved shard\n\nBoth bindings subscribe through ClusterClient, so their subscriptions now\nfollow a moved shard the way the Rust ClusterSubscription does, with the\nsame Python and TypeScript API. A cache watch whose shard moved yields\nCacheWatchShardMoved in Python and a shardMoved item in TypeScript, as a\nlagged watch yields its lag.\n\n* feat(bindings): report a sharded subscription's moved shard\n\nA sharded subscription in Python yields felix.ShardMoved, and in\nTypeScript a shardMoved item, when one of its shards moves, where they had\nskipped it. The shard's records carry on after it. TypeScript's cache watch\nand sharded subscription share one ShardMoved type.\n\n* test(conformance): a moved shard's subscribers get shard_moved only when offered\n\nTwo raw subscribers on a dedicated stream, one offering FEATURE_SHARD_MOVED\nand one not, a publish, then the broker ends the shard's subscriptions the\nway a move does. The first reads the event, shard_moved and the end of the\nstream; the second reads the event and the end, nothing else.\n\n* docs: moved shards tell readers where to resume, and clients follow\n\nThe shard_moved frame and FEATURE_SHARD_MOVED in the protocol references,\nhow ClusterClient subscriptions and the bindings follow a moved shard, what\na moved shard's readers now receive on the scaling page, the Phase 3\nsection of the rebalancing plan, and the changelog.",
+          "timestamp": "2026-09-24T12:22:42-07:00",
+          "tree_id": "17738cfc17e6742987c61035ca360a0beed90cbc",
+          "url": "https://github.com/gabloe/felix/commit/933af8084bb57b8b656f3820bd79492fb2056773"
+        },
+        "date": 1790277937788,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 170,
+            "range": "1.41",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 170.00\nmean: 171.00\nstdev: 1.41\ncv: 0.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 211,
+            "range": "1.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 211.00\nmean: 211.20\nstdev: 1.10\ncv: 0.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 243,
+            "range": "6.42",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 243.00\nmean: 241.20\nstdev: 6.42\ncv: 2.66%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 204,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 203.60\nstdev: 0.55\ncv: 0.27%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 408,
+            "range": "9.18",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 408.00\nmean: 408.60\nstdev: 9.18\ncv: 2.25%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 546,
+            "range": "328.09",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 546.00\nmean: 681.00\nstdev: 328.09\ncv: 48.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
