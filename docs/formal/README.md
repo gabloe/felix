@@ -56,9 +56,9 @@ One shard, three brokers, one control plane, discrete time.
   superseded generation is dropped on arrival, as the store does.
   The logs that ride a shard — consumer-group cursors, dead letters,
   counters — are not modelled separately. They are written through the same
-  fence, and the drained report waits for them to be on every follower level
-  with the shard's log, so a write to any of them is modelled as a write to
-  the one log.
+  fence, the drained report waits for them to be on the successor, and a
+  follower without them is left out of the report's candidates, so a write to
+  any of them is modelled as a write to the one log.
 - **Planners.** The control plane decides from a read of the store, not from
   its live state. A decision (promote, fence, cut over) either reads and writes
   in one step, or comes from a read one of `Planners` took earlier (`cpView`:
@@ -216,12 +216,14 @@ that has ended, and believing it lets the next move skip its wait.
 The broker's half is `ShardLifecycle::observe`, which closes the shard's write
 fence the moment a draining assignment arrives and never serves it again at
 that generation, and the replication driver, which withholds the drained
-report until the fence is closed with no write inside it and the shard's
-auxiliary logs are level wherever its main log is (`aux_level` in
-`services/felix-broker-service/src/replication/driver/shard.rs`). That second
-condition is what lets the model treat those logs as part of the one log: a
-drained report over the main log alone would let the cut-over drop a record
-the model says survived.
+report until the fence is closed with no write inside it and the successor
+holds the shard's auxiliary logs as well as its main one, and names as caught
+up only followers that hold both (`drain_ready` in
+`services/felix-broker-service/src/replication/driver/shard.rs`; with no
+successor, every follower level on the main log must hold them). That is what
+lets the model treat those logs as part of the one log: a drained report over
+the main log alone would let the cut-over drop a record the model says
+survived.
 
 ### The fence at the claim that is load-bearing
 

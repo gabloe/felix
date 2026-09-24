@@ -659,16 +659,22 @@ stream shard carries its consumer groups' cursors and dead letters, a cache
 shard its counters; they are written through the same fence and shipped to
 the same replicas. Normally they go after the report and never hold it up,
 since no publish waits on group state. The drained pass is the exception: it
-ships them first, and reports `drained` only once every follower level on the
-shard's log is level on each of them too. Any such follower may be the one
-the control plane names, and a dead letter or counter add it lacks is lost at
-the cut-over — a dead-lettered record past the group's cursor is skipped, and
-an acknowledged add is gone from the sum. A follower that cannot take them
-holds the move at `Draining`: the control plane shows it waiting on the
-leader, `felix_broker_replication_drain_withheld_total{log}` counts each pass
-held, and the leader logs the shard and the follower. The report itself
-carries no positions for these logs; the leader gates on them, so the control
-plane has nothing more to check.
+ships them first, and reports `drained` only once the move's successor holds
+the shard's log and each of them. A dead letter or counter add the new leader
+lacks is lost at the cut-over — a dead-lettered record past the group's
+cursor is skipped, and an acknowledged add is gone from the sum. Any other
+follower still behind on one of them is left out of the report's `caught_up`,
+so it is not promoted, but it does not hold the move. A move that has lost
+its successor cuts over to whichever follower is level, so there every
+follower level on the shard's log must hold them too.
+
+A successor that cannot take them holds the move at `Draining`: the control
+plane shows it waiting on the leader,
+`felix_broker_replication_drain_withheld_total{log}` counts each pass held,
+and the leader logs the shard and the follower. The report carries no
+positions for these logs; the leader gates on them, so the control plane has
+nothing more to check. The broker learns the successor from the assignment's
+`successor` field.
 
 So the ordering is the same shape as report-before-mark. The successor is
 staged as a replica and caught up *before* the fence; the leader stops
@@ -706,6 +712,9 @@ than the report said, because the report is the only input either reads.
 > `a_draining_cache_withholds_drained_until_its_counters_are_shipped` — no
 > drained report while the successor has the shard's log but not its dead
 > letters or counters; the report follows once they are shipped.
+> `a_lagging_replica_other_than_the_successor_is_left_out_not_waited_for` —
+> another replica missing a dead letter does not hold the report, and is not
+> in its `caught_up`.
 >
 > `a_moved_shard_keeps_its_group_state_and_counters` — group acks and counter
 > adds keep arriving while a shard and a cache move off a live broker; on the

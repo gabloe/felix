@@ -101,10 +101,12 @@ async fn a_draining_shard_never_served_here_drains_on_its_first_pass() {
 }
 
 /// A follower that stores every log it is sent, but refuses the auxiliary
-/// ones — group cursors, dead letters, counters — while `refusing` is set.
+/// ones — group cursors, dead letters, counters — while `refusing` is set,
+/// to `only` when that names a node and to everyone otherwise.
 #[derive(Default)]
 struct AuxRefusingFollower {
     refusing: std::sync::atomic::AtomicBool,
+    only: Option<&'static str>,
     aux_stored: std::sync::atomic::AtomicUsize,
 }
 
@@ -124,7 +126,7 @@ impl PeerRequester for AuxRefusingFollower {
             other => panic!("unexpected message {other:?}"),
         };
         if aux {
-            if self.refusing.load(SeqCst) {
+            if self.refusing.load(SeqCst) && self.only.is_none_or(|only| only == node_id) {
                 return Err(PeerError::Unavailable {
                     node_id: node_id.to_string(),
                     detail: "refusing auxiliary logs".to_string(),
@@ -173,21 +175,14 @@ async fn aux_pass(
     .reports
 }
 
-/// **A draining shard is not drained while a dead letter is not on the
-/// successor.** The main log is level and the fence is quiet, but the
-/// control plane cuts over on the drained report alone, and a dead letter left
-/// behind is a record the new leader's group silently skips.
-#[tokio::test]
-async fn a_draining_shard_withholds_drained_until_its_dead_letters_are_shipped() {
-    use std::sync::atomic::Ordering::SeqCst;
-    let dir = tempfile::tempdir().expect("tempdir");
+/// A broker leading one record on the shard, which a group has dead-lettered.
+async fn broker_with_a_dead_letter(dir: &std::path::Path) -> Arc<Broker> {
     let config = LogConfig {
         fsync_mode: FsyncMode::None,
         preallocate_segments: false,
         ..LogConfig::default()
     };
-    let storage =
-        DurableStorage::open(dir.path().join("streams"), config.clone()).expect("storage");
+    let storage = DurableStorage::open(dir.join("streams"), config.clone()).expect("storage");
     storage
         .open_stream(TENANT, NAMESPACE, STREAM, 0)
         .expect("open")
@@ -195,7 +190,7 @@ async fn a_draining_shard_withholds_drained_until_its_dead_letters_are_shipped()
         .await
         .expect("append");
     let dead_letters = Arc::new(
-        felix_broker::DeadLetters::open(dir.path().join("dead-letters"), config.clone())
+        felix_broker::DeadLetters::open(dir.join("dead-letters"), config.clone())
             .expect("dead letters"),
     );
     let broker = Arc::new(
@@ -203,8 +198,7 @@ async fn a_draining_shard_withholds_drained_until_its_dead_letters_are_shipped()
             .with_durable_storage(storage)
             .with_consumer_groups(
                 Arc::new(
-                    felix_broker::ConsumerGroups::open(dir.path().join("groups"), config)
-                        .expect("groups"),
+                    felix_broker::ConsumerGroups::open(dir.join("groups"), config).expect("groups"),
                 ),
                 Arc::clone(&dead_letters),
                 std::time::Duration::from_secs(30),
@@ -224,6 +218,18 @@ async fn a_draining_shard_withholds_drained_until_its_dead_letters_are_shipped()
         )
         .await
         .expect("dead letter");
+    broker
+}
+
+/// **A draining shard is not drained while a dead letter is not on the
+/// successor.** The main log is level and the fence is quiet, but the
+/// control plane cuts over on the drained report alone, and a dead letter left
+/// behind is a record the new leader's group silently skips.
+#[tokio::test]
+async fn a_draining_shard_withholds_drained_until_its_dead_letters_are_shipped() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let broker = broker_with_a_dead_letter(dir.path()).await;
 
     let router = draining_router(LOCAL, &["broker-b"], 4);
     let follower = AuxRefusingFollower::default();
@@ -298,6 +304,7 @@ async fn a_draining_cache_withholds_drained_until_its_counters_are_shipped() {
                 replicas: vec!["broker-b".to_string()],
                 generation: 4,
                 draining: true,
+                successor: Some("broker-b".to_string()),
             }],
             &nodes,
         ),
@@ -321,4 +328,29 @@ async fn a_draining_cache_withholds_drained_until_its_counters_are_shipped() {
         reports.iter().any(|report| report.drained),
         "a successor holding every log should see the cache drained: {reports:?}",
     );
+}
+
+/// **Only the successor gates the report.** Another replica still missing a
+/// dead letter does not hold the move, but it is not offered as a leader
+/// either: it is left out of `caught_up`.
+#[tokio::test]
+async fn a_lagging_replica_other_than_the_successor_is_left_out_not_waited_for() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let broker = broker_with_a_dead_letter(dir.path()).await;
+    // broker-b is the successor.
+    let router = draining_router(LOCAL, &["broker-b", "broker-c"], 4);
+    let follower = AuxRefusingFollower {
+        only: Some("broker-c"),
+        ..AuxRefusingFollower::default()
+    };
+    follower.refusing.store(true, SeqCst);
+    let mut cursors = AllCursors::default();
+
+    let reports = aux_pass(&follower, &broker, &router, &mut cursors).await;
+    let report = reports
+        .iter()
+        .find(|report| report.drained)
+        .unwrap_or_else(|| panic!("the successor holds everything: {reports:?}"));
+    assert_eq!(report.caught_up, vec!["broker-b".to_string()]);
 }

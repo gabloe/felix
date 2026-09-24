@@ -41,6 +41,7 @@ impl RoutingTable {
                     replicas,
                     generation,
                     draining: false,
+                    successor: None,
                 }),
             nodes,
         )
@@ -59,6 +60,7 @@ impl RoutingTable {
             replicas,
             generation,
             draining,
+            successor,
         } in assignments
         {
             // The count is the highest shard index placed plus one, not the
@@ -93,6 +95,7 @@ impl RoutingTable {
                         .collect(),
                     generation,
                     draining,
+                    successor,
                 },
             );
         }
@@ -186,6 +189,9 @@ pub struct Route {
     /// shard can move. It still leads for replication: the followers are
     /// caught up from it before anyone else takes over.
     pub draining: bool,
+    /// The node a move in progress is handing the shard to, when the control
+    /// plane has named one. Always one of `replicas`.
+    pub successor: Option<String>,
 }
 
 /// One assignment as the table takes it.
@@ -196,6 +202,7 @@ pub struct Placed {
     pub replicas: Vec<String>,
     pub generation: u64,
     pub draining: bool,
+    pub successor: Option<String>,
 }
 
 /// The key `shards_per_stream` is built and looked up under.

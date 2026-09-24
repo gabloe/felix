@@ -158,10 +158,13 @@ for what the current release actually guarantees.
   logging a failure and moving on. A dead letter the new owner lacked was a
   record its group silently skipped, and a counter add it lacked was an
   acknowledged add gone from the sum. The drained pass now ships those logs
-  first and reports `drained` only once every follower level on the shard's
-  log holds them too. A move held on them stays `Draining`, and
-  `felix_broker_replication_drain_withheld_total{log}` and a warning naming the
-  shard and follower say why.
+  first and reports `drained` only once the move's successor holds them; any
+  other replica still missing them is left out of the report's caught-up
+  list rather than holding the move. A move that lost its successor waits for
+  every replica level on the shard's log. A move held on them stays
+  `Draining`, and `felix_broker_replication_drain_withheld_total{log}` and a
+  warning naming the shard and follower say why. Brokers now read the
+  assignment's `successor`.
 
 ### Fixed
 

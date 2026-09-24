@@ -36,6 +36,9 @@ pub struct ShardAssignment {
     pub replicas: Vec<String>,
     pub generation: u64,
     pub state: String,
+    /// Where a move in progress is taking the shard, if it has a destination.
+    #[serde(default)]
+    pub successor: Option<String>,
 }
 
 impl ShardAssignment {

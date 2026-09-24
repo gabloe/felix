@@ -304,8 +304,14 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         Vec::new()
     };
     let tail = log.tail_offset().await.unwrap_or(tail);
-    let drained = quiesced && aux_level(key, &caught_up(tail, &entry.followers), &aux_behind);
-    let settled = shard_report(key, route.generation, tail, &entry.followers, drained);
+    let drained =
+        quiesced && drain_ready(key, route, &caught_up(tail, &entry.followers), &aux_behind);
+    let mut settled = shard_report(key, route.generation, tail, &entry.followers, drained);
+    // A follower missing some of that state would lose it if it led, so it is
+    // not offered as a candidate.
+    settled
+        .caught_up
+        .retain(|node| !aux_behind.iter().any(|(_, behind)| behind == node));
     if report_out.as_ref() != Some(&settled) {
         // And the mark with it. Usually a no-op — the mark is monotonic and the
         // majority already moved it — but with five replicas a second follower
@@ -403,16 +409,43 @@ pub(super) async fn ship_aux_logs<R: PeerRequester>(
     behind
 }
 
-/// Whether every follower level on the shard's log is level on its auxiliary
-/// logs too. Any of them may be the one the control plane cuts over to.
+/// Whether a quiesced draining shard can say it is drained: the follower the
+/// control plane will cut over to holds the shard's log and every log that
+/// rides it.
 ///
-/// A follower behind on the shard's own log is not counted: it cannot be
-/// chosen, and one that is gone must not hold a move up. One that is level
-/// there but not on an auxiliary log holds the drained report back until it
-/// is, which is what a move stuck on it looks like from outside.
-fn aux_level(key: &ShardKey, level: &[String], behind: &[(felix_broker::LogKind, String)]) -> bool {
+/// With a named successor only it gates the report; another follower lagging
+/// on an auxiliary log is left out of `caught_up` instead of holding the move.
+/// Without one — the move lost its destination and the control plane will
+/// promote whoever is level — every follower level on the shard's log must be
+/// level on the rest too, since any of them may be chosen.
+fn drain_ready(
+    key: &ShardKey,
+    route: &Route,
+    level: &[String],
+    behind: &[(felix_broker::LogKind, String)],
+) -> bool {
+    let successor = route
+        .successor
+        .as_deref()
+        .filter(|successor| route.replicas.iter().any(|r| r.node_id == *successor));
+    match successor {
+        Some(successor) => {
+            level.iter().any(|node| node == successor)
+                && !withheld(key, behind, |node| node == successor)
+        }
+        None => !withheld(key, behind, |node| level.iter().any(|l| l == node)),
+    }
+}
+
+/// Log and count each follower `gates` picks out that is still behind on an
+/// auxiliary log; true if there was one.
+fn withheld(
+    key: &ShardKey,
+    behind: &[(felix_broker::LogKind, String)],
+    gates: impl Fn(&str) -> bool,
+) -> bool {
     let mut held = false;
-    for (log_kind, node) in behind.iter().filter(|(_, node)| level.contains(node)) {
+    for (log_kind, node) in behind.iter().filter(|(_, node)| gates(node)) {
         held = true;
         let log = aux_log_label(*log_kind);
         metrics::record_drain_withheld(log);
@@ -426,7 +459,7 @@ fn aux_level(key: &ShardKey, level: &[String], behind: &[(felix_broker::LogKind,
              not all of its {log} yet, and a cut-over now would lose them",
         );
     }
-    !held
+    held
 }
 
 fn aux_log_label(log_kind: felix_broker::LogKind) -> &'static str {
