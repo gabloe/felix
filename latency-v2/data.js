@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790268555347,
+  "lastUpdate": 1790273172050,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18810,6 +18810,72 @@ window.BENCHMARK_DATA = {
             "range": "827.08",
             "unit": "us",
             "extra": "trials: 5\nmedian: 618.00\nmean: 994.80\nstdev: 827.08\ncv: 83.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "01845d8275a242501926f177bf82682cf2b142d5",
+          "message": "The Rust ClusterClient acts on the broker's error codes (#669)\n\n* feat(client): act on the broker's error codes in ClusterClient\n\nRetry, reroute or fail is decided by the retry class the broker sends\ninstead of by matching the message; peers without codes keep the old\nstring rules.\n\n- A cached owner or leader that answers retry/redirect (shard_unavailable,\n  fenced, draining, not_leader) is forgotten and the request goes to the\n  entry broker at once, including a single re-send from publish, since\n  nothing was applied.\n- outcome_unknown is returned by publish and never re-sent; at-least-once\n  and the idempotent producer re-send it.\n- retry_after honours retry_after_ms; not_found is retried for 5 s from\n  the first one, not for the whole attempt budget.\n- Fatal codes stop the loop on the first answer.\n- publish reconnects only on draining or a dead connection.\n- Subscribe and cache-watch refusals are typed BrokerErrors, and a\n  redirect target that has lost the shard sends the request back to the\n  entry broker once.\n\n* docs: describe how the Rust client reacts to each retry class",
+          "timestamp": "2026-09-24T11:03:42-07:00",
+          "tree_id": "04abc09817db6b9ab39762c272d6b534442457d1",
+          "url": "https://github.com/gabloe/felix/commit/01845d8275a242501926f177bf82682cf2b142d5"
+        },
+        "date": 1790273169350,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 81,
+            "range": "1.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 81.00\nmean: 80.20\nstdev: 1.64\ncv: 2.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 113,
+            "range": "2.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 113.00\nmean: 112.80\nstdev: 2.39\ncv: 2.12%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 134,
+            "range": "6.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 134.00\nmean: 134.40\nstdev: 6.35\ncv: 4.72%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 99,
+            "range": "4.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 99.00\nmean: 101.20\nstdev: 4.49\ncv: 4.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 224,
+            "range": "13.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 224.00\nmean: 220.00\nstdev: 13.87\ncv: 6.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 336,
+            "range": "1193.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 336.00\nmean: 907.00\nstdev: 1193.85\ncv: 131.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
