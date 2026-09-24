@@ -141,7 +141,7 @@ next pass; an occasional one is normal with several instances.
 `felix_shard_moves_waiting` sitting above zero for longer than a couple of
 placement intervals means a successor is not catching up (check the leader's
 `felix_broker_replication_lag_records` and `/replication/halted`), a fenced
-leader is not reporting drained (a publish stuck in flight, or the broker
+leader is not reporting drained (a write stuck inside its fence, or the broker
 lost its control-plane connection), or a drain is queued behind the move
 limit.
 
@@ -155,9 +155,10 @@ few seconds with the default 2 s broker sync interval and 5 s reconcile interval
 Subscriptions and cache watches on the old leader are **ended** when it is
 fenced. Each reader first receives everything already queued for it, then its
 stream closes; the old leader stays up, so the close is the only signal a client
-gets. A write the old leader accepted just before the fence and commits after it
-reaches none of those readers; a reader that resumes by offset still finds it on
-the new owner. A sharded
+gets. A write that has not taken its place in the old leader's log by the time
+the fence arrives is refused, not committed after it, and the readers are ended
+only once the writes already under way have landed, so each of them receives
+every record the old leader committed. A sharded
 `ClusterClient` subscription reports `ShardLost` for that shard and resubscribes
 from the last offset it delivered; a sharded cache watch reports `ShardClosed`.
 Subscriptions are not migrated: the new owner serves the shard only once it has
@@ -165,7 +166,8 @@ opened it, and a resubscribe before then is refused and retried.
 
 Every publish acknowledged before or during a move is on the new owner. The
 tests behind these claims are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`
-and `crates/testing/felix-cluster/tests/routing/moved_readers.rs`.
+and `crates/testing/felix-cluster/tests/routing/moved_readers.rs`; the write
+fence and its tests are in `services/felix-broker-service/src/shards/lifecycle/fence.rs`.
 
 ## Tuning
 

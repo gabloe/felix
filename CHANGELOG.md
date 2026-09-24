@@ -39,7 +39,7 @@ for what the current release actually guarantees.
   mid-transfer, a drain and a join at once, and publishes arriving throughout.
 
   The fence is model-checked. `docs/formal/FelixShardHandoff.cfg` adds the
-  planned move to the TLA+ spec and explores 2.6M states without a
+  planned move to the TLA+ spec and explores 2.7M states without a
   violation; `FelixShardHandoffNoWait.cfg`, which cuts over as soon as the
   fence is written, finds two brokers serving one shard in seven steps.
 
@@ -124,6 +124,34 @@ for what the current release actually guarantees.
   it, but it made `felix-broker` and `felix-storage` optional dependencies of
   the client, and so forced them onto crates.io. Test against a broker over
   QUIC instead; `felix-cluster` starts one.
+- **`Broker::in_flight_publishes`.** It counted claimed publishes for the
+  drained report, which now reads the broker service's per-shard write fence
+  instead.
+
+### Fixed
+
+- **An acknowledged write could be lost in a planned shard move.** Admission
+  checked that the broker served the shard, but an admitted publish could wait
+  in the publish queue and claim its offsets after the old leader had reported
+  `drained` and the control plane had cut over; it was then committed and
+  acknowledged on a broker the new owner never copied it from. The drained
+  report guessed at this with the tail holding still for two passes, which a
+  deep enough queue outlasts. The same gap existed for cache puts and deletes,
+  counter adds, consumer-group polls, acks, nacks and dead-letter changes, and
+  publishes forwarded to the old leader.
+
+  Every such write now enters a per-shard write fence right before it claims
+  its place in the log and holds it until it is durable and fanned out. The
+  shard lifecycle closes the fence as soon as it sees a move, and a write that
+  reaches the fence afterwards is refused the way a write to a shard the broker
+  does not serve is. The drained report goes out only once the fence is closed
+  with nothing inside it, which makes it exact. The readers a moved shard's old
+  leader ends now receive every record it committed first. The TLA+ model splits
+  admission from the claim, and `FelixShardHandoffNoClaimFence.cfg` shows the
+  loss without the check.
+- **A shard moved off a broker that stays up left its subscriptions and cache
+  watches open and silent.** The old leader now ends them, after delivering
+  what was queued, whenever it stops serving a shard.
 
 ### Fixed
 

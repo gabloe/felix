@@ -423,10 +423,11 @@ whichever instance runs the next pass:
 1. **Stage.** The destination joins `replicas` and is recorded as
    `successor`. The leader ships it the log like any other follower.
 2. **Fence.** Once the leader's replica report lists the successor as caught
-   up, the assignment goes `draining`. The leader stops admitting writes at
-   that generation, lets what it already accepted land, keeps shipping, and
-   reports `drained: true` once its log has held still with nothing in
-   flight — with `caught_up` measured against that final tail.
+   up, the assignment goes `draining`. The leader closes the shard's write
+   fence, so a write that has not yet claimed its place in the log is
+   refused, lets the writes already inside land, keeps shipping, and reports
+   `drained: true` once the fence is empty — with `caught_up` measured
+   against that final tail.
 3. **Cut over.** On a drained report at the fenced generation, the successor
    is named leader in a fresh `assigning` assignment. The old leader keeps a
    follower's seat if it is staying and the replication factor wants one;

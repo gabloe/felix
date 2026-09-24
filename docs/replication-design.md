@@ -384,7 +384,7 @@ releases the acknowledgement — so the control plane cannot be behind a client.
 A report that does not land leaves the mark where it was, and the publish waits
 rather than being acknowledged on a report nobody received.
 
-Both halves are checked. `docs/formal/FelixShard.tla` explores 2.4M distinct
+Both halves are checked. `docs/formal/FelixShard.tla` explores 2.0M distinct
 states of the implemented design without violating `AckedSurvive`, and
 `FelixShardNoReportOrder.cfg` — the same design with the ordering removed —
 loses an acknowledged record in a second (`task tla:check`). Promotion then
@@ -629,12 +629,24 @@ the successor, is not written until the old leader has said it stopped.
 
 Saying so rides the replica report. The leader keeps leading for replication
 while draining — the followers are caught up from it, and the successor is
-one of them — and reports `drained` once its log has held still with no
-publish in flight across two passes. Admission closed when the fence arrived,
-but a publish admitted just before may still be committing; the in-flight
-count covers what has been claimed, and the tail holding still covers the gap
-between admission and the claim, since an append wakes another pass. The
-control plane cuts over on that report and no earlier one: a report from
+one of them — and reports `drained` once no write can land any more. That
+needs more than closing admission. Admission checks ownership, and a write it
+lets in can then wait in a publish queue for as long as the queue is deep;
+a tail that has not moved for a while says nothing about a write still
+queued. So every write — a publish, a forwarded publish, a cache put or
+delete, a counter add, a consumer group's poll, ack, nack or dead-letter
+change — enters a per-shard write fence at the moment it claims its place in
+the log, and stays counted until it is durable and fanned out. The shard
+lifecycle closes the fence as soon as it sees the move, whether the move
+arrives as a draining copy of the served generation or as a new, draining
+generation, and before the new servable set is published. A write that
+reaches its claim after that is refused, the same way a publish to a shard
+this broker does not serve is refused. The leader reports `drained` when the
+fence is closed with nothing inside it, and reads the tail it reports only
+after seeing that, so the tail is final. The fence lives in
+`shards/lifecycle/fence.rs`.
+
+The control plane cuts over on that report and no earlier one: a report from
 before the fence, at the previous generation, describes a leader that was
 still writing.
 
@@ -666,17 +678,29 @@ than the report said, because the report is the only input either reads.
 > staged successor is killed before the cut-over; the shard lands on a broker
 > that holds the log.
 >
-> `a_draining_shard_reports_drained_once_its_tail_holds_still` — the broker
-> side of the fence: no drained report until the tail has settled, and a late
-> record starts the wait again.
+> `a_draining_shard_reports_drained_once_its_fence_is_quiet` — the broker
+> side of the fence: no drained report while a write is inside it, however
+> still the tail looks, and the report that follows includes that write.
+>
+> `a_durable_publish_claimed_after_the_fence_is_refused` — a publish admitted
+> before the fence and claimed after it is refused and never written; the
+> same holds for cache, counter, consumer-group and forwarded writes
+> (`cache_writes_after_the_fence_are_refused`,
+> `a_counter_add_after_the_fence_is_refused`,
+> `an_ack_after_the_fence_is_refused`,
+> `a_forwarded_publish_after_the_fence_is_refused`).
 
 Both halves are model-checked. `docs/formal/FelixShardHandoff.cfg` explores
-2.6M states of the move as implemented without a violation;
+the move as implemented without a violation;
 `FelixShardHandoffNoWait.cfg` — the same move cutting over as soon as the
 fence is written — finds two brokers serving the shard at once in seven
 steps, because the old leader has not seen the fence yet. The lease does not
 close that: it has not lapsed, and the leader is alive and meant to keep it.
-Only the leader's own word that it stopped does.
+Only the leader's own word that it stopped does. And
+`FelixShardHandoffNoClaimFence.cfg` — the fence checked at admission only —
+finds a write admitted before the fence, claimed after the drained report,
+and acknowledged by the old leader after the successor took over, which the
+successor does not hold.
 
 The steps, their triggers and the policy that bounds them are in
 [control-plane.md](control-plane.md#moving-a-shard).
