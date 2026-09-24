@@ -2,6 +2,7 @@
 //! accounting, ack handling, and the control/uni handler entry points.
 
 mod ack;
+mod ack_on_enqueue;
 mod admission;
 mod control_batch;
 mod control_binary;
@@ -85,6 +86,7 @@ fn make_job() -> PublishJob {
         payloads: vec![Bytes::from_static(b"payload")],
         response: None,
         admission_permit: None,
+        fenced: None,
     }
 }
 

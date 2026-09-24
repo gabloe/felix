@@ -16,9 +16,7 @@ use crate::replication::reporter::{ShardReport, shard_report};
 use crate::replication::{
     FollowerCursor, Progress, Rebuilds, lag_records, metrics, quorum_offset, ship_once,
 };
-
-/// Passes a draining shard's tail must hold still before it reports drained.
-pub(super) const DRAIN_SETTLE_PASSES: u32 = 2;
+use crate::shards::lifecycle::fence::ShardFence;
 
 /// How much of the log one exchange may carry.
 ///
@@ -32,9 +30,6 @@ pub struct ShardCursors {
     /// Where a follower with no cursor yet starts. See [`compare_from`].
     pub(super) base: u64,
     pub(super) followers: Vec<FollowerCursor>,
-    /// The tail this draining shard had at the end of the last pass, and how
-    /// many passes in a row it has stayed there with nothing in flight.
-    pub(super) settled: Option<(u64, u32)>,
 }
 
 impl ShardCursors {
@@ -46,23 +41,7 @@ impl ShardCursors {
             generation,
             base: 0,
             followers: Vec::new(),
-            settled: None,
         }
-    }
-
-    /// Whether a draining shard's log has stopped growing.
-    ///
-    /// Admission closed when the route went draining, but a publish admitted
-    /// just before may still be committing. `in_flight` covers what has been
-    /// claimed; the tail holding still across two passes covers the gap
-    /// between admission and the claim, since an append wakes another pass.
-    fn settle(&mut self, tail: u64, in_flight: usize) -> bool {
-        let passes = match self.settled {
-            Some((seen, passes)) if seen == tail && in_flight == 0 => passes + 1,
-            _ => 0,
-        };
-        self.settled = Some((tail, passes));
-        passes >= DRAIN_SETTLE_PASSES
     }
 }
 
@@ -104,6 +83,7 @@ pub(super) struct AuxCursors {
 pub(super) async fn replicate_shard<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
+    fence: &ShardFence,
     marks: &QuorumMarks,
     reporter: Option<&Reporter>,
     rebuilds: &Rebuilds,
@@ -308,22 +288,13 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     //
     // Equal reports send nothing, which is the healthy case: followers finish
     // together, so the majority report already described all of them.
+    // A draining shard says so once its fence is closed with no write inside,
+    // and only then. Nothing can land after that, so the tail read next is
+    // final and the control plane hands the shard on against exactly it.
+    // Checked before the read: the other way round, a write finishing in
+    // between would be quiesced but not in the tail.
+    let drained = route.draining && fence.quiesced(&watch_key(key));
     let tail = log.tail_offset().await.unwrap_or(tail);
-    // A draining shard says so once its log has stopped growing, and only
-    // then: the control plane hands it on against exactly this tail.
-    let drained = route.draining && {
-        let in_flight = match key.kind {
-            felix_router::ShardKind::Stream => {
-                broker
-                    .in_flight_publishes(&key.tenant_id, &key.namespace, &key.stream, key.shard)
-                    .await
-            }
-            // Cache writes are not claimed the way publishes are; the tail
-            // holding still is the whole check.
-            felix_router::ShardKind::Cache => 0,
-        };
-        entry.settle(tail, in_flight)
-    };
     let settled = shard_report(key, route.generation, tail, &entry.followers, drained);
     if report_out.as_ref() != Some(&settled) {
         // And the mark with it. Usually a no-op — the mark is monotonic and the

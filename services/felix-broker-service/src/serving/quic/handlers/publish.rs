@@ -202,6 +202,9 @@ pub(crate) struct PublishJob {
     /// Held from `enqueue_publish` admission until this job finishes processing (or is dropped
     /// without ever being enqueued). See [`PublishAdmission`].
     pub(crate) admission_permit: Option<AdmissionPermit>,
+    /// The shard's write fence, entered at admission when the publish is
+    /// acknowledged before it is written. See `enqueue_publish`.
+    pub(crate) fenced: Option<crate::shards::lifecycle::fence::FenceGuard>,
 }
 
 /// Count a publish that arrived on the JSON encoding.

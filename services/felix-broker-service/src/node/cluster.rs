@@ -37,10 +37,14 @@ pub(super) fn shard_state(config: &BrokerConfig) -> Option<ShardState> {
             membership.region.clone(),
             felix_router::RegionRouter::new(membership.region.clone()),
         ));
-        let ingress = Arc::new(shard_routing::IngressRouter::new(Arc::clone(&router)));
-        let lifecycle = Arc::new(tokio::sync::Mutex::new(
-            shard_lifecycle::ShardLifecycle::new(membership.node_id.clone()),
+        let lifecycle = shard_lifecycle::ShardLifecycle::new(membership.node_id.clone());
+        // One fence, shared: the lifecycle opens and closes it, every write
+        // path enters it through the ingress router.
+        let ingress = Arc::new(shard_routing::IngressRouter::new(
+            Arc::clone(&router),
+            Arc::clone(lifecycle.fence()),
         ));
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(lifecycle));
         let ownership = Arc::new(tokio::sync::RwLock::new(
             shard_watch::ShardOwnership::default(),
         ));
@@ -190,13 +194,15 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
     } = deps;
     match (cluster, &config.controlplane_url, durable_storage) {
         (Some((router, ingress, lifecycle, ownership)), Some(base_url), storage) => {
+            let readers = shard_lifecycle::ShardReaders::new(Arc::clone(broker));
             let store: Arc<dyn shard_lifecycle::ShardStore> = match storage {
-                Some(storage) => Arc::new(shard_lifecycle::DurableShardStore::new(Arc::new(
-                    storage.clone(),
-                ))),
+                Some(storage) => Arc::new(
+                    shard_lifecycle::DurableShardStore::new(Arc::new(storage.clone()))
+                        .with_readers(readers),
+                ),
                 // Without durable storage there is no log to open, so taking a
                 // shard is bookkeeping only.
-                None => Arc::new(shard_lifecycle::EphemeralShardStore),
+                None => Arc::new(shard_lifecycle::EphemeralShardStore::with_readers(readers)),
             };
             let watch = tokio::spawn(shard_watch::run(
                 membership_client.clone(),
@@ -233,6 +239,7 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                     Arc::clone(pool),
                     Arc::clone(broker),
                     Arc::clone(router),
+                    Arc::clone(ingress.fence()),
                     replication::driver::Published {
                         marks: Arc::clone(quorum_marks),
                         halted: Arc::clone(halted_replicas),

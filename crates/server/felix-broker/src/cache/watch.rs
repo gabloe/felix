@@ -107,6 +107,25 @@ impl CacheWatchHub {
         self.shards.lock().get(&key).map_or(0, Vec::len)
     }
 
+    /// End every watch on one cache shard. Each watcher is handed what was
+    /// already queued and then sees its queue close, which its delivery path
+    /// answers by finishing the stream. Returns how many ended.
+    ///
+    /// For a shard that has moved to another broker: call it once writes here
+    /// have stopped, so no change is applied after the watchers are gone.
+    pub fn end_shard(&self, tenant_id: &str, namespace: &str, cache: &str, shard: u32) -> usize {
+        let key = (
+            tenant_id.to_string(),
+            namespace.to_string(),
+            cache.to_string(),
+            shard,
+        );
+        self.shards
+            .lock()
+            .remove(&key)
+            .map_or(0, |watchers| watchers.len())
+    }
+
     fn remove(&self, key: &WatchShardKey, id: u64) {
         let mut shards = self.shards.lock();
         if let Some(watchers) = shards.get_mut(key) {

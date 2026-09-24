@@ -26,6 +26,9 @@ pub(crate) enum PublishTarget {
         /// cluster. `None` on a single-node broker, which has no replica set
         /// and so nothing to wait for.
         shard: Option<crate::shards::ShardKey>,
+        /// The generation it was admitted at, which the fence checks at the
+        /// claim.
+        generation: u64,
     },
     /// This broker leads the shard and the batch names its producer: appended
     /// once however many times it arrives. Never forwarded, because only the
@@ -33,6 +36,7 @@ pub(crate) enum PublishTarget {
     Idempotent {
         handle: StreamHandle,
         shard: Option<crate::shards::ShardKey>,
+        generation: u64,
         producer_id: u64,
         sequence: u64,
     },
@@ -207,6 +211,12 @@ pub(crate) async fn enqueue_publish(
         _conn: conn_permit,
         _global: permit,
     });
+    // Nobody waits on this job, so its ack goes out before the write and a
+    // refusal at the claim would reach no one. It enters the fence now and
+    // keeps the guard until it is written; a move then waits for it instead.
+    if job.response.is_none() {
+        job.fenced = fence_now(publish_ctx, &job.target)?;
+    }
 
     #[cfg(feature = "perf_debug")]
     let enqueue_wait_start = Instant::now();
@@ -345,6 +355,28 @@ pub(crate) fn reset_local_depth_only(
             }
             Err(updated) => prev = updated,
         }
+    }
+}
+
+/// Enter the write fence for a local write at the generation it was admitted
+/// at. `Ok(None)` for a forward, which the owner fences, and on a single-node
+/// broker.
+fn fence_now(
+    publish_ctx: &PublishContext,
+    target: &PublishTarget,
+) -> Result<Option<crate::shards::lifecycle::fence::FenceGuard>> {
+    match target {
+        PublishTarget::Resolved {
+            shard, generation, ..
+        }
+        | PublishTarget::Idempotent {
+            shard, generation, ..
+        } => Ok(crate::shards::lifecycle::fence::enter(
+            publish_ctx.ingress.as_deref(),
+            shard.as_ref(),
+            *generation,
+        )?),
+        _ => Ok(None),
     }
 }
 

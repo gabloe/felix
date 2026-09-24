@@ -6,6 +6,7 @@
 //! `--test routing sharding::`.
 
 mod cross_broker;
+mod moved_readers;
 mod publish_routing;
 mod rebalance;
 mod redirect;

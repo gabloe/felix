@@ -685,3 +685,101 @@ fn a_drained_shard_reassigned_here_serves_again() {
     assert_eq!(own.opened(&key(0), 5), Opened::Activated);
     assert!(own.may_serve_at(&key(0), 5));
 }
+
+/// The write fence follows the phase: open only while `Active`, and at that
+/// generation. A move closes it however it arrives -- as a draining copy of
+/// the served generation, or as a new, draining generation -- and it stays
+/// closed through the open that recovers the log for shipping. Closed at
+/// `observe`, so before the driver acts and before `publish_servable`.
+#[test]
+fn the_fence_is_open_only_while_active() {
+    let mut own = lifecycle();
+    let fence = std::sync::Arc::clone(own.fence());
+    own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+    assert!(fence.enter(&key(0), 3).is_none(), "opening");
+    own.opened(&key(0), 3);
+    assert!(fence.enter(&key(0), 3).is_some(), "active");
+
+    // A move as a release of the served generation.
+    own.observe(&key(0), Some(&draining_on("broker-a", 3)));
+    assert!(fence.enter(&key(0), 3).is_none(), "released for a move");
+    own.released(&key(0), 3);
+
+    // Served again, then a move as a new, draining generation.
+    own.observe(&key(0), Some(&assigned_to("broker-a", 5)));
+    own.opened(&key(0), 5);
+    assert!(fence.enter(&key(0), 5).is_some());
+    own.observe(&key(0), Some(&draining_on("broker-a", 6)));
+    assert!(fence.enter(&key(0), 5).is_none(), "reopening to hand off");
+    assert!(fence.enter(&key(0), 6).is_none(), "opening, draining");
+    assert_eq!(own.opened(&key(0), 6), Opened::Draining);
+    assert!(fence.enter(&key(0), 6).is_none(), "shipping, not serving");
+    assert!(fence.quiesced(&key(0)));
+
+    // Reassigned elsewhere.
+    own.observe(&key(1), Some(&assigned_to("broker-a", 1)));
+    own.opened(&key(1), 1);
+    own.observe(&key(1), Some(&assigned_to("broker-b", 2)));
+    assert!(fence.enter(&key(1), 1).is_none(), "lost to another broker");
+}
+
+/// Ending a moved shard's readers waits for the writes already inside the
+/// fence, so each reader is handed everything this broker committed.
+#[tokio::test]
+async fn releasing_a_shard_waits_for_writes_in_flight() {
+    let own = std::sync::Arc::new(tokio::sync::Mutex::new(lifecycle()));
+    let store = std::sync::Arc::new(EphemeralShardStore::default());
+    let fence = {
+        let mut own = own.lock().await;
+        own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+        own.opened(&key(0), 3);
+        std::sync::Arc::clone(own.fence())
+    };
+    let in_flight = fence.enter(&key(0), 3).expect("active");
+    let action = own
+        .lock()
+        .await
+        .observe(&key(0), Some(&draining_on("broker-a", 3)));
+
+    let released = tokio::spawn({
+        let own = std::sync::Arc::clone(&own);
+        let store = std::sync::Arc::clone(&store);
+        async move { apply(&own, store.as_ref(), action).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !released.is_finished(),
+        "ended readers with a write in flight"
+    );
+
+    drop(in_flight);
+    tokio::time::timeout(std::time::Duration::from_secs(5), released)
+        .await
+        .expect("released once the write left")
+        .expect("task");
+    assert_eq!(own.lock().await.phase(&key(0)), Phase::Closed);
+}
+
+/// A move arriving as a new, draining generation reopens the shard to ship it
+/// and ends its readers. Doing that must not wait on the lifecycle lock the
+/// driver took to record the open, or the feed stalls for good.
+#[tokio::test]
+async fn opening_a_shard_to_hand_it_off_completes() {
+    let own = tokio::sync::Mutex::new(lifecycle());
+    let store = EphemeralShardStore::default();
+    let action = {
+        let mut own = own.lock().await;
+        own.observe(&key(0), Some(&assigned_to("broker-a", 3)));
+        own.opened(&key(0), 3);
+        own.observe(&key(0), Some(&draining_on("broker-a", 4)))
+    };
+    assert!(matches!(action, Action::Open { generation: 4, .. }));
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        apply(&own, &store, action),
+    )
+    .await
+    .expect("the handoff open never finished");
+    assert_eq!(own.lock().await.phase(&key(0)), Phase::Closed);
+}

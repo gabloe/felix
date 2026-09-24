@@ -80,7 +80,7 @@ fn ingress(assignments: &[ShardAssignment]) -> IngressRouter {
         lifecycle.observe(&assignment.key, Some(assignment));
         lifecycle.opened(&assignment.key, assignment.generation);
     }
-    let ingress = IngressRouter::new(router);
+    let ingress = IngressRouter::new(router, Arc::clone(lifecycle.fence()));
     ingress.publish_servable(lifecycle.servable());
     ingress
 }
@@ -91,7 +91,7 @@ fn ingress(assignments: &[ShardAssignment]) -> IngressRouter {
 fn a_single_node_broker_serves_every_key_locally() {
     for key in ["a", "b", "anything at all"] {
         match resolve_cache_route(None, TENANT, NAMESPACE, CACHE, key) {
-            CacheRoute::Local { shard: 0 } => {}
+            CacheRoute::Local { shard: 0, .. } => {}
             other => panic!("expected shard 0 locally, got {other:?}"),
         }
     }
@@ -118,7 +118,7 @@ fn every_key_resolves_to_exactly_one_owner() {
     for n in 0..200 {
         let key = format!("session:{n}");
         match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key) {
-            CacheRoute::Local { shard } => {
+            CacheRoute::Local { shard, .. } => {
                 assert!(shard < 4);
                 // A key served here must belong to a shard this broker leads.
                 assert_eq!(shard % 2, 0, "{key} is shard {shard}, which broker-b leads");
@@ -162,7 +162,7 @@ fn a_cache_and_a_stream_of_the_same_name_resolve_to_their_own_owners() {
 
     assert_eq!(
         crate::shards::routing::dispatch(Some(&ours), &stream_key(0)),
-        crate::shards::routing::Dispatch::Local,
+        crate::shards::routing::Dispatch::Local { generation: 1 },
         "the stream is led here, and the cache must not have taken its row",
     );
 }
@@ -178,7 +178,7 @@ fn a_cache_uses_its_own_shard_count() {
     let shards: std::collections::BTreeSet<u32> = (0..200)
         .filter_map(|n| {
             match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &format!("k{n}")) {
-                CacheRoute::Local { shard } => Some(shard),
+                CacheRoute::Local { shard, .. } => Some(shard),
                 _ => None,
             }
         })
@@ -218,5 +218,94 @@ fn resolution_is_deterministic() {
             let again = resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key);
             assert_eq!(format!("{first:?}"), format!("{again:?}"));
         }
+    }
+}
+
+/// The write fence, on the local cache path. Admission still says the shard is
+/// served here -- the servable set has not caught up -- but the lifecycle has
+/// closed the fence for a move, so every cache write is refused and the cache
+/// is left as it was.
+mod fence {
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::serving::forward::CacheRequest;
+    use crate::test_support::leader::{self, Leader};
+
+    async fn cache_op(leader: &Leader, request: CacheRequest) -> Result<Option<Bytes>, String> {
+        apply_cache_op(
+            &leader.broker,
+            (None, std::time::Duration::from_secs(1)),
+            Some(&leader.ingress),
+            None,
+            "",
+            leader::TENANT,
+            leader::NAMESPACE,
+            leader::CACHE,
+            "session:abc",
+            request,
+        )
+        .await
+    }
+
+    async fn counter_op(leader: &Leader, request: CacheRequest) -> Result<Option<i64>, String> {
+        apply_counter_op(
+            &leader.broker,
+            Some(&leader.ingress),
+            None,
+            "",
+            leader::TENANT,
+            leader::NAMESPACE,
+            leader::CACHE,
+            "hits",
+            request,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn cache_writes_after_the_fence_are_refused() {
+        let mut leader = Leader::start().await;
+        cache_op(&leader, put_request(Bytes::from_static(b"v1"), None))
+            .await
+            .expect("served before the move");
+
+        leader.fence_move(&leader::cache_key());
+        assert!(
+            cache_op(&leader, put_request(Bytes::from_static(b"v2"), None))
+                .await
+                .is_err(),
+            "a put landed after the fence closed"
+        );
+        assert!(
+            cache_op(&leader, CacheRequest::Delete).await.is_err(),
+            "a delete landed after the fence closed"
+        );
+        assert_eq!(
+            cache_op(&leader, CacheRequest::Get).await,
+            Ok(Some(Bytes::from_static(b"v1"))),
+            "reads are not fenced, and the value is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_counter_add_after_the_fence_is_refused() {
+        let mut leader = Leader::start().await;
+        assert_eq!(
+            counter_op(&leader, CacheRequest::CounterAdd { delta: 5 }).await,
+            Ok(Some(5))
+        );
+
+        leader.fence_move(&leader::cache_key());
+        assert!(
+            counter_op(&leader, CacheRequest::CounterAdd { delta: 5 })
+                .await
+                .is_err(),
+            "a counter add landed after the fence closed"
+        );
+        assert_eq!(
+            counter_op(&leader, CacheRequest::CounterGet).await,
+            Ok(Some(5))
+        );
     }
 }

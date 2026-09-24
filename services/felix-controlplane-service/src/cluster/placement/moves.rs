@@ -104,13 +104,22 @@ pub(super) fn move_step<'a>(
             is_live,
             load,
         );
-        if let Some(from) = catalog_id(leader) {
-            leaders
-                .entry(from)
-                .and_modify(|count| *count = count.saturating_sub(1));
-        }
-        if let Some(to) = catalog_id(target) {
-            *leaders.entry(to).or_default() += 1;
+        // The tally already credits this shard to its live successor, so
+        // only a cut-over somewhere else moves the count.
+        let counted = existing
+            .successor
+            .as_deref()
+            .filter(|successor| is_live(successor))
+            .unwrap_or(leader);
+        if counted != target {
+            if let Some(from) = catalog_id(counted) {
+                leaders
+                    .entry(from)
+                    .and_modify(|count| *count = count.saturating_sub(1));
+            }
+            if let Some(to) = catalog_id(target) {
+                *leaders.entry(to).or_default() += 1;
+            }
         }
         return Decision::Move(
             MoveStep::CutOver {

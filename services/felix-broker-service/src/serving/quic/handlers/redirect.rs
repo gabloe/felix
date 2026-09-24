@@ -41,7 +41,7 @@ pub(crate) fn redirect_for(
     };
 
     match dispatch(ingress, &key) {
-        Dispatch::Local => None,
+        Dispatch::Local { .. } => None,
         Dispatch::Forward {
             node_id,
             generation,

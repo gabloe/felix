@@ -72,6 +72,10 @@ expectations=(
   "FelixShardStalePlanner violates AtMostOneServing"
   "FelixShardStalePromotionCas pass"
   "FelixShardStalePromotion violates AtMostOneServing"
+  "FelixShardHandoffLeaderAck pass"
+  "FelixShardHandoffNoClaimFence violates AckedSurvive"
+  "FelixShardHandoffAdmitAck pass"
+  "FelixShardHandoffAdmitAckClaimFence violates AckedSurvive"
 )
 
 fetch_tools

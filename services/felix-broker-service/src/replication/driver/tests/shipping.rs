@@ -289,6 +289,7 @@ async fn an_append_ships_without_waiting_for_the_tick() {
         Arc::clone(&follower),
         Arc::clone(&broker),
         router,
+        Arc::default(),
         Published {
             marks: Arc::clone(&marks),
             halted: Arc::new(crate::replication::halted::HaltedReplicas::new()),

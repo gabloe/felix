@@ -23,6 +23,7 @@ use super::reporter::Reporter;
 use super::reporter::ShardReport;
 use super::{RebuildPolicy, Rebuilds, metrics};
 use crate::peer::PeerRequester;
+use crate::shards::lifecycle::fence::ShardFence;
 use shard::{AuxCursors, ShardCursors, ShardPass, replicate_shard, watch_key};
 
 /// How many shards a pass ships at the same time.
@@ -49,6 +50,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     requester: Arc<R>,
     broker: Arc<Broker>,
     router: Arc<ShardRouter>,
+    fence: Arc<ShardFence>,
     published: Published,
     reporter: Option<Reporter>,
     interval: Duration,
@@ -85,6 +87,7 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
                 requester.as_ref(),
                 &broker,
                 &router,
+                &fence,
                 &published.marks,
                 reporter.as_ref(),
                 &mut cursors,
@@ -105,6 +108,8 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
 /// Ship for every shard this broker leads, once.
 ///
 /// Returns the largest lag seen, so a caller can report it without recomputing.
+/// Nothing is fenced here, so a draining shard counts as quiet at once; use
+/// [`replicate_once_with`] to drain against a real fence.
 // One cursor map per log kind the pass ships, plus the shared context: folding
 // the maps into a struct would move the argument list rather than shorten it.
 #[allow(clippy::too_many_arguments)]
@@ -123,6 +128,7 @@ pub async fn replicate_once<R: PeerRequester>(
         requester,
         broker,
         router,
+        &ShardFence::default(),
         marks,
         reporter,
         cursors,
@@ -134,12 +140,14 @@ pub async fn replicate_once<R: PeerRequester>(
     .await
 }
 
-/// [`replicate_once`] with halted followers rebuilt under `rebuilds`.
+/// [`replicate_once`] with halted followers rebuilt under `rebuilds`, and a
+/// draining shard held back until `fence` says its writes have stopped.
 #[allow(clippy::too_many_arguments)]
 pub async fn replicate_once_with<R: PeerRequester>(
     requester: &R,
     broker: &Arc<Broker>,
     router: &ShardRouter,
+    fence: &ShardFence,
     marks: &QuorumMarks,
     reporter: Option<&Reporter>,
     cursors: &mut HashMap<ShardKey, ShardCursors>,
@@ -212,7 +220,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
     let passes: Vec<ShardPass> =
         futures::stream::iter(work.into_iter().map(|(key, route, entry, aux)| {
             replicate_shard(
-                requester, broker, marks, reporter, rebuilds, key, route, entry, aux,
+                requester, broker, fence, marks, reporter, rebuilds, key, route, entry, aux,
             )
         }))
         .buffer_unordered(SHARD_CONCURRENCY)

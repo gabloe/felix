@@ -57,9 +57,6 @@ pub(crate) struct StreamState {
     consistency: AtomicU8,
     /// The producers whose sequences this shard's leader remembers.
     pub(crate) producers: ProducerTable,
-    /// Publishes claimed and not yet completed. A draining shard reports
-    /// itself settled only once this is zero.
-    pub(crate) in_flight: AtomicUsize,
 }
 
 impl StreamState {
@@ -86,7 +83,6 @@ impl StreamState {
             durable,
             commit_sequencer: Arc::new(CommitSequencer::new(0)),
             producers: ProducerTable::default(),
-            in_flight: AtomicUsize::new(0),
         }
     }
 
@@ -425,6 +421,19 @@ impl StreamState {
         if removed {
             self.rebuild_subscriber_snapshot(&state);
         }
+    }
+
+    /// Drop every subscriber's sender, so each receiver drains what is queued
+    /// and then sees its channel close. Returns how many there were.
+    ///
+    /// The fanout snapshot holds clones of the senders, so it is emptied too;
+    /// otherwise the channels would stay open until the next publish.
+    pub(crate) fn end_subscribers(&self) -> usize {
+        let mut state = self.subscribers.lock();
+        let ended = state.senders.len();
+        state.senders.clear();
+        self.rebuild_subscriber_snapshot(&state);
+        ended
     }
 
     /// The current fanout list.

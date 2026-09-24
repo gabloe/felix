@@ -27,6 +27,21 @@
 (* FALSE` cuts over as soon as the fence is written, and TLC finds the     *)
 (* leader landing a write after its successor has taken over.             *)
 (*                                                                         *)
+(* A write is admitted, then claimed, then committed. Admission checks the *)
+(* broker is serving; the claim is where it takes its place in the log,    *)
+(* and anything may happen while it waits in between. `FenceAtClaim`      *)
+(* checks the fence again at the claim, and the drained report counts only *)
+(* claimed writes, as the broker's fence does. Without the check TLC finds *)
+(* a write admitted before the fence, claimed after the drained report,    *)
+(* committed and acknowledged by the old leader, and missing from the new. *)
+(*                                                                         *)
+(* `AckOnAdmit` acknowledges a write when it is admitted, as the broker    *)
+(* does by default, so a claim refused at the fence is an acknowledged     *)
+(* write that never lands. `FenceFromAdmit` has such a write hold the      *)
+(* fence from admission instead: its claim is not refused, and the drained *)
+(* report waits for it. Without that, TLC finds the old leader refusing an *)
+(* acknowledged write and the successor taking over without it.            *)
+(*                                                                         *)
 (* Time is discrete. `now` is real time; each broker has its own clock,    *)
 (* within `Drift` of real time, which is the drift-rate assumption of the  *)
 (* design in the only form a finite model needs. A broker anchors a lease  *)
@@ -66,13 +81,17 @@ CONSTANTS
     ReportBeforeAck, \* whether a Quorum ack waits for the report describing it
     Handoff,        \* whether the control plane may move the shard off a live leader
     WaitForDrained, \* whether a cut-over waits for the leader's drained report
+    FenceAtClaim,   \* whether a claim re-checks the fence, or only admission does
+    AckOnAdmit,     \* under `Leader`, acknowledge on admission rather than on commit
+    FenceFromAdmit, \* whether a write acknowledged on admission holds the fence from there
     MaxMoves,       \* how many planned moves the run starts; bounds the state space
     Planners,       \* control-plane instances deciding placement, each from its own read
     CasWrites       \* whether an assignment write lands only at the generation it read
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
-ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN
+ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN /\ FenceAtClaim \in BOOLEAN
+ASSUME AckOnAdmit \in BOOLEAN /\ FenceFromAdmit \in BOOLEAN
 ASSUME CasWrites \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
@@ -91,7 +110,8 @@ VARIABLES
     log,        \* each broker's log: a sequence of [g |-> generation, id |-> write]
     hwm,        \* each broker's high-water mark: the prefix known committed
     halted,     \* followers that found a divergence they may not repair
-    pending,    \* a write admitted by each broker and not yet committed; 0 means none
+    queued,     \* a write admitted by each broker and not yet claimed; 0 means none
+    pending,    \* a write claimed by each broker and not yet committed; 0 means none
     acked,      \* writes acknowledged to a client
     writes,     \* how many writes have been admitted so far
     staleCommit, \* history: a broker committed at a generation already superseded
@@ -103,7 +123,7 @@ VARIABLES
     cpView      \* the read each planner holds: {} or {view}
 
 vars == << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-           hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+           hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit,
            draining, successor, stopped, moves, ver, cpView >>
 
 \* Placement's state, which only the control plane's decisions change.
@@ -145,6 +165,7 @@ Init ==
     /\ log = [b \in Brokers |-> <<>>]
     /\ hwm = [b \in Brokers |-> 0]
     /\ halted = {}
+    /\ queued = [b \in Brokers |-> 0]
     /\ pending = [b \in Brokers |-> 0]
     /\ acked = {}
     /\ writes = 0
@@ -172,7 +193,7 @@ Tick ==
                                         /\ c[b] >= now + 1 - Drift
                                         /\ c[b] <= now + 1 + Drift }
     /\ UNCHANGED << gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
@@ -188,7 +209,7 @@ SendHeartbeat(b) ==
     /\ hbOut' = [hbOut EXCEPT ![b] = TRUE]
     /\ hbAt' = [hbAt EXCEPT ![b] = clock[b]]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    log, hwm, halted, pending, acked, writes, staleCommit >>
+                    log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 AcceptHeartbeat(b) ==
@@ -199,14 +220,14 @@ AcceptHeartbeat(b) ==
     /\ hbOut' = [hbOut EXCEPT ![b] = FALSE]
     /\ bexpiry' = [bexpiry EXCEPT ![b] = hbAt[b] + L]
     /\ UNCHANGED << now, clock, gen, leader, report, inflight, bgen, hbAt,
-                    log, hwm, halted, pending, acked, writes, staleCommit >>
+                    log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 LoseHeartbeat(b) ==
     /\ hbOut[b]
     /\ hbOut' = [hbOut EXCEPT ![b] = FALSE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+                    hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 \* A broker that finds its lease lapsed, or that hears of a newer generation,
@@ -216,6 +237,7 @@ StepDown(b) ==
     /\ bgen[b] > 0
     /\ (bgen[b] < gen \/ clock[b] + Eps >= bexpiry[b])
     /\ bgen' = [bgen EXCEPT ![b] = 0]
+    /\ queued' = [queued EXCEPT ![b] = 0]
     /\ pending' = [pending EXCEPT ![b] = 0]
     /\ stopped' = [stopped EXCEPT ![b] = FALSE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bexpiry,
@@ -223,18 +245,43 @@ StepDown(b) ==
                     draining, successor, moves, ver, cpView >>
 
 -----------------------------------------------------------------------------
-(* Writes. Admission checks the lease; the commit checks it again, or does *)
-(* not, which is the knob. Anything may happen between the two: that gap   *)
-(* is where a paused process lives.                                        *)
+(* Writes. Admission checks the broker is serving; the write then waits,  *)
+(* and claims its place in the log; the commit checks the lease again, or  *)
+(* does not, which is the knob. Anything may happen between admission and *)
+(* the claim, and between the claim and the commit: those gaps are a       *)
+(* queue and a paused process.                                             *)
+
+\* A write acknowledged here holds the fence from here, with `FenceFromAdmit`:
+\* the broker's `enqueue_publish` enters it for a publish nobody waits on.
+Held == AckOnAdmit /\ FenceFromAdmit
 
 Admit(b) ==
     /\ Serving(b)
-    /\ pending[b] = 0
+    /\ queued[b] = 0
     /\ writes < MaxWrites
     /\ writes' = writes + 1
-    /\ pending' = [pending EXCEPT ![b] = writes + 1]
+    /\ queued' = [queued EXCEPT ![b] = writes + 1]
+    /\ acked' = IF AckOnAdmit /\ ~Quorum THEN acked \cup {writes + 1} ELSE acked
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, acked, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, pending, staleCommit >>
+    /\ UNCHANGED handoffVars
+
+\* The claim, and with `FenceAtClaim` the fence checked again: a broker that
+\* has seen the fence refuses a write it admitted before it. This is
+\* `ShardFence::enter` in `services/felix-broker-service/src/shards/lifecycle/fence.rs`,
+\* entered right before a publish claims its offsets. A refused write is
+\* simply never claimed. Unless it was acknowledged on admission, it was
+\* never acknowledged either; one that was holds the fence with `Held`, and
+\* is claimed regardless.
+Claim(b) ==
+    /\ queued[b] /= 0
+    /\ pending[b] = 0
+    /\ bgen[b] > 0
+    /\ (FenceAtClaim /\ ~Held) => ~stopped[b]
+    /\ pending' = [pending EXCEPT ![b] = queued[b]]
+    /\ queued' = [queued EXCEPT ![b] = 0]
+    /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
+                    hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 Commit(b) ==
@@ -248,7 +295,7 @@ Commit(b) ==
     \* History: the control plane has moved on, and this write still landed.
     /\ staleCommit' = (staleCommit \/ bgen[b] < gen)
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, hwm, halted, writes >>
+                    hbOut, hbAt, hwm, halted, queued, writes >>
     /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
@@ -281,7 +328,7 @@ Ship(b, f) ==
              ELSE /\ halted' = halted \cup {f}
                   /\ UNCHANGED log
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, hwm, pending, acked, writes, staleCommit >>
+                    hbOut, hbAt, hwm, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 \* Under `Quorum`, a record is acknowledged once a majority including the
@@ -306,7 +353,7 @@ AckQuorum(b) ==
         /\ acked' = acked \cup { log[b][j].id : j \in 1..i }
         /\ hwm' = [hwm EXCEPT ![b] = i]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, halted, pending, writes, staleCommit >>
+                    hbOut, hbAt, log, halted, queued, pending, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 \* A follower learns the mark from the leader, never past what it holds.
@@ -317,7 +364,7 @@ LearnHwm(b, f) ==
     /\ SubSeq(log[f], 1, hwm[b]) = SubSeq(log[b], 1, hwm[b])
     /\ hwm' = [hwm EXCEPT ![f] = hwm[b]]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, halted, pending, acked, writes, staleCommit >>
+                    hbOut, hbAt, log, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
@@ -330,6 +377,10 @@ LearnHwm(b, f) ==
 (* it does -- a drained report from the old leader, read as the new one's, *)
 (* lets the next move skip its wait.                                       *)
 
+\* `drained` counts claimed writes only. A write still waiting to be claimed
+\* is invisible to it, as it is to the broker's fence -- which is why the
+\* claim has to check the fence rather than trust the report to cover it.
+\* A write that holds the fence from admission is counted from there.
 Report(b) ==
     /\ LeaseValid(b)
     /\ leader = b /\ bgen[b] = gen
@@ -337,10 +388,10 @@ Report(b) ==
     /\ inflight' = << [holders |-> { f \in Brokers \ {b} :
                                         log[f] = log[b] /\ f \notin halted },
                        len     |-> Len(log[b]),
-                       drained |-> stopped[b] /\ pending[b] = 0,
+                       drained |-> stopped[b] /\ pending[b] = 0 /\ (Held => queued[b] = 0),
                        gen     |-> bgen[b]] >>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 DeliverReport ==
@@ -348,14 +399,14 @@ DeliverReport ==
     /\ report' = IF inflight[1].gen = gen THEN inflight[1] ELSE report
     /\ inflight' = <<>>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 LoseReport ==
     /\ inflight /= <<>>
     /\ inflight' = <<>>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit >>
     /\ UNCHANGED handoffVars
 
 -----------------------------------------------------------------------------
@@ -390,7 +441,7 @@ Now == [ver       |-> ver,
 Snapshot(p) ==
     /\ cpView' = [cpView EXCEPT ![p] = {Now}]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+                    hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit,
                     draining, successor, stopped, moves, ver >>
 
 \* A write decided from read `v` lands only if nothing was written since,
@@ -413,6 +464,7 @@ Promote(v, f, views) ==
     /\ cpExpiry' = now + L
     /\ bgen' = [bgen EXCEPT ![f] = gen + 1]
     /\ bexpiry' = [bexpiry EXCEPT ![f] = clock[f] + L]
+    /\ queued' = [queued EXCEPT ![f] = 0]
     /\ pending' = [pending EXCEPT ![f] = 0]
     /\ report' = NoReport
     /\ draining' = FALSE
@@ -424,9 +476,10 @@ Promote(v, f, views) ==
 (* Planned handoff. The control plane fences the leader so the shard can    *)
 (* move to a follower the last report says is caught up. The leader keeps  *)
 (* its lease and keeps shipping; it stops serving when it sees the fence,  *)
-(* and a write it admitted before that still lands. Its next report says   *)
-(* whether the log has stopped growing, and the cut-over waits for that -- *)
-(* or does not, which is the knob.                                         *)
+(* and a write it claimed before that still lands. Its next report says    *)
+(* whether the log has stopped growing -- fenced, with no claimed write    *)
+(* outstanding -- and the cut-over waits for that, or does not, which is   *)
+(* the knob.                                                               *)
 
 \* The fence names the leader that was read. If that is no longer the
 \* leader -- only possible without `CasWrites` -- the write hands the shard
@@ -441,12 +494,13 @@ Fence(v, f, views) ==
     /\ ver' = ver + 1
     /\ cpView' = views
     /\ IF v.leader = leader
-       THEN UNCHANGED << gen, leader, cpExpiry, report, bgen, bexpiry, pending, stopped >>
+       THEN UNCHANGED << gen, leader, cpExpiry, report, bgen, bexpiry, queued, pending, stopped >>
        ELSE /\ gen' = gen + 1
             /\ leader' = v.leader
             /\ cpExpiry' = now + L
             /\ bgen' = [bgen EXCEPT ![v.leader] = gen + 1]
             /\ bexpiry' = [bexpiry EXCEPT ![v.leader] = clock[v.leader] + L]
+            /\ queued' = [queued EXCEPT ![v.leader] = 0]
             /\ pending' = [pending EXCEPT ![v.leader] = 0]
             /\ report' = NoReport
             /\ stopped' = [stopped EXCEPT ![v.leader] = TRUE]
@@ -463,7 +517,7 @@ ObserveFence(b) ==
     /\ ~stopped[b]
     /\ stopped' = [stopped EXCEPT ![b] = TRUE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+                    hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit,
                     draining, successor, moves, ver, cpView >>
 
 CutOver(v, f, views) ==
@@ -478,6 +532,7 @@ CutOver(v, f, views) ==
     /\ cpExpiry' = now + L
     /\ bgen' = [bgen EXCEPT ![f] = gen + 1]
     /\ bexpiry' = [bexpiry EXCEPT ![f] = clock[f] + L]
+    /\ queued' = [queued EXCEPT ![f] = 0]
     /\ pending' = [pending EXCEPT ![f] = 0]
     /\ report' = NoReport
     /\ draining' = FALSE
@@ -499,6 +554,7 @@ Next ==
         \/ LoseHeartbeat(b)
         \/ StepDown(b)
         \/ Admit(b)
+        \/ Claim(b)
         \/ Commit(b)
         \/ AckQuorum(b)
         \/ Report(b)
@@ -519,10 +575,13 @@ Spec == Init /\ [][Next]_vars
 AtMostOneServing ==
     \A a, c \in Brokers : Serving(a) /\ Serving(c) => a = c
 
-\* A record acknowledged to a client is held by whoever is serving.
+\* A record acknowledged to a client is held by whoever is serving. One
+\* acknowledged on admission may still be on its way into that broker's log.
 AckedSurvive ==
     \A b \in Brokers : Serving(b) =>
-        \A id \in acked : \E i \in 1..Len(log[b]) : log[b][i].id = id
+        \A id \in acked :
+            \/ \E i \in 1..Len(log[b]) : log[b][i].id = id
+            \/ AckOnAdmit /\ id \in {queued[b], pending[b]}
 
 \* Two brokers never hold different acknowledged records at one offset.
 AckedAgree ==

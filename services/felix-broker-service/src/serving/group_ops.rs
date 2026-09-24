@@ -15,6 +15,7 @@ use felix_broker::{Broker, GroupKey};
 use felix_wire::GroupRecord;
 
 use crate::serving::quic::handlers::publish::PublishContext;
+use crate::shards::lifecycle::fence::{self, FenceGuard};
 use crate::shards::routing::{Dispatch, dispatch};
 use crate::shards::{ShardKey, ShardKind};
 
@@ -42,15 +43,21 @@ pub(crate) async fn poll(
     max_records: usize,
     wait: Duration,
 ) -> Result<Vec<GroupRecord>, String> {
-    let (reader, log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
+    let (reader, log, owned) =
+        reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
     let deadline = Instant::now() + wait;
 
     loop {
+        // A poll writes: it records what it hands out, and dead-letters what
+        // has run out of attempts.
+        let fenced = owned.enter(publish_ctx)?;
         let claimed = reader
             .poll(&key, &log, max_records, Instant::now())
             .await
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| err.to_string());
+        drop(fenced);
+        let claimed = claimed?;
         if !claimed.is_empty() {
             return Ok(claimed
                 .into_iter()
@@ -85,7 +92,8 @@ pub(crate) async fn dead_letters(
     shard: u32,
     group: &str,
 ) -> Result<Vec<u64>, String> {
-    let (reader, _log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
+    let (reader, _log, _owned) =
+        reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
     reader
         .dead_lettered(&key)
@@ -106,8 +114,10 @@ pub(crate) async fn manage_dead_letter(
     offset: u64,
     redrive: bool,
 ) -> Result<(), String> {
-    let (reader, _log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
+    let (reader, _log, owned) =
+        reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
+    let _fenced = owned.enter(publish_ctx)?;
     let taken = if redrive {
         reader.redrive(&key, offset).await
     } else {
@@ -136,12 +146,34 @@ pub(crate) async fn settle(
     offset: u64,
     finish: bool,
 ) -> Result<(), String> {
-    let (reader, _log) = reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
+    let (reader, _log, owned) =
+        reader_and_log(broker, publish_ctx, tenant_id, namespace, stream, shard)?;
     let key = group_key(tenant_id, namespace, stream, shard, group);
+    let _fenced = owned.enter(publish_ctx)?;
     if finish {
         reader.ack(&key, offset).await.map_err(|e| e.to_string())
     } else {
         reader.nack(&key, offset).await.map_err(|e| e.to_string())
+    }
+}
+
+/// A shard this broker led when a group operation was admitted.
+struct Owned {
+    key: ShardKey,
+    generation: u64,
+}
+
+impl Owned {
+    /// Enter the shard's write fence, right before a group write. Group state
+    /// moves with the shard, so a write landing after the shard stopped
+    /// serving here would be left behind.
+    fn enter(&self, publish_ctx: &PublishContext) -> Result<Option<FenceGuard>, String> {
+        fence::enter(
+            publish_ctx.ingress.as_deref(),
+            Some(&self.key),
+            self.generation,
+        )
+        .map_err(|refused| refused.to_string())
     }
 }
 
@@ -152,7 +184,7 @@ fn owned_here(
     namespace: &str,
     stream: &str,
     shard: u32,
-) -> Result<(), String> {
+) -> Result<Owned, String> {
     let key = ShardKey {
         tenant_id: tenant_id.to_string(),
         namespace: namespace.to_string(),
@@ -161,7 +193,7 @@ fn owned_here(
         kind: ShardKind::Stream,
     };
     match dispatch(publish_ctx.ingress.as_deref(), &key) {
-        Dispatch::Local => Ok(()),
+        Dispatch::Local { generation } => Ok(Owned { key, generation }),
         Dispatch::Forward { node_id, .. } => {
             Err(format!("shard {shard} of {stream} is served by {node_id}"))
         }
@@ -181,10 +213,11 @@ fn reader_and_log<'a>(
     (
         &'a std::sync::Arc<felix_broker::GroupReader>,
         felix_broker::StreamLog,
+        Owned,
     ),
     String,
 > {
-    owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
+    let owned = owned_here(publish_ctx, tenant_id, namespace, stream, shard)?;
     let reader = broker
         .group_reader()
         .ok_or("this broker has no durable storage, so it serves no consumer groups")?;
@@ -193,7 +226,7 @@ fn reader_and_log<'a>(
         .ok_or("this broker has no durable storage")?
         .open_stream(tenant_id, namespace, stream, shard)
         .map_err(|err| err.to_string())?;
-    Ok((reader, log))
+    Ok((reader, log, owned))
 }
 
 fn group_key(tenant_id: &str, namespace: &str, stream: &str, shard: u32, group: &str) -> GroupKey {
@@ -205,3 +238,6 @@ fn group_key(tenant_id: &str, namespace: &str, stream: &str, shard: u32, group: 
         group: group.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests;

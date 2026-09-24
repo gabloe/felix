@@ -65,7 +65,7 @@ fn ingress(assignments: &[ShardAssignment], opened: &[u32]) -> IngressRouter {
             lifecycle.opened(&assignment.key, assignment.generation);
         }
     }
-    let ingress = IngressRouter::new(router);
+    let ingress = IngressRouter::new(router, Arc::clone(lifecycle.fence()));
     ingress.publish_servable(lifecycle.servable());
     ingress
 }
@@ -74,14 +74,17 @@ fn ingress(assignments: &[ShardAssignment], opened: &[u32]) -> IngressRouter {
 /// behaves exactly as it did before clustering existed.
 #[tokio::test]
 async fn a_single_node_broker_always_serves_locally() {
-    assert_eq!(dispatch(None, &key(0)), Dispatch::Local);
-    assert_eq!(dispatch(None, &key(41)), Dispatch::Local);
+    assert_eq!(dispatch(None, &key(0)), Dispatch::Local { generation: 0 });
+    assert_eq!(dispatch(None, &key(41)), Dispatch::Local { generation: 0 });
 }
 
 #[tokio::test]
 async fn an_owned_and_open_shard_is_served_locally() {
     let ingress = ingress(&[assignment(0, "broker-a", 3)], &[0]);
-    assert_eq!(dispatch(Some(&ingress), &key(0)), Dispatch::Local);
+    assert_eq!(
+        dispatch(Some(&ingress), &key(0)),
+        Dispatch::Local { generation: 3 }
+    );
 }
 
 /// The reason ownership and readiness are two separate sources: the cluster
@@ -142,7 +145,7 @@ async fn an_unavailable_owner_is_reported_with_its_reason() {
         .collect();
     router.publish(routing_table_from(&owned, &nodes), &nodes);
 
-    let ingress = IngressRouter::new(router);
+    let ingress = IngressRouter::new(router, Arc::default());
     match dispatch(Some(&ingress), &key(0)) {
         Dispatch::Unavailable(Reason::OwnerUnavailable(detail)) => {
             assert!(detail.contains("broker-dead"), "{detail}");
@@ -168,9 +171,12 @@ async fn losing_a_shard_stops_local_service() {
 
     let owned: HashMap<ShardKey, ShardAssignment> = [(key(0), mine)].into_iter().collect();
     router.publish(routing_table_from(&owned, &nodes), &nodes);
-    let ingress = IngressRouter::new(Arc::clone(&router));
+    let ingress = IngressRouter::new(Arc::clone(&router), Arc::clone(lifecycle.fence()));
     ingress.publish_servable(lifecycle.servable());
-    assert_eq!(dispatch(Some(&ingress), &key(0)), Dispatch::Local);
+    assert_eq!(
+        dispatch(Some(&ingress), &key(0)),
+        Dispatch::Local { generation: 1 }
+    );
 
     // Reassigned to broker-b.
     let moved: HashMap<ShardKey, ShardAssignment> = [(key(0), assignment(0, "broker-b", 2))]
@@ -205,7 +211,7 @@ async fn a_local_route_at_a_newer_generation_is_not_served_until_reopened() {
         .collect();
     router.publish(routing_table_from(&newer, &nodes), &nodes);
 
-    let ingress = IngressRouter::new(router);
+    let ingress = IngressRouter::new(router, Arc::clone(lifecycle.fence()));
     ingress.publish_servable(lifecycle.servable());
     assert_eq!(
         dispatch(Some(&ingress), &key(0)),
@@ -225,12 +231,18 @@ async fn a_multi_shard_stream_dispatches_per_shard() {
         &[0, 2],
     );
 
-    assert_eq!(dispatch(Some(&ingress), &key(0)), Dispatch::Local);
+    assert_eq!(
+        dispatch(Some(&ingress), &key(0)),
+        Dispatch::Local { generation: 1 }
+    );
     assert!(matches!(
         dispatch(Some(&ingress), &key(1)),
         Dispatch::Forward { .. }
     ));
-    assert_eq!(dispatch(Some(&ingress), &key(2)), Dispatch::Local);
+    assert_eq!(
+        dispatch(Some(&ingress), &key(2)),
+        Dispatch::Local { generation: 1 }
+    );
 }
 
 /// Without a routing key on the wire there is only one shard to choose, and
@@ -319,7 +331,11 @@ mod feed {
             "us-west-2",
             RegionRouter::new("us-west-2".to_string()),
         ));
-        let ingress = Arc::new(IngressRouter::new(Arc::clone(&router)));
+        let lifecycle = ShardLifecycle::new("broker-a");
+        let ingress = Arc::new(IngressRouter::new(
+            Arc::clone(&router),
+            Arc::clone(lifecycle.fence()),
+        ));
         (
             FeedState {
                 client_endpoints: None,
@@ -328,8 +344,8 @@ mod feed {
                     ownership.reset(assignments.to_vec());
                     ownership
                 })),
-                lifecycle: Arc::new(tokio::sync::Mutex::new(ShardLifecycle::new("broker-a"))),
-                store: Arc::new(EphemeralShardStore),
+                lifecycle: Arc::new(tokio::sync::Mutex::new(lifecycle)),
+                store: Arc::new(EphemeralShardStore::default()),
                 ingress,
                 router: Arc::clone(&router),
             },
@@ -357,7 +373,7 @@ mod feed {
 
         let feed = spawn_feed(state, None, Duration::from_millis(20), shutdown.clone());
         until("the shard to be served locally", || {
-            ingress.dispatch(&key(0)) == Dispatch::Local
+            matches!(ingress.dispatch(&key(0)), Dispatch::Local { .. })
         })
         .await;
 

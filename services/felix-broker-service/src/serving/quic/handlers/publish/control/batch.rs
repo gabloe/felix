@@ -187,9 +187,10 @@ pub(crate) async fn handle_publish_batch_message(
             &credential,
         ),
         Some((producer_id, sequence)) => match route {
-            PublishRoute::Local(handle) => Some(PublishTarget::Idempotent {
+            PublishRoute::Local { handle, generation } => Some(PublishTarget::Idempotent {
                 handle,
                 shard: local_shard_key(publish_ctx, &tenant_id, &namespace, &stream, shard),
+                generation,
                 producer_id,
                 sequence,
             }),
@@ -324,6 +325,7 @@ pub(crate) async fn handle_publish_batch_message(
             payloads,
             response: response_tx,
             admission_permit: None,
+            fenced: None,
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()
