@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790228026249,
+  "lastUpdate": 1790246481754,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14456,6 +14456,58 @@ window.BENCHMARK_DATA = {
             "range": "12509.17",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 915519.80\nmean: 918338.93\nstdev: 12509.17\ncv: 1.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8295ba883f45d3fe7d25a63c97db4c0bf1208ac5",
+          "message": "Fix the two tests that failed Coverage on main (#659)\n\n* test(controlplane): start the binary on port 0 in main_runtime\n\nThe harness chose a free port, released it, and told the child to bind it.\nAnother test's process could take the port in between; the child then failed\nto bind and exited, and the test went on to poll whichever process now held\nthe port. Under coverage that showed up as a control plane that never\nanswered /ready.\n\nThe control plane now logs its listening addresses after binding, with the\nport the socket actually got, and the harness starts it on port 0 and reads\nthe addresses from those lines. A failed bind no longer logs \"listening\".\n\n* test(broker-service): wait for the refresh loop to exit before checking its file\n\nA refresh that has started runs to the end, including writing the rotated\ntoken, even after shutdown is cancelled. The rotation test read the file right\nafter cancelling, so it could see the stub's newest answer without the file\nwrite that follows it.",
+          "timestamp": "2026-09-24T03:36:41-07:00",
+          "tree_id": "ff72697cb570a8196a68ccc40b70ec08c2efaeea",
+          "url": "https://github.com/gabloe/felix/commit/8295ba883f45d3fe7d25a63c97db4c0bf1208ac5"
+        },
+        "date": 1790246480889,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 383613.32,
+            "range": "22407.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 383613.32\nmean: 385474.66\nstdev: 22407.79\ncv: 5.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 383613.32,
+            "range": "22407.79",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 383613.32\nmean: 385474.66\nstdev: 22407.79\ncv: 5.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94288.34,
+            "range": "846.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94288.34\nmean: 93761.60\nstdev: 846.42\ncv: 0.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 942883.35,
+            "range": "8464.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 942883.35\nmean: 937615.97\nstdev: 8464.23\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
