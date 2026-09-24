@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790273172050,
+  "lastUpdate": 1790273351475,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18876,6 +18876,72 @@ window.BENCHMARK_DATA = {
             "range": "1193.85",
             "unit": "us",
             "extra": "trials: 5\nmedian: 336.00\nmean: 907.00\nstdev: 1193.85\ncv: 131.63%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9d71b3efeea53703c046caac04908d6790302285",
+          "message": "A moving shard switches over in milliseconds (#673)\n\n* feat(broker): switch a moving shard over in milliseconds\n\nThe broker heard about each step of a move on a 2 s poll, and each of its\nloops waited for its own tick, so a switch-over took seconds. Now:\n\n- the assignment watch long-polls the change feed (wait_ms=20000) and falls\n  back to the sync interval when the control plane answers at once;\n- the watch wakes the routing feed, and the feed wakes replication after it\n  acts on a change, so the drained report follows the fence directly;\n- a broker named as a shard's successor opens its log and stream state while\n  it is still copying;\n- routes and the servable set are published in one ArcSwap, and the router\n  swaps its table and node set together;\n- the destination records felix_broker_shard_move_seconds and\n  felix_broker_shard_switchover_seconds.\n\nSpec-Unaffected: the wakes change when the lifecycle, replication and the drained report run, not what they decide; preparing a successor opens state without serving it, and the fence and drained condition are unchanged.\n\n* test(cluster): measure a move's switch-over with placement woken by reports\n\nThe harness can now run the control plane's placement loop and set the\nbrokers' sync interval. a_move_switches_over_in_well_under_a_second drains a\nleader with every broker on the 2 s default and asserts the destination\naccepts a publish within a second of the fence.",
+          "timestamp": "2026-09-24T11:04:51-07:00",
+          "tree_id": "6cb9d44b8b6bce2ed5075280b46c67cdbc48b510",
+          "url": "https://github.com/gabloe/felix/commit/9d71b3efeea53703c046caac04908d6790302285"
+        },
+        "date": 1790273348511,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 124,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 124.00\nmean: 124.40\nstdev: 0.55\ncv: 0.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 165,
+            "range": "4.32",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 165.00\nmean: 167.80\nstdev: 4.32\ncv: 2.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 223,
+            "range": "22.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 223.00\nmean: 219.00\nstdev: 22.75\ncv: 10.39%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 169,
+            "range": "7.19",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 172.20\nstdev: 7.19\ncv: 4.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 346,
+            "range": "227.49",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 346.00\nmean: 443.40\nstdev: 227.49\ncv: 51.30%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 565,
+            "range": "814.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 565.00\nmean: 1053.60\nstdev: 814.68\ncv: 77.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
