@@ -264,7 +264,18 @@ async fn cache_round_trip(
             }
             Ok(value)
         }
-        Message::Error { message, .. } => Err(anyhow::anyhow!("cache error: {message}")),
+        Message::Error {
+            message,
+            code,
+            retry,
+            detail,
+        } => Err(crate::error::refused(
+            "cache error",
+            message,
+            code,
+            retry,
+            detail,
+        )),
         other => Err(anyhow::anyhow!("cache response unexpected: {other:?}")),
     }
 }
@@ -298,7 +309,18 @@ async fn counter_round_trip(
             }
             Ok(value)
         }
-        Message::Error { message, .. } => Err(anyhow::anyhow!("counter error: {message}")),
+        Message::Error {
+            message,
+            code,
+            retry,
+            detail,
+        } => Err(crate::error::refused(
+            "counter error",
+            message,
+            code,
+            retry,
+            detail,
+        )),
         other => Err(anyhow::anyhow!("counter response unexpected: {other:?}")),
     }
 }

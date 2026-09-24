@@ -58,9 +58,18 @@ impl Client {
         let _ = send.finish();
         match answer {
             Some(Message::TopologyView { brokers }) => Ok(brokers),
-            Some(Message::Error { message, .. }) => {
-                Err(anyhow::anyhow!("topology rejected: {message}"))
-            }
+            Some(Message::Error {
+                message,
+                code,
+                retry,
+                detail,
+            }) => Err(crate::error::refused(
+                "topology rejected",
+                message,
+                code,
+                retry,
+                detail,
+            )),
             Some(other) => Err(anyhow::anyhow!("unexpected topology response: {other:?}")),
             None => Err(anyhow::anyhow!("topology response missing")),
         }
@@ -119,9 +128,18 @@ impl Client {
         let _ = send.finish();
         match answer {
             Some(Message::StreamShardsView { shards, .. }) => Ok(shards),
-            Some(Message::Error { message, .. }) => {
-                Err(anyhow::anyhow!("stream shards rejected: {message}"))
-            }
+            Some(Message::Error {
+                message,
+                code,
+                retry,
+                detail,
+            }) => Err(crate::error::refused(
+                "stream shards rejected",
+                message,
+                code,
+                retry,
+                detail,
+            )),
             Some(other) => Err(anyhow::anyhow!(
                 "unexpected stream shards response: {other:?}"
             )),
@@ -171,9 +189,18 @@ impl Client {
         let _ = send.finish();
         match answer {
             Some(Message::CacheShardsView { shards, .. }) => Ok(shards),
-            Some(Message::Error { message, .. }) => {
-                Err(anyhow::anyhow!("cache shards rejected: {message}"))
-            }
+            Some(Message::Error {
+                message,
+                code,
+                retry,
+                detail,
+            }) => Err(crate::error::refused(
+                "cache shards rejected",
+                message,
+                code,
+                retry,
+                detail,
+            )),
             Some(other) => Err(anyhow::anyhow!(
                 "unexpected cache shards response: {other:?}"
             )),

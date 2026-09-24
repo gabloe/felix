@@ -202,9 +202,18 @@ impl Client {
                 .await?;
         let _ = send.finish();
         match answer {
-            Some(Message::Error { message, .. }) => {
-                Err(anyhow::anyhow!("group request refused: {message}"))
-            }
+            Some(Message::Error {
+                message,
+                code,
+                retry,
+                detail,
+            }) => Err(crate::error::refused(
+                "group request refused",
+                message,
+                code,
+                retry,
+                detail,
+            )),
             // Typed, so a caller can follow it: only the shard's leader holds
             // its groups, and this names which broker that is.
             Some(Message::NotLeader {
