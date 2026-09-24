@@ -1,91 +1,15 @@
 // The package's JavaScript half: load the addon, and give its errors an
-// identity a caller can branch on.
-//
-// The native layer cannot set `err.code` itself — napi puts an error's status
-// there and `#[napi]` requires that status to be napi's own fixed enum. So it
-// prefixes the message with a Felix code and this file lifts it onto a typed
-// error. Both halves ship as one package, so that prefix is an internal detail
-// rather than something a caller parses.
-//
-// The class hierarchy mirrors the Python binding's exceptions, because the
-// distinction is the same one in both languages: what an application can
-// *decide* from a failure. A connection failure is worth another attempt
-// against another broker; an authorization failure, a missing stream, or a
-// discarded offset will fail the same way every time.
+// identity a caller can branch on. The error classes and how a native error
+// becomes one are in `errors.js`.
 
 "use strict";
 
 const { existsSync } = require("node:fs");
 const { join } = require("node:path");
 
-/** Base class for every error this client raises. */
-class FelixError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = new.target.name;
-    /**
-     * A stable identifier for *why* this failed. Branch on this, or on the
-     * class, rather than on the message — the message is prose and will be
-     * reworded.
-     */
-    this.code = code;
-  }
+const errors = require("./errors.js");
 
-  /**
-   * Whether retrying could plausibly succeed.
-   *
-   * Only `ConnectionError` says yes. An authorization failure, a missing
-   * stream, or a discarded offset fails the same way every time — retrying
-   * them burns a budget on a call that cannot succeed.
-   */
-  get retryable() {
-    return false;
-  }
-}
-
-/** The broker could not be reached, or the connection was lost mid-call. */
-class ConnectionError extends FelixError {
-  get retryable() {
-    return true;
-  }
-}
-
-/** The token was rejected, or lacks the permission this call needs. */
-class AuthError extends FelixError {}
-
-/** The tenant, namespace, stream or cache does not exist on the broker. */
-class NotFoundError extends FelixError {}
-
-/** The requested start offset is gone — retention discarded it. */
-class CursorError extends FelixError {}
-
-/** A bad argument to this client, rather than a failure of the call. */
-class InvalidArgumentError extends FelixError {}
-
-const CLASSES = new Map([
-  ["FELIX_CONNECTION", ConnectionError],
-  ["FELIX_AUTH", AuthError],
-  ["FELIX_NOT_FOUND", NotFoundError],
-  ["FELIX_CURSOR", CursorError],
-  ["FELIX_INVALID", InvalidArgumentError],
-  ["FELIX_ERROR", FelixError],
-]);
-
-/** Lift a native error into a typed one, leaving anything else alone. */
-function typed(err) {
-  const message = err && typeof err.message === "string" ? err.message : "";
-  const at = message.indexOf(": ");
-  if (at > 0) {
-    const Class = CLASSES.get(message.slice(0, at));
-    if (Class) {
-      const out = new Class(message.slice(0, at), message.slice(at + 2));
-      // Keep the native stack: it names the call that failed.
-      if (err.stack) out.stack = err.stack.replace(message, out.message);
-      return out;
-    }
-  }
-  return err;
-}
+const { typed } = errors;
 
 /**
  * What this machine's binary is called, in napi's naming.
@@ -241,12 +165,15 @@ const Client = {
 
 module.exports = {
   Client,
-  FelixError,
-  ConnectionError,
-  AuthError,
-  NotFoundError,
-  CursorError,
-  InvalidArgumentError,
+  FelixError: errors.FelixError,
+  ConnectionError: errors.ConnectionError,
+  AuthError: errors.AuthError,
+  NotFoundError: errors.NotFoundError,
+  CursorError: errors.CursorError,
+  InvalidArgumentError: errors.InvalidArgumentError,
+  ShardUnavailableError: errors.ShardUnavailableError,
+  OverloadedError: errors.OverloadedError,
+  OutcomeUnknownError: errors.OutcomeUnknownError,
   /** The unwrapped addon, for anyone who wants it. Errors are untyped there. */
   native,
 };

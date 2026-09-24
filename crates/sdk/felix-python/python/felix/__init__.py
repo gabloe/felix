@@ -57,10 +57,13 @@ from ._felix import (
     FelixError,
     GroupRecord,
     NotFoundError,
+    OutcomeUnknownError,
+    OverloadedError,
     ShardedSubscriptionHandle,
     ShardLost,
     ShardRecord,
     ShardRecovered,
+    ShardUnavailableError,
     SubscriptionHandle,
     __version__,
 )
@@ -93,5 +96,8 @@ __all__ = [
     "AuthError",
     "NotFoundError",
     "CursorError",
+    "ShardUnavailableError",
+    "OverloadedError",
+    "OutcomeUnknownError",
     "__version__",
 ]

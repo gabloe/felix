@@ -3,54 +3,135 @@
 //! A single error carrying prose would push callers into matching on message
 //! text, which breaks the moment a message is reworded. The split here mirrors
 //! the one the Python binding makes, and the one that actually changes what an
-//! application does: a connection failure is worth retrying, an authorization
-//! failure or a bad argument is not.
+//! application does: a connection failure or an unavailable shard is worth
+//! retrying, an authorization failure is not, and a write whose outcome is
+//! unknown is safe to resend only when it is idempotent. A broker that
+//! negotiated error codes says which it is; only an error without a code falls
+//! back to reading the message.
 //!
-//! The identity rides on `err.code` — the idiom Node's own errors use
-//! (`ENOENT`, `ERR_MODULE_NOT_FOUND`) — but it cannot be set from here: napi
-//! puts an error's *status* on `err.code`, and `#[napi]` requires that status
-//! to be its own fixed `Status` enum. So the code travels as a message prefix
-//! and `index.js` lifts it onto a typed `FelixError`. The two halves ship as
-//! one package, so the prefix is an internal detail rather than something a
-//! caller is expected to parse.
+//! napi puts an error's *status* on `err.code`, and `#[napi]` requires that
+//! status to be its own fixed `Status` enum, so none of this can be set from
+//! here. The kind travels as a message prefix and `index.js` lifts it onto a
+//! typed `FelixError`, along with the broker's code, retry class and detail
+//! when there are any:
+//!
+//! ```text
+//! FELIX_AUTH: <text>                               no broker code
+//! FELIX_SHARD_UNAVAILABLE {"code":...}\n<text>     with one
+//! ```
+//!
+//! Compact JSON never holds a raw newline, which is what makes the second form
+//! safe to split. Both halves ship as one package, so this is an internal
+//! detail rather than something a caller parses.
 
+use felix_client::{BrokerError, NotLeaderError, SubscribeCursorError};
+use felix_wire::RetryClass;
 use napi::{Error, Status};
 
-/// The separator between the code and the human text.
-///
-/// napi puts an error's *status* on `err.code`, and `Status` is a fixed enum
-/// with no room for a Felix code — so the code travels in the message and
-/// `index.js` lifts it onto a typed error. That prefix is an internal detail
-/// between the two halves of this package, not something a caller parses.
+/// The separator between the kind and the text when there is no broker code.
 pub(crate) const CODE_SEPARATOR: &str = ": ";
 
 /// The broker rejected the token, or it lacks the permission this call needs.
 /// Not retryable.
 pub(crate) const CODE_AUTH: &str = "FELIX_AUTH";
-/// The tenant, namespace, stream or cache does not exist. Not retryable.
+/// The tenant, namespace, stream or cache does not exist.
 pub(crate) const CODE_NOT_FOUND: &str = "FELIX_NOT_FOUND";
 /// The requested start offset is gone — retention discarded it. Recover by
 /// restarting from `earliest` and accepting the gap.
 pub(crate) const CODE_CURSOR: &str = "FELIX_CURSOR";
-/// The broker could not be reached, or the connection was lost mid-call.
-/// Worth retrying, and against a different broker.
+/// The broker could not be reached, the connection was lost mid-call, or the
+/// broker is shutting down. Worth retrying, and against a different broker.
 pub(crate) const CODE_CONNECTION: &str = "FELIX_CONNECTION";
+/// Nobody can serve the shard right now, typically while it moves. Nothing was
+/// applied.
+pub(crate) const CODE_SHARD_UNAVAILABLE: &str = "FELIX_SHARD_UNAVAILABLE";
+/// The broker is shedding load. Nothing was applied.
+pub(crate) const CODE_OVERLOADED: &str = "FELIX_OVERLOADED";
+/// The write may have been applied.
+pub(crate) const CODE_OUTCOME_UNKNOWN: &str = "FELIX_OUTCOME_UNKNOWN";
 /// Something this binding could not classify. Deliberately not a category.
 pub(crate) const CODE_GENERIC: &str = "FELIX_ERROR";
 /// A bad argument to this binding, rather than a failure of the call.
 pub(crate) const CODE_INVALID: &str = "FELIX_INVALID";
 
-/// Classify an error from the Rust client into one of the typed codes.
-///
-/// Deliberately conservative: anything unrecognised gets `FELIX_ERROR` rather
-/// than being forced into a category, because a wrong category is worse than a
-/// general one — it tells an application to retry something that cannot
-/// succeed, or to give up on something that could.
-pub(crate) fn classify<E: std::fmt::Display>(err: E) -> Error {
-    let text = format!("{err:#}");
-    let lower = text.to_ascii_lowercase();
+/// Classify an error from the Rust client into a typed one.
+pub(crate) fn classify(err: impl Into<anyhow::Error>) -> Error {
+    Error::new(Status::GenericFailure, encode(&err.into()))
+}
 
-    let code = if lower.contains("unauthorized")
+/// An error raised by this binding rather than by the client beneath it.
+pub(crate) fn invalid(message: impl Into<String>) -> Error {
+    Error::new(
+        Status::InvalidArg,
+        format!("{CODE_INVALID}{CODE_SEPARATOR}{}", message.into()),
+    )
+}
+
+/// The message `index.js` decodes.
+///
+/// A code from the broker wins over the message. Without one, classification
+/// is deliberately conservative: anything unrecognised gets `FELIX_ERROR`,
+/// because a wrong category is worse than a general one.
+pub(crate) fn encode(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}");
+
+    if let Some(broker) = err.chain().find_map(|e| e.downcast_ref::<BrokerError>()) {
+        let mut meta = serde_json::json!({
+            "code": broker.code.as_str(),
+            "retry": broker.retry.as_str(),
+        });
+        if let Some(detail) = &broker.detail {
+            meta["detail"] = serde_json::to_value(detail).unwrap_or_default();
+        }
+        let kind = kind_for_code(broker.code.as_str(), broker.retry);
+        return format!("{kind} {meta}\n{text}");
+    }
+    // A redirect the client could not follow: the same fact the `not_leader`
+    // code carries, so it reads the same way.
+    if err
+        .chain()
+        .any(|e| e.downcast_ref::<NotLeaderError>().is_some())
+    {
+        let meta = serde_json::json!({
+            "code": "not_leader",
+            "retry": RetryClass::Redirect.as_str(),
+        });
+        return format!("{CODE_SHARD_UNAVAILABLE} {meta}\n{text}");
+    }
+    let kind = if err
+        .chain()
+        .any(|e| e.downcast_ref::<SubscribeCursorError>().is_some())
+    {
+        CODE_CURSOR
+    } else {
+        kind_from_text(&text.to_ascii_lowercase())
+    };
+    format!("{kind}{CODE_SEPARATOR}{text}")
+}
+
+/// The kind for a broker code.
+///
+/// `outcome_unknown` wins over the code: whatever went wrong, the caller's
+/// next step is decided by "this may have been written". A code this version
+/// does not know is a plain `FelixError`, with its retry class still on it.
+pub(crate) fn kind_for_code(code: &str, retry: RetryClass) -> &'static str {
+    if retry == RetryClass::OutcomeUnknown {
+        return CODE_OUTCOME_UNKNOWN;
+    }
+    match code {
+        "unauthenticated" | "forbidden" => CODE_AUTH,
+        "not_found" => CODE_NOT_FOUND,
+        "shard_unavailable" | "not_leader" => CODE_SHARD_UNAVAILABLE,
+        "overloaded" => CODE_OVERLOADED,
+        // This broker is going away; another one will take the request.
+        "draining" => CODE_CONNECTION,
+        _ => CODE_GENERIC,
+    }
+}
+
+/// The fallback for an error without a code.
+fn kind_from_text(lower: &str) -> &'static str {
+    if lower.contains("unauthorized")
         || lower.contains("permission")
         || lower.contains("forbidden")
         || lower.contains("token")
@@ -75,18 +156,8 @@ pub(crate) fn classify<E: std::fmt::Display>(err: E) -> Error {
         CODE_CONNECTION
     } else {
         CODE_GENERIC
-    };
-
-    Error::new(
-        Status::GenericFailure,
-        format!("{code}{CODE_SEPARATOR}{text}"),
-    )
+    }
 }
 
-/// An error raised by this binding rather than by the client beneath it.
-pub(crate) fn invalid(message: impl Into<String>) -> Error {
-    Error::new(
-        Status::InvalidArg,
-        format!("{CODE_INVALID}{CODE_SEPARATOR}{}", message.into()),
-    )
-}
+#[cfg(test)]
+mod tests;
