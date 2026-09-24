@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790250457277,
+  "lastUpdate": 1790256877687,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14560,6 +14560,58 @@ window.BENCHMARK_DATA = {
             "range": "5900.00",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 931132.01\nmean: 931721.10\nstdev: 5900.00\ncv: 0.63%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fac667d69f6f837e3b5e07dfce02f9623502917d",
+          "message": "fix(broker): let an in-flight credential refresh finish on shutdown (#661)\n\nThe control plane rotates a refresh token as soon as it answers a refresh.\nThe broker's refresh loop was spawned and never waited for, so a process\nexiting between that answer and the file write left a spent token on disk;\nthe next start presented it and the control plane revoked the whole chain.\n\nThe drain now waits for the loop, within the shared deadline. The loop only\nwatches for shutdown between refreshes, so one already in flight finishes and\nsaves its replacement first. If the deadline runs out mid-refresh the task is\naborted with a warning saying the next start may need a fresh token.\n\nA unit test cancels shutdown while a stub control plane is still answering and\nchecks the rotated token is saved. It fails if the loop is allowed to abandon\nthe request on shutdown. The drain wiring itself is covered by review: a\nprocess-level test would need a control plane that registers, heartbeats and\nsyncs a broker as well.\n\nAlso fixes graceful-shutdown.md, which said the broker has no pre-drain\nhold-off; it has one, off by default.",
+          "timestamp": "2026-09-24T06:31:49-07:00",
+          "tree_id": "b9215d3024c156d0c2f3ded24fa457a179fd13a9",
+          "url": "https://github.com/gabloe/felix/commit/fac667d69f6f837e3b5e07dfce02f9623502917d"
+        },
+        "date": 1790256877119,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 488011.58,
+            "range": "23153.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 488011.58\nmean: 482227.03\nstdev: 23153.24\ncv: 4.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 488011.58,
+            "range": "23153.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 488011.58\nmean: 482227.03\nstdev: 23153.24\ncv: 4.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 103987.84,
+            "range": "1147.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 103987.84\nmean: 104079.19\nstdev: 1147.27\ncv: 1.10%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1039878.39,
+            "range": "11472.68",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1039878.39\nmean: 1040791.96\nstdev: 11472.68\ncv: 1.10%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
