@@ -36,6 +36,7 @@ pub(super) struct Running {
     pub(super) membership_client: reqwest::Client,
     pub(super) credential: Option<NodeCredential>,
     pub(super) membership: Option<MembershipTask>,
+    pub(super) credential_refresh: Option<JoinHandle<()>>,
     pub(super) shard_tasks: Option<ShardTasks>,
     pub(super) sync_shutdown: CancellationToken,
     pub(super) controlplane_task: Option<JoinHandle<()>>,
@@ -84,6 +85,7 @@ impl Running {
             membership_client,
             credential,
             membership,
+            credential_refresh,
             shard_tasks,
             sync_shutdown,
             controlplane_task,
@@ -223,6 +225,29 @@ impl Running {
                 .await
             {
                 task.handle.abort();
+            }
+        }
+
+        // Waited for rather than dropped. A refresh the control plane has
+        // already answered has rotated the refresh token server-side; if the
+        // process exits before the loop writes the replacement, the next start
+        // presents a spent token and the control plane revokes the whole chain.
+        // The loop only watches for shutdown between refreshes, so waiting here
+        // lets one already in flight finish and persist.
+        if let Some(mut task) = credential_refresh {
+            sync_shutdown.cancel();
+            if !budget
+                .drain("credential_refresh", async {
+                    let _ = (&mut task).await;
+                })
+                .await
+            {
+                task.abort();
+                tracing::warn!(
+                    "stopped the credential refresh loop mid-refresh; if the control \
+                     plane had already rotated the refresh token, the next start \
+                     will need a fresh one",
+                );
             }
         }
 

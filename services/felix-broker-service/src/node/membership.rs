@@ -3,12 +3,20 @@
 
 use std::sync::Arc;
 
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::cluster::credential::{self, NodeCredential};
 use crate::cluster::lease::LeaseState;
 use crate::cluster::membership::{self, MembershipTask};
 use crate::config::BrokerConfig;
+
+/// What a cluster member runs in the background, for the drain to stop.
+pub(super) struct Joined {
+    pub(super) membership: MembershipTask,
+    /// The credential refresh loop, when there is a refresh token to rotate.
+    pub(super) credential_refresh: Option<JoinHandle<()>>,
+}
 
 /// Spawn membership when this broker has an identity. Registration waits for
 /// `serving`, because advertising a node placement can route to before it can
@@ -21,7 +29,7 @@ pub(super) fn spawn(
     lease: &Option<Arc<LeaseState>>,
     credential: &Option<NodeCredential>,
     sync_shutdown: &CancellationToken,
-) -> Option<MembershipTask> {
+) -> Option<Joined> {
     match (&config.membership, &config.controlplane_url) {
         (Some(membership_config), Some(base_url)) => {
             let serving = if gate_readiness_on_sync {
@@ -44,24 +52,25 @@ pub(super) fn spawn(
             // Refresh only when the operator provided somewhere to keep the
             // rotating half. Without it the broker runs on the token it was
             // given, and leaves the cluster when that expires.
-            match membership_config.refresh_token_file.clone() {
-                Some(refresh_token_file) => {
-                    tokio::spawn(credential::refresh::run(
-                        credential::refresh::RefreshConfig {
-                            client: membership_client.clone(),
-                            base_url: base_url.clone(),
-                            credential: node_credential.clone(),
-                            refresh_token_file,
-                        },
-                        sync_shutdown.clone(),
-                    ));
+            let credential_refresh = match membership_config.refresh_token_file.clone() {
+                Some(refresh_token_file) => Some(tokio::spawn(credential::refresh::run(
+                    credential::refresh::RefreshConfig {
+                        client: membership_client.clone(),
+                        base_url: base_url.clone(),
+                        credential: node_credential.clone(),
+                        refresh_token_file,
+                    },
+                    sync_shutdown.clone(),
+                ))),
+                None => {
+                    tracing::info!(
+                        "no FELIX_NODE_REFRESH_TOKEN_FILE: this broker will run on \
+                         the credential it was given and leave the cluster when it \
+                         expires",
+                    );
+                    None
                 }
-                None => tracing::info!(
-                    "no FELIX_NODE_REFRESH_TOKEN_FILE: this broker will run on \
-                     the credential it was given and leave the cluster when it \
-                     expires",
-                ),
-            }
+            };
 
             // The other way a credential stays current: something outside the
             // broker rewrites the token file. Watched whenever the token came
@@ -79,15 +88,18 @@ pub(super) fn spawn(
             // Published once at startup so the series exists before the first
             // refresh or rotation, which on a long-lived token is hours away.
             credential::report_expiry(&node_credential);
-            Some(membership::spawn(
-                membership_client.clone(),
-                base_url.clone(),
-                membership_config.clone(),
-                node_credential,
-                serving,
-                sync_shutdown.clone(),
-                lease,
-            ))
+            Some(Joined {
+                membership: membership::spawn(
+                    membership_client.clone(),
+                    base_url.clone(),
+                    membership_config.clone(),
+                    node_credential,
+                    serving,
+                    sync_shutdown.clone(),
+                    lease,
+                ),
+                credential_refresh,
+            })
         }
         _ => {
             tracing::info!("cluster membership disabled (FELIX_NODE_ID not set)");

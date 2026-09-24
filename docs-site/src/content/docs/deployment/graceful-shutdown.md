@@ -29,7 +29,7 @@ The order matters more than the individual steps.
    answering normally the whole time. Without this the listener closes in the same
    breath as the readiness flip, and a load balancer that has not polled yet is
    still sending requests to a socket that has gone away. A second SIGTERM ends the
-   wait early. The broker does not have this yet — see below.
+   wait early. The broker has the same hold-off but defaults it to off — see below.
 3. **Stop admitting new work.** The broker cancels its QUIC accept loop; the
    control plane stops accepting new HTTP connections. Already-accepted work is
    untouched.
@@ -37,6 +37,12 @@ The order matters more than the individual steps.
    their own.
 5. **Force-cancel the remainder and name it.** Anything still running when the
    deadline expires is aborted and logged by name at WARN.
+
+A broker that rotates its credential also waits, inside the same deadline, for a
+refresh already in flight to finish. The control plane rotates the refresh token as
+soon as it answers, so a broker that exited before writing the replacement to
+`FELIX_NODE_REFRESH_TOKEN_FILE` would present a spent token on its next start and
+the control plane would revoke the whole chain.
 
 `/live` stays `200` throughout. A draining process is alive and working correctly;
 failing liveness would make Kubernetes restart a pod that is shutting down exactly

@@ -206,7 +206,7 @@ where
     );
 
     let membership_client = reqwest::Client::new();
-    let membership = membership::spawn(
+    let (membership, credential_refresh) = match membership::spawn(
         &config,
         &membership_client,
         gate_readiness_on_sync,
@@ -214,7 +214,10 @@ where
         &lease,
         &credential,
         &sync_shutdown,
-    );
+    ) {
+        Some(joined) => (Some(joined.membership), joined.credential_refresh),
+        None => (None, None),
+    };
     let peer_task = cluster::bind_peer_listener(
         &config,
         &cluster,
@@ -251,6 +254,7 @@ where
         membership_client,
         credential,
         membership,
+        credential_refresh,
         shard_tasks,
         sync_shutdown,
         controlplane_task,
