@@ -33,6 +33,7 @@
 //!   Err(_)    => hard failure (decode/IO/etc.)
 
 mod authz;
+mod cache;
 mod discovery;
 mod group;
 mod publish;
@@ -55,11 +56,10 @@ use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 use crate::config::BrokerConfig;
 use crate::observability::timings;
 use crate::serving::auth::{AuthContext, BrokerAuth};
-use crate::serving::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::serving::quic::handlers::publish::{
     AckTimeoutState, AckWaiterMessage, Outgoing, PublishContext, StreamHandleCache,
     handle_ack_enqueue_result, handle_acked_binary_publish_batch_control,
-    handle_binary_publish_batch_control, send_outgoing_best_effort, send_outgoing_critical,
+    handle_binary_publish_batch_control, send_outgoing_critical,
 };
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
@@ -262,6 +262,8 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
             ack_wait_timeout,
             throttled,
             sample,
+            read_ns,
+            decode_ns,
         };
         // Dispatch by message type. Most handlers are responsible for enqueuing responses into
         // `out_ack_tx` rather than writing directly to the network.
@@ -452,130 +454,21 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 request_id,
                 ttl_ms,
             } => {
-                if !authorize_cache(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::CacheWrite,
-                    &namespace,
-                    &cache,
-                    &authz_ctx,
+                if let Step::Close(graceful) = cache::cache_put(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    value,
+                    request_id,
+                    ttl_ms,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                if let Some(read_ns) = read_ns {
-                    timings::record_cache_read_ns(read_ns);
-                }
-                if let Some(decode_ns) = decode_ns {
-                    timings::record_cache_decode_ns(decode_ns);
-                }
-                // Cache scope validation: cache operations are rejected if the cache isn't
-                // registered for the (tenant, namespace, cache) triple.
-                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::CacheMessage(Message::Error {
-                                message: format!(
-                                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
-                                ),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    if request_id.is_none() {
-                        // When request_id is None, the client is using a "best effort" cache API and the
-                        // stream is closed after the single request/response completes.
-                        return Ok(true);
-                    }
-                    continue;
-                }
-                let ttl = ttl_ms.map(Duration::from_millis);
-                let lookup_start = t_now_if(sample);
-                // Routed, not applied locally: exactly one broker owns this
-                // key's shard, and a write served here instead would be the
-                // second copy nothing reconciles.
-                let applied = crate::serving::cache_routing::apply_cache_op(
-                    &broker,
-                    (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
-                    publish_ctx.ingress.as_deref(),
-                    publish_ctx.peers.as_deref(),
-                    session
-                        .auth_ctx
-                        .as_ref()
-                        .map_or("", |ctx| ctx.token.as_str()),
-                    tenant_id.as_str(),
-                    namespace.as_str(),
-                    cache.as_str(),
-                    key.as_str(),
-                    crate::serving::cache_routing::put_request(value, ttl),
-                )
-                .await;
-                if let Some(start) = lookup_start {
-                    let lookup_ns = start.elapsed().as_nanos() as u64;
-                    timings::record_cache_insert_ns(lookup_ns);
-                }
-                if let Err(reason) = applied {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::CacheMessage(Message::Error {
-                                message: format!("cache put not served: {reason}"),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    if request_id.is_none() {
-                        return Ok(true);
-                    }
-                    continue;
-                }
-                if let Some(request_id) = request_id {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::CacheMessage(Message::CacheOk { request_id }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    continue;
-                }
-                match send_outgoing_best_effort(
-                    &out_ack_tx,
-                    &out_ack_depth,
-                    "felix_broker_out_ack_depth",
-                    &ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::Ok),
-                )
-                .await
-                {
-                    Ok(()) => {}
-                    Err(AckEnqueueError::Full) => {}
-                    Err(err) => return Err(record_ack_enqueue_failure(err)),
-                }
-                return Ok(true);
             }
             Message::CacheGet {
                 tenant_id,
@@ -584,127 +477,18 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 key,
                 request_id,
             } => {
-                if !authorize_cache(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::CacheRead,
-                    &namespace,
-                    &cache,
-                    &authz_ctx,
+                if let Step::Close(graceful) = cache::cache_get(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
-                }
-                if let Some(read_ns) = read_ns {
-                    timings::record_cache_read_ns(read_ns);
-                }
-                if let Some(decode_ns) = decode_ns {
-                    timings::record_cache_decode_ns(decode_ns);
-                }
-                // Cache scope validation: cache operations are rejected if the cache isn't
-                // registered for the (tenant, namespace, cache) triple.
-                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::CacheMessage(Message::Error {
-                                message: format!(
-                                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
-                                ),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    if request_id.is_none() {
-                        // When request_id is None, the client is using a "best effort" cache API and the
-                        // stream is closed after the single request/response completes.
-                        return Ok(true);
-                    }
-                    continue;
-                }
-                let lookup_start = t_now_if(sample);
-                let read = crate::serving::cache_routing::apply_cache_op(
-                    &broker,
-                    (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
-                    publish_ctx.ingress.as_deref(),
-                    publish_ctx.peers.as_deref(),
-                    session
-                        .auth_ctx
-                        .as_ref()
-                        .map_or("", |ctx| ctx.token.as_str()),
-                    &tenant_id,
-                    &namespace,
-                    &cache,
-                    &key,
-                    crate::serving::forward::CacheRequest::Get,
-                )
-                .await;
-                if let Some(start) = lookup_start {
-                    let lookup_ns = start.elapsed().as_nanos() as u64;
-                    timings::record_cache_lookup_ns(lookup_ns);
-                }
-                let value = match read {
-                    Ok(value) => value,
-                    Err(reason) => {
-                        // A read this broker cannot route is an error, never an
-                        // empty answer: reporting a miss would let a client
-                        // conclude the key does not exist when it does, on the
-                        // owner.
-                        handle_ack_enqueue_result(
-                            send_outgoing_critical(
-                                &out_ack_tx,
-                                &out_ack_depth,
-                                "felix_broker_out_ack_depth",
-                                &ack_throttle_tx,
-                                Outgoing::CacheMessage(Message::Error {
-                                    message: format!("cache get not served: {reason}"),
-                                }),
-                            )
-                            .await,
-                            &ack_timeout_state,
-                            &ack_throttle_tx,
-                            &cancel_tx,
-                        )
-                        .await?;
-                        if request_id.is_none() {
-                            return Ok(true);
-                        }
-                        continue;
-                    }
-                };
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::CacheMessage(Message::CacheValue {
-                            tenant_id,
-                            namespace,
-                            cache,
-                            key,
-                            value,
-                            request_id,
-                        }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
-                if request_id.is_none() {
-                    // When request_id is None, the client is using a "best effort" cache API and the
-                    // stream is closed after the single request/response completes.
-                    return Ok(true);
+                    return Ok(graceful);
                 }
             }
             Message::CacheWatch {
@@ -718,45 +502,23 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 retained,
                 subscription_id,
             } => {
-                // A watch is a read of the cache, and is authorized as one.
-                if !authorize_cache(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::CacheRead,
-                    &namespace,
-                    &cache,
-                    &authz_ctx,
+                if let Step::Close(graceful) = cache::cache_watch(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    prefix,
+                    shard,
+                    from_offset,
+                    retained,
+                    subscription_id,
                 )
                 .await?
                 {
-                    return Ok(false);
+                    return Ok(graceful);
                 }
-                crate::serving::quic::handlers::cache_watch::handle_cache_watch_message(
-                    Arc::clone(&broker),
-                    connection.clone(),
-                    config.clone(),
-                    &publish_ctx,
-                    crate::serving::quic::handlers::cache_watch::WatchResponder {
-                        out_ack_tx: &out_ack_tx,
-                        out_ack_depth: &out_ack_depth,
-                        ack_throttle_tx: &ack_throttle_tx,
-                        ack_timeout_state: &ack_timeout_state,
-                        cancel_tx: &cancel_tx,
-                    },
-                    crate::serving::quic::handlers::cache_watch::WatchRequest {
-                        tenant_id,
-                        namespace,
-                        cache,
-                        key,
-                        prefix,
-                        shard,
-                        from_offset,
-                        retained,
-                        subscription_id,
-                    },
-                    session.peer_features,
-                )
-                .await?;
             }
             Message::CounterAdd {
                 tenant_id,
@@ -1490,117 +1252,18 @@ pub(super) async fn run_control_loop<S: FrameSource + ?Sized>(
                 key,
                 request_id,
             } => {
-                // A delete is a write, so it is authorized as one. Letting it
-                // through on `CacheRead` would make read-only credentials able
-                // to destroy data.
-                if !authorize_cache(
-                    session.auth_ctx.as_ref(),
-                    &tenant_id,
-                    Action::CacheWrite,
-                    &namespace,
-                    &cache,
-                    &authz_ctx,
+                if let Step::Close(graceful) = cache::cache_delete(
+                    &cx,
+                    &mut session,
+                    tenant_id,
+                    namespace,
+                    cache,
+                    key,
+                    request_id,
                 )
                 .await?
                 {
-                    return Ok(false);
-                }
-                if !broker.cache_exists(&tenant_id, &namespace, &cache).await {
-                    handle_ack_enqueue_result(
-                        send_outgoing_critical(
-                            &out_ack_tx,
-                            &out_ack_depth,
-                            "felix_broker_out_ack_depth",
-                            &ack_throttle_tx,
-                            Outgoing::CacheMessage(Message::Error {
-                                message: format!(
-                                    "cache scope not found: {tenant_id}/{namespace}/{cache}"
-                                ),
-                            }),
-                        )
-                        .await,
-                        &ack_timeout_state,
-                        &ack_throttle_tx,
-                        &cancel_tx,
-                    )
-                    .await?;
-                    if request_id.is_none() {
-                        return Ok(true);
-                    }
-                    continue;
-                }
-
-                let removed = crate::serving::cache_routing::apply_cache_op(
-                    &broker,
-                    (publish_ctx.marks.as_deref(), publish_ctx.quorum_timeout),
-                    publish_ctx.ingress.as_deref(),
-                    publish_ctx.peers.as_deref(),
-                    session
-                        .auth_ctx
-                        .as_ref()
-                        .map_or("", |ctx| ctx.token.as_str()),
-                    &tenant_id,
-                    &namespace,
-                    &cache,
-                    &key,
-                    crate::serving::forward::CacheRequest::Delete,
-                )
-                .await;
-
-                let value = match removed {
-                    Ok(value) => value,
-                    Err(reason) => {
-                        // Refused rather than reported as "nothing was there".
-                        // A client told the key is gone when the owner still
-                        // holds it would be worse than a plain failure.
-                        handle_ack_enqueue_result(
-                            send_outgoing_critical(
-                                &out_ack_tx,
-                                &out_ack_depth,
-                                "felix_broker_out_ack_depth",
-                                &ack_throttle_tx,
-                                Outgoing::CacheMessage(Message::Error {
-                                    message: format!("cache delete not served: {reason}"),
-                                }),
-                            )
-                            .await,
-                            &ack_timeout_state,
-                            &ack_throttle_tx,
-                            &cancel_tx,
-                        )
-                        .await?;
-                        if request_id.is_none() {
-                            return Ok(true);
-                        }
-                        continue;
-                    }
-                };
-
-                // Answered with the value that was removed, so a caller learns
-                // whether the key was there without a second round trip.
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        &out_ack_tx,
-                        &out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        &ack_throttle_tx,
-                        Outgoing::CacheMessage(Message::CacheValue {
-                            tenant_id,
-                            namespace,
-                            cache,
-                            key,
-                            value,
-                            request_id,
-                        }),
-                    )
-                    .await,
-                    &ack_timeout_state,
-                    &ack_throttle_tx,
-                    &cancel_tx,
-                )
-                .await?;
-                if request_id.is_none() {
-                    return Ok(true);
+                    return Ok(graceful);
                 }
             }
             Message::GroupRecords { .. }
@@ -1696,4 +1359,6 @@ struct Ctx<'a> {
     ack_wait_timeout: Duration,
     throttled: bool,
     sample: bool,
+    read_ns: Option<u64>,
+    decode_ns: Option<u64>,
 }
