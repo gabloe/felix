@@ -1,4 +1,4 @@
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -8,28 +8,64 @@ struct RunningControlplane {
     bootstrap_addr: Option<SocketAddr>,
 }
 
-/// Two free ports, both held while they are chosen.
+/// Start the binary on port 0 and learn the ports it got from its own log.
 ///
-/// Binding port 0 and reading the address back is the only way to find a free
-/// port, and it is a reservation the process gives up the moment the listener
-/// drops. Holding both at once makes the two distinct by construction rather
-/// than by the OS happening not to repeat itself.
-///
-/// **This does not make the port safe.** Between the drop here and the child's
-/// bind, any other process — another test binary in the same cargo run — can
-/// take it, and the child exits. Closing that would mean the child choosing its
-/// own port and reporting it back, which is a bigger change than this harness
-/// justifies. What matters is that when it does happen, the failure now says
-/// so: see `child_stderr`.
-fn reserve_two_addrs() -> (SocketAddr, SocketAddr) {
-    let first = TcpListener::bind("127.0.0.1:0").expect("reserve test port");
-    let second = TcpListener::bind("127.0.0.1:0").expect("reserve test port");
-    let addrs = (
-        first.local_addr().expect("read test port"),
-        second.local_addr().expect("read test port"),
-    );
-    assert_ne!(addrs.0, addrs.1, "two reservations returned one port");
-    addrs
+/// Picking a free port in the test and handing it over is a race: between the
+/// test releasing the port and the child binding it, another test's process can
+/// take it, and the test then talks to that process instead. Letting the child
+/// bind port 0 closes the race; the "listening" lines are logged after the bind
+/// with the real address.
+fn spawn_controlplane_with_predrain(
+    bootstrap_enabled: bool,
+    predrain_ms: u64,
+) -> RunningControlplane {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_felix-controlplane"));
+    cmd.env("FELIX_CONTROLPLANE_BIND", "127.0.0.1:0")
+        .env("FELIX_CONTROLPLANE_METRICS_BIND", "127.0.0.1:0")
+        .env("FELIX_CONTROLPLANE_STORAGE_BACKEND", "memory")
+        .env("FELIX_SHUTDOWN_PREDRAIN_MS", predrain_ms.to_string())
+        .env(
+            "FELIX_BOOTSTRAP_ENABLED",
+            if bootstrap_enabled { "true" } else { "false" },
+        )
+        .env("FELIX_BOOTSTRAP_BIND_ADDR", "127.0.0.1:0")
+        .env("FELIX_BOOTSTRAP_TOKEN", "bootstrap-token")
+        .env("NO_COLOR", "1")
+        .env("RUST_LOG", "info")
+        .stdout(Stdio::piped())
+        // Kept, not discarded. When the child exits before listening, this is
+        // the only thing that says why.
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn controlplane");
+    let listening = watch_listening_lines(child.stdout.take().expect("child stdout"));
+
+    // Generous, because this also runs under coverage instrumentation.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut main_addr = None;
+    let mut bootstrap_addr = None;
+    while main_addr.is_none() || (bootstrap_enabled && bootstrap_addr.is_none()) {
+        match listening.recv_timeout(Duration::from_millis(50)) {
+            Ok(Listening::Main(addr)) => main_addr = Some(addr),
+            Ok(Listening::Bootstrap(addr)) => bootstrap_addr = Some(addr),
+            Err(_) => {
+                if let Some(status) = child.try_wait().expect("check controlplane status") {
+                    panic!(
+                        "controlplane exited before listening: {status}\n{}",
+                        child_stderr(&mut child),
+                    );
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "controlplane did not report its listening address within 30s",
+                );
+            }
+        }
+    }
+    RunningControlplane {
+        child,
+        main_addr: main_addr.expect("main address"),
+        bootstrap_addr,
+    }
 }
 
 fn spawn_controlplane(bootstrap_enabled: bool) -> RunningControlplane {
@@ -38,32 +74,63 @@ fn spawn_controlplane(bootstrap_enabled: bool) -> RunningControlplane {
     spawn_controlplane_with_predrain(bootstrap_enabled, 0)
 }
 
-fn spawn_controlplane_with_predrain(
-    bootstrap_enabled: bool,
-    predrain_ms: u64,
-) -> RunningControlplane {
-    let (main_addr, bootstrap_addr) = reserve_two_addrs();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_felix-controlplane"));
-    cmd.env("FELIX_CONTROLPLANE_BIND", main_addr.to_string())
-        .env("FELIX_CONTROLPLANE_METRICS_BIND", "127.0.0.1:0")
-        .env("FELIX_CONTROLPLANE_STORAGE_BACKEND", "memory")
-        .env("FELIX_SHUTDOWN_PREDRAIN_MS", predrain_ms.to_string())
-        .env(
-            "FELIX_BOOTSTRAP_ENABLED",
-            if bootstrap_enabled { "true" } else { "false" },
-        )
-        .env("FELIX_BOOTSTRAP_BIND_ADDR", bootstrap_addr.to_string())
-        .env("FELIX_BOOTSTRAP_TOKEN", "bootstrap-token")
-        .stdout(Stdio::null())
-        // Kept, not discarded. When the child exits before listening, this is
-        // the only thing that says why — and "it exited" with no reason is how
-        // a bind collision reads as an unexplained flake.
-        .stderr(Stdio::piped());
-    RunningControlplane {
-        child: cmd.spawn().expect("spawn controlplane"),
-        main_addr,
-        bootstrap_addr: bootstrap_enabled.then_some(bootstrap_addr),
+enum Listening {
+    Main(SocketAddr),
+    Bootstrap(SocketAddr),
+}
+
+/// Read the child's stdout on a thread, reporting each "listening" line.
+///
+/// The thread keeps reading to the end so the child never blocks on a full pipe.
+fn watch_listening_lines(
+    stdout: std::process::ChildStdout,
+) -> std::sync::mpsc::Receiver<Listening> {
+    use std::io::BufRead;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            let line = strip_ansi(&line);
+            let Some(addr) = listening_addr(&line) else {
+                continue;
+            };
+            let event = if line.contains("bootstrap control plane listening") {
+                Listening::Bootstrap(addr)
+            } else {
+                Listening::Main(addr)
+            };
+            let _ = tx.send(event);
+        }
+    });
+    rx
+}
+
+/// The `addr=` field of a "control plane listening" log line.
+fn listening_addr(line: &str) -> Option<SocketAddr> {
+    if !line.contains("control plane listening") {
+        return None;
     }
+    let value = line.split("addr=").nth(1)?.split_whitespace().next()?;
+    value.parse().ok()
+}
+
+/// Remove terminal colour escapes, in case the subscriber ignores `NO_COLOR`.
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn wait_for_listener(child: &mut std::process::Child, addr: SocketAddr, timeout: Duration) {
