@@ -641,7 +641,11 @@ lifecycle closes the fence as soon as it sees the move, whether the move
 arrives as a draining copy of the served generation or as a new, draining
 generation, and before the new servable set is published. A write that
 reaches its claim after that is refused, the same way a publish to a shard
-this broker does not serve is refused. The leader reports `drained` when the
+this broker does not serve is refused. A publish acknowledged when it is
+queued rather than when it is written — the default, `ack_on_commit` off —
+cannot be refused later, because the client already holds the ack. It enters
+the fence when it is queued instead and holds it until it is written, so the
+move waits for it rather than losing it. The leader reports `drained` when the
 fence is closed with nothing inside it, and reads the tail it reports only
 after seeing that, so the tail is final. The fence lives in
 `shards/lifecycle/fence.rs`.

@@ -137,6 +137,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
             payloads,
             response: None,
             admission_permit: None,
+            fenced: None,
         },
         publish_ctx.overflow_policy(),
         Some(cancel_tx.subscribe()),

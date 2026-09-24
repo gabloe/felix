@@ -325,6 +325,7 @@ pub(crate) async fn handle_publish_batch_message(
             payloads,
             response: response_tx,
             admission_permit: None,
+            fenced: None,
         },
         if ack_mode == felix_wire::AckMode::None {
             publish_ctx.overflow_policy()

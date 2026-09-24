@@ -113,6 +113,19 @@ pub fn enter(
     }
 }
 
+/// [`enter`], for a write that may already hold a guard from admission.
+pub fn enter_or_keep(
+    held: &mut Option<FenceGuard>,
+    ingress: Option<&IngressRouter>,
+    key: Option<&ShardKey>,
+    generation: u64,
+) -> Result<Option<FenceGuard>, Fenced> {
+    match held.take() {
+        Some(guard) => Ok(Some(guard)),
+        None => enter(ingress, key, generation),
+    }
+}
+
 /// A write refused at its claim: the shard stopped serving here after the
 /// write was admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

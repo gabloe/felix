@@ -75,7 +75,8 @@ pub(crate) fn build_publish_context(
             config.pub_flush_concurrency.max(1),
         ));
         let worker_task = async move {
-            while let Some(job) = publish_rx.recv().await {
+            while let Some(mut job) = publish_rx.recv().await {
+                let mut held = job.fenced.take();
                 #[cfg(feature = "perf_debug")]
                 metrics::counter!(
                     "felix_perf_publish_worker_wakeups_total",
@@ -108,7 +109,8 @@ pub(crate) fn build_publish_context(
                     if lease_ok && handle.is_durable() {
                         // Held until the publish is durable and fanned out, so
                         // a drained report cannot go out while it is landing.
-                        let fenced = match fence::enter(
+                        let fenced = match fence::enter_or_keep(
+                            &mut held,
                             ingress_for_worker.as_deref(),
                             shard.as_ref(),
                             *generation,
@@ -191,7 +193,8 @@ pub(crate) fn build_publish_context(
                                     "lease lapsed before the record could be committed"
                                 ))
                             }
-                            _ => match fence::enter(
+                            _ => match fence::enter_or_keep(
+                                &mut held,
                                 ingress_for_worker.as_deref(),
                                 shard.as_ref(),
                                 *generation,
@@ -236,7 +239,8 @@ pub(crate) fn build_publish_context(
                                 "lease lapsed before the record could be committed"
                             ))
                         }
-                        _ => match fence::enter(
+                        _ => match fence::enter_or_keep(
+                            &mut held,
                             ingress_for_worker.as_deref(),
                             shard.as_ref(),
                             *generation,

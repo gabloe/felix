@@ -211,6 +211,12 @@ pub(crate) async fn enqueue_publish(
         _conn: conn_permit,
         _global: permit,
     });
+    // Nobody waits on this job, so its ack goes out before the write and a
+    // refusal at the claim would reach no one. It enters the fence now and
+    // keeps the guard until it is written; a move then waits for it instead.
+    if job.response.is_none() {
+        job.fenced = fence_now(publish_ctx, &job.target)?;
+    }
 
     #[cfg(feature = "perf_debug")]
     let enqueue_wait_start = Instant::now();
@@ -349,6 +355,28 @@ pub(crate) fn reset_local_depth_only(
             }
             Err(updated) => prev = updated,
         }
+    }
+}
+
+/// Enter the write fence for a local write at the generation it was admitted
+/// at. `Ok(None)` for a forward, which the owner fences, and on a single-node
+/// broker.
+fn fence_now(
+    publish_ctx: &PublishContext,
+    target: &PublishTarget,
+) -> Result<Option<crate::shards::lifecycle::fence::FenceGuard>> {
+    match target {
+        PublishTarget::Resolved {
+            shard, generation, ..
+        }
+        | PublishTarget::Idempotent {
+            shard, generation, ..
+        } => Ok(crate::shards::lifecycle::fence::enter(
+            publish_ctx.ingress.as_deref(),
+            shard.as_ref(),
+            *generation,
+        )?),
+        _ => Ok(None),
     }
 }
 

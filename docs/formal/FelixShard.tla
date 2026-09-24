@@ -35,6 +35,13 @@
 (* a write admitted before the fence, claimed after the drained report,    *)
 (* committed and acknowledged by the old leader, and missing from the new. *)
 (*                                                                         *)
+(* `AckOnAdmit` acknowledges a write when it is admitted, as the broker    *)
+(* does by default, so a claim refused at the fence is an acknowledged     *)
+(* write that never lands. `FenceFromAdmit` has such a write hold the      *)
+(* fence from admission instead: its claim is not refused, and the drained *)
+(* report waits for it. Without that, TLC finds the old leader refusing an *)
+(* acknowledged write and the successor taking over without it.            *)
+(*                                                                         *)
 (* Time is discrete. `now` is real time; each broker has its own clock,    *)
 (* within `Drift` of real time, which is the drift-rate assumption of the  *)
 (* design in the only form a finite model needs. A broker anchors a lease  *)
@@ -75,6 +82,8 @@ CONSTANTS
     Handoff,        \* whether the control plane may move the shard off a live leader
     WaitForDrained, \* whether a cut-over waits for the leader's drained report
     FenceAtClaim,   \* whether a claim re-checks the fence, or only admission does
+    AckOnAdmit,     \* under `Leader`, acknowledge on admission rather than on commit
+    FenceFromAdmit, \* whether a write acknowledged on admission holds the fence from there
     MaxMoves,       \* how many planned moves the run starts; bounds the state space
     Planners,       \* control-plane instances deciding placement, each from its own read
     CasWrites       \* whether an assignment write lands only at the generation it read
@@ -82,6 +91,7 @@ CONSTANTS
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
 ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN /\ FenceAtClaim \in BOOLEAN
+ASSUME AckOnAdmit \in BOOLEAN /\ FenceFromAdmit \in BOOLEAN
 ASSUME CasWrites \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
@@ -241,26 +251,33 @@ StepDown(b) ==
 (* the claim, and between the claim and the commit: those gaps are a       *)
 (* queue and a paused process.                                             *)
 
+\* A write acknowledged here holds the fence from here, with `FenceFromAdmit`:
+\* the broker's `enqueue_publish` enters it for a publish nobody waits on.
+Held == AckOnAdmit /\ FenceFromAdmit
+
 Admit(b) ==
     /\ Serving(b)
     /\ queued[b] = 0
     /\ writes < MaxWrites
     /\ writes' = writes + 1
     /\ queued' = [queued EXCEPT ![b] = writes + 1]
+    /\ acked' = IF AckOnAdmit /\ ~Quorum THEN acked \cup {writes + 1} ELSE acked
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, staleCommit >>
+                    hbOut, hbAt, log, hwm, halted, pending, staleCommit >>
     /\ UNCHANGED handoffVars
 
 \* The claim, and with `FenceAtClaim` the fence checked again: a broker that
 \* has seen the fence refuses a write it admitted before it. This is
 \* `ShardFence::enter` in `services/felix-broker-service/src/shards/lifecycle/fence.rs`,
 \* entered right before a publish claims its offsets. A refused write is
-\* simply never claimed; it was never acknowledged either.
+\* simply never claimed. Unless it was acknowledged on admission, it was
+\* never acknowledged either; one that was holds the fence with `Held`, and
+\* is claimed regardless.
 Claim(b) ==
     /\ queued[b] /= 0
     /\ pending[b] = 0
     /\ bgen[b] > 0
-    /\ FenceAtClaim => ~stopped[b]
+    /\ (FenceAtClaim /\ ~Held) => ~stopped[b]
     /\ pending' = [pending EXCEPT ![b] = queued[b]]
     /\ queued' = [queued EXCEPT ![b] = 0]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
@@ -363,6 +380,7 @@ LearnHwm(b, f) ==
 \* `drained` counts claimed writes only. A write still waiting to be claimed
 \* is invisible to it, as it is to the broker's fence -- which is why the
 \* claim has to check the fence rather than trust the report to cover it.
+\* A write that holds the fence from admission is counted from there.
 Report(b) ==
     /\ LeaseValid(b)
     /\ leader = b /\ bgen[b] = gen
@@ -370,7 +388,7 @@ Report(b) ==
     /\ inflight' = << [holders |-> { f \in Brokers \ {b} :
                                         log[f] = log[b] /\ f \notin halted },
                        len     |-> Len(log[b]),
-                       drained |-> stopped[b] /\ pending[b] = 0,
+                       drained |-> stopped[b] /\ pending[b] = 0 /\ (Held => queued[b] = 0),
                        gen     |-> bgen[b]] >>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, queued, pending, acked, writes, staleCommit >>
@@ -557,10 +575,13 @@ Spec == Init /\ [][Next]_vars
 AtMostOneServing ==
     \A a, c \in Brokers : Serving(a) /\ Serving(c) => a = c
 
-\* A record acknowledged to a client is held by whoever is serving.
+\* A record acknowledged to a client is held by whoever is serving. One
+\* acknowledged on admission may still be on its way into that broker's log.
 AckedSurvive ==
     \A b \in Brokers : Serving(b) =>
-        \A id \in acked : \E i \in 1..Len(log[b]) : log[b][i].id = id
+        \A id \in acked :
+            \/ \E i \in 1..Len(log[b]) : log[b][i].id = id
+            \/ AckOnAdmit /\ id \in {queued[b], pending[b]}
 
 \* Two brokers never hold different acknowledged records at one offset.
 AckedAgree ==

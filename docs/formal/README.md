@@ -26,7 +26,9 @@ One shard, three brokers, one control plane, discrete time.
   after the expiry it recorded.
 - **Writes.** Admission checks the broker is serving. The write then waits,
   and claims its place in the log; with `FenceAtClaim` the claim checks the
-  handoff fence again. Commit checks the lease again, or not, which is the
+  handoff fence again. `AckOnAdmit` acknowledges a `Leader` write when it is
+  admitted rather than when it commits, and with `FenceFromAdmit` such a write
+  holds the fence from admission. Commit checks the lease again, or not, which is the
   `CheckAtCommit` knob. Anything may happen between admission and the claim,
   and between the claim and the commit: those gaps are a queue and a paused
   process.
@@ -101,6 +103,8 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardStalePromotion.cfg` | the same, writing unconditionally | violate `AtMostOneServing` |
 | `FelixShardHandoffLeaderAck.cfg` | a planned move under `Leader` acknowledgement, the claim checking the fence | pass every invariant (1.3M states) |
 | `FelixShardHandoffNoClaimFence.cfg` | the same move with the fence checked at admission only | violate `AckedSurvive` |
+| `FelixShardHandoffAdmitAck.cfg` | the same move with the write acknowledged on admission and holding the fence from there | pass every invariant (1.2M states) |
+| `FelixShardHandoffAdmitAckClaimFence.cfg` | acknowledged on admission, fenced at the claim | violate `AckedSurvive` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -235,6 +239,21 @@ closed with nothing inside it. Under `Quorum` the report-before-mark ordering
 keeps such a record from being acknowledged, which is why the counterexample
 needs `Leader`; the record would still land on the old leader after it said
 it had stopped.
+
+### The fence from admission, for a write acknowledged there
+
+The claim check is only safe for a write nobody has been told about yet. The
+broker acknowledges a publish when it is queued unless `ack_on_commit` is on,
+and refusing that publish at its claim loses a record the client holds an ack
+for. `FelixShardHandoffAdmitAckClaimFence.cfg` models it: the write is
+acknowledged on admission, the leader sees the fence while it is queued,
+refuses the claim and reports `drained`, and the successor takes over without
+it. TLC finds `AckedSurvive` violated.
+
+`FelixShardHandoffAdmitAck.cfg` has the write hold the fence from admission,
+as `enqueue_publish` does for a publish nobody waits on: the claim is not
+refused, and the drained report waits until the write is claimed and
+committed. It passes.
 
 ### The ordering that is load-bearing
 
