@@ -664,3 +664,114 @@ async fn quic_subscribe_rejects_a_cursor_past_the_tail() -> Result<()> {
     server_task.abort();
     Ok(())
 }
+
+/// A long replay reaches the reader whole. History is read off disk for a
+/// subscriber that asked for it, so it must arrive paced by that reader rather
+/// than faster than it can take it and then dropped.
+#[tokio::test]
+#[serial]
+async fn quic_subscribe_replays_a_long_history_without_loss() -> Result<()> {
+    unsafe {
+        std::env::set_var("FELIX_ACK_ON_COMMIT", "false");
+    }
+    let dir = tempfile::tempdir()?;
+    let storage = felix_broker::DurableStorage::open(
+        dir.path(),
+        felix_storage::log::LogConfig {
+            fsync_mode: felix_storage::log::FsyncMode::None,
+            preallocate_segments: false,
+            ..Default::default()
+        },
+    )?;
+    let broker = Arc::new(Broker::new(EphemeralCache::new().into()).with_durable_storage(storage));
+    broker.register_tenant("t1").await?;
+    broker.register_namespace("t1", "default").await?;
+    broker
+        .register_stream(
+            "t1",
+            "default",
+            "orders",
+            StreamMetadata {
+                durable: true,
+                shards: 1,
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let (server_config, cert) = build_server_config()?;
+    let server = Arc::new(QuicServer::bind(
+        "127.0.0.1:0".parse()?,
+        server_config,
+        TransportConfig::default(),
+    )?);
+    let addr = server.local_addr()?;
+    let config = felix_broker_service::config::BrokerConfig::from_env()?;
+    let auth = auth_fixture(
+        "t1",
+        vec![
+            "stream.publish:stream:t1/*/*".to_string(),
+            "stream.subscribe:stream:t1/*/*".to_string(),
+        ],
+    );
+    let server_task = tokio::spawn(felix_broker_service::serving::quic::serve(
+        Arc::clone(&server),
+        Arc::clone(&broker),
+        config,
+        Arc::clone(&auth.auth),
+    ));
+
+    // Far past both the replay ring and every queue between the log and the
+    // reader, so most of it comes off disk and none of it fits in a buffer.
+    const TOTAL: usize = 5_000;
+    let client =
+        Client::connect(addr, "localhost", build_client_config(cert.clone(), &auth)?).await?;
+    let publisher = client.publisher().await?;
+    for chunk in 0..TOTAL / 250 {
+        let payloads = (chunk * 250..(chunk + 1) * 250)
+            .map(|i| format!("r{i:05}").into_bytes())
+            .collect();
+        publisher
+            .publish_batch(
+                "t1",
+                "default",
+                "orders",
+                payloads,
+                felix_wire::AckMode::PerBatch,
+            )
+            .await?;
+    }
+
+    let reader = Client::connect(addr, "localhost", build_client_config(cert, &auth)?).await?;
+    let mut sub = reader
+        .subscribe_from(
+            "t1",
+            "default",
+            "orders",
+            Some(felix_client::StartPosition::Offset(0)),
+        )
+        .await?;
+    assert_eq!(sub.live_offset(), Some(TOTAL as u64));
+
+    // The reader takes each event as soon as it is there, and yields between
+    // them the way an application doing any work at all does.
+    let mut next = 0u64;
+    while next < TOTAL as u64 {
+        let event = match timeout(Duration::from_secs(5), sub.next_event()).await {
+            Ok(event) => event?,
+            Err(_) => panic!("replay stalled after {next} of {TOTAL} records"),
+        };
+        let Some(event) = event else {
+            panic!("replay ended after {next} of {TOTAL} records");
+        };
+        let offset = event.offset.expect("durable events carry offsets");
+        assert_eq!(offset, next, "replay skipped from {next} to {offset}");
+        assert_eq!(event.payload.as_ref(), format!("r{next:05}").as_bytes());
+        next += 1;
+        tokio::task::yield_now().await;
+    }
+
+    drop(sub);
+    server_task.abort();
+    Ok(())
+}
