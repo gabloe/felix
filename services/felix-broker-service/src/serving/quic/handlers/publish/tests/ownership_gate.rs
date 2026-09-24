@@ -78,8 +78,9 @@ fn ingress_for(leader: &str, servable: bool) -> IngressRouter {
         .collect();
     router.publish(routing_table_from(&assignments, &nodes), &nodes);
 
-    let ingress = IngressRouter::new(router);
+    let ingress = IngressRouter::new(router, Arc::default());
     if servable {
+        ingress.fence().open(&watch_key(), 1);
         ingress.publish_servable([(watch_key(), 1)].into_iter().collect());
     }
     ingress
@@ -108,7 +109,7 @@ async fn an_owned_shard_resolves() {
     )
     .await;
     assert!(
-        matches!(route, PublishRoute::Local(_)),
+        matches!(route, PublishRoute::Local { .. }),
         "an owned, open shard must be servable",
     );
 }
@@ -197,7 +198,7 @@ async fn losing_a_shard_takes_effect_without_waiting_for_the_cache() {
                 0
             )
             .await,
-            PublishRoute::Local(_)
+            PublishRoute::Local { .. }
         ),
         "warm the handle cache while the shard is ours",
     );
@@ -248,5 +249,5 @@ async fn a_single_node_broker_is_unaffected() {
         0,
     )
     .await;
-    assert!(matches!(route, PublishRoute::Local(_)));
+    assert!(matches!(route, PublishRoute::Local { .. }));
 }

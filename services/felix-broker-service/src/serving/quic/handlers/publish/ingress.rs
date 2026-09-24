@@ -26,6 +26,9 @@ pub(crate) enum PublishTarget {
         /// cluster. `None` on a single-node broker, which has no replica set
         /// and so nothing to wait for.
         shard: Option<crate::shards::ShardKey>,
+        /// The generation it was admitted at, which the fence checks at the
+        /// claim.
+        generation: u64,
     },
     /// This broker leads the shard and the batch names its producer: appended
     /// once however many times it arrives. Never forwarded, because only the
@@ -33,6 +36,7 @@ pub(crate) enum PublishTarget {
     Idempotent {
         handle: StreamHandle,
         shard: Option<crate::shards::ShardKey>,
+        generation: u64,
         producer_id: u64,
         sequence: u64,
     },

@@ -215,35 +215,39 @@ fn handler_with(
     auth: Arc<BrokerAuth>,
 ) -> ForwardingHandler {
     let router = router();
-    let ingress = Arc::new(crate::shards::routing::IngressRouter::new(Arc::clone(
-        &router,
-    )));
-    ingress.publish_servable(
-        [
-            (
-                crate::shards::ShardKey {
-                    tenant_id: TENANT.to_string(),
-                    namespace: NAMESPACE.to_string(),
-                    stream: STREAM.to_string(),
-                    shard: 0,
-                    kind: crate::shards::ShardKind::Stream,
-                },
-                GENERATION,
-            ),
-            (
-                crate::shards::ShardKey {
-                    tenant_id: TENANT.to_string(),
-                    namespace: NAMESPACE.to_string(),
-                    stream: CACHE.to_string(),
-                    shard: 0,
-                    kind: crate::shards::ShardKind::Cache,
-                },
-                GENERATION,
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    );
+    let ingress = Arc::new(crate::shards::routing::IngressRouter::new(
+        Arc::clone(&router),
+        Arc::default(),
+    ));
+    let servable: crate::shards::routing::ServableShards = [
+        (
+            crate::shards::ShardKey {
+                tenant_id: TENANT.to_string(),
+                namespace: NAMESPACE.to_string(),
+                stream: STREAM.to_string(),
+                shard: 0,
+                kind: crate::shards::ShardKind::Stream,
+            },
+            GENERATION,
+        ),
+        (
+            crate::shards::ShardKey {
+                tenant_id: TENANT.to_string(),
+                namespace: NAMESPACE.to_string(),
+                stream: CACHE.to_string(),
+                shard: 0,
+                kind: crate::shards::ShardKind::Cache,
+            },
+            GENERATION,
+        ),
+    ]
+    .into_iter()
+    .collect();
+    // What the lifecycle does when it activates a shard.
+    for (key, generation) in &servable {
+        ingress.fence().open(key, *generation);
+    }
+    ingress.publish_servable(servable);
     ForwardingHandler::new(
         broker,
         ingress,
@@ -477,4 +481,161 @@ async fn a_forwarded_leader_publish_does_not_wait() {
         "a leader-acknowledged stream waited for a quorum: {:?}",
         answer.kind(),
     );
+}
+
+/// The write fence, on the owner. Ownership and the generation check pass --
+/// the servable set still says the shard is served here -- but the lifecycle
+/// has already closed the fence for a move, so every forwarded write is
+/// refused and nothing lands.
+mod fence {
+    use super::*;
+    use crate::test_support::leader::{
+        self, CACHE, DURABLE, GENERATION, Leader, NAMESPACE, TENANT,
+    };
+
+    fn owner(leader: &Leader, credentials: &Credentials) -> ForwardingHandler {
+        ForwardingHandler::new(
+            Arc::clone(&leader.broker),
+            Arc::clone(&leader.ingress),
+            Arc::clone(&leader.router),
+            "10.0.0.1:7001".to_string(),
+            None,
+            Duration::from_secs(1),
+            Arc::clone(&credentials.auth),
+        )
+    }
+
+    fn shard_ref(name: &str) -> ShardRef {
+        ShardRef {
+            tenant_id: TENANT.to_string(),
+            namespace: NAMESPACE.to_string(),
+            stream: name.to_string(),
+            shard: 0,
+            generation: GENERATION,
+        }
+    }
+
+    fn cache_op(credential: &str, op: CacheOpKind, value: Bytes) -> ForwardCacheOp {
+        ForwardCacheOp {
+            correlation_id: 2,
+            shard: shard_ref(CACHE),
+            op,
+            key: "session:abc".to_string(),
+            value,
+            ttl_ms: 0,
+            credential: credential.to_string(),
+        }
+    }
+
+    fn refused_cache_op(answer: InternalMessage) {
+        match answer {
+            InternalMessage::ForwardCacheError(err) => {
+                assert_eq!(err.code, ErrorCode::Unavailable, "{}", err.detail)
+            }
+            other => panic!("a cache write landed after the fence closed: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_forwarded_publish_after_the_fence_is_refused() {
+        let mut leader = Leader::start().await;
+        let credentials = Credentials::new();
+        let handler = owner(&leader, &credentials);
+        let publish = |payload: &'static [u8]| ForwardPublish {
+            correlation_id: 1,
+            shard: shard_ref(DURABLE),
+            ack: AckMode::OnCommit,
+            payloads: vec![Bytes::from_static(payload)],
+            credential: credentials.token(&[&format!(
+                "stream.publish:stream:{TENANT}/{NAMESPACE}/{DURABLE}"
+            )]),
+        };
+
+        assert!(matches!(
+            handler.apply(publish(b"before")).await,
+            InternalMessage::ForwardPublishOk(_)
+        ));
+        leader.fence_move(&leader::stream_key(DURABLE));
+        match handler.apply(publish(b"after")).await {
+            InternalMessage::ForwardPublishError(err) => {
+                assert_eq!(err.code, ErrorCode::Unavailable, "{}", err.detail)
+            }
+            other => panic!("a forwarded publish landed after the fence closed: {other:?}"),
+        }
+        assert_eq!(
+            leader.tail(DURABLE).await,
+            1,
+            "the refused publish was written"
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_cache_writes_after_the_fence_are_refused() {
+        let mut leader = Leader::start().await;
+        let credentials = Credentials::new();
+        let handler = owner(&leader, &credentials);
+        let writer =
+            credentials.token(&[&format!("cache.write:cache:{TENANT}/{NAMESPACE}/{CACHE}")]);
+        let reader =
+            credentials.token(&[&format!("cache.read:cache:{TENANT}/{NAMESPACE}/{CACHE}")]);
+        let add = || {
+            cache_op(
+                &writer,
+                CacheOpKind::CounterAdd,
+                felix_storage::counter_log::encode_sum(5),
+            )
+        };
+
+        assert!(matches!(
+            handler
+                .apply_cache_op(cache_op(
+                    &writer,
+                    CacheOpKind::Put,
+                    Bytes::from_static(b"v1")
+                ))
+                .await,
+            InternalMessage::ForwardCacheOk(_)
+        ));
+        assert!(matches!(
+            handler.apply_cache_op(add()).await,
+            InternalMessage::ForwardCacheOk(_)
+        ));
+        leader.fence_move(&leader::cache_key());
+
+        refused_cache_op(
+            handler
+                .apply_cache_op(cache_op(
+                    &writer,
+                    CacheOpKind::Put,
+                    Bytes::from_static(b"v2"),
+                ))
+                .await,
+        );
+        refused_cache_op(
+            handler
+                .apply_cache_op(cache_op(&writer, CacheOpKind::Delete, Bytes::new()))
+                .await,
+        );
+        refused_cache_op(handler.apply_cache_op(add()).await);
+
+        // Reads are not fenced, and show nothing changed.
+        match handler
+            .apply_cache_op(cache_op(&reader, CacheOpKind::Get, Bytes::new()))
+            .await
+        {
+            InternalMessage::ForwardCacheOk(ok) => {
+                assert_eq!(ok.value, Some(Bytes::from_static(b"v1")))
+            }
+            other => panic!("read failed: {other:?}"),
+        }
+        match handler
+            .apply_cache_op(cache_op(&reader, CacheOpKind::CounterGet, Bytes::new()))
+            .await
+        {
+            InternalMessage::ForwardCacheOk(ok) => {
+                assert_eq!(ok.value, Some(felix_storage::counter_log::encode_sum(5)))
+            }
+            other => panic!("read failed: {other:?}"),
+        }
+    }
 }

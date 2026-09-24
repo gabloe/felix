@@ -19,7 +19,7 @@ async fn a_connections_context_keeps_the_cluster_view() {
         "us-west-2",
         RegionRouter::new("us-west-2".to_string()),
     ));
-    context.ingress = Some(Arc::new(IngressRouter::new(router)));
+    context.ingress = Some(Arc::new(IngressRouter::new(router, Arc::default())));
 
     let derived = context.for_connection(&crate::config::BrokerConfig::default());
     assert!(
@@ -103,7 +103,7 @@ async fn resolve_stream_cached_uses_cached_entry_until_cleared() {
     )
     .await;
     assert!(
-        matches!(refreshed, PublishRoute::Local(_)),
+        matches!(refreshed, PublishRoute::Local { .. }),
         "cache refresh should see stream"
     );
 }

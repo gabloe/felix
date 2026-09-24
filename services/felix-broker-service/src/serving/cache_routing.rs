@@ -7,14 +7,15 @@
 use bytes::Bytes;
 
 use crate::serving::forward::{CacheRequest, ForwardKey, ForwardTarget};
+use crate::shards::lifecycle::fence;
 use crate::shards::routing::{Dispatch, IngressRouter, dispatch, shard_for};
 use crate::shards::{ShardKey, ShardKind};
 
 /// Where one cache operation belongs.
 #[derive(Debug)]
 pub(crate) enum CacheRoute {
-    /// This broker owns the shard the key falls in.
-    Local { shard: u32 },
+    /// This broker owns the shard the key falls in, at `generation`.
+    Local { shard: u32, generation: u64 },
     /// Another broker owns it.
     Forward {
         key: ForwardKey,
@@ -36,7 +37,10 @@ pub(crate) fn resolve_cache_route(
     key: &str,
 ) -> CacheRoute {
     let Some(router) = ingress else {
-        return CacheRoute::Local { shard: 0 };
+        return CacheRoute::Local {
+            shard: 0,
+            generation: 0,
+        };
     };
 
     // The cache's own width, not the stream of the same name: `shards_for`
@@ -52,7 +56,7 @@ pub(crate) fn resolve_cache_route(
     };
 
     match dispatch(Some(router), &shard_key) {
-        Dispatch::Local => CacheRoute::Local { shard },
+        Dispatch::Local { generation } => CacheRoute::Local { shard, generation },
         Dispatch::Forward {
             node_id,
             advertise_addr,
@@ -106,7 +110,7 @@ pub(crate) async fn apply_cache_op(
     request: CacheRequest,
 ) -> Result<Option<Bytes>, String> {
     match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
-        CacheRoute::Local { shard } => {
+        CacheRoute::Local { shard, generation } => {
             let cache_store = broker.cache();
             let written = ShardKey {
                 tenant_id: tenant_id.to_string(),
@@ -119,9 +123,12 @@ pub(crate) async fn apply_cache_op(
             Ok(match request {
                 CacheRequest::Put { value, ttl_ms } => {
                     let ttl = (ttl_ms > 0).then(|| std::time::Duration::from_millis(ttl_ms));
+                    let fenced = fence::enter(ingress, Some(&written), generation)
+                        .map_err(|refused| refused.to_string())?;
                     cache_store
                         .put(tenant_id, namespace, cache, shard, key, value, ttl)
                         .await;
+                    drop(fenced);
                     crate::replication::quorum::await_cache_quorum(
                         broker,
                         &written,
@@ -139,9 +146,12 @@ pub(crate) async fn apply_cache_op(
                         .await
                 }
                 CacheRequest::Delete => {
+                    let fenced = fence::enter(ingress, Some(&written), generation)
+                        .map_err(|refused| refused.to_string())?;
                     let removed = cache_store
                         .delete(tenant_id, namespace, cache, shard, key)
                         .await;
+                    drop(fenced);
                     crate::replication::quorum::await_cache_quorum(
                         broker,
                         &written,
@@ -209,16 +219,28 @@ pub(crate) async fn apply_counter_op(
     request: CacheRequest,
 ) -> Result<Option<i64>, String> {
     match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
-        CacheRoute::Local { shard } => {
+        CacheRoute::Local { shard, generation } => {
             let Some(counters) = broker.counters() else {
                 return Err("this broker has no durable storage for counters".to_string());
             };
             match request {
-                CacheRequest::CounterAdd { delta } => counters
-                    .add(tenant_id, namespace, cache, shard, key, delta)
-                    .await
-                    .map(|(sum, _)| Some(sum))
-                    .map_err(|err| err.to_string()),
+                CacheRequest::CounterAdd { delta } => {
+                    // A counter lives on its cache's shard, so it is fenced by it.
+                    let shard_key = ShardKey {
+                        tenant_id: tenant_id.to_string(),
+                        namespace: namespace.to_string(),
+                        stream: cache.to_string(),
+                        shard,
+                        kind: ShardKind::Cache,
+                    };
+                    let _fenced = fence::enter(ingress, Some(&shard_key), generation)
+                        .map_err(|refused| refused.to_string())?;
+                    counters
+                        .add(tenant_id, namespace, cache, shard, key, delta)
+                        .await
+                        .map(|(sum, _)| Some(sum))
+                        .map_err(|err| err.to_string())
+                }
                 CacheRequest::CounterGet => counters
                     .get(tenant_id, namespace, cache, shard, key)
                     .await

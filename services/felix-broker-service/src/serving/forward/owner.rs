@@ -35,6 +35,7 @@ use felix_wire::internal::{
 use crate::peer::metrics;
 use crate::peer::server::PeerRequestHandler;
 use crate::serving::auth::BrokerAuth;
+use crate::shards::lifecycle::fence::Fenced;
 use crate::shards::routing::{Dispatch, IngressRouter};
 use crate::shards::{ShardKey, ShardKind};
 
@@ -126,11 +127,16 @@ impl ForwardingHandler {
             }
         };
 
-        match self
+        let fenced = match self.ingress.fence().admit(&key, publish.shard.generation) {
+            Ok(fenced) => fenced,
+            Err(refused) => return self.fenced(refused).into_publish_answer(correlation_id),
+        };
+        let published = self
             .broker
             .publish_batch_with_outcome(&handle, &publish.payloads)
-            .await
-        {
+            .await;
+        drop(fenced);
+        match published {
             Ok(outcome) => {
                 // The same wait the direct publish path makes. A forwarded
                 // publish is still a publish to this stream, and the client on
@@ -214,6 +220,14 @@ impl ForwardingHandler {
 
         let cache = self.broker.cache();
         let writes = matches!(op.op, CacheOpKind::Put | CacheOpKind::Delete);
+        let fenced = if writes {
+            match self.ingress.fence().admit(&key, op.shard.generation) {
+                Ok(fenced) => Some(fenced),
+                Err(refused) => return self.fenced(refused).into_cache_answer(correlation_id),
+            }
+        } else {
+            None
+        };
         let value = match op.op {
             CacheOpKind::Put => {
                 let ttl = (op.ttl_ms > 0).then(|| std::time::Duration::from_millis(op.ttl_ms));
@@ -256,6 +270,7 @@ impl ForwardingHandler {
                 return self.apply_counter_op(op, &key).await;
             }
         };
+        drop(fenced);
 
         // The same wait the requester's own path makes for a local write: the
         // client asked for the cache's guarantee, wherever the key happens to
@@ -334,7 +349,7 @@ impl ForwardingHandler {
         claimed_generation: u64,
     ) -> Option<Denial> {
         match self.ingress.dispatch(key) {
-            Dispatch::Local => {}
+            Dispatch::Local { .. } => {}
             Dispatch::Forward {
                 node_id,
                 advertise_addr,
@@ -405,6 +420,17 @@ impl ForwardingHandler {
         None
     }
 
+    /// A write that passed the ownership check and was then refused by the
+    /// fence: the shard stopped serving here while the request was on its way
+    /// in. Answered like any other refusal, so the requester retries.
+    fn fenced(&self, refused: Fenced) -> Denial {
+        metrics::record_served(metrics::OUTCOME_REFUSED);
+        Denial::Refused {
+            code: ErrorCode::Unavailable,
+            detail: refused.to_string(),
+        }
+    }
+
     /// The counter half of a forwarded cache op: the delta and the sum both
     /// ride the envelope's value bytes as eight big-endian bytes.
     async fn apply_counter_op(&self, op: ForwardCacheOp, key: &ShardKey) -> InternalMessage {
@@ -429,6 +455,12 @@ impl ForwardingHandler {
                             code: ErrorCode::Malformed,
                             detail: err.to_string(),
                         });
+                    }
+                };
+                let _fenced = match self.ingress.fence().admit(key, op.shard.generation) {
+                    Ok(fenced) => fenced,
+                    Err(refused) => {
+                        return self.fenced(refused).into_cache_answer(correlation_id);
                     }
                 };
                 counters

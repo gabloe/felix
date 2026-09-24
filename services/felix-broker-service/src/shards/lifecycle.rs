@@ -13,12 +13,21 @@
 //! The decision half is a pure state machine and the I/O half is a driver, for
 //! the same reason placement is split that way: every interesting rule is then
 //! testable without a disk.
+//!
+//! The phase also drives the [`fence::ShardFence`] every write passes through
+//! when it claims its place in the log: open only while `Active`.
+pub mod fence;
 pub mod metrics;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::shards::lifecycle::metrics as mm;
 use crate::shards::{ShardKey, ShardKind, watch::ShardAssignment};
+
+/// How long ending a shard's readers waits for writes already in flight. A
+/// write inside the fence is a commit and a fanout, normally milliseconds.
+const QUIESCE_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Where this broker is with one shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -100,6 +109,7 @@ pub enum Action {
 pub struct ShardLifecycle {
     node_id: String,
     shards: HashMap<ShardKey, LocalShard>,
+    fence: Arc<fence::ShardFence>,
 }
 
 impl ShardLifecycle {
@@ -107,11 +117,18 @@ impl ShardLifecycle {
         Self {
             node_id: node_id.into(),
             shards: HashMap::new(),
+            fence: Arc::default(),
         }
     }
 
     pub fn node_id(&self) -> &str {
         &self.node_id
+    }
+
+    /// The write fence this lifecycle opens and closes. Every write path
+    /// enters it; see [`fence`].
+    pub fn fence(&self) -> &Arc<fence::ShardFence> {
+        &self.fence
     }
 
     /// Whether this broker may serve writes for `key` right now.
@@ -334,6 +351,16 @@ impl ShardLifecycle {
     }
 
     fn set(&mut self, key: &ShardKey, phase: Phase, generation: u64, draining: bool) {
+        // The one place a phase changes, so the fence cannot disagree with it.
+        // Closing here, as the decision is made, is what puts the close ahead of
+        // `publish_servable` and of whatever the driver does next -- including
+        // when a move arrives as a new draining generation, which reopens the
+        // shard for shipping rather than releasing it.
+        if phase.may_serve() {
+            self.fence.open(key, generation);
+        } else {
+            self.fence.close(key);
+        }
         let previous = self.shards.get(key).map(|shard| shard.phase);
         self.shards.insert(
             key.clone(),
@@ -548,36 +575,41 @@ pub async fn apply(
     match action {
         Action::None => {}
         Action::Open { key, generation } => match store.open(&key, generation).await {
-            Ok(()) => match lifecycle.lock().await.opened(&key, generation) {
-                Opened::Activated => tracing::info!(
-                    stream = %key.stream,
-                    shard = key.shard,
-                    generation,
-                    "shard opened and now serving",
-                ),
-                // How a move usually reaches the old leader: every assignment
-                // write bumps the generation, so the fence arrives as a new,
-                // draining generation rather than as a release of the current
-                // one. This broker has stopped serving the shard either way, so
-                // its readers end here too.
-                Opened::Draining => {
-                    store.end_readers(&key).await;
-                    tracing::info!(
+            Ok(()) => {
+                // Bound first: matching on the locked call would hold the guard
+                // through the arms, and a handoff ends its readers under the lock.
+                let opened = lifecycle.lock().await.opened(&key, generation);
+                match opened {
+                    Opened::Activated => tracing::info!(
                         stream = %key.stream,
                         shard = key.shard,
                         generation,
-                        "shard opened for a move; shipping to its successor, not serving",
-                    );
+                        "shard opened and now serving",
+                    ),
+                    // How a move usually reaches the old leader: every assignment
+                    // write bumps the generation, so the fence arrives as a new,
+                    // draining generation rather than as a release of the current
+                    // one. This broker has stopped serving the shard either way, so
+                    // its readers end here too.
+                    Opened::Draining => {
+                        end_readers(lifecycle, store, &key).await;
+                        tracing::info!(
+                            stream = %key.stream,
+                            shard = key.shard,
+                            generation,
+                            "shard opened for a move; shipping to its successor, not serving",
+                        );
+                    }
+                    // Reassigned while we were recovering it. Not an error, and
+                    // deliberately not activated -- see `ShardLifecycle::opened`.
+                    Opened::Stale => tracing::info!(
+                        stream = %key.stream,
+                        shard = key.shard,
+                        generation,
+                        "shard was reassigned while opening; not activating",
+                    ),
                 }
-                // Reassigned while we were recovering it. Not an error, and
-                // deliberately not activated -- see `ShardLifecycle::opened`.
-                Opened::Stale => tracing::info!(
-                    stream = %key.stream,
-                    shard = key.shard,
-                    generation,
-                    "shard was reassigned while opening; not activating",
-                ),
-            },
+            }
             Err(err) => {
                 mm::record_open_failure();
                 lifecycle.lock().await.open_failed(&key, generation);
@@ -603,7 +635,7 @@ pub async fn apply(
                     "could not flush local shard state while releasing it",
                 );
             }
-            store.end_readers(&key).await;
+            end_readers(lifecycle, store, &key).await;
             lifecycle.lock().await.released(&key, generation);
             tracing::info!(
                 stream = %key.stream,
@@ -613,6 +645,31 @@ pub async fn apply(
             );
         }
     }
+}
+
+/// End a shard's readers once the writes already inside its fence are done,
+/// so each reader is handed every record this broker committed for the shard.
+///
+/// Bounded: a write that hangs must not hold up the feed that every other
+/// shard's lifecycle runs on. A reader ended early resumes by offset on the
+/// new owner, which has the record once the drained report goes out.
+async fn end_readers(
+    lifecycle: &tokio::sync::Mutex<ShardLifecycle>,
+    store: &dyn ShardStore,
+    key: &ShardKey,
+) {
+    let fence = Arc::clone(lifecycle.lock().await.fence());
+    if tokio::time::timeout(QUIESCE_BOUND, fence.quiesce(key))
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            stream = %key.stream,
+            shard = key.shard,
+            "ending a shard's readers with writes still in flight",
+        );
+    }
+    store.end_readers(key).await;
 }
 
 /// Bring local state in line with a full assignment set.

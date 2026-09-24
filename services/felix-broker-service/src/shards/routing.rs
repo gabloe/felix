@@ -25,13 +25,18 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use felix_router::{Resolution, ShardRouter, Unavailable};
 
+use crate::shards::lifecycle::fence::ShardFence;
 use crate::shards::{ShardKey, ShardKind};
 
 /// What ingress should do with a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dispatch {
-    /// Serve it here.
-    Local,
+    /// Serve it here, at this generation.
+    ///
+    /// A write carries the generation to its claim, where the fence refuses it
+    /// if the shard stopped serving in between. Zero on a single-node broker,
+    /// which has no generations and no fence.
+    Local { generation: u64 },
     /// Another node owns it. The publish is forwarded there over the internal
     /// protocol and its answer is relayed back to the client.
     Forward {
@@ -99,14 +104,24 @@ pub type ServableShards = HashMap<ShardKey, u64>;
 pub struct IngressRouter {
     router: Arc<ShardRouter>,
     servable: ArcSwap<ServableShards>,
+    fence: Arc<ShardFence>,
 }
 
 impl IngressRouter {
-    pub fn new(router: Arc<ShardRouter>) -> Self {
+    /// `fence` is the one the shard lifecycle opens and closes; see
+    /// [`crate::shards::lifecycle::ShardLifecycle::fence`].
+    pub fn new(router: Arc<ShardRouter>, fence: Arc<ShardFence>) -> Self {
         Self {
             router,
             servable: ArcSwap::from_pointee(ServableShards::new()),
+            fence,
         }
+    }
+
+    /// The write fence every local write enters when it claims its place in
+    /// the log. Here because every write path already holds this router.
+    pub fn fence(&self) -> &Arc<ShardFence> {
+        &self.fence
     }
 
     /// Replace the set of shards this broker can serve.
@@ -131,10 +146,7 @@ impl IngressRouter {
     /// one does not count toward a newer one's quorum.
     pub fn generation(&self, key: &ShardKey) -> Option<u64> {
         match self.dispatch(key) {
-            Dispatch::Local => match self.router.resolve(&to_router_key(key)) {
-                Resolution::Local { generation } => Some(generation),
-                _ => None,
-            },
+            Dispatch::Local { generation } => Some(generation),
             _ => None,
         }
     }
@@ -175,7 +187,7 @@ impl IngressRouter {
                 // and only at this exact generation: an older one means we have
                 // not caught up with a reassignment that already happened.
                 if self.servable.load().get(key) == Some(&generation) {
-                    Dispatch::Local
+                    Dispatch::Local { generation }
                 } else {
                     Dispatch::Unavailable(Reason::NotReady)
                 }
@@ -211,7 +223,7 @@ impl IngressRouter {
 #[inline]
 pub fn dispatch(ingress: Option<&IngressRouter>, key: &ShardKey) -> Dispatch {
     match ingress {
-        None => Dispatch::Local,
+        None => Dispatch::Local { generation: 0 },
         Some(ingress) => ingress.dispatch(key),
     }
 }

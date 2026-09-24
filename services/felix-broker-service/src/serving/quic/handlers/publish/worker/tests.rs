@@ -73,3 +73,165 @@ async fn build_publish_context_worker_returns_publish_error() -> Result<()> {
     assert!(err.to_string().contains("stream"));
     Ok(())
 }
+
+/// The write fence, on the worker. Each of these admits a publish while the
+/// shard is served here, lets a move close the fence while the job waits in
+/// the queue, and then lets the worker claim it -- which must refuse it and
+/// write nothing, since the drained report may already have gone out.
+mod fence {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::serving::quic::handlers::publish::route::{
+        Authority, PublishRoute, local_shard_key, publish_target, resolve_route,
+    };
+    use crate::test_support::leader::{DURABLE, EPHEMERAL, Leader, NAMESPACE, TENANT, stream_key};
+
+    #[derive(Clone, Copy)]
+    enum Kind {
+        Plain,
+        Idempotent,
+    }
+
+    async fn admitted_then_fenced(stream: &str, kind: Kind) {
+        let mut leader = Leader::start().await;
+        let publish_ctx = build_publish_context(
+            Arc::clone(&leader.broker),
+            &BrokerConfig::default(),
+            ClusterContext {
+                ingress: Some(Arc::clone(&leader.ingress)),
+                ..ClusterContext::default()
+            },
+        );
+
+        let route = resolve_route(
+            &leader.broker,
+            Authority {
+                ingress: Some(&leader.ingress),
+                lease: None,
+            },
+            &mut HashMap::new(),
+            &mut String::new(),
+            TENANT,
+            NAMESPACE,
+            stream,
+            0,
+        )
+        .await;
+        let target = match (kind, route) {
+            (Kind::Plain, route) => publish_target(
+                route,
+                &publish_ctx,
+                TENANT,
+                NAMESPACE,
+                stream,
+                0,
+                felix_wire::internal::AckMode::OnCommit,
+                "",
+            )
+            .expect("admitted"),
+            (Kind::Idempotent, PublishRoute::Local { handle, generation }) => {
+                PublishTarget::Idempotent {
+                    handle,
+                    shard: local_shard_key(&publish_ctx, TENANT, NAMESPACE, stream, 0),
+                    generation,
+                    producer_id: leader.broker.new_producer_id(),
+                    sequence: 0,
+                }
+            }
+            (_, other) => panic!("admission should serve it here: {other:?}"),
+        };
+
+        // The move lands while the job sits in the queue.
+        leader.fence_move(&stream_key(stream));
+
+        let (response_tx, response_rx) = oneshot::channel();
+        publish_ctx.workers[0]
+            .send(PublishJob {
+                target,
+                payloads: vec![Bytes::from_static(b"late")],
+                response: Some(response_tx),
+                admission_permit: None,
+            })
+            .await
+            .expect("enqueue publish");
+        let answer = response_rx.await.expect("worker response");
+        assert!(
+            answer.is_err(),
+            "a publish claimed after the fence closed was acknowledged"
+        );
+        let tail = leader.tail(stream).await;
+        assert_eq!(tail, 0, "the refused publish was written anyway");
+    }
+
+    #[tokio::test]
+    async fn a_durable_publish_claimed_after_the_fence_is_refused() {
+        admitted_then_fenced(DURABLE, Kind::Plain).await;
+    }
+
+    #[tokio::test]
+    async fn an_ephemeral_publish_claimed_after_the_fence_is_refused() {
+        admitted_then_fenced(EPHEMERAL, Kind::Plain).await;
+    }
+
+    #[tokio::test]
+    async fn an_idempotent_publish_claimed_after_the_fence_is_refused() {
+        admitted_then_fenced(DURABLE, Kind::Idempotent).await;
+    }
+
+    /// The control: the same path with no move in between is acknowledged,
+    /// so the refusals above are the fence and not a broken fixture.
+    #[tokio::test]
+    async fn a_publish_with_no_move_in_between_is_written() {
+        let leader = Leader::start().await;
+        let publish_ctx = build_publish_context(
+            Arc::clone(&leader.broker),
+            &BrokerConfig::default(),
+            ClusterContext {
+                ingress: Some(Arc::clone(&leader.ingress)),
+                ..ClusterContext::default()
+            },
+        );
+        let route = resolve_route(
+            &leader.broker,
+            Authority {
+                ingress: Some(&leader.ingress),
+                lease: None,
+            },
+            &mut HashMap::new(),
+            &mut String::new(),
+            TENANT,
+            NAMESPACE,
+            DURABLE,
+            0,
+        )
+        .await;
+        let target = publish_target(
+            route,
+            &publish_ctx,
+            TENANT,
+            NAMESPACE,
+            DURABLE,
+            0,
+            felix_wire::internal::AckMode::OnCommit,
+            "",
+        )
+        .expect("admitted");
+        let (response_tx, response_rx) = oneshot::channel();
+        publish_ctx.workers[0]
+            .send(PublishJob {
+                target,
+                payloads: vec![Bytes::from_static(b"on time")],
+                response: Some(response_tx),
+                admission_permit: None,
+            })
+            .await
+            .expect("enqueue publish");
+        response_rx
+            .await
+            .expect("worker response")
+            .expect("acknowledged");
+        let tail = leader.tail(DURABLE).await;
+        assert_eq!(tail, 1);
+    }
+}

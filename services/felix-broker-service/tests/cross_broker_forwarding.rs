@@ -176,7 +176,7 @@ impl Owner {
             "us-west-2",
             RegionRouter::new("us-west-2".to_string()),
         ));
-        let ingress = Arc::new(IngressRouter::new(Arc::clone(&router)));
+        let ingress = Arc::new(IngressRouter::new(Arc::clone(&router), Arc::default()));
         let owner = Self {
             broker,
             ingress,
@@ -204,6 +204,12 @@ impl Owner {
         let nodes = catalog(nodes);
         self.router
             .publish(routing_table_from(&assignments, &nodes), &nodes);
+        // What the shard lifecycle does when it activates or leaves a shard.
+        if servable {
+            self.ingress.fence().open(&shard_key(), generation);
+        } else {
+            self.ingress.fence().close(&shard_key());
+        }
         self.ingress.publish_servable(if servable {
             [(shard_key(), generation)].into_iter().collect()
         } else {

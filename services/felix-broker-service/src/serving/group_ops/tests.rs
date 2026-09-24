@@ -1,0 +1,159 @@
+//! The write fence on consumer-group operations.
+//!
+//! Admission here is the ownership check, which reads the servable set; the
+//! lifecycle closes the fence before that set catches up. Each test takes a
+//! record while the shard is served, lets a move close the fence, and shows
+//! every group write is then refused -- group state moves with the shard, so
+//! a write landing after the fence would be left behind on the old leader.
+use std::sync::Arc;
+use std::time::Duration;
+
+use bytes::Bytes;
+
+use super::*;
+use crate::config::BrokerConfig;
+use crate::serving::quic::ClusterContext;
+use crate::serving::quic::handlers::publish::build_publish_context;
+use crate::test_support::leader::{self, DURABLE, Leader, NAMESPACE, TENANT};
+
+const GROUP: &str = "workers";
+
+fn context(leader: &Leader) -> PublishContext {
+    build_publish_context(
+        Arc::clone(&leader.broker),
+        &BrokerConfig::default(),
+        ClusterContext {
+            ingress: Some(Arc::clone(&leader.ingress)),
+            ..ClusterContext::default()
+        },
+    )
+}
+
+/// A leader with two records on the queue and the first one claimed.
+async fn claimed_one() -> (Leader, PublishContext) {
+    let leader = Leader::start().await;
+    leader
+        .broker
+        .publish_batch(
+            TENANT,
+            NAMESPACE,
+            DURABLE,
+            0,
+            &[Bytes::from_static(b"first"), Bytes::from_static(b"second")],
+        )
+        .await
+        .expect("publish");
+    let publish_ctx = context(&leader);
+    let claimed = poll(
+        &leader.broker,
+        &publish_ctx,
+        TENANT,
+        NAMESPACE,
+        DURABLE,
+        0,
+        GROUP,
+        1,
+        Duration::ZERO,
+    )
+    .await
+    .expect("served before the move");
+    assert_eq!(claimed.len(), 1);
+    (leader, publish_ctx)
+}
+
+async fn committed(leader: &Leader) -> Option<u64> {
+    leader
+        .broker
+        .group_reader()
+        .expect("groups")
+        .committed(&group_key(TENANT, NAMESPACE, DURABLE, 0, GROUP))
+        .await
+        .expect("committed")
+}
+
+#[tokio::test]
+async fn an_ack_after_the_fence_is_refused() {
+    let (mut leader, publish_ctx) = claimed_one().await;
+    leader.fence_move(&leader::stream_key(DURABLE));
+
+    for finish in [true, false] {
+        assert!(
+            settle(
+                &leader.broker,
+                &publish_ctx,
+                TENANT,
+                NAMESPACE,
+                DURABLE,
+                0,
+                GROUP,
+                0,
+                finish,
+            )
+            .await
+            .is_err(),
+            "a settle (finish: {finish}) landed after the fence closed"
+        );
+    }
+    assert_eq!(committed(&leader).await, None, "the cursor moved");
+}
+
+#[tokio::test]
+async fn a_poll_after_the_fence_is_refused() {
+    let (mut leader, publish_ctx) = claimed_one().await;
+    leader.fence_move(&leader::stream_key(DURABLE));
+
+    assert!(
+        poll(
+            &leader.broker,
+            &publish_ctx,
+            TENANT,
+            NAMESPACE,
+            DURABLE,
+            0,
+            GROUP,
+            1,
+            Duration::ZERO,
+        )
+        .await
+        .is_err(),
+        "a poll claimed a record after the fence closed"
+    );
+}
+
+#[tokio::test]
+async fn a_dead_letter_change_after_the_fence_is_refused() {
+    let (mut leader, publish_ctx) = claimed_one().await;
+    let broker = Arc::clone(&leader.broker);
+    let reader = broker.group_reader().expect("groups");
+    let key = group_key(TENANT, NAMESPACE, DURABLE, 0, GROUP);
+    reader
+        .dead_letters()
+        .record(&key, 0)
+        .await
+        .expect("dead-letter");
+    leader.fence_move(&leader::stream_key(DURABLE));
+
+    for redrive in [true, false] {
+        let refused = manage_dead_letter(
+            &leader.broker,
+            &publish_ctx,
+            TENANT,
+            NAMESPACE,
+            DURABLE,
+            0,
+            GROUP,
+            0,
+            redrive,
+        )
+        .await;
+        assert!(
+            refused.is_err(),
+            "a dead-letter change (redrive: {redrive}) landed after the fence closed"
+        );
+    }
+    assert_eq!(
+        reader.dead_lettered(&key).await.expect("list"),
+        vec![0],
+        "the dead letter was touched"
+    );
+}

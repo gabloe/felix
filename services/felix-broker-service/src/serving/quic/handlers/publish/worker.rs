@@ -14,6 +14,7 @@ use super::{
 use crate::config::BrokerConfig;
 use crate::serving::quic::handlers::subscribe::WriterLaneManager;
 use crate::serving::quic::{ClusterContext, GLOBAL_INGRESS_DEPTH};
+use crate::shards::lifecycle::fence;
 
 pub(crate) fn build_publish_context(
     broker: Arc<Broker>,
@@ -94,12 +95,32 @@ pub(crate) fn build_publish_context(
                 // overlap. Everything else -- forwards, idempotent sequences,
                 // the single-node local target -- stays inline, because none of
                 // them is waiting on a flush this worker could be sharing.
-                if let PublishTarget::Resolved { handle, shard } = &job.target {
+                if let PublishTarget::Resolved {
+                    handle,
+                    shard,
+                    generation,
+                } = &job.target
+                {
                     let lease_ok = match &lease_for_worker {
                         Some(lease) => lease.is_valid_now(),
                         None => true,
                     };
                     if lease_ok && handle.is_durable() {
+                        // Held until the publish is durable and fanned out, so
+                        // a drained report cannot go out while it is landing.
+                        let fenced = match fence::enter(
+                            ingress_for_worker.as_deref(),
+                            shard.as_ref(),
+                            *generation,
+                        ) {
+                            Ok(fenced) => fenced,
+                            Err(refused) => {
+                                if let Some(response) = job.response {
+                                    let _ = response.send(Err(refused.into()));
+                                }
+                                continue;
+                            }
+                        };
                         // Serial, and the only ordered part: offsets are
                         // consumed here, so the order these return in is the
                         // order records land on disk.
@@ -116,7 +137,9 @@ pub(crate) fn build_publish_context(
                                 let ingress = ingress_for_worker.clone();
                                 let response = job.response;
                                 tokio::spawn(async move {
-                                    let result = match broker.complete_publish(claimed).await {
+                                    let completed = broker.complete_publish(claimed).await;
+                                    drop(fenced);
+                                    let result = match completed {
                                         Ok(outcome) => {
                                             crate::replication::quorum::await_quorum(
                                                 &handle,
@@ -148,7 +171,11 @@ pub(crate) fn build_publish_context(
                 }
 
                 let result: Result<(), anyhow::Error> = match &job.target {
-                    PublishTarget::Resolved { handle, shard } => {
+                    PublishTarget::Resolved {
+                        handle,
+                        shard,
+                        generation,
+                    } => {
                         // The commit fence, and the authoritative one. Everything
                         // between admission and here can take arbitrarily long --
                         // a full queue, a slow fsync, a suspended process -- so a
@@ -164,30 +191,39 @@ pub(crate) fn build_publish_context(
                                     "lease lapsed before the record could be committed"
                                 ))
                             }
-                            _ => {
-                                match broker_for_worker
-                                    .publish_batch_with_outcome(handle, &job.payloads)
-                                    .await
-                                {
-                                    Ok(outcome) => {
-                                        crate::replication::quorum::await_quorum(
-                                            handle,
-                                            shard.as_ref(),
-                                            &outcome,
-                                            marks_for_worker.as_deref(),
-                                            ingress_for_worker.as_deref(),
-                                            quorum_timeout,
-                                        )
-                                        .await
+                            _ => match fence::enter(
+                                ingress_for_worker.as_deref(),
+                                shard.as_ref(),
+                                *generation,
+                            ) {
+                                Err(refused) => Err(refused.into()),
+                                Ok(fenced) => {
+                                    let published = broker_for_worker
+                                        .publish_batch_with_outcome(handle, &job.payloads)
+                                        .await;
+                                    drop(fenced);
+                                    match published {
+                                        Ok(outcome) => {
+                                            crate::replication::quorum::await_quorum(
+                                                handle,
+                                                shard.as_ref(),
+                                                &outcome,
+                                                marks_for_worker.as_deref(),
+                                                ingress_for_worker.as_deref(),
+                                                quorum_timeout,
+                                            )
+                                            .await
+                                        }
+                                        Err(err) => Err(err.into()),
                                     }
-                                    Err(err) => Err(err.into()),
                                 }
-                            }
+                            },
                         }
                     }
                     PublishTarget::Idempotent {
                         handle,
                         shard,
+                        generation,
                         producer_id,
                         sequence,
                     } => match &lease_for_worker {
@@ -200,33 +236,41 @@ pub(crate) fn build_publish_context(
                                 "lease lapsed before the record could be committed"
                             ))
                         }
-                        _ => {
-                            match broker_for_worker
-                                .publish_batch_idempotent(
-                                    handle,
-                                    *producer_id,
-                                    *sequence,
-                                    &job.payloads,
-                                )
-                                .await
-                            {
-                                // A duplicate waits on the same quorum the
-                                // original did: its offsets are the original's,
-                                // and the answer must mean the same thing.
-                                Ok(idempotent) => {
-                                    crate::replication::quorum::await_quorum(
+                        _ => match fence::enter(
+                            ingress_for_worker.as_deref(),
+                            shard.as_ref(),
+                            *generation,
+                        ) {
+                            Err(refused) => Err(refused.into()),
+                            Ok(fenced) => {
+                                let published = broker_for_worker
+                                    .publish_batch_idempotent(
                                         handle,
-                                        shard.as_ref(),
-                                        &idempotent.outcome,
-                                        marks_for_worker.as_deref(),
-                                        ingress_for_worker.as_deref(),
-                                        quorum_timeout,
+                                        *producer_id,
+                                        *sequence,
+                                        &job.payloads,
                                     )
-                                    .await
+                                    .await;
+                                drop(fenced);
+                                match published {
+                                    // A duplicate waits on the same quorum the
+                                    // original did: its offsets are the original's,
+                                    // and the answer must mean the same thing.
+                                    Ok(idempotent) => {
+                                        crate::replication::quorum::await_quorum(
+                                            handle,
+                                            shard.as_ref(),
+                                            &idempotent.outcome,
+                                            marks_for_worker.as_deref(),
+                                            ingress_for_worker.as_deref(),
+                                            quorum_timeout,
+                                        )
+                                        .await
+                                    }
+                                    Err(err) => Err(err.into()),
                                 }
-                                Err(err) => Err(err.into()),
                             }
-                        }
+                        },
                     },
                     #[cfg(test)]
                     PublishTarget::Named {

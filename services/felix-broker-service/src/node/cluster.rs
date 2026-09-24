@@ -37,10 +37,14 @@ pub(super) fn shard_state(config: &BrokerConfig) -> Option<ShardState> {
             membership.region.clone(),
             felix_router::RegionRouter::new(membership.region.clone()),
         ));
-        let ingress = Arc::new(shard_routing::IngressRouter::new(Arc::clone(&router)));
-        let lifecycle = Arc::new(tokio::sync::Mutex::new(
-            shard_lifecycle::ShardLifecycle::new(membership.node_id.clone()),
+        let lifecycle = shard_lifecycle::ShardLifecycle::new(membership.node_id.clone());
+        // One fence, shared: the lifecycle opens and closes it, every write
+        // path enters it through the ingress router.
+        let ingress = Arc::new(shard_routing::IngressRouter::new(
+            Arc::clone(&router),
+            Arc::clone(lifecycle.fence()),
         ));
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(lifecycle));
         let ownership = Arc::new(tokio::sync::RwLock::new(
             shard_watch::ShardOwnership::default(),
         ));

@@ -67,6 +67,9 @@ pub(crate) async fn resolve_route(
         return PublishRoute::Refused;
     }
 
+    // Carried to the claim, where the fence refuses the write if this broker
+    // stopped serving the shard in the meantime.
+    let mut generation = 0;
     if ingress.is_some() {
         let key = ShardKey {
             tenant_id: tenant_id.to_string(),
@@ -79,7 +82,7 @@ pub(crate) async fn resolve_route(
             kind: ShardKind::Stream,
         };
         match dispatch(ingress, &key) {
-            Dispatch::Local => {}
+            Dispatch::Local { generation: at } => generation = at,
             Dispatch::Forward {
                 node_id,
                 advertise_addr,
@@ -113,7 +116,7 @@ pub(crate) async fn resolve_route(
         && *expires > Instant::now()
         && handle.as_ref().is_none_or(StreamHandle::is_active)
     {
-        return PublishRoute::from(handle.clone());
+        return PublishRoute::local(handle.clone(), generation);
     }
     let handle = broker
         .resolve_stream_handle(tenant_id, namespace, stream, shard)
@@ -123,24 +126,28 @@ pub(crate) async fn resolve_route(
         key_scratch.clone(),
         (handle.clone(), Instant::now() + STREAM_CACHE_TTL),
     );
-    PublishRoute::from(handle)
+    PublishRoute::local(handle, generation)
 }
 
 /// Where a publish should be applied.
 #[derive(Debug)]
 pub(crate) enum PublishRoute {
-    /// This broker owns the shard and the stream resolved here.
-    Local(StreamHandle),
+    /// This broker owns the shard, at `generation`, and the stream resolved
+    /// here.
+    Local {
+        handle: StreamHandle,
+        generation: u64,
+    },
     /// Another broker owns it.
     Forward(ForwardTarget),
     /// Nobody can take it right now, or the stream does not resolve.
     Refused,
 }
 
-impl From<Option<StreamHandle>> for PublishRoute {
-    fn from(handle: Option<StreamHandle>) -> Self {
+impl PublishRoute {
+    fn local(handle: Option<StreamHandle>, generation: u64) -> Self {
         match handle {
-            Some(handle) => Self::Local(handle),
+            Some(handle) => Self::Local { handle, generation },
             None => Self::Refused,
         }
     }
@@ -214,9 +221,10 @@ pub(crate) fn publish_target(
     credential: &str,
 ) -> Option<PublishTarget> {
     match route {
-        PublishRoute::Local(handle) => Some(PublishTarget::Resolved {
+        PublishRoute::Local { handle, generation } => Some(PublishTarget::Resolved {
             handle,
             shard: local_shard_key(publish_ctx, tenant_id, namespace, stream, shard),
+            generation,
         }),
         PublishRoute::Forward(target) => {
             if publish_ctx.peers.is_none() {
