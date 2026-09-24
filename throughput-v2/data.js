@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790279754515,
+  "lastUpdate": 1790279932621,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15028,6 +15028,58 @@ window.BENCHMARK_DATA = {
             "range": "10730.10",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 924531.87\nmean: 923936.43\nstdev: 10730.10\ncv: 1.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b57f770a5a7b2888e43691ddd9cee0b72b2dafa",
+          "message": "Replayed history is never dropped from a subscription's queues (#677)\n\n* feat(wire): read an event batch's base offset without decoding it\n\nA subscription's read loop decides how to queue a frame before it decodes\none, and replayed history has to be queued differently from live records.\n\n* fix(client): never drop replayed history from a subscription's queues\n\nA subscription resumed from an early offset lost records even when the\napplication read every event as it arrived. The broker writes history as\nfast as it can read it, and the client's read loop drained the stream\ninto two bounded queues under the default drop_new policy, so a replay\nlonger than the queue overflowed it. Losing the tail of a replay looked\nlike a stall: nothing more arrived until the next live publish.\n\nHistory is now queued with backpressure whatever the policy: a record\nbelow the subscription's live_offset waits for room, which stops reading\nthe stream and paces the broker's disk reads to the application. The\npolicy still governs live records, where it protects publishers from a\nslow reader.\n\n* docs: replayed history is never dropped; the overflow policy covers live records",
+          "timestamp": "2026-09-24T12:53:19-07:00",
+          "tree_id": "e279cc19443093eeacd20a7a3a71c6ca80ebd4c9",
+          "url": "https://github.com/gabloe/felix/commit/5b57f770a5a7b2888e43691ddd9cee0b72b2dafa"
+        },
+        "date": 1790279932110,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 377859.52,
+            "range": "14494.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 377859.52\nmean: 383386.79\nstdev: 14494.56\ncv: 3.78%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 377859.52,
+            "range": "14494.56",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 377859.52\nmean: 383386.79\nstdev: 14494.56\ncv: 3.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93742.18,
+            "range": "994.92",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93742.18\nmean: 93893.48\nstdev: 994.92\ncv: 1.06%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 937421.81,
+            "range": "9949.17",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 937421.81\nmean: 938934.77\nstdev: 9949.17\ncv: 1.06%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
