@@ -333,6 +333,26 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **The move limits hold across control-plane instances.** Each placement
+  write was conditional only on its own shard's generation, so two
+  Postgres-backed instances, or a pass and an operator's request on another
+  instance, could each read the last free slot and start moves on two
+  different shards. One instance now runs the timed placement passes, the
+  holder of a lease in the store that lasts three reconcile intervals, is
+  renewed every pass and is released on shutdown; under Raft the leader
+  holds it. Every placement write, operator steps included, is also fenced
+  by a placement token read before the pass or request decided: a write
+  lands only if no other placement write landed since, and a new holder
+  advances the token, so an instance that paused past its lease writes
+  nothing after a takeover. Passes woken by a report still run where the
+  report arrived. Postgres gains migration `0016_placement_lease.sql`; the
+  Raft log gains `put_shard_assignment_fenced` and `take_placement_lease`
+  commands, which a follower running an older build refuses, so upgrade
+  every member before the leader. `ControlPlaneStore::put_shard_assignment_if`
+  takes the token. Metrics: `felix_placement_lease_held`,
+  `felix_placement_lease_takeovers_total`,
+  `felix_placement_writes_fenced_total`.
+
 - **One refused publish failed later publishes on the same connection.** A
   publish the broker refused (an unknown stream, a forbidden one, overload)
   stopped the client's publish worker that sent it, and every later publish

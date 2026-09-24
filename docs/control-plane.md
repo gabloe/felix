@@ -389,21 +389,50 @@ Two deliberate omissions:
 Reconciliation is idempotent: a pass over a settled cluster writes nothing, so
 running it on a timer does not churn rows or flood the changefeed.
 
-Every control-plane instance runs it over Postgres or the in-memory store;
-under Raft only the leader does, and a deposed leader can still be mid-pass.
-Each instance plans from its own read, so a pass can decide from a state
-another instance has already moved on from. Every write a pass makes — a
-placement, a promotion, each move step — is therefore **conditional on the
-generation it planned from** (`put_shard_assignment_if`; no assignment at all
-for a shard being placed for the first time). The store compares under the
-same lock or log entry as the write. Without that, a fence planned before
-another instance's cut-over could land after it and hand the shard back to
-the old leader, whose log is missing whatever the new one acknowledged, and
-two instances could promote different followers after one failure. A write
-that finds a newer generation writes nothing, is counted in
-`felix_shard_assignment_write_conflicts_total`, and the next pass re-plans
-from a fresh read. An occasional conflict is expected with several instances;
-a steady rate means instances keep planning from reads that are already old. A shard with
+**One instance runs the timed passes: the holder of the placement lease.**
+The lease is one record in the store naming a holder and an expiry. Every
+instance tries to take it on each tick, and the holder renews it every pass;
+it lasts three reconcile intervals (15 s by default), judged by the store's
+clock (Postgres's `clock_timestamp()`), so instances never compare their own.
+An instance that stops gives it up on the way out and another takes it on its
+next tick. One that dies holds it until it expires, and meanwhile no timed
+pass runs: moves already started carry on, since brokers act on assignments,
+but nothing new is started, stepped on the timer or failed over until the
+lease moves. Under Raft the lease is leadership: only the confirmed leader
+places, and it takes the lease the moment it is confirmed rather than
+waiting for the old leader's to expire. The in-memory store is one instance
+and trivially holds it.
+
+A pass also runs wherever it is woken: a replica report a move waits on, or
+an operator's request, runs one on the instance that received it, so a
+switch-over does not wait for the holder's tick. And a deposed Raft leader,
+or an instance that paused past its lease, can still be mid-pass. So the
+lease decides who plans on the timer; it is not what keeps writes safe. Two
+checks do that, both compared under the same lock or log entry as the write:
+
+- **Every placement write is conditional on the generation it planned
+  from** (`put_shard_assignment_if`; no assignment at all for a shard being
+  placed for the first time). Without it, a fence planned before another
+  instance's cut-over could land after it and hand the shard back to the old
+  leader, whose log is missing whatever the new one acknowledged, and two
+  instances could promote different followers after one failure. A write
+  that finds a newer generation writes nothing, is counted in
+  `felix_shard_assignment_write_conflicts_total`, and the next pass re-plans
+  from a fresh read.
+- **Every placement write is fenced by the placement token.** The token is a
+  counter beside the lease. A pass reads it before anything else, and each of
+  its writes lands only if the token is still where the pass left it; landing
+  advances it by one, and so does a change of lease holder. The generation
+  guards one shard, but the move limits are about all of them: two passes,
+  or a pass and an operator's request, that each read one free slot would
+  otherwise start moves on two different shards. A fenced write writes
+  nothing and ends its pass, which is counted in
+  `felix_placement_writes_fenced_total`; the next pass re-plans. An
+  instance that paused past its lease finds its next write fenced by the
+  takeover, before it has written anything.
+
+An occasional conflict or fenced pass is expected with several instances; a
+steady rate means instances keep planning from reads that are already old. A shard with
 no eligible leader is left unplaced and logged with the reason — an empty
 cluster and a full one are reported differently, because they need different
 fixes.
@@ -504,9 +533,11 @@ to the broker's leaderships before its follower copies: clients feel a
 leader, and a broker stopping for a restart waits only until it leads
 nothing.
 
-The limits are enforced by one planner. Each write is conditional on its own
-shard's generation, not on the count, so with several Postgres instances
-running placement at the same instant each may start a move.
+The limits hold across instances. A move is started from a read that saw a
+free slot, and the write lands only if no other placement write landed
+since that read (the placement token above), so of two instances that each
+saw the last slot free, one starts a move and the other re-plans. An
+operator's start goes through the same check.
 
 A move or replacement that has not reached its fence within
 `shard_move_timeout_ms` of starting is **abandoned** (`timed_out`): the
@@ -539,6 +570,9 @@ after the fence.
 | `felix_shard_moves_timed_out_total` | moves and follower replacements abandoned at the move timeout; a steady count means a copy that cannot finish |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass — a destination not catching up, a leader not reporting drained, or a move limit holding a drain back |
 | `felix_shard_assignment_write_conflicts_total` | placements and move steps not written because another instance changed the shard after this pass read it; the next pass re-plans |
+| `felix_placement_writes_fenced_total` | passes and operator requests that stopped because another placement write landed after they read the store; the pass re-plans, the request is decided again |
+| `felix_placement_lease_held` | 1 on the instance holding the placement lease; summed across instances it is 1, or 0 while a lease that was not released runs out |
+| `felix_placement_lease_takeovers_total` | times this instance took the placement lease |
 | `felix_shard_move_duration_seconds` | histogram: from a move's first step (the stage, or the fence when the destination was already caught up) to its cut-over |
 | `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over — the window in which the shard is not served |
 
@@ -546,10 +580,11 @@ The two histograms are **per-instance observations**, timed from the steps
 the instance itself wrote; the start an assignment carries is for the move
 timeout, not for these. A move is observed
 only by the instance that wrote both its fence and its cut-over, and its full
-duration only if that instance staged it too. With a single placement writer
-(one instance, or the Raft leader) that is every move; with several instances
-over Postgres, a move whose steps were written by different instances is
-missing from some or all of them.
+duration only if that instance staged it too. With one instance, or under
+Raft, that is every move; with several instances over Postgres, most steps
+are written by the lease holder, but a step written by a pass that a report
+woke elsewhere, or across a change of holder, leaves that move missing from
+some or all of them.
 
 The destination broker times the same move from its side, and that is the
 number to watch for client impact: `felix_broker_shard_switchover_seconds`
@@ -614,8 +649,10 @@ through the fence and the cut-over, and a timeout abandons it the same way.
 - *After the cut-over* there is nothing to cancel (409 `not_moving`). Move
   the shard back instead.
 
-Every operator step is written only at the generation it was decided from,
-and decided again from a fresh read if the shard changed first. A cancel
+Every operator step is written only at the generation and placement token it
+was decided from, on whichever instance the request reached, and decided
+again from a fresh read if either moved first. So a start is held to the
+same limits as placement's own moves across instances. A cancel
 that races a cut-over therefore finds nothing to cancel, rather than handing
 the shard back to a leader missing writes the new one acknowledged
 (`FelixShardCancelStalePlanner.cfg` in `docs/formal/` is that race without
@@ -854,6 +891,9 @@ Control plane:
 | `felix_shard_moves_timed_out_total` | moves and follower replacements abandoned at the move timeout |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_assignment_write_conflicts_total` | placement writes skipped because the shard changed after the pass read it |
+| `felix_placement_writes_fenced_total` | passes and operator requests stopped because another placement write landed after they read the store |
+| `felix_placement_lease_held` | 1 while this instance holds the placement lease and runs the timed passes |
+| `felix_placement_lease_takeovers_total` | times this instance took the placement lease |
 | `felix_shard_move_duration_seconds` | histogram: stage (or fence) to cut-over, as this instance observed it |
 | `felix_shard_move_fence_seconds` | histogram: fence to cut-over, as this instance observed it |
 | `felix_shard_reconcile_failures_total` | passes that could not read the catalog at all |
