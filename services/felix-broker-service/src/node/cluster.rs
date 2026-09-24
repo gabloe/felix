@@ -1,11 +1,12 @@
 //! A cluster member's shard ownership, its peer transport, and the tasks that
 //! keep ownership and replication in step with the control plane.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use felix_broker::{Broker, DurableStorage};
 use felix_router::ShardRouter;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 

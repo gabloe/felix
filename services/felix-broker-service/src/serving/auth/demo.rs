@@ -5,6 +5,10 @@
 //! by the `demos/broker` binaries, `demos/slow-consumer` and
 //! `demos/state-divergence`.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -13,9 +17,6 @@ use felix_authz::{
     FelixTokenIssuer, Jwk, Jwks, KeyUse, TenantId, TenantKeyCache, TenantKeyMaterial,
 };
 use jsonwebtoken::Algorithm;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
 use crate::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 

@@ -3,15 +3,17 @@
 //! is ever sent back on it. Anything other than auth or a publish is a
 //! protocol violation and closes the stream.
 
+use std::sync::Arc;
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
+
 use anyhow::{Context, Result};
 use bytes::BytesMut;
 use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Message;
-use std::sync::Arc;
-#[cfg(feature = "telemetry")]
-use std::sync::atomic::Ordering;
 
+use super::frame_source::FrameSource;
 use crate::config::BrokerConfig;
 use crate::serving::auth::{AuthContext, BrokerAuth};
 use crate::serving::quic::handlers::publish::{
@@ -19,8 +21,6 @@ use crate::serving::quic::handlers::publish::{
     handle_publish_batch_message_uni, handle_publish_message_uni,
 };
 use crate::serving::quic::telemetry::t_counter;
-
-use super::frame_source::FrameSource;
 
 pub(super) struct UniLoopArgs {
     pub config: BrokerConfig,

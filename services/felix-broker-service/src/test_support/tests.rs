@@ -1,6 +1,7 @@
-use super::*;
 use axum::http::StatusCode;
 use serial_test::serial;
+
+use super::*;
 
 #[tokio::test]
 #[serial]

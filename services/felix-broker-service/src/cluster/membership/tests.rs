@@ -1,11 +1,13 @@
 //! Membership client behaviour against a stub control plane.
-use super::*;
-use crate::test_support::{build_test_client, spawn_axum_with_shutdown, wait_for_listen};
+use std::sync::Mutex;
+
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::routing::post;
 use serde_json::json;
-use std::sync::Mutex;
+
+use super::*;
+use crate::test_support::{build_test_client, spawn_axum_with_shutdown, wait_for_listen};
 
 /// Records what the broker sent, so a test can assert on the calls rather than
 /// on the client's own bookkeeping.

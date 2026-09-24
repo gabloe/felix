@@ -1,5 +1,6 @@
-use super::*;
 use serial_test::serial;
+
+use super::*;
 
 /// The environment is process-global, so these tests take a lock and clean
 /// up after themselves rather than running in parallel against each other.

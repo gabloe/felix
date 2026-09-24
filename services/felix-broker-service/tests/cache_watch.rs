@@ -5,6 +5,10 @@
 //! shard's write order, with the log offsets that make resume and duplicate
 //! detection real. The headline is `a_resumed_watch_is_gapless_under_
 //! concurrent_writes` — the register-before-read join under real concurrency.
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -20,9 +24,6 @@ use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
 const DEMO_PRIVATE_KEY: [u8; 32] = [42u8; 32];
 const CACHE: &str = "sessions";

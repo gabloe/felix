@@ -4,10 +4,11 @@
 //! can take time and can fail, and both are better surfaced as a startup
 //! error than as a failed publish once traffic is arriving.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use felix_broker::{Broker, DurableStorage};
 use felix_storage::EphemeralCache;
-use std::time::Duration;
 
 use crate::config::{BrokerConfig, DurableStorageConfig};
 

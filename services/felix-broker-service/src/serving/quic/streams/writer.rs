@@ -20,23 +20,23 @@
 //! cancellation/backpressure behavior, while logic stays straightforward.
 
 // Writer loop owns the SendStream and serializes all outbound responses.
-use felix_wire::Message;
-use quinn::SendStream;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
-use tokio::sync::{mpsc, watch};
 
-use crate::observability::timings;
-use crate::serving::quic::GLOBAL_ACK_DEPTH;
-use crate::serving::quic::handlers::publish::{Outgoing, decrement_depth};
-use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
+use felix_wire::Message;
+use quinn::SendStream;
+use tokio::sync::{mpsc, watch};
 
 use super::hooks::{
     encode_cache_message_with_hook, should_reset_throttle, write_frame_with_hook,
     write_message_with_hook,
 };
+use crate::observability::timings;
+use crate::serving::quic::GLOBAL_ACK_DEPTH;
+use crate::serving::quic::handlers::publish::{Outgoing, decrement_depth};
+use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
 // Longest error text carried in a binary publish ack. Well under the u16 wire
 // limit, and long enough for the broker's own messages ("forbidden",

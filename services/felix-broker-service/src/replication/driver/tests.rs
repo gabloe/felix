@@ -17,6 +17,9 @@ use std::sync::Mutex;
 
 use bytes::Bytes;
 use felix_broker::{Broker, DurableStorage};
+use felix_common::membership::{
+    ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
+};
 use felix_router::{NodeRef, RegionRouter, RoutingTable};
 use felix_storage::EphemeralCache;
 use felix_storage::log::{FsyncMode, LogConfig};
@@ -27,9 +30,6 @@ use super::shard::*;
 use super::*;
 use crate::peer::PeerError;
 use crate::replication::reporter::ReportTo;
-use felix_common::membership::{
-    ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
-};
 
 const TENANT: &str = "t1";
 const NAMESPACE: &str = "ns";

@@ -1,10 +1,12 @@
 //! The gate on the publish path itself, not just the decision behind it.
 
+use std::collections::HashMap;
+
+use felix_router::{RegionRouter, ShardRouter};
+
 use super::*;
 use crate::shards::routing::{IngressRouter, routing_table_from};
 use crate::shards::{ShardKey as WatchKey, watch::ShardAssignment};
-use felix_router::{RegionRouter, ShardRouter};
-use std::collections::HashMap;
 
 /// A broker with the stream registered, so only the ownership gate can
 /// refuse anything below.

@@ -1,5 +1,10 @@
 //! Auth and transport fixtures, and an in-process broker to run load against.
 
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -17,10 +22,6 @@ use jsonwebtoken::Algorithm;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 

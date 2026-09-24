@@ -1,9 +1,10 @@
 //! One sync pass: seed from snapshots on a cold start, then follow the change
 //! feeds.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use felix_broker::{Broker, BrokerError, CacheMetadata, StreamMetadata};
-use std::sync::Arc;
 
 use super::SyncState;
 use super::apply::{

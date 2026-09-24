@@ -12,6 +12,9 @@
 //! the credential has to be a thing that can *change* while requests are using
 //! it. Hence [`NodeCredential`]: one holder every caller reads through, swapped
 //! atomically.
+pub mod refresh;
+pub mod rotate;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -137,9 +140,6 @@ pub fn report_expiry(credential: &NodeCredential) {
         None => crate::cluster::membership::metrics::record_credential_expiry_unknown(),
     }
 }
-
-pub mod refresh;
-pub mod rotate;
 
 #[cfg(test)]
 mod tests;

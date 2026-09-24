@@ -14,6 +14,9 @@
 
 pub mod demo;
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -23,8 +26,6 @@ use felix_authz::{
     TenantKeyStore, TenantVerificationKey,
 };
 use jsonwebtoken::Algorithm;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 /// Verifies Felix tokens against control-plane JWKS. Cloning shares the
 /// verifier and key store.

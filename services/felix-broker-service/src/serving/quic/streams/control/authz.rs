@@ -7,12 +7,11 @@ use felix_authz::{
 };
 use felix_wire::Message;
 
+use super::responder::{Responder, send_control_error};
 use crate::serving::auth::AuthContext;
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
-
-use super::responder::{Responder, send_control_error};
 
 pub(super) async fn authorize_stream(
     auth_ctx: Option<&AuthContext>,

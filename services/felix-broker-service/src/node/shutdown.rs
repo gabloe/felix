@@ -5,12 +5,13 @@
 //! finish, peers and background tasks stop, durable logs are flushed, and the
 //! metrics server goes last so an operator can watch the whole thing.
 
-use anyhow::Result;
-use felix_broker::DurableStorage;
-use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::Result;
+use felix_broker::DurableStorage;
+use felix_common::lifecycle::{self, DrainBudget, Readiness};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;

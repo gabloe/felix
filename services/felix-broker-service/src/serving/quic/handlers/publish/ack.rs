@@ -1,11 +1,12 @@
-// Ack protocol: outgoing envelopes, waiter messages, the timeout window, and the
-// helpers that push acks onto the writer with the right backpressure policy.
+//! Ack protocol: outgoing envelopes, waiter messages, the timeout window, and the
+//! helpers that push acks onto the writer with the right backpressure policy.
 
-use anyhow::{Result, anyhow};
-use felix_wire::Message;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+
+use anyhow::{Result, anyhow};
+use felix_wire::Message;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 use crate::serving::quic::errors::AckEnqueueError;

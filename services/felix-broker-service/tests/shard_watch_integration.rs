@@ -3,6 +3,10 @@
 //! The property under test is the one that cannot be checked in isolation: a
 //! broker starting from nothing converges on the current assignments, and no
 //! committed change is lost in the seam between the snapshot and the first poll.
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use felix_broker_service::shards::watch::{self as shard_watch, ShardOwnership};
 use felix_broker_service::shards::{ShardKey as WatchedShardKey, ShardKind as WatchedShardKind};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
@@ -20,9 +24,6 @@ use felix_controlplane_service::store::{
     AuthStore, ControlPlaneAuthStore, ControlPlaneStore, StoreConfig,
 };
 use reqwest::{Client, redirect::Policy};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 

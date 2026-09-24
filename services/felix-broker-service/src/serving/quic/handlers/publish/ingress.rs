@@ -1,8 +1,5 @@
-// Ingress: worker sharding, the bounded enqueue path, and in-flight depth accounting.
+//! Ingress: worker sharding, the bounded enqueue path, and in-flight depth accounting.
 
-use anyhow::{Result, anyhow};
-use bytes::Bytes;
-use felix_broker::StreamHandle;
 use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -10,6 +7,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "perf_debug")]
 use std::time::Instant;
+
+use anyhow::{Result, anyhow};
+use bytes::Bytes;
+use felix_broker::StreamHandle;
 use tokio::sync::{mpsc, watch};
 
 use crate::serving::quic::GLOBAL_INGRESS_DEPTH;

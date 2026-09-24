@@ -2,6 +2,7 @@
 //! keeping the node credential current.
 
 use std::sync::Arc;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::cluster::credential::{self, NodeCredential};

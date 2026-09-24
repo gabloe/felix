@@ -1,12 +1,13 @@
-// Publish handlers for uni-directional streams (fire-and-forget, no acks).
+//! Publish handlers for uni-directional streams (fire-and-forget, no acks).
+
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Frame;
-#[cfg(feature = "telemetry")]
-use std::sync::atomic::Ordering;
 
 use crate::serving::auth::AuthContext;
 use crate::serving::quic::handlers::publish::ingress::enqueue_publish;

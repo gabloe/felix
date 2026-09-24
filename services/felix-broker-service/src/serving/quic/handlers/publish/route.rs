@@ -1,18 +1,18 @@
 //! Where a publish goes: served here, forwarded to the shard's owner, or
 //! refused.
 
-use felix_broker::{Broker, StreamHandle};
 use std::time::Instant;
 
+use felix_broker::{Broker, StreamHandle};
+
+use super::PublishContext;
+use super::ingress::PublishTarget;
+use super::stream_cache::{StreamHandleCache, push_stream_cache_key};
 use crate::serving::forward::ForwardTarget;
 use crate::serving::quic::STREAM_CACHE_TTL;
 use crate::serving::quic::telemetry::t_counter;
 use crate::shards::routing::{Dispatch, IngressRouter, dispatch};
 use crate::shards::{ShardKey, ShardKind};
-
-use super::PublishContext;
-use super::ingress::PublishTarget;
-use super::stream_cache::{StreamHandleCache, push_stream_cache_key};
 
 /// Resolve a stream, or say where else the publish belongs.
 ///

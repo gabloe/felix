@@ -1,11 +1,12 @@
-// Writer-lane data model: lane/connection commands, the lane manager, and its routing.
+//! Writer-lane data model: lane/connection commands, the lane manager, and its routing.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
-use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::observability::timings;

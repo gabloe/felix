@@ -13,6 +13,19 @@ mod routing;
 mod stream_cache;
 mod uni;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use felix_authz::PermissionMatcher;
+use felix_broker::Broker;
+use felix_storage::EphemeralCache;
+use felix_wire::{Frame, Message};
+use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{mpsc, watch};
+
 use super::ingress::{enqueue_publish, publish_worker_index};
 use super::route::{PublishRoute, publish_target, resolve_route};
 use super::stream_cache::{push_decimal, push_stream_cache_key};
@@ -23,17 +36,6 @@ use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::{
     ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
 };
-use bytes::Bytes;
-use felix_authz::PermissionMatcher;
-use felix_broker::Broker;
-use felix_storage::EphemeralCache;
-use felix_wire::{Frame, Message};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Semaphore};
-use tokio::sync::{mpsc, watch};
 
 // These publish-path tests don't exercise subscription delivery; this just gives
 // `PublishContext::lane_manager` a real (if unused) instance to satisfy the type.

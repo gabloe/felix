@@ -1,12 +1,14 @@
 //! Which broker a cache key resolves to, and what happens when it is not this one.
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use felix_router::{NodeRef, RegionRouter, ShardRouter};
+
 use super::*;
 use crate::shards::lifecycle::ShardLifecycle;
 use crate::shards::routing::routing_table_from;
 use crate::shards::watch::ShardAssignment;
-use felix_router::{NodeRef, RegionRouter, ShardRouter};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
 
 const TENANT: &str = "t1";
 const NAMESPACE: &str = "ns";

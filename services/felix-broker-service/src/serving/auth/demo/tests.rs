@@ -1,5 +1,6 @@
-use super::*;
 use felix_authz::Action;
+
+use super::*;
 
 #[test]
 fn build_jwks_includes_kid_and_key() {

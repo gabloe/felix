@@ -3,12 +3,11 @@
 use anyhow::Result;
 use felix_wire::Message;
 
+use super::responder::send_control_error;
+use super::{Ctx, Session, Step};
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
-
-use super::responder::send_control_error;
-use super::{Ctx, Session, Step};
 
 pub(super) async fn topology(cx: &Ctx<'_>, session: &mut Session) -> Result<Step> {
     let Ctx {

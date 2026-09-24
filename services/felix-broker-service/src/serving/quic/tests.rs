@@ -1,5 +1,6 @@
-use super::*;
 use std::net::SocketAddr;
+
+use super::*;
 
 #[test]
 fn cache_transport_config_overrides_windows() {

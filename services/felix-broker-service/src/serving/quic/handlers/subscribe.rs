@@ -22,17 +22,9 @@
 //! contention at high fanout. Lane assignment is deterministic so per-subscriber
 //! ordering holds. Batches coalesce until whichever comes first: `max_events`,
 //! `max_bytes`, or `flush_delay`.
-
-// Submodules:
-// - `config`: event-writer tunables.
-// - `lane`: writer-lane data model, manager, and routing.
-// - `writer`: frame-writing primitives and the writer task loops.
-// - `feeder`: broker subscription queue -> writer lane.
-// - `conn_counts`: per-connection active-subscriber gauge bookkeeping.
-// - `event_writer`: legacy direct-to-stream writer, test-only.
-//
-// `WriterLaneManager` and `handle_subscribe_message` are the only names this
-// module exposes to the rest of the transport.
+//!
+//! `WriterLaneManager` and `handle_subscribe_message` are the only names this
+//! module exposes to the rest of the transport.
 
 mod config;
 mod conn_counts;
@@ -43,37 +35,22 @@ mod lane;
 mod replay;
 mod writer;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use lane::{LaneCommand, WriterLaneManager};
 
-// Re-exported so the test module (and its `use super::*`) sees the internals it
-// exercises directly.
-use config::EventWriterConfig;
-#[cfg(test)]
-use conn_counts::{
-    ACTIVE_SUB_CONN_COUNTS, connection_subscriber_register, connection_subscriber_unregister,
-};
-#[cfg(test)]
-use event_writer::run_event_writer;
-use feeder::run_lane_feeder;
-#[cfg(test)]
-use lane::ConnectionCommand;
-#[cfg(test)]
-use writer::{run_connection_writer, write_parts_many, write_parts_to};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use felix_broker::Broker;
 use felix_wire::{Message, StartPosition};
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::publish::{Outgoing, SubscriptionLimiter, send_outgoing_critical};
 use crate::serving::quic::SUBSCRIPTION_ID;
 use crate::serving::quic::codec::write_message;
 use crate::serving::quic::telemetry::t_counter;
+use config::EventWriterConfig;
+use feeder::run_lane_feeder;
 use replay::write_replay;
 
 /// Turn a broker error into the most specific protocol message available.
@@ -499,3 +476,6 @@ pub(crate) async fn handle_subscribe_message(
     }
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests;

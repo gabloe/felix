@@ -1,9 +1,10 @@
 //! Replaying stored history to a resumed subscription, and the handover from
 //! history to live delivery.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use felix_broker::Broker;
-use std::sync::Arc;
 
 /// Where replayed events are written.
 ///

@@ -9,6 +9,9 @@
 //! - `TaskTracker::wait` resolves once tracked connections finish.
 //!
 //! Run with `cargo test -p felix-broker-service --test graceful_shutdown`.
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use felix_broker::Broker;
 use felix_broker_service::serving::auth::BrokerAuth;
@@ -20,8 +23,6 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;

@@ -1,9 +1,10 @@
 //! Answering on the control stream.
 
-use anyhow::Result;
-use felix_wire::Message;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
+
+use anyhow::Result;
+use felix_wire::Message;
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::serving::quic::handlers::publish::{

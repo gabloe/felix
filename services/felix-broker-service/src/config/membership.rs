@@ -1,8 +1,9 @@
 //! The cluster identity a broker claims, read from `FELIX_NODE_*`.
 
-use serde::Serialize;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+
+use serde::Serialize;
 
 /// Identity this broker claims in the cluster.
 ///

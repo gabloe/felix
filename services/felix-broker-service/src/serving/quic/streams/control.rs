@@ -42,17 +42,19 @@ mod responder;
 mod session;
 mod subscribe;
 
-use anyhow::{Context, Result};
-use bytes::BytesMut;
-use felix_broker::Broker;
-use felix_wire::Message;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use bytes::BytesMut;
+use felix_broker::Broker;
+use felix_wire::Message;
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
+use super::frame_source::FrameSource;
 use crate::config::BrokerConfig;
 use crate::observability::timings;
 use crate::serving::auth::{AuthContext, BrokerAuth};
@@ -62,8 +64,6 @@ use crate::serving::quic::handlers::publish::{
     handle_binary_publish_batch_control, send_outgoing_critical,
 };
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
-
-use super::frame_source::FrameSource;
 use responder::{Responder, send_control_error};
 
 /// Main control loop: read frames, decode messages, and dispatch to handlers.

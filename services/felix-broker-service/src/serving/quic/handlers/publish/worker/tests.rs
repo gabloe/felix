@@ -1,8 +1,9 @@
-use super::*;
 use anyhow::Result;
 use bytes::Bytes;
 use felix_storage::EphemeralCache;
 use tokio::sync::oneshot;
+
+use super::*;
 
 #[tokio::test]
 async fn build_publish_context_clamps_worker_and_queue_minimums() -> Result<()> {

@@ -68,9 +68,14 @@ mod telemetry;
 
 pub mod handlers;
 
-use felix_transport::TransportConfig;
+pub use codec::{read_frame_limited_into, read_message_limited, write_message};
+pub use conn::{ClusterContext, serve, serve_with_shutdown};
+pub use telemetry::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
+
 use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::time::Duration;
+
+use felix_transport::TransportConfig;
 
 use crate::config::BrokerConfig;
 
@@ -89,10 +94,6 @@ pub(crate) static GLOBAL_ACK_DEPTH: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DECODE_ERROR_LOGS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "telemetry")]
 pub(crate) const DECODE_ERROR_LOG_LIMIT: usize = 20;
-
-pub use codec::{read_frame_limited_into, read_message_limited, write_message};
-pub use conn::{ClusterContext, serve, serve_with_shutdown};
-pub use telemetry::{FrameCountersSnapshot, frame_counters_snapshot, reset_frame_counters};
 
 /// The QUIC transport settings for client listeners: `base` with the cache
 /// flow-control windows from `config` applied.

@@ -9,6 +9,15 @@
 //! no router to consult and no assignments to honour, so dispatch is `Local` by
 //! construction. Clustering is opt-in, and a broker that never joined one must
 //! behave exactly as it did before this existed.
+
+/// Map a request to a shard number.
+///
+/// Re-exported from `felix_wire::routing` rather than defined here: a client
+/// that routes its publishes to the shard's owner has to reach the same answer
+/// this broker does, and two copies of a hash are two things that can drift.
+/// The wire crate is where both sides already meet.
+pub use felix_wire::routing::shard_for;
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -70,14 +79,6 @@ impl std::fmt::Display for Reason {
         }
     }
 }
-
-/// Map a request to a shard number.
-///
-/// Re-exported from `felix_wire::routing` rather than defined here: a client
-/// that routes its publishes to the shard's owner has to reach the same answer
-/// this broker does, and two copies of a hash are two things that can drift.
-/// The wire crate is where both sides already meet.
-pub use felix_wire::routing::shard_for;
 
 /// Shards this broker has opened, and the generation each was opened at.
 ///

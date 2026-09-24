@@ -19,6 +19,7 @@
 //! initialized from the first config that requests it (matching the existing
 //! global writer-lane-manager pattern).
 use std::sync::{Arc, OnceLock};
+
 use tokio::sync::oneshot;
 
 /// A fixed set of single-threaded runtimes, one per shard.

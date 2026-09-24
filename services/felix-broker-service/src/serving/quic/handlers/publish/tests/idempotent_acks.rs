@@ -1,8 +1,9 @@
 //! A refusal of an idempotent publish carries its reason; every other
 //! encoding, and every other error, is the prose it always was.
 
-use super::*;
 use felix_wire::PublishRefusalReason;
+
+use super::*;
 
 #[test]
 fn a_typed_refusal_is_answered_as_publish_refused() {

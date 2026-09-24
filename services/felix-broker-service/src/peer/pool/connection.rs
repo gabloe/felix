@@ -14,11 +14,10 @@ use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::peer::codec::{Incoming, read_frame};
-use crate::peer::metrics;
-
 use super::PeerError;
 use super::state::Pooled;
+use crate::peer::codec::{Incoming, read_frame};
+use crate::peer::metrics;
 
 /// One established connection to a peer, with its multiplexed streams.
 pub(super) struct PeerConnection {

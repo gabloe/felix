@@ -1,9 +1,10 @@
 //! The catalog sync task, and the readiness flip that waits on its first pass.
 
-use felix_broker::Broker;
-use felix_common::lifecycle::Readiness;
 use std::sync::Arc;
 use std::time::Duration;
+
+use felix_broker::Broker;
+use felix_common::lifecycle::Readiness;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;

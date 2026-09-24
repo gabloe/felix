@@ -63,19 +63,19 @@ pub(crate) use uni::{
 };
 pub(crate) use worker::build_publish_context;
 
-use anyhow::Result;
-use bytes::Bytes;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
+
+use anyhow::Result;
+use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 
+use super::subscribe::WriterLaneManager;
 use crate::shards::routing::IngressRouter;
 use ack::EnqueuePolicy;
 use admission::AdmissionPermit;
 use route::Authority;
-
-use super::subscribe::WriterLaneManager;
 
 /// Shared publish-ingress configuration and worker queue handles.
 ///

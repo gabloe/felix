@@ -50,7 +50,6 @@ use tokio_util::sync::CancellationToken;
 use super::config::PeerTransportConfig;
 use super::metrics;
 use super::tls;
-
 use connection::PeerConnection;
 use state::Peer;
 

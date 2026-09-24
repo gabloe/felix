@@ -1,8 +1,9 @@
 //! Applying catalog entries to the broker's registries.
 
+use std::sync::Arc;
+
 use anyhow::{Result, anyhow};
 use felix_broker::{Broker, BrokerError, CacheMetadata, ConsistencyLevel, StreamMetadata};
-use std::sync::Arc;
 
 pub(super) async fn apply_namespace_create(
     broker: &Arc<Broker>,

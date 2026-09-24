@@ -4,6 +4,8 @@
 //! who inverted one — which is exactly the case that produced behaviour
 //! nobody configured and no error to explain it.
 
+use base64::Engine;
+
 use super::*;
 
 #[test]
@@ -106,11 +108,6 @@ fn a_stream_window_above_the_connection_window_is_refused() {
     assert!(config.validate().is_err());
 }
 
-/// Equal is fine everywhere. The limits bound each other; they do not
-/// have to differ, and refusing equality would fail a configuration
-/// that behaves exactly as written.
-use base64::Engine;
-
 fn expiring_token(exp: i64) -> String {
     let encode = |value: &serde_json::Value| {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
@@ -199,6 +196,9 @@ fn a_broker_not_joining_a_cluster_is_left_alone() {
     config.validate().expect("no cluster to fall out of");
 }
 
+/// Equal is fine everywhere. The limits bound each other; they do not
+/// have to differ, and refusing equality would fail a configuration
+/// that behaves exactly as written.
 #[test]
 fn equal_limits_are_allowed() {
     let config = BrokerConfig {

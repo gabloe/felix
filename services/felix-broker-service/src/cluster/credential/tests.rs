@@ -1,6 +1,7 @@
 //! Reading a token's own claims, and deciding when to act on them.
-use super::*;
 use base64::Engine;
+
+use super::*;
 
 fn jwt(payload: serde_json::Value) -> String {
     let encode = |value: &serde_json::Value| {

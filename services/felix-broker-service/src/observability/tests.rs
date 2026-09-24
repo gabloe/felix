@@ -1,13 +1,14 @@
-// Tests for resource_attributes and environment variable handling.
-// init_observability and serve_metrics tests removed per request.
+//! Tests for resource_attributes and environment variable handling.
+
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use serial_test::serial;
 
 use super::*;
 use crate::test_support::{
     build_test_client, get_with_context, spawn_axum_with_shutdown, wait_for_listen,
 };
-use serial_test::serial;
-use std::net::SocketAddr;
-use std::time::Duration;
 
 struct EnvGuard {
     key: &'static str,

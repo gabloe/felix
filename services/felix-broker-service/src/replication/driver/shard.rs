@@ -6,7 +6,6 @@ use std::sync::Arc;
 use felix_broker::Broker;
 use felix_router::{Route, ShardKey};
 use felix_wire::internal::ShardRef;
-
 use futures::StreamExt;
 
 use crate::peer::PeerRequester;

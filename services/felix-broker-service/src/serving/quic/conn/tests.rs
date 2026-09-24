@@ -1,10 +1,11 @@
-use super::*;
 use anyhow::{Context, Result};
 use felix_storage::EphemeralCache;
 use felix_transport::TransportConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::PrivatePkcs8KeyDer;
+
+use super::*;
 
 #[tokio::test]
 async fn handle_connection_returns_ok_on_closed_connection() -> Result<()> {

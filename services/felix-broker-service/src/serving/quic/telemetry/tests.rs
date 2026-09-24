@@ -1,7 +1,8 @@
-use super::*;
 use anyhow::anyhow;
 use bytes::Bytes;
 use felix_wire::Frame;
+
+use super::*;
 
 #[test]
 fn helpers_return_noop_defaults_when_telemetry_disabled() {

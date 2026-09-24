@@ -1,16 +1,16 @@
 //! Consumer-group requests on the control stream.
 
+use std::time::Duration;
+
 use anyhow::Result;
 use felix_authz::Action;
 use felix_wire::Message;
-use std::time::Duration;
-
-use crate::serving::quic::handlers::publish::{
-    Outgoing, PublishContext, handle_ack_enqueue_result, send_outgoing_critical,
-};
 
 use super::authz::authorize_stream_simple;
 use super::{Ctx, Session, Step};
+use crate::serving::quic::handlers::publish::{
+    Outgoing, PublishContext, handle_ack_enqueue_result, send_outgoing_critical,
+};
 
 /// A group operation for a shard another broker leads, answered with where to
 /// go instead of refused.

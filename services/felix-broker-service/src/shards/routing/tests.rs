@@ -1,9 +1,11 @@
 //! Ingress dispatch: what a broker does with a request for each ownership state.
+use std::collections::HashMap;
+
+use felix_router::{NodeRef, RegionRouter};
+
 use super::*;
 use crate::shards::lifecycle::ShardLifecycle;
 use crate::shards::watch::ShardAssignment;
-use felix_router::{NodeRef, RegionRouter};
-use std::collections::HashMap;
 
 fn key(shard: u32) -> ShardKey {
     ShardKey {

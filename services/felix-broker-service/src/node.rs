@@ -26,10 +26,11 @@ mod shutdown;
 mod storage;
 mod sync;
 
-use anyhow::{Context, Result};
-use felix_common::lifecycle::Readiness;
 use std::future::Future;
 use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use felix_common::lifecycle::Readiness;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 

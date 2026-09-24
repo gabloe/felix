@@ -19,11 +19,11 @@
 //! toward a newer generation's quorum. Resetting is what enforces that here.
 use std::collections::HashMap;
 
-use super::FollowerCursor;
-
-use crate::shards::ShardKey;
 use parking_lot::Mutex;
 use tokio::sync::watch;
+
+use super::FollowerCursor;
+use crate::shards::ShardKey;
 
 /// The quorum-durable high-water mark for each shard this broker leads.
 #[derive(Debug, Default)]

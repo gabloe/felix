@@ -1,18 +1,18 @@
 //! Subscribing on the control stream.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use felix_authz::Action;
 use felix_wire::StartPosition;
-use std::sync::Arc;
-
-use crate::serving::quic::handlers::publish::{
-    Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
-};
-use crate::serving::quic::handlers::subscribe::handle_subscribe_message;
 
 use super::authz::authorize_stream_simple;
 use super::responder::send_control_error;
 use super::{Ctx, Session, Step};
+use crate::serving::quic::handlers::publish::{
+    Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
+};
+use crate::serving::quic::handlers::subscribe::handle_subscribe_message;
 
 // One parameter per field of the message it answers.
 #[allow(clippy::too_many_arguments)]

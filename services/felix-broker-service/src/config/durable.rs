@@ -1,13 +1,13 @@
-// Environment configuration for the broker's durable storage.
-//
-// Kept out of `config.rs` deliberately: that module owns transport, batching and
-// queue tuning, and durability is a separate concern with its own failure modes.
-// The one thing they share is the `FELIX_*` naming convention.
-//
-// Durability is opt-in. With `FELIX_DURABLE_STORAGE_DIR` unset the broker runs
-// exactly as it did before — in-memory only — and any stream the control plane
-// marks `durable: true` is rejected at registration rather than silently
-// downgraded to a guarantee the broker cannot keep.
+//! Environment configuration for the broker's durable storage.
+//!
+//! A module of its own because the rest of `config` owns transport, batching and
+//! queue tuning, and durability is a separate concern with its own failure modes.
+//! The one thing they share is the `FELIX_*` naming convention.
+//!
+//! Durability is opt-in. With `FELIX_DURABLE_STORAGE_DIR` unset the broker runs
+//! in memory only, and any stream the control plane marks `durable: true` is
+//! rejected at registration rather than silently downgraded to a guarantee the
+//! broker cannot keep.
 
 use std::path::PathBuf;
 use std::time::Duration;

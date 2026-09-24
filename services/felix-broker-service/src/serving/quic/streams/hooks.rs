@@ -1,5 +1,5 @@
-// Test hooks: thin wrappers over the codec functions so tests can force
-// write/encode failures and throttle resets without touching production code.
+//! Test hooks: thin wrappers over the codec functions so tests can force
+//! write/encode failures and throttle resets without touching production code.
 
 use anyhow::{Context, Result};
 use felix_wire::{Frame, Message};

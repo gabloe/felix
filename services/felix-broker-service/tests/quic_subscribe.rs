@@ -17,6 +17,9 @@
 //! - Tests are serialized to avoid port collisions and shared state races.
 //!
 //! Run with `cargo test -p felix-broker-service quic_subscribe`.
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -36,8 +39,6 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
-use std::sync::Arc;
-use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 

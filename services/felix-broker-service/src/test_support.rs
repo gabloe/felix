@@ -3,10 +3,11 @@
 //! - readiness polling instead of sleep
 //! - graceful shutdown so servers don't linger between tests
 
-use anyhow::{Context, Result};
-use reqwest::{Client, Response, redirect::Policy};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use reqwest::{Client, Response, redirect::Policy};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;

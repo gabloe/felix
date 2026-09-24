@@ -4,13 +4,14 @@
 //! certificate. Production deployments should use a real certificate chain and
 //! should not re-generate keys on each start.
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use felix_broker::Broker;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::pki_types::PrivatePkcs8KeyDer;
-use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;

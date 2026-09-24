@@ -1,23 +1,22 @@
 //! The broker's QUIC entrypoint: the accept loop, per-connection setup, and
 //! dispatch of bi/uni streams to the publish/subscribe/cache handlers.
 //! Authentication happens per stream via `BrokerAuth`.
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use felix_broker::Broker;
 use felix_broker::timings as broker_publish_timings;
 use felix_transport::{QuicConnection, QuicServer};
-use std::sync::Arc;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use super::handlers::publish::{PublishContext, build_publish_context};
+use super::streams::{handle_stream, handle_uni_stream};
 use crate::config::BrokerConfig;
 use crate::observability::timings;
 use crate::serving::auth::BrokerAuth;
 use crate::shards::routing::IngressRouter;
-
-use super::handlers::publish::{PublishContext, build_publish_context};
-
-use super::streams::{handle_stream, handle_uni_stream};
 
 /// Serve incoming QUIC connections: accept loop, one task per connection.
 ///

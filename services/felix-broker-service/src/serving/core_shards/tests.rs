@@ -1,6 +1,7 @@
-use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+use super::*;
 
 #[tokio::test]
 async fn same_shard_id_runs_on_same_thread() {

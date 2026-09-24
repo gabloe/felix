@@ -1,11 +1,12 @@
-// Frame-writing primitives and the two writer task loops (per-lane and per-connection).
+//! Frame-writing primitives and the two writer task loops (per-lane and per-connection).
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Weak;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{StreamExt, stream::FuturesUnordered};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Weak;
-use std::time::{Duration, Instant};
 #[cfg(test)]
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;

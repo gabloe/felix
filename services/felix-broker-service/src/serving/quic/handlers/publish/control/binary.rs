@@ -1,14 +1,15 @@
 //! Binary publish batches on the control stream, acked and unacked.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+#[cfg(feature = "telemetry")]
+use std::sync::atomic::Ordering;
+
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Frame;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-#[cfg(feature = "telemetry")]
-use std::sync::atomic::Ordering;
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
 use super::batch::handle_publish_batch_message;

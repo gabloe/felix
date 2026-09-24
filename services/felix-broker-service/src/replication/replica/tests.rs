@@ -3,12 +3,13 @@
 //! These are about *authority* rather than position: whether the sender is
 //! still the leader, and whether this broker is a replica at all. Position is
 //! `felix_broker::replication`'s subject and is tested there.
+use std::collections::HashMap;
+
 use bytes::Bytes;
 use felix_router::{NodeRef, RegionRouter, RoutingTable, ShardRouter};
 use felix_storage::EphemeralCache;
 use felix_storage::log::{FsyncMode, LogConfig};
 use felix_wire::internal::{ShardRef, batch_checksum};
-use std::collections::HashMap;
 use tempfile::TempDir;
 
 use super::*;

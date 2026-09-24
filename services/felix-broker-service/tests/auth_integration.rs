@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -9,9 +13,6 @@ use felix_authz::{
 };
 use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TEST_PRIVATE_KEY: [u8; 32] = [7u8; 32];
 

@@ -1,17 +1,19 @@
-// Telemetry and metrics helpers for the QUIC transport adapter.
-use felix_wire::Frame;
-use std::time::Instant;
+//! Telemetry and metrics helpers for the QUIC transport adapter.
 
-#[cfg(feature = "telemetry")]
-use super::{DECODE_ERROR_LOG_LIMIT, DECODE_ERROR_LOGS};
-#[cfg(feature = "telemetry")]
-use crate::observability::timings;
 #[cfg(feature = "telemetry")]
 use std::sync::Arc;
 #[cfg(feature = "telemetry")]
 use std::sync::OnceLock;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use felix_wire::Frame;
+
+#[cfg(feature = "telemetry")]
+use super::{DECODE_ERROR_LOG_LIMIT, DECODE_ERROR_LOGS};
+#[cfg(feature = "telemetry")]
+use crate::observability::timings;
 
 #[cfg(feature = "telemetry")]
 macro_rules! t_counter {

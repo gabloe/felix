@@ -34,10 +34,11 @@ mod phase;
 mod report;
 mod resources;
 
-use anyhow::{Context, Result, bail};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
 
 use crate::child::{run_restart_cycles, run_serve_child};
 use crate::config::parse_args;

@@ -1,4 +1,4 @@
-// Tunables for the subscription event writer: batching limits and flush pacing.
+//! Tunables for the subscription event writer: batching limits and flush pacing.
 
 use std::time::Duration;
 

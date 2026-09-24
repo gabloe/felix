@@ -1,6 +1,9 @@
 //! What batching must not change, and the one thing it does.
-use super::*;
 use std::sync::Arc;
+
+use parking_lot::Mutex;
+
+use super::*;
 
 /// A control plane that records how many shards arrived in each request.
 fn counting_control_plane(
@@ -49,8 +52,6 @@ fn counting_control_plane(
         server,
     )
 }
-
-use parking_lot::Mutex;
 
 fn report(stream: &str) -> ShardReport {
     ShardReport {

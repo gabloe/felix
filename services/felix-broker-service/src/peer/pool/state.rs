@@ -7,10 +7,9 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 
-use crate::peer::metrics;
-
 use super::connection::PeerConnection;
 use super::{PeerError, PeerPool};
+use crate::peer::metrics;
 
 /// One peer broker, and this broker's connections to it.
 pub(super) struct Peer {

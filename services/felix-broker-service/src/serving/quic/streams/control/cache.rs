@@ -1,21 +1,21 @@
 //! Cache requests on the control stream.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use bytes::Bytes;
 use felix_authz::Action;
 use felix_wire::Message;
-use std::sync::Arc;
-use std::time::Duration;
 
+use super::authz::authorize_cache;
+use super::{Ctx, Session, Step};
 use crate::observability::timings;
 use crate::serving::quic::errors::{AckEnqueueError, record_ack_enqueue_failure};
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_best_effort, send_outgoing_critical,
 };
 use crate::serving::quic::telemetry::t_now_if;
-
-use super::authz::authorize_cache;
-use super::{Ctx, Session, Step};
 
 // One parameter per field of the message it answers.
 #[allow(clippy::too_many_arguments)]

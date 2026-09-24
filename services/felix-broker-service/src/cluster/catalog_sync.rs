@@ -29,10 +29,11 @@ mod fetch;
 mod pass;
 mod wire;
 
-use anyhow::Result;
-use felix_broker::Broker;
 use std::sync::Arc;
 use std::time::Duration;
+
+use anyhow::Result;
+use felix_broker::Broker;
 
 use crate::cluster::credential::NodeCredential;
 use pass::sync_once;

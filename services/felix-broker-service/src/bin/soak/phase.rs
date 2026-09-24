@@ -1,10 +1,11 @@
 //! Running a load phase, then waiting for resources to settle.
 
-use anyhow::Result;
-use felix_common::lifecycle::{DrainBudget, Readiness};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use felix_common::lifecycle::{DrainBudget, Readiness};
 
 use crate::config::SoakConfig;
 use crate::fixture::{AuthFixture, BrokerHarness};

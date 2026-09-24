@@ -18,14 +18,15 @@ mod hooks;
 mod uni;
 mod writer;
 
-use anyhow::Result;
-use bytes::BytesMut;
-use felix_broker::Broker;
-use quinn::{RecvStream, SendStream};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::{Duration, Instant};
+
+use anyhow::Result;
+use bytes::BytesMut;
+use felix_broker::Broker;
+use quinn::{RecvStream, SendStream};
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 
 use crate::config::BrokerConfig;
@@ -37,14 +38,12 @@ use crate::serving::quic::telemetry::t_counter;
 #[cfg(feature = "telemetry")]
 use crate::serving::quic::telemetry::t_histogram;
 use crate::serving::quic::{ACK_QUEUE_DEPTH, ACK_WAITERS_MAX, GLOBAL_ACK_DEPTH};
-
 use ack_waiter::run_ack_waiter_loop;
 use control::run_control_loop;
-use uni::{UniLoopArgs, run_uni_loop};
-use writer::run_writer_loop;
-
 #[cfg(test)]
 use hooks::test_hooks;
+use uni::{UniLoopArgs, run_uni_loop};
+use writer::run_writer_loop;
 
 /// Handle one bi-directional control stream.
 ///

@@ -1,7 +1,8 @@
-// Admission control: the global/per-connection byte budget and the subscription cap.
+//! Admission control: the global/per-connection byte budget and the subscription cap.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
 use tokio::sync::Semaphore;
 
 /// Bundles the two byte-budget permits a job holds while queued/processing: its slice of the

@@ -1,9 +1,10 @@
-// Feeder task: drains the broker subscription queue into a writer lane.
+//! Feeder task: drains the broker subscription queue into a writer lane.
+
+use std::sync::{Arc, Weak};
+use std::time::Instant;
 
 use bytes::Bytes;
 use felix_broker::{DeliveryEnvelope, SubscriptionReceiver};
-use std::sync::{Arc, Weak};
-use std::time::Instant;
 
 use crate::observability::timings;
 use crate::serving::quic::handlers::publish::SubscriptionLimiter;

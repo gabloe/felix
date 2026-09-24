@@ -5,6 +5,10 @@
 //! pass. Running the real router means the HTTP contract is under test too.
 //!
 //! Run with `cargo test -p felix-broker-service --test membership_lifecycle`.
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
 use felix_broker_service::cluster::membership::{self, MembershipError};
 use felix_broker_service::config::MembershipConfig;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
@@ -14,9 +18,6 @@ use felix_controlplane_service::model::NodeLifecycle;
 use felix_controlplane_service::store::memory::InMemoryStore;
 use felix_controlplane_service::store::{AuthStore, ControlPlaneStore, StoreConfig};
 use reqwest::{Client, redirect::Policy};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 const LIVENESS: NodeLivenessConfig = NodeLivenessConfig {

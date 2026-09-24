@@ -1,7 +1,8 @@
 //! Judging a run against its steady-state envelope, and writing it up.
 
-use anyhow::Result;
 use std::collections::HashMap;
+
+use anyhow::Result;
 
 use crate::config::SoakConfig;
 use crate::phase::PhaseReport;

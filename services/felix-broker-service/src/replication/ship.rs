@@ -6,11 +6,10 @@ use felix_wire::internal::{
     ErrorCode, InternalMessage, ReplicaLog, ReplicateRecords, ShardRef, batch_checksum,
 };
 
-use crate::peer::{PeerError, PeerRequester};
-
 use super::follower::{FollowerCursor, Halt};
 use super::metrics;
 use super::rebuild::{Rebuild, Rebuilds, offer_bootstrap, request_rebuild};
+use crate::peer::{PeerError, PeerRequester};
 
 /// Ship one batch to one follower and apply its answer to the cursor.
 ///

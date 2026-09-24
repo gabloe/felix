@@ -9,9 +9,10 @@
 //! Refreshed by the same loop that refreshes the catalog, and read on the
 //! control stream, so it is an `ArcSwap`: one writer on a timer, a reader per
 //! `Topology` request, and no reason for either to wait on the other.
+use std::sync::Arc;
+
 use arc_swap::ArcSwap;
 use felix_wire::BrokerEndpoint;
-use std::sync::Arc;
 
 #[derive(Debug, Default)]
 pub struct ClientEndpoints {

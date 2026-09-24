@@ -1,6 +1,7 @@
 //! Adopting — and declining — a credential written by something else.
-use super::*;
 use base64::Engine;
+
+use super::*;
 
 fn jwt(exp: i64) -> String {
     let encode = |value: &serde_json::Value| {

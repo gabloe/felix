@@ -7,21 +7,23 @@ mod pass;
 mod seeding;
 mod start_sync;
 
+use std::net::SocketAddr;
+use std::sync::Arc as StdArc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use anyhow::Result;
+use axum::{Json, Router, http::StatusCode, routing::get};
+use felix_broker::{CacheMetadata, ConsistencyLevel, StreamMetadata};
+use felix_storage::EphemeralCache;
+use tokio::net::TcpListener;
+
 use super::apply::*;
 use super::fetch::*;
 use super::pass::*;
 use super::wire::*;
 use super::*;
 use crate::test_support::{build_test_client, spawn_axum_with_shutdown, wait_for_listen};
-use anyhow::Result;
-use axum::{Json, Router, http::StatusCode, routing::get};
-use felix_broker::{CacheMetadata, ConsistencyLevel, StreamMetadata};
-use felix_storage::EphemeralCache;
-use std::net::SocketAddr;
-use std::sync::Arc as StdArc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
-use tokio::net::TcpListener;
 
 async fn serve_router(
     router: Router,

@@ -18,9 +18,10 @@ pub use durable::DurableStorageConfig;
 pub use membership::MembershipConfig;
 pub use subscriber::{SubStreamMode, SubscriberLaneShard};
 
+use std::net::SocketAddr;
+
 use felix_broker::SubQueuePolicy;
 use serde::Serialize;
-use std::net::SocketAddr;
 
 use defaults::*;
 

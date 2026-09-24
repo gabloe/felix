@@ -1,9 +1,10 @@
 //! Folding a YAML config file over the environment.
 
-use anyhow::{Context, Result};
-use serde::Deserialize;
 use std::fs;
 use std::io::ErrorKind;
+
+use anyhow::{Context, Result};
+use serde::Deserialize;
 
 use super::env::parse_sub_queue_policy;
 use super::{BrokerConfig, SubStreamMode, SubscriberLaneShard};

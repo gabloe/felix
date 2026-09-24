@@ -14,13 +14,12 @@
 //! queue behind it and go together in the next one. Batches grow under load,
 //! which is when they are worth having, and an idle broker waits for nothing.
 //! `disk_log/sync.rs` makes the same trade for the same reason.
-use tokio::sync::{mpsc, oneshot};
-use tokio_util::sync::CancellationToken;
-
 use felix_common::membership::{
     ReplicaOffset, ReplicaStatusRequest, ShardKind as WireShardKind, ShardReplicaStatus,
 };
 use felix_router::ShardKey;
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use super::{FollowerCursor, caught_up};
 

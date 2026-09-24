@@ -1,11 +1,12 @@
 //! Load generators: publishers, subscribers and connection churn.
 
-use anyhow::Result;
-use felix_client::Client;
-use felix_wire::AckMode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
+
+use anyhow::Result;
+use felix_client::Client;
+use felix_wire::AckMode;
 
 use crate::fixture::{AuthFixture, BrokerHarness, NAMESPACE, STREAM, TENANT, client_config};
 

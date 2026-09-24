@@ -26,6 +26,11 @@ mod idempotent_producer;
 mod uni;
 mod writer;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -44,10 +49,6 @@ use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use serial_test::serial;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 use tokio::time::timeout;
 

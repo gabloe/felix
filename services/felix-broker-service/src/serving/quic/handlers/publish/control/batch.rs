@@ -1,13 +1,14 @@
 //! A JSON publish batch on the control stream.
 
-use anyhow::Result;
-use bytes::Bytes;
-use felix_broker::Broker;
-use felix_wire::Message;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 #[cfg(feature = "telemetry")]
 use std::sync::atomic::Ordering;
+
+use anyhow::Result;
+use bytes::Bytes;
+use felix_broker::Broker;
+use felix_wire::Message;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
 use crate::observability::timings;

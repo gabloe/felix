@@ -2,6 +2,8 @@
 //!
 //! Exercises the broker and client over QUIC using JSON (text) frames to ensure
 //! large publish batches do not drop and that auth/JWKS wiring works end-to-end.
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -19,7 +21,6 @@ use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::sync::Arc;
 use tokio::time::{Duration, timeout};
 
 // Static test keys keep JWT/JWKS generation deterministic for the test run.

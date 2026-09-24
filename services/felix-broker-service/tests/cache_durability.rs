@@ -7,6 +7,10 @@
 //! "Restart" is the broker and its storage torn down and rebuilt over the same
 //! directory, which is what a process restart is from the cache's point of
 //! view: nothing in memory survives, and only the log does.
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -22,9 +26,6 @@ use quinn::ClientConfig as QuinnClientConfig;
 use rcgen::generate_simple_self_signed;
 use rustls::RootCertStore;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
 const DEMO_PRIVATE_KEY: [u8; 32] = [42u8; 32];
 const CACHE: &str = "sessions";

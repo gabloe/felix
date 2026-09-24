@@ -3,11 +3,10 @@
 use felix_broker::StreamLog;
 use felix_wire::internal::{InternalMessage, ReplicateBootstrap, ReplicateRebuild, ShardRef};
 
-use crate::peer::PeerRequester;
-
 use super::follower::{FollowerCursor, Halt};
 use super::metrics;
 use super::ship::{Progress, read_answer, replica_log, unreachable_outcome};
+use crate::peer::PeerRequester;
 
 /// What the leader may do about a halted follower on its own.
 ///

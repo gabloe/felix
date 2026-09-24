@@ -22,11 +22,12 @@
 //! offsets sparse and a drop would otherwise be indistinguishable from other
 //! keys' traffic. Re-watching from that offset is gapless.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use felix_broker::{Broker, CacheWatchFilter, CacheWatchSubscription};
 use felix_storage::log::{AppendOnlyLog, ReadRange};
 use felix_wire::Message;
-use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use super::publish::{Outgoing, PublishContext, send_outgoing_critical};

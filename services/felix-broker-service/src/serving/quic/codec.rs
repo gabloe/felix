@@ -1,4 +1,5 @@
-// QUIC frame/message encoding and decoding helpers with size limits.
+//! QUIC frame/message encoding and decoding helpers with size limits.
+
 use anyhow::{Context, Result, anyhow};
 use bytes::{Bytes, BytesMut};
 use felix_wire::{Frame, FrameHeader, Message};

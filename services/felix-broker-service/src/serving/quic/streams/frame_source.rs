@@ -8,12 +8,13 @@
 //! doesn't allocate; the boxed future keeps the trait object-safe without
 //! pulling in `async_trait`.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use anyhow::Result;
 use bytes::BytesMut;
 use felix_wire::Frame;
 use quinn::RecvStream;
-use std::future::Future;
-use std::pin::Pin;
 
 use crate::serving::quic::codec::read_frame_limited_into;
 

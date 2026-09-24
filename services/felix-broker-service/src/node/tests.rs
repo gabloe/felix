@@ -1,6 +1,7 @@
+use std::time::Duration;
+
 use super::listeners::build_server_config;
 use super::*;
-use std::time::Duration;
 
 struct EnvGuard {
     key: &'static str,

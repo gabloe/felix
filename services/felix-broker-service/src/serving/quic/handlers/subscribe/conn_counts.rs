@@ -1,8 +1,9 @@
-// Per-connection active-subscriber bookkeeping behind the `felix_sub_active_connections` gauge.
+//! Per-connection active-subscriber bookkeeping behind the `felix_sub_active_connections` gauge.
 
-use dashmap::DashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
+
+use dashmap::DashMap;
 
 pub(super) static ACTIVE_SUB_CONN_COUNTS: OnceLock<DashMap<u64, usize>> = OnceLock::new();
 

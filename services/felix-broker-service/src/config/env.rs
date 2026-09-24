@@ -1,9 +1,10 @@
 //! Reading [`BrokerConfig`] from `FELIX_*` environment variables.
 
-use anyhow::{Context, Result};
-use felix_broker::SubQueuePolicy;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
+
+use anyhow::{Context, Result};
+use felix_broker::SubQueuePolicy;
 
 use super::defaults::*;
 use super::membership::{membership_from_env, warn_on_unreachable_advertise};

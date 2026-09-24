@@ -14,9 +14,8 @@ use std::time::Duration;
 
 use felix_broker::Broker;
 use felix_router::{ShardKey, ShardRouter};
-use tokio_util::sync::CancellationToken;
-
 use futures::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 use super::halted::{HaltedReplica, HaltedReplicas};
 use super::quorum::QuorumMarks;

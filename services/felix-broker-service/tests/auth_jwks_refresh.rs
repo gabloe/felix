@@ -13,6 +13,11 @@
 //! - Async ordering is controlled by awaiting server bind before use.
 //!
 //! Run with `cargo test -p felix-broker-service auth_jwks_refresh` to execute this test.
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use axum::{Json, Router, routing::get};
 use base64::Engine;
@@ -24,10 +29,6 @@ use felix_authz::{
 };
 use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore, ensure_jwks_cached};
 use jsonwebtoken::Algorithm;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
 
 const TEST_PRIVATE_KEY: [u8; 32] = [8u8; 32];
 

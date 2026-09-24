@@ -1,8 +1,9 @@
 //! The per-connection cache of resolved stream handles, and its key.
 
-use felix_broker::StreamHandle;
 use std::collections::HashMap;
 use std::time::Instant;
+
+use felix_broker::StreamHandle;
 
 pub(crate) type StreamHandleCache = HashMap<String, (Option<StreamHandle>, Instant)>;
 

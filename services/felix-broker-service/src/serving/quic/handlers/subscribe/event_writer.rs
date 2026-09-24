@@ -1,8 +1,9 @@
-// Legacy direct-to-stream event writer, retained for tests.
+//! A direct-to-stream event writer, without lanes. Only tests use it.
 
-use anyhow::{Context, Result};
 #[cfg(feature = "telemetry")]
 use std::time::Instant;
+
+use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 
 use crate::observability::timings;

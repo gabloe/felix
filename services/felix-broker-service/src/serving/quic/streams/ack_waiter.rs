@@ -1,23 +1,25 @@
-// Ack waiter loop decouples "publish commit completion" from the control-stream read loop.
-//
-// Why this exists:
-// - The control stream is responsible for ingesting client requests (Publish / PublishBatch) and must
-//   stay responsive. If we were to await broker commit completion inline while reading, the control
-//   stream would stall under load and amplify head-of-line blocking.
-// - Instead, request handling enqueues a waiter message containing a oneshot receiver that completes
-//   when the publish worker finishes its broker call.
-// - This task waits on those receivers and emits ACK/ERR responses back to the client.
-//
-// Key properties:
-// - Responses may be emitted out-of-order (completion order), which is acceptable because request_id
-//   provides correlation.
-// - A semaphore (permit) bounds the number of in-flight waiters; every path MUST drop the permit to
-//   prevent deadlock/leak (see drop(permit) on all branches).
-// - Cancellation (cancel_rx) is checked both in the outer select loop and inside each waiter future
-//   to ensure we can abort promptly even while waiting on a timeout.
-use futures::{StreamExt, stream::FuturesUnordered};
+//! Ack waiter loop decouples "publish commit completion" from the control-stream read loop.
+//!
+//! Why this exists:
+//! - The control stream is responsible for ingesting client requests (Publish / PublishBatch) and must
+//!   stay responsive. If we were to await broker commit completion inline while reading, the control
+//!   stream would stall under load and amplify head-of-line blocking.
+//! - Instead, request handling enqueues a waiter message containing a oneshot receiver that completes
+//!   when the publish worker finishes its broker call.
+//! - This task waits on those receivers and emits ACK/ERR responses back to the client.
+//!
+//! Key properties:
+//! - Responses may be emitted out-of-order (completion order), which is acceptable because request_id
+//!   provides correlation.
+//! - A semaphore (permit) bounds the number of in-flight waiters; every path MUST drop the permit to
+//!   prevent deadlock/leak (see drop(permit) on all branches).
+//! - Cancellation (cancel_rx) is checked both in the outer select loop and inside each waiter future
+//!   to ensure we can abort promptly even while waiting on a timeout.
+
 use std::sync::Arc;
 use std::time::Duration;
+
+use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::sync::{Mutex, mpsc, watch};
 
 use crate::serving::quic::handlers::publish::{

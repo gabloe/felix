@@ -7,6 +7,9 @@
 
 pub mod timings;
 
+use std::net::SocketAddr;
+use std::sync::OnceLock;
+
 use felix_common::lifecycle::Readiness;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_exporter_prometheus::PrometheusHandle;
@@ -14,8 +17,6 @@ use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
-use std::net::SocketAddr;
-use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
