@@ -1,11 +1,9 @@
-mod common;
-
+use crate::common::json_request;
+use crate::common::read_json;
+use crate::common::{json_request_as, seed_credentials};
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
-use common::json_request;
-use common::read_json;
-use common::{json_request_as, seed_credentials};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::felix_token::{TenantSigningKeys, mint_token};

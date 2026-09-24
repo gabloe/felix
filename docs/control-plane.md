@@ -821,8 +821,8 @@ window.
 
 Every claim in this section is exercised against a real Postgres reached through
 a proxy the test can cut, black-hole, and restore, in
-`tests/readiness_pg.rs` (`cargo test -p felix-controlplane-service --features pg-tests --test
-readiness_pg`):
+`tests/pg_readiness.rs` (`cargo test -p felix-controlplane-service --features pg-tests --test
+pg_readiness`):
 
 | Claim | What the test does |
 | --- | --- |

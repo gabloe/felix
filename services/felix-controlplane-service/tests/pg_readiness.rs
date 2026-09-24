@@ -13,7 +13,7 @@
 //! from the pool's point of view: connections drop, new ones are refused, and
 //! nothing in the process knows it was deliberate.
 //!
-//! Run with `cargo test -p felix-controlplane-service --features pg-tests readiness_pg`.
+//! Run with `cargo test -p felix-controlplane-service --features pg-tests pg_readiness`.
 //! Skipped, not failed, when no database is reachable — same rule as the other
 //! pg-tests, so a machine without docker still runs the rest of the suite.
 //!
@@ -49,7 +49,7 @@ fn database_url() -> Option<String> {
     match std::env::var("FELIX_TEST_DATABASE_URL") {
         Ok(url) if !url.trim().is_empty() => Some(url),
         _ => {
-            eprintln!("skipping readiness_pg: FELIX_TEST_DATABASE_URL is not set");
+            eprintln!("skipping pg_readiness: FELIX_TEST_DATABASE_URL is not set");
             None
         }
     }

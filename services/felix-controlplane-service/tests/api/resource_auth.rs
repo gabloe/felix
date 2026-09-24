@@ -3,11 +3,11 @@
 //! Before this, tenants, namespaces, streams and caches were created and
 //! deleted with no token at all while `/v1/nodes` next to them answered 401.
 //! Each case here is a request that used to succeed and must not.
-mod common;
-
+use crate::common::{
+    Credentials, json_request, json_request_as, read_json, request_as, seed_credentials,
+};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{Credentials, json_request, json_request_as, read_json, request_as, seed_credentials};
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::model::{Namespace, Tenant};

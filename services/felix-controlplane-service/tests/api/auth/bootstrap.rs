@@ -1,8 +1,6 @@
-mod common;
-
+use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::read_json;
 use felix_controlplane_service::api::bootstrap::BootstrapInitializeRequest;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_bootstrap_router};

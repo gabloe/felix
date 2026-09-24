@@ -6,11 +6,9 @@
 //! it stood when the token was minted.
 //! The store's own guarantees have their own suite
 //! (`src/store/contract/refresh_tokens.rs`, run against memory and Postgres alike).
-mod common;
-
+use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::read_json;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};

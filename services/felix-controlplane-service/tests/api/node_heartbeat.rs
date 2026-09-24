@@ -1,10 +1,8 @@
 //! HTTP behaviour of the broker heartbeat endpoint.
-mod common;
-
+use crate::common::json_request;
+use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::json_request;
-use common::read_json;
 use felix_controlplane_service::api::types::FeatureFlags;
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::config::NodeLivenessConfig;

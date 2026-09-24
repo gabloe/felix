@@ -1,9 +1,7 @@
 //! Operator-facing node listing and detail.
-mod common;
-
+use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::read_json;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::felix_token::{TenantSigningKeys, mint_token};

@@ -12,13 +12,11 @@
 //! - Uses in-memory store for deterministic, race-free behavior.
 //!
 //! Run with `cargo test -p felix-controlplane-service auth_jwks` to execute these tests.
-mod common;
-
+use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::read_json;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
 use felix_controlplane_service::auth::keys::generate_signing_keys;

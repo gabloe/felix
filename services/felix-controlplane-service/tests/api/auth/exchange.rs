@@ -14,13 +14,11 @@
 //! - Async ordering is controlled by awaiting server bind before requests.
 //!
 //! Run with `cargo test -p felix-controlplane-service auth_exchange` to execute these tests.
-mod common;
-
+use crate::common::read_json;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::read_json;
 use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use felix_controlplane_service::api::types::{FeatureFlags, Region};
 use felix_controlplane_service::api::{AppState, build_router};
@@ -264,7 +262,7 @@ async fn exchange_returns_tenant_scoped_token() {
     let refresh_token = payload["refresh_token"].as_str().expect("refresh token");
     assert!(payload["refresh_expires_in"].as_u64().unwrap_or(0) > 0);
 
-    let req = common::json_request(
+    let req = crate::common::json_request(
         "POST",
         "/v1/tenants/t1/token/refresh",
         json!({ "refresh_token": refresh_token }),
