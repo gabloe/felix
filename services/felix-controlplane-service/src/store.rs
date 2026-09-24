@@ -169,6 +169,23 @@ pub trait ControlPlaneStore: Send + Sync {
         &self,
         assignment: ShardAssignment,
     ) -> StoreResult<ShardAssignment>;
+    /// [`ControlPlaneStore::put_shard_assignment`], but only if the shard is
+    /// still at `expected_generation` (`None`: still has no assignment).
+    ///
+    /// Placement writes through this. Every instance may run it, each deciding
+    /// from its own read, and an unconditional write planned from an old read
+    /// can undo a newer step -- a fence written after the cut-over it preceded
+    /// hands the shard back to a leader missing writes the new one acknowledged.
+    ///
+    /// A changed shard is [`AssignmentWrite::Stale`], not an error: nothing is
+    /// written, and the caller re-plans from a fresh read. It is checked before
+    /// the state transition, so a stale write is reported as stale rather than
+    /// as a transition the model disallows.
+    async fn put_shard_assignment_if(
+        &self,
+        assignment: ShardAssignment,
+        expected_generation: Option<u64>,
+    ) -> StoreResult<AssignmentWrite>;
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment>;
     /// Every assignment, ordered by stream then shard.
     async fn list_shard_assignments(&self) -> StoreResult<Vec<ShardAssignment>>;
@@ -374,6 +391,17 @@ impl From<serde_json::Error> for StoreError {
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
+
+/// What [`ControlPlaneStore::put_shard_assignment_if`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssignmentWrite {
+    Written(ShardAssignment),
+    /// The shard was not at the expected generation, and nothing was written.
+    Stale {
+        /// The generation it is at, or `None` if it has no assignment.
+        current: Option<u64>,
+    },
+}
 
 #[derive(Debug, Clone)]
 pub struct StoreConfig {

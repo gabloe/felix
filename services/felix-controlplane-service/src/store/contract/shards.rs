@@ -10,7 +10,7 @@ use crate::model::{
     Cache, CacheKey, ConsistencyLevel, DeliveryGuarantee, Namespace, RetentionPolicy,
     ShardAssignment, ShardKey, ShardKind, ShardState, Stream, StreamKey, StreamKind, Tenant,
 };
-use crate::store::{ControlPlaneStore, StoreError};
+use crate::store::{AssignmentWrite, ControlPlaneStore, StoreError};
 
 const TENANT: &str = "shard-t";
 const NAMESPACE: &str = "shard-ns";
@@ -133,6 +133,8 @@ pub(crate) async fn run_shard_contract(store: Arc<dyn ControlPlaneStore>) {
     replica_reports::a_report_needs_an_assignment_and_goes_with_it(store).await;
     a_move_in_progress_is_persisted(store).await;
     replica_reports::a_drained_report_is_kept(store).await;
+    a_conditional_write_lands_only_at_the_expected_generation(store).await;
+    a_fence_planned_before_a_cut_over_is_refused_after_it(store).await;
 }
 
 fn cache_key(shard: u32) -> ShardKey {
@@ -212,7 +214,44 @@ async fn an_unknown_cache_is_rejected(store: &dyn ControlPlaneStore) {
 /// Cases needing an owned handle to share across tasks.
 pub(crate) async fn run_shard_concurrency_contract(store: Arc<dyn ControlPlaneStore>) {
     seed(store.as_ref()).await;
-    concurrent_writes_to_one_shard_serialise(store).await;
+    concurrent_writes_to_one_shard_serialise(Arc::clone(&store)).await;
+    concurrent_conditional_writes_have_one_winner(store).await;
+}
+
+/// Placement instances racing on one shard, each writing against the
+/// generation it read: exactly one lands, whether the shard existed or not.
+async fn concurrent_conditional_writes_have_one_winner(store: Arc<dyn ControlPlaneStore>) {
+    const WRITERS: u64 = 8;
+
+    for expected in [None, Some(0)] {
+        if expected.is_none() {
+            clear(store.as_ref()).await;
+        }
+        let writers: Vec<_> = (0..WRITERS)
+            .map(|i| {
+                let store = Arc::clone(&store);
+                tokio::spawn(async move {
+                    let leader = if i % 2 == 0 { "broker-x" } else { "broker-y" };
+                    store
+                        .put_shard_assignment_if(assignment(0, leader), expected)
+                        .await
+                        .expect("conditional put")
+                })
+            })
+            .collect();
+        let mut written = Vec::new();
+        for writer in writers {
+            if let AssignmentWrite::Written(assignment) = writer.await.expect("writer") {
+                written.push(assignment);
+            }
+        }
+        assert_eq!(written.len(), 1, "expecting {expected:?}: one writer wins");
+        assert_eq!(
+            store.get_shard_assignment(&key(0)).await.expect("get"),
+            written[0],
+            "the winner's write is what is stored",
+        );
+    }
 }
 
 /// Two placement passes can write the same shard at once. Whatever order they
@@ -428,6 +467,142 @@ async fn a_move_in_progress_is_persisted(store: &dyn ControlPlaneStore) {
     assert_eq!(written.leader, "broker-y");
     assert_eq!(written.successor, None);
     assert_eq!(written.generation, 3);
+}
+
+/// A conditional write lands only over the generation it names, or where
+/// there is no assignment when it names none; anything else writes nothing
+/// and publishes nothing.
+async fn a_conditional_write_lands_only_at_the_expected_generation(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+
+    let first = store
+        .put_shard_assignment_if(assignment(0, "broker-x"), None)
+        .await
+        .expect("create");
+    let AssignmentWrite::Written(first) = first else {
+        panic!("a write expecting no assignment lands on an empty shard: {first:?}");
+    };
+    assert_eq!(first.generation, 0);
+    let seq = store
+        .shard_assignment_snapshot()
+        .await
+        .expect("snapshot")
+        .next_seq;
+
+    assert_eq!(
+        store
+            .put_shard_assignment_if(assignment(0, "broker-y"), None)
+            .await
+            .expect("create again"),
+        AssignmentWrite::Stale { current: Some(0) },
+    );
+    assert_eq!(
+        store
+            .put_shard_assignment_if(assignment(0, "broker-y"), Some(7))
+            .await
+            .expect("wrong generation"),
+        AssignmentWrite::Stale { current: Some(0) },
+    );
+    assert_eq!(
+        store
+            .put_shard_assignment_if(assignment(1, "broker-y"), Some(0))
+            .await
+            .expect("no assignment"),
+        AssignmentWrite::Stale { current: None },
+    );
+    assert!(matches!(
+        store.get_shard_assignment(&key(1)).await,
+        Err(StoreError::NotFound(_))
+    ));
+    assert_eq!(
+        store.get_shard_assignment(&key(0)).await.expect("get"),
+        first,
+        "a stale write leaves the assignment alone",
+    );
+    assert_eq!(
+        store
+            .shard_assignment_snapshot()
+            .await
+            .expect("snapshot")
+            .next_seq,
+        seq,
+        "a stale write publishes no change",
+    );
+
+    let second = store
+        .put_shard_assignment_if(assignment(0, "broker-y"), Some(0))
+        .await
+        .expect("update");
+    let AssignmentWrite::Written(second) = second else {
+        panic!("a write at the current generation lands: {second:?}");
+    };
+    assert_eq!(second.generation, 1);
+    assert_eq!(second.leader, "broker-y");
+
+    // Stale is reported ahead of an invalid transition: the caller planned
+    // from an old state, and the transition is judged against a newer one.
+    let mut draining = second.clone();
+    draining.state = ShardState::Draining;
+    store
+        .put_shard_assignment_if(draining, Some(1))
+        .await
+        .expect("drain");
+    let mut active = second;
+    active.state = ShardState::Active;
+    assert_eq!(
+        store
+            .put_shard_assignment_if(active, Some(1))
+            .await
+            .expect("stale and disallowed"),
+        AssignmentWrite::Stale { current: Some(2) },
+    );
+}
+
+/// The race placement's conditional writes exist for: two instances plan a
+/// fence from the same read, one fences and then cuts over, and the other's
+/// fence arrives last. Unconditionally it would hand the shard back to the
+/// old leader after the new one may have acknowledged writes.
+async fn a_fence_planned_before_a_cut_over_is_refused_after_it(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    store
+        .put_shard_assignment(assignment(0, "broker-x"))
+        .await
+        .expect("assigning");
+    let mut staged = assignment(0, "broker-x");
+    staged.replicas = vec!["broker-y".to_string()];
+    staged.successor = Some("broker-y".to_string());
+    let read = store.put_shard_assignment(staged).await.expect("stage");
+
+    let mut fence = read.clone();
+    fence.state = ShardState::Draining;
+    let fenced = store
+        .put_shard_assignment_if(fence.clone(), Some(read.generation))
+        .await
+        .expect("fence");
+    let AssignmentWrite::Written(fenced) = fenced else {
+        panic!("the first fence lands: {fenced:?}");
+    };
+    let cut_over = store
+        .put_shard_assignment_if(assignment(0, "broker-y"), Some(fenced.generation))
+        .await
+        .expect("cut over");
+    let AssignmentWrite::Written(cut_over) = cut_over else {
+        panic!("the cut-over lands: {cut_over:?}");
+    };
+
+    assert_eq!(
+        store
+            .put_shard_assignment_if(fence, Some(read.generation))
+            .await
+            .expect("late fence"),
+        AssignmentWrite::Stale {
+            current: Some(cut_over.generation)
+        },
+    );
+    assert_eq!(
+        store.get_shard_assignment(&key(0)).await.expect("get"),
+        cut_over
+    );
 }
 
 /// The question placement asks when a node fails or is drained.

@@ -317,6 +317,14 @@ impl ControlPlaneStore for PostgresStore {
         shards::put_shard_assignment(self, assignment).await
     }
 
+    async fn put_shard_assignment_if(
+        &self,
+        assignment: ShardAssignment,
+        expected_generation: Option<u64>,
+    ) -> StoreResult<crate::store::AssignmentWrite> {
+        shards::put_shard_assignment_if(self, assignment, expected_generation).await
+    }
+
     async fn get_shard_assignment(&self, key: &ShardKey) -> StoreResult<ShardAssignment> {
         shards::get_shard_assignment(self, key).await
     }

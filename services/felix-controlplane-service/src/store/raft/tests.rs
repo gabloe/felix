@@ -50,7 +50,8 @@ async fn satisfies_the_node_store_contract() {
 async fn satisfies_the_shard_store_contract() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = single_node_store(dir.path()).await;
-    crate::store::contract::shards::run_shard_contract(store).await;
+    crate::store::contract::shards::run_shard_contract(store.clone()).await;
+    crate::store::contract::shards::run_shard_concurrency_contract(store).await;
 }
 
 /// Writes travel the log; reads come from applied state — so a write

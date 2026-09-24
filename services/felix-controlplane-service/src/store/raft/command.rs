@@ -112,6 +112,16 @@ pub enum MetaCommand {
     PutShardAssignment {
         assignment: ShardAssignment,
     },
+    /// Write only if the shard is at `expected_generation` (`None`: has no
+    /// assignment), checked as the command applies.
+    ///
+    /// Its own variant rather than an optional field on `PutShardAssignment`:
+    /// a follower that predates it must refuse it, not apply it
+    /// unconditionally and diverge from the replicas that skipped it as stale.
+    PutShardAssignmentIf {
+        assignment: ShardAssignment,
+        expected_generation: Option<u64>,
+    },
     DeleteShardAssignment {
         key: ShardKey,
     },
@@ -242,6 +252,10 @@ pub enum MetaResponse {
     },
     Assignment {
         assignment: ShardAssignment,
+    },
+    /// `PutShardAssignmentIf` found another generation and wrote nothing.
+    StaleAssignment {
+        current_generation: Option<u64>,
     },
     SigningKeys {
         keys: TenantSigningKeys,

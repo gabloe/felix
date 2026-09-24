@@ -25,7 +25,7 @@ use crate::store::memory::InMemoryStore;
 use crate::store::raft::command::{
     MetaCommand, MetaResponse, MetaResult, decode_command, encode_result,
 };
-use crate::store::{AuthStore, ControlPlaneStore};
+use crate::store::{AssignmentWrite, AuthStore, ControlPlaneStore};
 
 /// How many applied request ids to remember.
 ///
@@ -201,6 +201,19 @@ impl MetadataStateMachine {
                 .put_shard_assignment(assignment)
                 .await
                 .map(|assignment| MetaResponse::Assignment { assignment })
+                .map_err(Into::into),
+            MetaCommand::PutShardAssignmentIf {
+                assignment,
+                expected_generation,
+            } => store
+                .put_shard_assignment_if(assignment, expected_generation)
+                .await
+                .map(|written| match written {
+                    AssignmentWrite::Written(assignment) => MetaResponse::Assignment { assignment },
+                    AssignmentWrite::Stale { current } => MetaResponse::StaleAssignment {
+                        current_generation: current,
+                    },
+                })
                 .map_err(Into::into),
             MetaCommand::RecordReplicaReport { report } => store
                 .record_replica_report(report)

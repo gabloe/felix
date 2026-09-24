@@ -37,7 +37,8 @@ use crate::store::memory::InMemoryStore;
 use crate::store::raft::command::{MetaCommand, MetaResponse, decode_result, encode_command};
 use crate::store::raft::state_machine::MetadataStateMachine;
 use crate::store::{
-    AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult, TenantAuthSeed,
+    AssignmentWrite, AuthStore, ChangeSet, ControlPlaneStore, Snapshot, StoreError, StoreResult,
+    TenantAuthSeed,
 };
 
 pub struct RaftStore {
@@ -313,6 +314,26 @@ impl ControlPlaneStore for RaftStore {
             .await?
         {
             MetaResponse::Assignment { assignment } => Ok(assignment),
+            _ => Err(unexpected_shape("assignment")),
+        }
+    }
+
+    async fn put_shard_assignment_if(
+        &self,
+        assignment: ShardAssignment,
+        expected_generation: Option<u64>,
+    ) -> StoreResult<AssignmentWrite> {
+        match self
+            .propose(MetaCommand::PutShardAssignmentIf {
+                assignment,
+                expected_generation,
+            })
+            .await?
+        {
+            MetaResponse::Assignment { assignment } => Ok(AssignmentWrite::Written(assignment)),
+            MetaResponse::StaleAssignment { current_generation } => Ok(AssignmentWrite::Stale {
+                current: current_generation,
+            }),
             _ => Err(unexpected_shape("assignment")),
         }
     }
