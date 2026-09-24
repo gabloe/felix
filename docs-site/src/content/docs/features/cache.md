@@ -770,11 +770,11 @@ cache_send_window: 268435456         # Send window
 
 ### Current limitations
 
-1. **No atomic operations**: no compare-and-swap, no increment
+1. **No compare-and-swap**: the one atomic update is a counter's `counter_add`
 2. **No multi-key operations**: no transactions
 3. **Best-effort eviction** in the in-memory backend: no guaranteed LRU or LFU. The log-backed cache does not evict at all — it compacts.
-4. **A prefix watch reads one shard**: keys sharing a prefix hash to different shards, so watching a whole multi-shard cache means one `watch_cache_shard` per shard, and nothing opens them for you yet the way `subscribe_sharded` does for streams
-5. **No declared consistency level**: a write is acknowledged by the shard's leader, so losing that leader between the acknowledgement and replication loses the write. A stream can ask for `Quorum`; a cache cannot.
+4. **A prefix watch reads one shard**: keys sharing a prefix hash to different shards, so `Client` needs one `watch_cache_shard` per shard. `ClusterClient::watch_cache_sharded` opens and merges them for you, as `subscribe_sharded` does for streams
+5. **Counter adds are acknowledged by the leader alone**: a cache declares `Leader` or `Quorum` like a stream, and puts and deletes honour it, but a counter add does not wait for a majority whatever the cache declares
 
 What used to be listed here and no longer applies: the cache persists across a
 restart when the broker has durable storage, it is routed to a single owner per

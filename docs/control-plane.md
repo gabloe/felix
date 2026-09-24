@@ -479,10 +479,15 @@ back at a new generation. A leader that dies mid-move is a failover, where
 the successor is a candidate like any other replica. An ephemeral stream has
 no log to hand off and is reassigned as it always was.
 
-Between the fence and the new owner opening, publishes to the shard are
-refused rather than accepted somewhere the successor cannot see — the client
-sees an error, never a silent drop. Locally that window is under a second;
-in a deployment it is a few control-plane sync intervals.
+Between the fence and the new owner opening, nobody serves the shard. A
+publish that arrives then is held by the broker it reached and forwarded once
+its routes show the new owner, so the client sees a slower acknowledgement,
+not an error; cache, counter and group writes are refused and retried. The
+broker long-polls the assignment feed, so the window is tens of milliseconds
+locally rather than a sync interval. Subscriptions on the old leader end with
+`shard_moved` and follow the shard (see
+[replication-design.md](replication-design.md#planned-handoff) and
+`docs/protocol.md`, "Shard moves").
 
 #### Pacing moves
 

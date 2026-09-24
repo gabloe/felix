@@ -187,6 +187,14 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **Online rebalancing is marked done** on the status page. The row now
+  cites the tests behind each claim and names what is left: cache, counter
+  and group writes are refused briefly during a switch-over, the move limits
+  hold per planner, and stopping a broker is a failover rather than a
+  handoff. Load-aware placement has its own row. Pages that still said a
+  move refuses publishes or ends subscriptions rather than letting them
+  follow were corrected, and the docs-site semantics page no longer says a
+  cache cannot declare `Quorum` or that metadata lives only in Postgres.
 - **Storage format v3.** A record's length word now carries two flag bits
   and, for the first record of an idempotent producer's batch, a 20-byte tag
   (see `docs/storage-format.md`, "Producer marks"). v2 segments are still read

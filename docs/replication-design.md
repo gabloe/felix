@@ -775,7 +775,16 @@ acknowledged, so a hold that runs out (`FELIX_SHARD_MOVE_HOLD_MS`, 2 s) or
 finds too many already waiting (`FELIX_SHARD_MOVE_HOLD_MAX`) is a plain refusal,
 `shard_unavailable` with reason `moving`, and the client retries. Holding lives
 in `shards/routing/hold.rs`. Only publishes are held; cache writes, counter adds
-and group writes are refused through the window as before.
+and group writes are refused through the window.
+
+Readers leave at the fence too. The old leader ends each subscription and
+cache watch on the shard once the writes inside its fence have fanned out, and
+its last frame, `shard_moved`, names the successor and the offset to resume
+from, so a client resumes there with nothing repeated or skipped
+(`docs/protocol.md`, "Shard moves"). An operator can cancel a fenced move: the
+old leader serves again at a new generation, and because nobody has led since
+the fence its log holds every write it accepted
+([control-plane.md](control-plane.md#operator-controls)).
 
 While it copies, the destination is not counted toward the quorum. A leader
 that saw the destination added to the replica set — it was not a follower of
@@ -829,6 +838,14 @@ than the report said, because the report is the only input either reads.
 > one through the old owner and one through the destination, run through a
 > whole move: none is refused, and every acknowledged record is on the new
 > owner exactly once.
+>
+> `a_subscription_follows_its_shard_to_the_new_owner` — a subscriber reading
+> from the start while a publisher writes through the move receives every
+> offset once, in order, including every acknowledged record.
+>
+> `cancelling_a_fenced_move_loses_no_acknowledged_write` — a fenced move is
+> cancelled with a publisher and a following subscriber running; the old
+> leader takes the shard back and every acknowledged record is delivered once.
 >
 > `a_quorum_publish_during_a_copy_is_not_held_by_it` — a one-replica `Quorum`
 > stream keeps acknowledging while its destination is stalled mid-copy.
