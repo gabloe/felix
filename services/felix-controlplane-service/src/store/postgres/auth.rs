@@ -467,7 +467,7 @@ pub(super) fn algorithm_to_str(value: Algorithm) -> &'static str {
     }
 }
 
-fn decode_key(value: &[u8], label: &str) -> StoreResult<[u8; 32]> {
+pub(super) fn decode_key(value: &[u8], label: &str) -> StoreResult<[u8; 32]> {
     value
         .try_into()
         .map_err(|_| StoreError::Unexpected(anyhow!("invalid {label} length")))

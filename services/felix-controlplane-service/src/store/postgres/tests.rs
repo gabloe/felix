@@ -1,6 +1,6 @@
 mod database;
 
-use super::auth::{algorithm_to_str, parse_algorithm};
+use super::auth::{algorithm_to_str, decode_key, parse_algorithm};
 use super::codec::{
     DbStream, consistency_to_str, delivery_to_str, parse_consistency, parse_delivery,
     parse_stream_kind, stream_from_db, stream_kind_to_str,
@@ -119,4 +119,17 @@ fn algorithm_round_trip_and_rejects_unknown() {
     ));
     assert!(parse_algorithm("RS256").is_err());
     assert_eq!(algorithm_to_str(Algorithm::EdDSA), "EdDSA");
+}
+
+#[test]
+fn algorithm_to_str_defaults_to_eddsa() {
+    assert_eq!(algorithm_to_str(Algorithm::HS256), "EdDSA");
+}
+
+#[test]
+fn decode_key_rejects_invalid_length() {
+    let err = decode_key(&[1, 2, 3], "key").unwrap_err();
+    assert!(err.to_string().contains("invalid key length"));
+    let ok = decode_key(&[0u8; 32], "key").unwrap();
+    assert_eq!(ok, [0u8; 32]);
 }
