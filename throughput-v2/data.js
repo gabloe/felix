@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790268202839,
+  "lastUpdate": 1790268558794,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14768,6 +14768,58 @@ window.BENCHMARK_DATA = {
             "range": "6924.21",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 946752.11\nmean: 947560.94\nstdev: 6924.21\ncv: 0.73%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5ac19759976839be20b3d2c99dc5074c8e26e8cb",
+          "message": "A moved shard keeps its group state and counters (#665)\n\n* fix(replication): report a shard drained only once its group state and counters are on the successor\n\nThe drained pass now ships the consumer-group cursor, dead-letter and\ncounter logs before the report, and withholds drained while any follower\nlevel on the shard's log is behind on one of them. A held report is\nlogged with the shard and follower and counted in\nfelix_broker_replication_drain_withheld_total{log}.\n\n* test(cluster): a moved shard keeps its group state and counters\n\n* docs: the drained report waits for a shard's group state and counters\n\n* fix(replication): gate the drained report on the move's successor only\n\nBrokers now read the assignment's successor. A draining shard reports\ndrained once the successor holds the shard's log and every log that rides\nit; another replica still behind on one of those is left out of caught_up\ninstead of holding the move. A move with no successor keeps the strict rule:\nevery follower level on the main log must hold them.",
+          "timestamp": "2026-09-24T09:46:09-07:00",
+          "tree_id": "1c7a4b08345cdb00930b8ed7f158557e91d9a412",
+          "url": "https://github.com/gabloe/felix/commit/5ac19759976839be20b3d2c99dc5074c8e26e8cb"
+        },
+        "date": 1790268557452,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 394385.96,
+            "range": "23909.77",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 394385.96\nmean: 389106.47\nstdev: 23909.77\ncv: 6.14%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 394385.96,
+            "range": "23909.77",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 394385.96\nmean: 389106.47\nstdev: 23909.77\ncv: 6.14%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 92341.86,
+            "range": "681.59",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 92341.86\nmean: 92673.44\nstdev: 681.59\ncv: 0.74%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 923418.56,
+            "range": "6815.87",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 923418.56\nmean: 926734.38\nstdev: 6815.87\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
