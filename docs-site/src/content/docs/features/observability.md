@@ -126,6 +126,7 @@ felix_broker_replication_lag_records
 felix_broker_replication_halted             # a count; GET /replication/halted says which
 felix_broker_replication_rebuilding         # halted followers the leader is rebuilding right now
 felix_broker_replication_rebuilds_total     # by outcome: started, completed, refused
+felix_broker_replication_drain_withheld_total # by log; a planned move waiting to hand over group state or counters
 felix_broker_replica_reports_per_request    # shards per control-plane report; 1 on a busy broker means batching found nothing
 felix_broker_lease_held
 felix_broker_lease_refusals_total           # writes refused after a lease lapsed
