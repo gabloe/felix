@@ -13,7 +13,8 @@
 //! - Tests use local loopback and serial sections to avoid races.
 //! - Many tests spawn background tasks; ordering is validated explicitly.
 //!
-//! Run with `cargo test -p felix-broker-service quic` or narrow with individual test names.
+//! Run with `cargo test -p felix-broker-service --lib serving::quic::streams`, or narrow with
+//! individual test names.
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -42,10 +43,10 @@ use tokio::time::timeout;
 use super::ack_waiter::run_ack_waiter_loop;
 use super::control::run_control_loop;
 use super::frame_source::{DelayFrameSource, FrameSource, TestFrameSource};
-use super::handlers::{handle_stream, handle_uni_stream};
 use super::hooks::test_hooks;
 use super::uni::{UniLoopArgs, run_uni_loop};
 use super::writer::run_writer_loop;
+use super::{handle_stream, handle_uni_stream};
 use crate::config::BrokerConfig;
 use crate::observability::timings;
 use crate::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
