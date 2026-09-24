@@ -335,6 +335,7 @@ async fn spawn_controlplane() -> Result<(SocketAddr, JoinHandle<()>)> {
         )),
         in_flight: Default::default(),
         placement_wakes: Default::default(),
+        move_policy: Default::default(),
     };
 
     let app = build_router(state.clone()).merge(build_bootstrap_router(state));

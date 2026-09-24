@@ -62,6 +62,7 @@ async fn setup() -> (App, Arc<InMemoryStore>, TenantSigningKeys) {
         )),
         in_flight: Default::default(),
         placement_wakes: Default::default(),
+        move_policy: Default::default(),
     };
     (build_router(state).into_service(), store, keys)
 }

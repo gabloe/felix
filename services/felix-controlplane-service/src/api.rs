@@ -10,6 +10,7 @@ pub mod readiness;
 pub mod regions;
 mod router;
 pub mod shard_assignments;
+pub mod shard_moves;
 mod state;
 pub mod streams;
 pub mod system;

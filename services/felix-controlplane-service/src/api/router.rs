@@ -180,6 +180,27 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::get(api::shard_assignments::shard_assignment_changes),
         )
         .route(
+            "/v1/shard-moves",
+            axum::routing::get(api::shard_moves::list_shard_moves)
+                .post(api::shard_moves::start_shard_move),
+        )
+        .route(
+            "/v1/shard-moves/{tenant_id}/{namespace}/{name}/{shard}",
+            axum::routing::delete(api::shard_moves::cancel_shard_move),
+        )
+        .route(
+            "/v1/placement/plan",
+            axum::routing::get(api::shard_moves::placement_plan),
+        )
+        .route(
+            "/v1/placement/pause",
+            axum::routing::post(api::shard_moves::pause_placement),
+        )
+        .route(
+            "/v1/placement/resume",
+            axum::routing::post(api::shard_moves::resume_placement),
+        )
+        .route(
             "/v1/tenants/{tenant_id}/token/exchange",
             axum::routing::post(auth::exchange::exchange_token),
         )

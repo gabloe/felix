@@ -43,6 +43,7 @@ fn bootstrap_state(enabled: bool, tokens: Vec<String>) -> (Arc<InMemoryStore>, A
         )),
         in_flight: Default::default(),
         placement_wakes: Default::default(),
+        move_policy: Default::default(),
     };
     (store, state)
 }

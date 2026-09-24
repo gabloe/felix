@@ -94,6 +94,7 @@ impl ControlPlane {
             ),
             in_flight: Default::default(),
             placement_wakes: Default::default(),
+            move_policy: Default::default(),
         };
         let placement_wakes = Arc::clone(&state.placement_wakes);
 
