@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790268558794,
+  "lastUpdate": 1790273174338,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -14820,6 +14820,58 @@ window.BENCHMARK_DATA = {
             "range": "6815.87",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 923418.56\nmean: 926734.38\nstdev: 6815.87\ncv: 0.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "01845d8275a242501926f177bf82682cf2b142d5",
+          "message": "The Rust ClusterClient acts on the broker's error codes (#669)\n\n* feat(client): act on the broker's error codes in ClusterClient\n\nRetry, reroute or fail is decided by the retry class the broker sends\ninstead of by matching the message; peers without codes keep the old\nstring rules.\n\n- A cached owner or leader that answers retry/redirect (shard_unavailable,\n  fenced, draining, not_leader) is forgotten and the request goes to the\n  entry broker at once, including a single re-send from publish, since\n  nothing was applied.\n- outcome_unknown is returned by publish and never re-sent; at-least-once\n  and the idempotent producer re-send it.\n- retry_after honours retry_after_ms; not_found is retried for 5 s from\n  the first one, not for the whole attempt budget.\n- Fatal codes stop the loop on the first answer.\n- publish reconnects only on draining or a dead connection.\n- Subscribe and cache-watch refusals are typed BrokerErrors, and a\n  redirect target that has lost the shard sends the request back to the\n  entry broker once.\n\n* docs: describe how the Rust client reacts to each retry class",
+          "timestamp": "2026-09-24T11:03:42-07:00",
+          "tree_id": "04abc09817db6b9ab39762c272d6b534442457d1",
+          "url": "https://github.com/gabloe/felix/commit/01845d8275a242501926f177bf82682cf2b142d5"
+        },
+        "date": 1790273173763,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 498293.28,
+            "range": "29168.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 498293.28\nmean: 486670.36\nstdev: 29168.89\ncv: 5.99%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 498293.28,
+            "range": "29168.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 498293.28\nmean: 486670.36\nstdev: 29168.89\ncv: 5.99%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 112248.47,
+            "range": "3512.99",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 112248.47\nmean: 111224.61\nstdev: 3512.99\ncv: 3.16%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1122484.74,
+            "range": "35129.86",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1122484.74\nmean: 1112246.13\nstdev: 35129.86\ncv: 3.16%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
