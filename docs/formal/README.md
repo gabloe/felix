@@ -48,6 +48,16 @@ One shard, three brokers, one control plane, discrete time.
   A write admitted before the fence still commits. `WaitForDrained` is that
   wait. Reports carry the generation they were made at and one from a
   superseded generation is dropped on arrival, as the store does.
+- **Planners.** The control plane decides from a read of the store, not from
+  its live state. A decision (promote, fence, cut over) either reads and writes
+  in one step, or comes from a read one of `Planners` took earlier (`cpView`:
+  the assignment, the last report, whether the lease had lapsed) and still
+  holds, one write per read. Every assignment write bumps `ver`, the store's
+  generation. With `CasWrites` a write lands only if `ver` is still what its
+  read saw, which is `put_shard_assignment_if`. `Planners = {}` is a single
+  instance whose reads are never stale; the `StalePlanner` and
+  `StalePromotion` configurations hold one read across the other instance's
+  writes, as two control-plane instances over one database do.
 
 Not modelled: the storage layer (a commit is a commit), network partitions as
 such (they are lost heartbeats, lost reports, and delays), retention, and the
@@ -81,6 +91,10 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.4M states) |
 | `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over | pass every invariant (2.6M states) |
 | `FelixShardHandoffNoWait.cfg` | the same move cutting over without waiting for the drained report | violate `AtMostOneServing` |
+| `FelixShardStalePlannerCas.cfg` | two instances moving the shard, one acting on a held read; writes conditional on the generation read | pass every invariant (2.6M states) |
+| `FelixShardStalePlanner.cfg` | the same, writing unconditionally | violate `AtMostOneServing` |
+| `FelixShardStalePromotionCas.cfg` | two instances failing the shard over, one acting on a held read; writes conditional | pass every invariant (29K states) |
+| `FelixShardStalePromotion.cfg` | the same, writing unconditionally | violate `AtMostOneServing` |
 
 Drift is checked where it matters and nowhere else. The lease configurations
 carry drifting clocks and no writes, so every interleaving of three drifting
@@ -140,6 +154,18 @@ make are behaviours the spec permits, and says nothing about paths no test
 exercises. The drift that actually occurred (#268) is what the two checks
 above catch. Worth revisiting if the protocol grows another mechanism of the
 size of the planned handoff, or if drift gets past both checks once.
+
+### Two planners, one read
+
+`FelixShardStalePlanner.cfg` finds this. One instance reads the shard while
+its leader is live and its report lists both followers caught up, and holds
+that read. The other fences towards one follower, the leader reports drained,
+and it cuts over. The held read's fence lands next: it names the old leader
+again, at a new generation, with the other follower as successor. That leader
+reports drained, and the cut-over to the second follower lands while the first
+still holds a live lease. `FelixShardStalePromotion.cfg` is the failover
+version: two promotions from one report of two caught-up followers. With
+`CasWrites`, each late write finds a newer generation and writes nothing.
 
 ### The interval that is load-bearing
 

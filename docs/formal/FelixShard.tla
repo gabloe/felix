@@ -41,6 +41,13 @@
 (* up, asynchronously, and the control plane promotes from the last report *)
 (* it received. `Promotion = "log-order"` promotes the live replica with   *)
 (* the highest (last generation, length), Raft's election restriction.     *)
+(*                                                                         *)
+(* The control plane decides from a read. A decision may read and write in *)
+(* one step, or come from a read one of `Planners` took earlier (`cpView`,  *)
+(* by Snapshot) and still holds. Every assignment write bumps `ver`, the   *)
+(* store's generation. `CasWrites` makes a write land only if `ver` is     *)
+(* still what its read saw; without it, TLC finds a planner writing from a *)
+(* read another instance has already acted on.                             *)
 (***************************************************************************)
 
 EXTENDS Naturals, Sequences, FiniteSets, TLC
@@ -59,11 +66,14 @@ CONSTANTS
     ReportBeforeAck, \* whether a Quorum ack waits for the report describing it
     Handoff,        \* whether the control plane may move the shard off a live leader
     WaitForDrained, \* whether a cut-over waits for the leader's drained report
-    MaxMoves        \* how many planned moves the run starts; bounds the state space
+    MaxMoves,       \* how many planned moves the run starts; bounds the state space
+    Planners,       \* control-plane instances deciding placement, each from its own read
+    CasWrites       \* whether an assignment write lands only at the generation it read
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
 ASSUME Handoff \in BOOLEAN /\ WaitForDrained \in BOOLEAN
+ASSUME CasWrites \in BOOLEAN
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -88,20 +98,24 @@ VARIABLES
     draining,   \* the control plane has fenced the leader so the shard can move
     successor,  \* where it is moving to; meaningful only while draining
     stopped,    \* each broker has seen the fence and stopped serving
-    moves       \* how many planned moves have been started
+    moves,      \* how many planned moves have been started
+    ver,        \* the store's generation for the assignment: bumped by every write
+    cpView      \* the read each planner holds: {} or {view}
 
 vars == << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
            hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
-           draining, successor, stopped, moves >>
+           draining, successor, stopped, moves, ver, cpView >>
 
-handoffVars == << draining, successor, stopped, moves >>
+\* Placement's state, which only the control plane's decisions change.
+handoffVars == << draining, successor, stopped, moves, ver, cpView >>
 
 NoReport == [holders |-> {}, len |-> 0, drained |-> FALSE, gen |-> 0]
 
 Majority(S) == Cardinality(S) * 2 > Cardinality(Brokers)
 
-\* Brokers are interchangeable, which lets TLC fold their permutations.
-Symm == Permutations(Brokers)
+\* Brokers are interchangeable, and so are planners, which lets TLC fold
+\* their permutations.
+Symm == Permutations(Brokers) \cup Permutations(Planners)
 
 \* A broker's lease is good while it believes it leads and its own clock is
 \* short of its own expiry by the margin it gives up.
@@ -139,6 +153,8 @@ Init ==
     /\ successor = leader
     /\ stopped = [b \in Brokers |-> FALSE]
     /\ moves = 0
+    /\ ver = 0
+    /\ cpView = [p \in Planners |-> {}]
 
 -----------------------------------------------------------------------------
 (* Time. Real time ticks, and with it each broker's clock moves by zero,   *)
@@ -204,7 +220,7 @@ StepDown(b) ==
     /\ stopped' = [stopped EXCEPT ![b] = FALSE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bexpiry,
                     hbOut, hbAt, log, hwm, halted, acked, writes, staleCommit,
-                    draining, successor, moves >>
+                    draining, successor, moves, ver, cpView >>
 
 -----------------------------------------------------------------------------
 (* Writes. Admission checks the lease; the commit checks it again, or does *)
@@ -348,21 +364,50 @@ LoseReport ==
 (* is the rule under test.                                                 *)
 
 \* A candidate under the design as written: reported caught up by the last
-\* report the control plane has, and not halted.
-ByLeaderReport(f) == f \in report.holders /\ f \notin halted
+\* report the planner read, and not halted.
+ByLeaderReport(r, f) == f \in r.holders /\ f \notin halted
 
 \* A candidate under the log-order rule: among the live replicas, one whose
 \* (last generation, length) is greatest.
-ByLogOrder(f) ==
+ByLogOrder(old, f) ==
     /\ f \notin halted
-    /\ \A o \in Brokers \ (halted \cup {leader}) :
+    /\ \A o \in Brokers \ (halted \cup {old}) :
         \/ LastGen(o) < LastGen(f)
         \/ LastGen(o) = LastGen(f) /\ Len(log[o]) <= Len(log[f])
 
-Promote(f) ==
-    /\ f /= leader
-    /\ now >= cpExpiry + Margin
-    /\ IF Promotion = "leader-report" THEN ByLeaderReport(f) ELSE ByLogOrder(f)
+\* What a planner reads: the assignment and the last report. `lapsed` is
+\* judged at the read and stays true: once the lease at a generation has
+\* lapsed no heartbeat renews it, as a node marked down stays down.
+Now == [ver       |-> ver,
+        gen       |-> gen,
+        leader    |-> leader,
+        report    |-> report,
+        draining  |-> draining,
+        successor |-> successor,
+        lapsed    |-> now >= cpExpiry + Margin]
+
+\* A planner reads, and holds the read to decide from later.
+Snapshot(p) ==
+    /\ cpView' = [cpView EXCEPT ![p] = {Now}]
+    /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
+                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
+                    draining, successor, stopped, moves, ver >>
+
+\* A write decided from read `v` lands only if nothing was written since,
+\* when the store compares generations.
+Cas(v) == CasWrites => v.ver = ver
+
+\* Each decision below is made from a read `v` and leaves the planners'
+\* reads as `views`: a held read is used up by the write it decided, one
+\* write per shard per pass. Every write bumps the store's generation.
+Promote(v, f, views) ==
+    /\ f /= v.leader
+    /\ v.lapsed
+    /\ IF Promotion = "leader-report" THEN ByLeaderReport(v.report, f)
+                                      ELSE ByLogOrder(v.leader, f)
+    /\ Cas(v)
+    /\ ver' = ver + 1
+    /\ cpView' = views
     /\ gen' = gen + 1
     /\ leader' = f
     /\ cpExpiry' = now + L
@@ -383,18 +428,33 @@ Promote(f) ==
 (* whether the log has stopped growing, and the cut-over waits for that -- *)
 (* or does not, which is the knob.                                         *)
 
-Fence(f) ==
+\* The fence names the leader that was read. If that is no longer the
+\* leader -- only possible without `CasWrites` -- the write hands the shard
+\* back to it at a new generation, fenced from the start.
+Fence(v, f, views) ==
     /\ Handoff
     /\ moves < MaxMoves
-    /\ ~draining
-    /\ f /= leader
-    /\ f \in report.holders /\ f \notin halted
+    /\ ~v.draining
+    /\ f /= v.leader
+    /\ f \in v.report.holders /\ f \notin halted
+    /\ Cas(v)
+    /\ ver' = ver + 1
+    /\ cpView' = views
+    /\ IF v.leader = leader
+       THEN UNCHANGED << gen, leader, cpExpiry, report, bgen, bexpiry, pending, stopped >>
+       ELSE /\ gen' = gen + 1
+            /\ leader' = v.leader
+            /\ cpExpiry' = now + L
+            /\ bgen' = [bgen EXCEPT ![v.leader] = gen + 1]
+            /\ bexpiry' = [bexpiry EXCEPT ![v.leader] = clock[v.leader] + L]
+            /\ pending' = [pending EXCEPT ![v.leader] = 0]
+            /\ report' = NoReport
+            /\ stopped' = [stopped EXCEPT ![v.leader] = TRUE]
     /\ draining' = TRUE
     /\ successor' = f
     /\ moves' = moves + 1
-    /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
-                    hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
-                    stopped >>
+    /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
+                    staleCommit >>
 
 \* The leader sees the fence. Modelled as the broker noticing; the cut-over
 \* below does not rely on it noticing in time.
@@ -404,12 +464,15 @@ ObserveFence(b) ==
     /\ stopped' = [stopped EXCEPT ![b] = TRUE]
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, inflight, bgen, bexpiry,
                     hbOut, hbAt, log, hwm, halted, pending, acked, writes, staleCommit,
-                    draining, successor, moves >>
+                    draining, successor, moves, ver, cpView >>
 
-CutOver(f) ==
-    /\ draining /\ successor = f
+CutOver(v, f, views) ==
+    /\ v.draining /\ v.successor = f
     /\ f \notin halted
-    /\ WaitForDrained => (report.gen = gen /\ report.drained /\ f \in report.holders)
+    /\ WaitForDrained => (v.report.gen = v.gen /\ v.report.drained /\ f \in v.report.holders)
+    /\ Cas(v)
+    /\ ver' = ver + 1
+    /\ cpView' = views
     /\ gen' = gen + 1
     /\ leader' = f
     /\ cpExpiry' = now + L
@@ -421,6 +484,10 @@ CutOver(f) ==
     /\ stopped' = [stopped EXCEPT ![f] = FALSE]
     /\ UNCHANGED << now, clock, inflight, hbOut, hbAt, log, hwm, halted, acked, writes,
                     staleCommit, successor, moves >>
+
+\* A placement write, from a read taken in the same step or from one a
+\* planner has held since.
+Decide(v, f, views) == Promote(v, f, views) \/ Fence(v, f, views) \/ CutOver(v, f, views)
 
 -----------------------------------------------------------------------------
 
@@ -435,13 +502,13 @@ Next ==
         \/ Commit(b)
         \/ AckQuorum(b)
         \/ Report(b)
-        \/ Promote(b)
-        \/ Fence(b)
         \/ ObserveFence(b)
-        \/ CutOver(b)
+        \/ Decide(Now, b, cpView)
+        \/ \E p \in Planners : \E v \in cpView[p] : Decide(v, b, [cpView EXCEPT ![p] = {}])
         \/ \E f \in Brokers : Ship(b, f) \/ LearnHwm(b, f)
     \/ DeliverReport
     \/ LoseReport
+    \/ \E p \in Planners : Snapshot(p)
 
 Spec == Init /\ [][Next]_vars
 
@@ -490,5 +557,7 @@ TypeOK ==
     /\ draining \in BOOLEAN
     /\ successor \in Brokers
     /\ moves \in 0..MaxMoves
+    /\ ver \in Nat
+    /\ \A p \in Planners : Cardinality(cpView[p]) <= 1
 
 =============================================================================
