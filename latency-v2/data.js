@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790266023471,
+  "lastUpdate": 1790268199269,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18678,6 +18678,72 @@ window.BENCHMARK_DATA = {
             "range": "894.00",
             "unit": "us",
             "extra": "trials: 5\nmedian: 522.00\nmean: 1140.80\nstdev: 894.00\ncv: 78.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3feac91f515045f5fa8b26daa87d5464c98fc33a",
+          "message": "Python and TypeScript errors are typed by the broker's code (#666)\n\n* feat(sdk): pick Python and TypeScript error classes from the broker's code\n\nA refusal that carries a broker error code now becomes an exception chosen\nfrom that code, with the code, retry class and detail on it: Python's\ncode/retry/detail, TypeScript's brokerCode/retry/detail. Without a code (an\nolder broker, or a failure in the client) the class still comes from the\nmessage, as before.\n\nNew classes, all under FelixError: ShardUnavailableError (shard_unavailable,\nnot_leader), OverloadedError, and OutcomeUnknownError (quorum_timeout,\nleadership_lost, unacknowledged, or any code sent as outcome_unknown). A\ndraining broker is a ConnectionError. In TypeScript, retryable follows the\nbroker's retry class when it sent one.\n\nThe TypeScript error classes move to errors.js so the decoding can be tested\nwithout the addon.\n\n* test(conformance): a refusal during a move is retryable, a lost quorum is outcome-unknown\n\nTwo required scenarios. error.shard_unavailable_is_retryable: a publish to\na shard fenced mid-move is typed shard_unavailable or not_leader with a\nretry class that allows resending. error.quorum_timeout_is_outcome_unknown:\na Quorum write the leader could not get a majority to confirm is\nquorum_timeout / outcome_unknown.\n\nBoth are deterministic. The harness gains Cluster::fence_shard, which\ndrains a shard's owner and steps placement only until the assignment is\ndraining, so the fence holds until placement is stepped again. The lost\nquorum is the existing partition fault. client-fixture serves the same\nfaults on a localhost control endpoint (POST /fence, /partition, /heal),\npausing its placement timer while one is held, so the Python and\nTypeScript suites can ask for them.\n\nThe existing error.*_is_typed checks now assert the code: forbidden for an\nunauthorized publish, and not_found for an unknown stream, or\nshard_unavailable from a broker that has no assignment for the shard and\ncannot tell an unregistered stream from an unplaced one.\n\n* docs: the error classes and attributes the Python and TypeScript clients expose\n\n* feat(typescript)!: err.code is the broker's error code\n\nerr.code now holds the broker's code (forbidden, shard_unavailable, ...),\nmatching the Python exceptions, and is undefined when the broker sent none,\nas are retry and detail. The client's own kind (FELIX_AUTH, ...) moves to\nerr.kind, which is always set. brokerCode is gone.\n\nThe FELIX_* message prefix stays: a napi error carries only a status and a\nmessage, so the prefix is still how the kind and the broker's code reach\nerrors.js.",
+          "timestamp": "2026-09-24T09:40:28-07:00",
+          "tree_id": "f3aaabf3e86e73e25cf3a9127eb970236564691d",
+          "url": "https://github.com/gabloe/felix/commit/3feac91f515045f5fa8b26daa87d5464c98fc33a"
+        },
+        "date": 1790268196554,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 171,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 171.00\nmean: 171.00\nstdev: 1.00\ncv: 0.58%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 212,
+            "range": "1.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 212.00\nmean: 211.80\nstdev: 1.79\ncv: 0.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 262,
+            "range": "27.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 262.00\nmean: 263.20\nstdev: 27.14\ncv: 10.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 204,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 204.00\nmean: 204.20\nstdev: 0.45\ncv: 0.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 405,
+            "range": "33.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 405.00\nmean: 415.00\nstdev: 33.26\ncv: 8.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 640,
+            "range": "485.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 640.00\nmean: 816.20\nstdev: 485.30\ncv: 59.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
