@@ -9,6 +9,7 @@ use anyhow::{Result, anyhow};
 use felix_wire::Message;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::telemetry::{t_counter, t_gauge};
 use crate::serving::quic::{
@@ -36,6 +37,9 @@ pub(crate) enum Outgoing {
         request_id: u64,
         /// `None` acknowledges success; `Some` reports failure.
         error: Option<String>,
+        /// The failure's code. The writer drops it for a client that did not
+        /// advertise `FLAG_BINARY_PUBLISH_ACK_CODE`.
+        code: Option<(felix_wire::ErrorCode, felix_wire::RetryClass)>,
         /// Set when the batch was forwarded, naming the shard's owner so the
         /// client can send the next one straight there.
         ///
@@ -89,24 +93,22 @@ impl AckEncoding {
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
                 error: None,
+                code: None,
                 forwarded_to,
             },
         }
     }
 
     /// Build a failure ack in this encoding.
-    pub(crate) fn error(self, request_id: u64, message: impl Into<String>) -> Outgoing {
-        let message = message.into();
+    pub(crate) fn error(self, request_id: u64, error: ClientError) -> Outgoing {
         match self {
             AckEncoding::Json | AckEncoding::Idempotent => {
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message,
-                })
+                Outgoing::Message(error.into_publish_error(request_id))
             }
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
-                error: Some(message),
+                code: Some((error.code().clone(), error.retry())),
+                error: Some(error.message().to_string()),
                 // A failed publish has no owner worth caching: the batch did
                 // not land anywhere, so where it would have gone is not a
                 // route the client should adopt.
@@ -131,7 +133,7 @@ impl AckEncoding {
                 message: err.to_string(),
             });
         }
-        self.error(request_id, err.to_string())
+        self.error(request_id, ClientError::from_anyhow(err))
     }
 }
 

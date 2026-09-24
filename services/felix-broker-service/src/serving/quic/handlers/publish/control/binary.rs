@@ -15,6 +15,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, watch};
 use super::batch::handle_publish_batch_message;
 use crate::observability::timings;
 use crate::serving::auth::AuthContext;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::ack::{
     AckEncoding, AckTimeoutState, AckWaiterMessage, Outgoing, handle_ack_enqueue_result,
     send_outgoing_critical,
@@ -91,7 +92,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
         &batch.stream,
         batch.key.as_deref(),
     );
-    let Some(target) = publish_target(
+    let Ok(target) = publish_target(
         resolve_route(
             broker,
             publish_ctx.authority(),
@@ -211,14 +212,14 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
             return Err(anyhow!("malformed acked publish prefix"));
         }
     };
-    let reply_error = |message: String| async move {
+    let reply_error = |error: ClientError| async move {
         handle_ack_enqueue_result(
             send_outgoing_critical(
                 out_ack_tx,
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                AckEncoding::Binary.error(request_id, message),
+                AckEncoding::Binary.error(request_id, error),
             )
             .await,
             ack_timeout_state,
@@ -241,7 +242,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
             }
             log_decode_error("acked_binary_publish_batch", &anyhow!(err), frame);
             t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
-            reply_error("malformed publish batch".to_string()).await?;
+            reply_error(ClientError::invalid("malformed publish batch")).await?;
             return Ok(());
         }
     };
@@ -254,12 +255,12 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
     let producer = batch.producer;
     let batch = batch.batch;
     let Some(auth_ctx) = auth_ctx else {
-        reply_error("auth required".to_string()).await?;
+        reply_error(ClientError::unauthenticated("auth required")).await?;
         return Ok(());
     };
     if auth_ctx.tenant_id != batch.tenant_id {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
-        reply_error("tenant mismatch".to_string()).await?;
+        reply_error(ClientError::forbidden("tenant mismatch")).await?;
         return Ok(());
     }
     let resource = stream_resource(
@@ -269,7 +270,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
     );
     if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
         t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
-        reply_error("forbidden".to_string()).await?;
+        reply_error(ClientError::forbidden("forbidden")).await?;
         return Ok(());
     }
 

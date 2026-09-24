@@ -72,7 +72,13 @@ pub enum ForwardError {
     /// The owner refused, or could not be reached, and retrying is allowed but
     /// exhausted. Nothing was applied.
     #[error("could not forward to the owner of {stream}: {detail}")]
-    Refused { stream: String, detail: String },
+    Refused {
+        stream: String,
+        detail: String,
+        /// The owner's last typed refusal, if it gave one. `None` means it
+        /// could not be reached or never answered with a code.
+        code: Option<ErrorCode>,
+    },
     /// The batch was sent and its answer never arrived. It may or may not have
     /// been applied, and this broker cannot tell.
     #[error("forwarded publish to {node_id} was not acknowledged: {detail}")]
@@ -100,6 +106,7 @@ pub async fn forward_publish(
     let deadline = Instant::now() + budget;
     let mut target = target.clone();
     let mut last = String::new();
+    let mut last_code = None;
     // Set once an owner has said it does not know the credentialed kind: it
     // predates it, and the only frame it can serve is the legacy one. That
     // owner checks nothing either way, so falling back costs no protection
@@ -124,6 +131,7 @@ pub async fn forward_publish(
             metrics::record_forward(metrics::OUTCOME_EXHAUSTED);
             return Err(ForwardError::Refused {
                 stream: key.stream.clone(),
+                code: last_code,
                 detail: budget_spent(&target.node_id, budget, attempt, &last),
             });
         };
@@ -178,6 +186,7 @@ pub async fn forward_publish(
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
+                        code: None,
                         detail: format!(
                             "owner {} advertised an unusable address {}",
                             moved.node_id, moved.advertise_addr
@@ -192,6 +201,7 @@ pub async fn forward_publish(
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
+                        code: None,
                         detail: format!(
                             "owner {} redirected in a loop at generation {}",
                             moved.node_id, moved.generation
@@ -211,14 +221,17 @@ pub async fn forward_publish(
                 // An owner from before credentialed forwards. Nothing was
                 // applied; send what it can read.
                 last = format!("{:?}: {}", err.code, err.detail);
+                last_code = Some(err.code);
                 legacy = true;
             }
             Ok(InternalMessage::ForwardPublishError(err)) => {
                 last = format!("{:?}: {}", err.code, err.detail);
+                last_code = Some(err.code);
                 if !err.code.is_retryable() {
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
+                        code: last_code,
                         detail: last,
                     });
                 }
@@ -230,11 +243,13 @@ pub async fn forward_publish(
                 metrics::record_forward(metrics::OUTCOME_REFUSED);
                 return Err(ForwardError::Refused {
                     stream: key.stream.clone(),
+                    code: None,
                     detail: format!("owner answered with an unexpected {:?}", other.kind()),
                 });
             }
             Err(err) if err.is_retryable() => {
                 last = err.to_string();
+                last_code = None;
                 sleep_within(retry_delay(attempt), deadline).await;
             }
             Err(err @ (PeerError::Disconnected { .. } | PeerError::Timeout { .. })) => {
@@ -250,6 +265,7 @@ pub async fn forward_publish(
                 metrics::record_forward(metrics::OUTCOME_REFUSED);
                 return Err(ForwardError::Refused {
                     stream: key.stream.clone(),
+                    code: last_code,
                     detail: err.to_string(),
                 });
             }
@@ -259,6 +275,7 @@ pub async fn forward_publish(
     metrics::record_forward(metrics::OUTCOME_EXHAUSTED);
     Err(ForwardError::Refused {
         stream: key.stream.clone(),
+        code: last_code,
         detail: format!("gave up after {MAX_ATTEMPTS} attempts: {last}"),
     })
 }
@@ -325,6 +342,7 @@ pub async fn forward_cache_op(
 ) -> Result<Option<Bytes>, ForwardError> {
     let mut target = target.clone();
     let mut last = String::new();
+    let mut last_code = None;
     let (op, value, ttl_ms) = request.parts();
     // See `forward_publish`: an owner that predates the credentialed kind gets
     // the legacy one, which is all it can read.
@@ -372,6 +390,7 @@ pub async fn forward_cache_op(
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
+                        code: None,
                         detail: format!(
                             "owner {} advertised an unusable address {}",
                             moved.node_id, moved.advertise_addr
@@ -385,6 +404,7 @@ pub async fn forward_cache_op(
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
+                        code: None,
                         detail: format!(
                             "owner {} redirected in a loop at generation {}",
                             moved.node_id, moved.generation
@@ -405,14 +425,17 @@ pub async fn forward_cache_op(
                 if err.code == ErrorCode::UnsupportedKind && !legacy =>
             {
                 last = format!("{:?}: {}", err.code, err.detail);
+                last_code = Some(err.code);
                 legacy = true;
             }
             Ok(InternalMessage::ForwardCacheError(err)) => {
                 last = format!("{:?}: {}", err.code, err.detail);
+                last_code = Some(err.code);
                 if !err.code.is_retryable() {
                     metrics::record_forward(metrics::OUTCOME_REFUSED);
                     return Err(ForwardError::Refused {
                         stream: key.stream.clone(),
+                        code: last_code,
                         detail: last,
                     });
                 }
@@ -422,11 +445,13 @@ pub async fn forward_cache_op(
                 metrics::record_forward(metrics::OUTCOME_REFUSED);
                 return Err(ForwardError::Refused {
                     stream: key.stream.clone(),
+                    code: None,
                     detail: format!("owner answered with an unexpected {:?}", other.kind()),
                 });
             }
             Err(err) if err.is_retryable() => {
                 last = err.to_string();
+                last_code = None;
                 tokio::time::sleep(retry_delay(attempt)).await;
             }
             Err(err @ (PeerError::Disconnected { .. } | PeerError::Timeout { .. }))
@@ -440,6 +465,7 @@ pub async fn forward_cache_op(
             }
             Err(err) => {
                 last = err.to_string();
+                last_code = None;
                 tokio::time::sleep(retry_delay(attempt)).await;
             }
         }
@@ -448,6 +474,7 @@ pub async fn forward_cache_op(
     metrics::record_forward(metrics::OUTCOME_REFUSED);
     Err(ForwardError::Refused {
         stream: key.stream.clone(),
+        code: last_code,
         detail: last,
     })
 }

@@ -72,11 +72,13 @@ pub use cluster::{
     ShardedCacheWatchItem, ShardedGroup, ShardedGroupRecord, ShardedSubscription,
 };
 pub use config::{ClientConfig, ClientSubQueuePolicy};
-pub use error::{NotLeaderError, PublishRefused, SubscribeCursorError};
+pub use error::{BrokerError, NotLeaderError, PublishRefused, SubscribeCursorError};
 pub use publish::{IdempotentProducer, PublishSharding, Publisher};
 pub use subscribe::{Event, Subscription};
 pub use telemetry::{
     FrameCountersSnapshot, frame_counters_snapshot, publishes_forwarded, reset_frame_counters,
 };
 
-pub use felix_wire::{CursorErrorReason, PublishRefusalReason, StartPosition};
+pub use felix_wire::{
+    CursorErrorReason, ErrorCode, ErrorDetail, PublishRefusalReason, RetryClass, StartPosition,
+};

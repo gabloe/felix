@@ -102,11 +102,8 @@ async fn maybe_wait_for_ack_ok() -> Result<()> {
 async fn maybe_wait_for_ack_error() -> Result<()> {
     crate::timings::enable_collection(1);
     let request_id = 7;
-    let (mut recv, shutdown_tx, server_task) = open_ack_stream(Some(Message::PublishError {
-        request_id,
-        message: "nope".into(),
-    }))
-    .await?;
+    let (mut recv, shutdown_tx, server_task) =
+        open_ack_stream(Some(Message::publish_error(request_id, "nope"))).await?;
     let mut scratch = BytesMut::with_capacity(64 * 1024);
     assert!(
         maybe_wait_for_ack(
@@ -183,6 +180,71 @@ async fn read_ack_message_with_timing_decode_error() -> Result<()> {
         .await
         .is_err()
     );
+    let _ = shutdown_tx.send(());
+    server_task.await.context("server task join")??;
+    Ok(())
+}
+
+/// A coded refusal is typed; the same refusal without a code keeps its text
+/// and is not.
+#[tokio::test]
+async fn a_coded_publish_error_is_a_broker_error() -> Result<()> {
+    let request_id = 8;
+    let coded = Message::PublishError {
+        request_id,
+        message: "no majority".to_string(),
+        code: Some(felix_wire::ErrorCode::QuorumTimeout),
+        retry: Some(felix_wire::RetryClass::OutcomeUnknown),
+        detail: None,
+    };
+    for (message, typed) in [
+        (coded, true),
+        (Message::publish_error(request_id, "no majority"), false),
+    ] {
+        let (mut recv, shutdown_tx, server_task) = open_ack_stream(Some(message)).await?;
+        let mut scratch = BytesMut::with_capacity(64 * 1024);
+        let err = maybe_wait_for_ack(
+            &mut recv,
+            AckMode::PerMessage,
+            Some(request_id),
+            &mut scratch,
+        )
+        .await
+        .expect_err("refused");
+        assert_eq!(err.to_string(), "publish failed: no majority");
+        let broker = err.downcast_ref::<crate::BrokerError>();
+        assert_eq!(broker.is_some(), typed);
+        if let Some(broker) = broker {
+            assert_eq!(broker.code, felix_wire::ErrorCode::QuorumTimeout);
+            assert_eq!(broker.retry, felix_wire::RetryClass::OutcomeUnknown);
+        }
+        let _ = shutdown_tx.send(());
+        server_task.await.context("server task join")??;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_binary_ack_carries_its_code_to_the_caller() -> Result<()> {
+    let bytes = felix_wire::binary::encode_publish_ack_bytes_coded(
+        9,
+        Some("shed"),
+        Some((
+            &felix_wire::ErrorCode::Overloaded,
+            felix_wire::RetryClass::RetryAfter,
+        )),
+        None,
+    )?;
+    let (mut recv, shutdown_tx, server_task) = open_ack_stream_bytes(Some(bytes.to_vec())).await?;
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let err = maybe_wait_for_ack(&mut recv, AckMode::PerMessage, Some(9), &mut scratch)
+        .await
+        .expect_err("refused");
+    let broker = err
+        .downcast_ref::<crate::BrokerError>()
+        .expect("typed refusal");
+    assert_eq!(broker.code, felix_wire::ErrorCode::Overloaded);
+    assert_eq!(broker.retry, felix_wire::RetryClass::RetryAfter);
     let _ = shutdown_tx.send(());
     server_task.await.context("server task join")??;
     Ok(())

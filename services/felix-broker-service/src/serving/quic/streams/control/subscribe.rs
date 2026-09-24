@@ -9,6 +9,7 @@ use felix_wire::StartPosition;
 use super::authz::authorize_stream_simple;
 use super::responder::send_control_error;
 use super::{Ctx, Session, Step};
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
@@ -131,7 +132,7 @@ pub(super) async fn subscribe_cursor_error(cx: &Ctx<'_>, _session: &mut Session)
         ack_throttle_tx,
         ack_timeout_state,
         cancel_tx,
-        "subscribe_cursor_error is a server-to-client message",
+        ClientError::invalid("subscribe_cursor_error is a server-to-client message"),
     )
     .await?;
     Ok(Step::Close(false))

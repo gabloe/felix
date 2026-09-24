@@ -853,10 +853,19 @@ subscription per shard, and follows each shard's own redirect.
 ```json
 {
   "type": "error",
-  "request_id": "string",
-  "message": "Descriptive error message"
+  "message": "Descriptive error message",
+  "code": "shard_unavailable",
+  "retry": "retry",
+  "detail": { "reason": "not_ready" }
 }
 ```
+
+`code`, `retry` and `detail` are sent only to a client that offered
+`FEATURE_ERROR_CODES` in `auth`; other clients get `type` and `message` alone.
+`publish_error` carries the same fields next to its `request_id`. The `retry`
+class says whether the request may have been applied (`outcome_unknown`) or
+certainly was not (`retry`, `retry_after`, `redirect`), and an unknown `code`
+must be tolerated. The full table is in `docs/protocol.md` under "Error codes".
 
 ### Common Errors
 

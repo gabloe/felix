@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use anyhow::Result;
-use felix_wire::Message;
 use tokio::sync::{Mutex, mpsc, watch};
 
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::{
     AckTimeoutState, Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
@@ -28,7 +28,7 @@ pub(super) async fn send_control_error(
     ack_throttle_tx: &watch::Sender<bool>,
     ack_timeout_state: &Arc<Mutex<AckTimeoutState>>,
     cancel_tx: &watch::Sender<bool>,
-    message: &str,
+    error: ClientError,
 ) -> Result<()> {
     handle_ack_enqueue_result(
         send_outgoing_critical(
@@ -36,9 +36,7 @@ pub(super) async fn send_control_error(
             out_ack_depth,
             "felix_broker_out_ack_depth",
             ack_throttle_tx,
-            Outgoing::Message(Message::Error {
-                message: message.to_string(),
-            }),
+            Outgoing::Message(error.into_message()),
         )
         .await,
         ack_timeout_state,

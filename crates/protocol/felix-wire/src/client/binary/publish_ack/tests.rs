@@ -130,3 +130,76 @@ fn a_truncated_owner_is_refused() {
         }
     }
 }
+
+#[test]
+fn a_failed_ack_carries_its_code_under_the_flag() {
+    use crate::{ErrorCode, FLAG_BINARY_PUBLISH_ACK_CODE, RetryClass};
+
+    let bytes = binary::encode_publish_ack_bytes_coded(
+        11,
+        Some("did not reach a majority"),
+        Some((&ErrorCode::QuorumTimeout, RetryClass::OutcomeUnknown)),
+        None,
+    )
+    .expect("encode");
+    let frame = Frame::decode(bytes).expect("frame");
+    assert_eq!(
+        frame.header.flags,
+        FLAG_BINARY_PUBLISH_ACK | FLAG_BINARY_PUBLISH_ACK_CODE
+    );
+    let decoded = binary::decode_publish_ack(&frame).expect("decode");
+    assert_eq!(decoded.error.as_deref(), Some("did not reach a majority"));
+    assert_eq!(
+        decoded.code,
+        Some((ErrorCode::QuorumTimeout, RetryClass::OutcomeUnknown))
+    );
+}
+
+/// Without a code the frame is the one an older broker sends, and a success
+/// never carries one even if asked to.
+#[test]
+fn an_ack_without_a_code_is_unchanged() {
+    use crate::{ErrorCode, RetryClass};
+
+    let old = binary::encode_publish_ack_bytes(12, Some("stream full")).expect("old");
+    let new =
+        binary::encode_publish_ack_bytes_coded(12, Some("stream full"), None, None).expect("new");
+    assert_eq!(old, new);
+
+    let ok = binary::encode_publish_ack_bytes(13, None).expect("ok");
+    let coded_ok = binary::encode_publish_ack_bytes_coded(
+        13,
+        None,
+        Some((&ErrorCode::Internal, RetryClass::Fatal)),
+        None,
+    )
+    .expect("coded ok");
+    assert_eq!(ok, coded_ok);
+}
+
+/// A code number this version does not know still decodes, keeping its class.
+#[test]
+fn an_unknown_binary_code_keeps_its_retry_class() {
+    use crate::{ErrorCode, FLAG_BINARY_PUBLISH_ACK_CODE, RetryClass};
+
+    let mut buf = BytesMut::new();
+    buf.put_u8(1);
+    buf.put_u64(14);
+    buf.put_u16(4);
+    buf.extend_from_slice(b"nope");
+    buf.put_u16(999);
+    buf.put_u8(RetryClass::Retry.to_u8());
+    let frame = Frame::new(
+        FLAG_BINARY_PUBLISH_ACK | FLAG_BINARY_PUBLISH_ACK_CODE,
+        buf.freeze(),
+    )
+    .expect("frame");
+    let decoded = binary::decode_publish_ack(&frame).expect("decode");
+    assert_eq!(
+        decoded.code,
+        Some((
+            ErrorCode::Unknown("code_999".to_string()),
+            RetryClass::Retry
+        ))
+    );
+}

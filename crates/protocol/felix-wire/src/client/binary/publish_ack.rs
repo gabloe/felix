@@ -7,6 +7,14 @@
 //! u8[message_len] message
 //! ```
 //!
+//! With FLAG_BINARY_PUBLISH_ACK_CODE (failed acks only), the error's code
+//! follows the message:
+//!
+//! ```text
+//! u16 code          (ErrorCode::to_u16)
+//! u8  retry         (RetryClass::to_u8)
+//! ```
+//!
 //! With FLAG_BINARY_PUBLISH_ACK_OWNER, the batch was forwarded and the owner
 //! follows:
 //!
@@ -21,7 +29,10 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::de::Error as SerdeError;
 
-use crate::client::flags::{FLAG_BINARY_PUBLISH_ACK, FLAG_BINARY_PUBLISH_ACK_OWNER};
+use crate::client::error_code::{ErrorCode, RetryClass};
+use crate::client::flags::{
+    FLAG_BINARY_PUBLISH_ACK, FLAG_BINARY_PUBLISH_ACK_CODE, FLAG_BINARY_PUBLISH_ACK_OWNER,
+};
 use crate::client::frame::{Frame, FrameHeader};
 use crate::error::{Error, Result};
 
@@ -34,6 +45,9 @@ pub struct PublishAck {
     pub request_id: u64,
     /// `None` on success, `Some(message)` when the publish failed.
     pub error: Option<String>,
+    /// The failure's code and retry class, when the broker sent them. Only a
+    /// client that advertised `FLAG_BINARY_PUBLISH_ACK_CODE` gets them.
+    pub code: Option<(ErrorCode, RetryClass)>,
     /// Set when this batch was forwarded, naming the shard's owner.
     ///
     /// `None` means the broker handled it itself -- or predates the hint, or
@@ -73,10 +87,29 @@ pub fn encode_publish_ack_bytes_owned(
     error: Option<&str>,
     forwarded_to: Option<&PublishOwner>,
 ) -> Result<Bytes> {
+    encode_publish_ack_bytes_coded(request_id, error, None, forwarded_to)
+}
+
+/// Encode a publish ack, optionally with a failure's code and the owner a
+/// forwarded batch went to.
+///
+/// `code` sets `FLAG_BINARY_PUBLISH_ACK_CODE` and is ignored on success, so the
+/// caller must only pass it for a client that advertised that bit -- the same
+/// rule as `forwarded_to`.
+pub fn encode_publish_ack_bytes_coded(
+    request_id: u64,
+    error: Option<&str>,
+    code: Option<(&ErrorCode, RetryClass)>,
+    forwarded_to: Option<&PublishOwner>,
+) -> Result<Bytes> {
     let message = error.unwrap_or("");
     let message_bytes = message.as_bytes();
     let message_len = u16::try_from(message_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
+    let code = code.filter(|_| error.is_some());
     let mut payload_len = 1 + 8 + 2 + message_bytes.len();
+    if code.is_some() {
+        payload_len += 2 + 1;
+    }
 
     let owner = match forwarded_to {
         Some(owner) => {
@@ -90,11 +123,13 @@ pub fn encode_publish_ack_bytes_owned(
         None => None,
     };
 
-    let flags = if owner.is_some() {
-        FLAG_BINARY_PUBLISH_ACK | FLAG_BINARY_PUBLISH_ACK_OWNER
-    } else {
-        FLAG_BINARY_PUBLISH_ACK
-    };
+    let mut flags = FLAG_BINARY_PUBLISH_ACK;
+    if owner.is_some() {
+        flags |= FLAG_BINARY_PUBLISH_ACK_OWNER;
+    }
+    if code.is_some() {
+        flags |= FLAG_BINARY_PUBLISH_ACK_CODE;
+    }
 
     let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
     FrameHeader::new(flags, payload_len as u32).encode(&mut buf);
@@ -106,6 +141,10 @@ pub fn encode_publish_ack_bytes_owned(
     buf.put_u64(request_id);
     buf.put_u16(message_len);
     buf.extend_from_slice(message_bytes);
+    if let Some((code, retry)) = code {
+        buf.put_u16(code.to_u16());
+        buf.put_u8(retry.to_u8());
+    }
     if let Some((node_id, node_id_len, addr, addr_len, generation)) = owner {
         buf.put_u16(node_id_len);
         buf.extend_from_slice(node_id);
@@ -137,6 +176,16 @@ pub fn decode_publish_ack(frame: &Frame) -> Result<PublishAck> {
         ),
         _ => return Err(Error::Deserialize(SerdeError::custom("invalid ack status"))),
     };
+    let code = if frame.header.flags & FLAG_BINARY_PUBLISH_ACK_CODE != 0 {
+        if buf.remaining() < 3 {
+            return Err(Error::Incomplete);
+        }
+        let code = ErrorCode::from_u16(buf.get_u16());
+        let retry = RetryClass::from_u8(buf.get_u8());
+        Some((code, retry))
+    } else {
+        None
+    };
     let forwarded_to = if frame.header.flags & FLAG_BINARY_PUBLISH_ACK_OWNER != 0 {
         if buf.remaining() < 2 {
             return Err(Error::Incomplete);
@@ -167,6 +216,7 @@ pub fn decode_publish_ack(frame: &Frame) -> Result<PublishAck> {
     Ok(PublishAck {
         request_id,
         error,
+        code,
         forwarded_to,
     })
 }

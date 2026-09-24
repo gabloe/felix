@@ -28,7 +28,7 @@ pub use publish::{
 };
 pub use publish_ack::{
     PublishAck, PublishOwner, decode_publish_ack, encode_publish_ack_bytes,
-    encode_publish_ack_bytes_owned,
+    encode_publish_ack_bytes_coded, encode_publish_ack_bytes_owned,
 };
 
 use crate::error::{Error, Result};

@@ -7,6 +7,7 @@
 //! flags.
 
 pub mod binary;
+pub(crate) mod error_code;
 pub(crate) mod features;
 pub(crate) mod flags;
 pub(crate) mod frame;

@@ -5,6 +5,7 @@ use felix_wire::Message;
 
 use super::responder::send_control_error;
 use super::{Ctx, Session, Step};
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
@@ -29,6 +30,14 @@ pub(super) async fn authenticate(
         cancel_tx,
         ..
     } = *cx;
+    // Before anything is answered, so even a refused `Auth` gets a code when
+    // it asked for one. A second `Auth` changes nothing: it is refused below.
+    if session.auth_ctx.is_none() {
+        session.error_codes.negotiate(
+            client_features.unwrap_or(0),
+            client_flags.unwrap_or(felix_wire::ORIGINAL_V1_FLAGS),
+        );
+    }
     if session.auth_ctx.is_some() {
         send_control_error(
             out_ack_tx,
@@ -36,7 +45,7 @@ pub(super) async fn authenticate(
             ack_throttle_tx,
             ack_timeout_state,
             cancel_tx,
-            "auth already established",
+            ClientError::invalid("auth already established"),
         )
         .await?;
         return Ok(Step::Close(false));
@@ -126,7 +135,11 @@ pub(super) async fn authenticate(
                             // sequences live with the shard's
                             // leader, which every broker is for
                             // the shards it leads.
-                            | felix_wire::FEATURE_IDEMPOTENT_PRODUCER,
+                            | felix_wire::FEATURE_IDEMPOTENT_PRODUCER
+                            // Codes are sent only to a client that offered
+                            // the bit; advertising it tells that client an
+                            // error without one is not a gap in this broker.
+                            | felix_wire::FEATURE_ERROR_CODES,
                     ),
                     // Only when there is more than one. A single
                     // listener is the default, and saying so
@@ -161,7 +174,7 @@ pub(super) async fn authenticate(
                 ack_throttle_tx,
                 ack_timeout_state,
                 cancel_tx,
-                "auth failed",
+                ClientError::unauthenticated("auth failed"),
             )
             .await?;
             return Ok(Step::Close(false));

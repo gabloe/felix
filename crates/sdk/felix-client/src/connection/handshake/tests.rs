@@ -76,13 +76,7 @@ impl TokenCheckingServer {
         };
         presented.lock().unwrap().push(token.clone());
         if token != *accepted.lock().unwrap() {
-            write_message(
-                &mut send,
-                Message::Error {
-                    message: "auth failed".to_string(),
-                },
-            )
-            .await?;
+            write_message(&mut send, Message::error("auth failed")).await?;
             let _ = send.finish();
             return Ok(());
         }

@@ -21,6 +21,7 @@ mod control_auth;
 mod control_cache;
 mod control_lifecycle;
 mod end_to_end;
+mod error_codes;
 mod frame_source;
 mod idempotent_producer;
 mod uni;
@@ -256,6 +257,18 @@ async fn run_control_loop_with_frames(
     frames: Vec<Result<Option<Frame>>>,
     config: BrokerConfig,
 ) -> Result<(bool, Vec<Outgoing>)> {
+    run_control_loop_with_codes(broker, auth, frames, config, Default::default()).await
+}
+
+/// As `run_control_loop_with_frames`, sharing `error_codes` with the loop the
+/// way the writer does, so a test can shape what it got as the writer would.
+async fn run_control_loop_with_codes(
+    broker: Arc<Broker>,
+    auth: Arc<BrokerAuth>,
+    frames: Vec<Result<Option<Frame>>>,
+    config: BrokerConfig,
+    error_codes: Arc<crate::serving::quic::client_error::ErrorCodeSupport>,
+) -> Result<(bool, Vec<Outgoing>)> {
     let publish_ctx = build_publish_context(Arc::clone(&broker)).await;
     let (server_config, cert) = build_server_config()?;
     let server = QuicServer::bind(
@@ -304,6 +317,7 @@ async fn run_control_loop_with_frames(
         ack_waiter_tx,
         Duration::from_millis(10),
         &mut scratch,
+        error_codes,
     )
     .await?;
 

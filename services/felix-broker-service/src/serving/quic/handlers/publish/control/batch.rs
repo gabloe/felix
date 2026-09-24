@@ -12,6 +12,7 @@ use felix_wire::Message;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
 use crate::observability::timings;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::handlers::publish::ack::{
     AckEncoding, AckTimeoutState, AckWaiterMessage, EnqueuePolicy, Outgoing,
@@ -87,7 +88,7 @@ pub(crate) async fn handle_publish_batch_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    encoding.error(request_id, "server overloaded".to_string()),
+                    encoding.error(request_id, ClientError::overloaded("server overloaded")),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -105,9 +106,7 @@ pub(crate) async fn handle_publish_batch_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::Error {
-                        message: "server overloaded".to_string(),
-                    }),
+                    Outgoing::Message(ClientError::overloaded("server overloaded").into_message()),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -148,9 +147,10 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::Error {
-                    message: "missing request_id for acked publish batch".to_string(),
-                }),
+                Outgoing::Message(
+                    ClientError::invalid("missing request_id for acked publish batch")
+                        .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -187,7 +187,7 @@ pub(crate) async fn handle_publish_batch_message(
             &credential,
         ),
         Some((producer_id, sequence)) => match route {
-            PublishRoute::Local { handle, generation } => Some(PublishTarget::Idempotent {
+            PublishRoute::Local { handle, generation } => Ok(PublishTarget::Idempotent {
                 handle,
                 shard: local_shard_key(publish_ctx, &tenant_id, &namespace, &stream, shard),
                 generation,
@@ -236,9 +236,11 @@ pub(crate) async fn handle_publish_batch_message(
                 .await?;
                 return Ok(());
             }
-            PublishRoute::Refused => None,
+            PublishRoute::Refused(refusal) => Err(refusal),
         },
     };
+    let refusal = target.as_ref().err().cloned();
+    let target = target.ok();
     // An idempotent publish is acknowledged only once committed, like a
     // forward or a `Quorum` publish: "accepted into the queue" says nothing
     // about whether the sequence was taken, which is what the producer needs
@@ -289,9 +291,10 @@ pub(crate) async fn handle_publish_batch_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    encoding.error(request_id, format!(
-                            "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
-                        )),
+                    encoding.error(
+                        request_id,
+                        refused_as_not_found(refusal, &tenant_id, &namespace, &stream),
+                    ),
                 )
                 .await,
                 ack_timeout_state,
@@ -358,7 +361,7 @@ pub(crate) async fn handle_publish_batch_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        encoding.error(request_id, "ingress overloaded".to_string()),
+                        encoding.error(request_id, ClientError::overloaded("ingress overloaded")),
                     )
                     .await,
                     ack_timeout_state,
@@ -379,7 +382,8 @@ pub(crate) async fn handle_publish_batch_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        encoding.error(request_id, err.to_string()),
+                        // Nothing was enqueued.
+                        encoding.error(request_id, ClientError::not_enqueued(&err)),
                     )
                     .await,
                     ack_timeout_state,
@@ -444,7 +448,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                encoding.error(request_id, "server overloaded".to_string()),
+                encoding.error(request_id, overloaded_after_enqueue()),
             )
             .await;
             t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
@@ -472,7 +476,7 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                encoding.error(request_id, "server overloaded".to_string()),
+                encoding.error(request_id, overloaded_after_enqueue()),
             )
             .await;
             return Ok(());
@@ -488,11 +492,32 @@ pub(crate) async fn handle_publish_batch_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                encoding.error(request_id, "server overloaded".to_string()),
+                encoding.error(request_id, overloaded_after_enqueue()),
             )
             .await;
             return Ok(());
         }
     }
     Ok(())
+}
+
+/// The batch is already with the worker, so it may still land: overloaded, but
+/// with the outcome unknown rather than "not applied".
+/// The refusal's code, in the words every client has always been given for an
+/// unroutable publish.
+pub(super) fn refused_as_not_found(
+    refusal: Option<ClientError>,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+) -> ClientError {
+    refusal
+        .unwrap_or_else(|| ClientError::not_found(""))
+        .reworded(format!(
+            "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
+        ))
+}
+
+pub(super) fn overloaded_after_enqueue() -> ClientError {
+    ClientError::overloaded("server overloaded").with_retry(felix_wire::RetryClass::OutcomeUnknown)
 }

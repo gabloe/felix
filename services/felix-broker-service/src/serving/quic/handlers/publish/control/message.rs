@@ -12,7 +12,9 @@ use felix_broker::Broker;
 use felix_wire::Message;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
+use super::batch::{overloaded_after_enqueue, refused_as_not_found};
 use crate::observability::timings;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::handlers::publish::ack::{
     AckEncoding, AckTimeoutState, AckWaiterMessage, EnqueuePolicy, Outgoing,
@@ -77,10 +79,9 @@ pub(crate) async fn handle_publish_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::PublishError {
-                        request_id,
-                        message: "server overloaded".to_string(),
-                    }),
+                    Outgoing::Message(
+                        ClientError::overloaded("server overloaded").into_publish_error(request_id),
+                    ),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -98,9 +99,7 @@ pub(crate) async fn handle_publish_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::Error {
-                        message: "server overloaded".to_string(),
-                    }),
+                    Outgoing::Message(ClientError::overloaded("server overloaded").into_message()),
                 )
                 .await;
                 if !matches!(result, Err(AckEnqueueError::Full)) {
@@ -138,9 +137,9 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::Error {
-                    message: "missing request_id for acked publish".to_string(),
-                }),
+                Outgoing::Message(
+                    ClientError::invalid("missing request_id for acked publish").into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -174,6 +173,8 @@ pub(crate) async fn handle_publish_message(
         internal_ack(ack),
         &credential,
     );
+    let refusal = target.as_ref().err().cloned();
+    let target = target.ok();
 
     // A forwarded publish is acknowledged only once the owner has answered,
     // whatever `ack_on_commit` says. That setting is a local policy — "accepted
@@ -210,12 +211,10 @@ pub(crate) async fn handle_publish_message(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::Message(Message::PublishError {
-                        request_id,
-                        message: format!(
-                            "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
-                        ),
-                    }),
+                    Outgoing::Message(
+                        refused_as_not_found(refusal, &tenant_id, &namespace, &stream)
+                            .into_publish_error(request_id),
+                    ),
                 )
                 .await,
                 ack_timeout_state,
@@ -273,10 +272,10 @@ pub(crate) async fn handle_publish_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        Outgoing::Message(Message::PublishError {
-                            request_id,
-                            message: "ingress overloaded".to_string(),
-                        }),
+                        Outgoing::Message(
+                            ClientError::overloaded("ingress overloaded")
+                                .into_publish_error(request_id),
+                        ),
                     )
                     .await,
                     ack_timeout_state,
@@ -297,10 +296,10 @@ pub(crate) async fn handle_publish_message(
                         out_ack_depth,
                         "felix_broker_out_ack_depth",
                         ack_throttle_tx,
-                        Outgoing::Message(Message::PublishError {
-                            request_id,
-                            message: err.to_string(),
-                        }),
+                        // Nothing was enqueued.
+                        Outgoing::Message(
+                            ClientError::not_enqueued(&err).into_publish_error(request_id),
+                        ),
                     )
                     .await,
                     ack_timeout_state,
@@ -368,10 +367,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
             )
             .await;
             t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
@@ -401,10 +397,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
             )
             .await;
             return Ok(());
@@ -420,10 +413,7 @@ pub(crate) async fn handle_publish_message(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::Message(Message::PublishError {
-                    request_id,
-                    message: "server overloaded".to_string(),
-                }),
+                Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
             )
             .await;
             return Ok(());

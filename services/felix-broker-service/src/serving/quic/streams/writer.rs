@@ -35,6 +35,7 @@ use super::hooks::{
 };
 use crate::observability::timings;
 use crate::serving::quic::GLOBAL_ACK_DEPTH;
+use crate::serving::quic::client_error::ErrorCodeSupport;
 use crate::serving::quic::handlers::publish::{Outgoing, decrement_depth};
 use crate::serving::quic::telemetry::{t_histogram, t_now_if, t_should_sample};
 
@@ -47,6 +48,7 @@ const MAX_ACK_MESSAGE_BYTES: usize = 512;
 pub(super) async fn run_writer_loop(
     mut send: SendStream,
     mut out_ack_rx: mpsc::Receiver<Outgoing>,
+    error_codes: Arc<ErrorCodeSupport>,
     out_ack_depth_worker: Arc<AtomicUsize>,
     ack_throttle_tx_writer: watch::Sender<bool>,
     cancel_tx_writer: watch::Sender<bool>,
@@ -63,6 +65,7 @@ pub(super) async fn run_writer_loop(
                 let Some(outgoing) = outgoing else { break };
                 match outgoing {
                     Outgoing::Message(message) => {
+                        let message = error_codes.shape(message);
                         let sample = t_should_sample();
                         let is_publish_ack = matches!(
                             message,
@@ -107,6 +110,7 @@ pub(super) async fn run_writer_loop(
                     Outgoing::PublishAck {
                         request_id,
                         error,
+                        code,
                         forwarded_to,
                     } => {
                         let sample = t_should_sample();
@@ -116,9 +120,14 @@ pub(super) async fn run_writer_loop(
                         // ack unencodable — dropping an ack strands a client that is
                         // synchronously waiting for it.
                         let error = error.as_deref().map(truncate_ack_message);
-                        let bytes = match felix_wire::binary::encode_publish_ack_bytes_owned(
+                        let code = code
+                            .as_ref()
+                            .filter(|_| error_codes.binary_ack())
+                            .map(|(code, retry)| (code, *retry));
+                        let bytes = match felix_wire::binary::encode_publish_ack_bytes_coded(
                             request_id,
                             error,
+                            code,
                             forwarded_to.as_ref(),
                         ) {
                             Ok(bytes) => bytes,
@@ -166,6 +175,7 @@ pub(super) async fn run_writer_loop(
                         }
                     }
                     Outgoing::CacheMessage(message) => {
+                        let message = error_codes.shape(message);
                         let sample = t_should_sample();
                         let encode_start = t_now_if(sample);
                         let frame = match encode_cache_message_with_hook(message) {

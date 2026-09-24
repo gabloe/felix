@@ -6,6 +6,7 @@ use felix_wire::Message;
 
 use super::authz::authorize_cache;
 use super::{Ctx, Session, Step};
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::publish::{
     Outgoing, handle_ack_enqueue_result, send_outgoing_critical,
 };
@@ -53,9 +54,12 @@ pub(super) async fn counter_add(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::Error {
-                    message: format!("cache scope not found: {tenant_id}/{namespace}/{cache}"),
-                }),
+                Outgoing::CacheMessage(
+                    ClientError::not_found(format!(
+                        "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                    ))
+                    .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -89,9 +93,11 @@ pub(super) async fn counter_add(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::Error {
-                        message: format!("counter add not served: {reason}"),
-                    }),
+                    Outgoing::CacheMessage(
+                        ClientError::from_anyhow(&reason)
+                            .prefixed("counter add not served")
+                            .into_message(),
+                    ),
                 )
                 .await,
                 ack_timeout_state,
@@ -158,9 +164,12 @@ pub(super) async fn counter_get(
                 out_ack_depth,
                 "felix_broker_out_ack_depth",
                 ack_throttle_tx,
-                Outgoing::CacheMessage(Message::Error {
-                    message: format!("cache scope not found: {tenant_id}/{namespace}/{cache}"),
-                }),
+                Outgoing::CacheMessage(
+                    ClientError::not_found(format!(
+                        "cache scope not found: {tenant_id}/{namespace}/{cache}"
+                    ))
+                    .into_message(),
+                ),
             )
             .await,
             ack_timeout_state,
@@ -197,9 +206,11 @@ pub(super) async fn counter_get(
                     out_ack_depth,
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    Outgoing::CacheMessage(Message::Error {
-                        message: format!("counter get not served: {reason}"),
-                    }),
+                    Outgoing::CacheMessage(
+                        ClientError::from_anyhow(&reason)
+                            .prefixed("counter get not served")
+                            .into_message(),
+                    ),
                 )
                 .await,
                 ack_timeout_state,

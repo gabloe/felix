@@ -14,6 +14,7 @@ pub use fields::{
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
+use crate::client::error_code::{ErrorCode, ErrorDetail, RetryClass};
 use crate::client::frame::Frame;
 use crate::error::{Error, Result};
 
@@ -110,8 +111,20 @@ pub enum Message {
     },
     /// Generic success response.
     Ok,
-    /// Protocol-level error for invalid requests or unexpected message types.
-    Error { message: String },
+    /// A request failed.
+    ///
+    /// `code`, `retry` and `detail` are sent only to a client that offered
+    /// `FEATURE_ERROR_CODES`, and are absent otherwise, so the frame is
+    /// byte-identical to the one an older broker sends.
+    Error {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<ErrorCode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<RetryClass>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<ErrorDetail>,
+    },
 
     // Topology and routing: who owns what, and how a stream or cache is sharded.
     /// This broker does not own the shard; the owner is named here.
@@ -225,8 +238,18 @@ pub enum Message {
     },
     /// Publish ack with request id.
     PublishOk { request_id: u64 },
-    /// Publish error with request id.
-    PublishError { request_id: u64, message: String },
+    /// Publish error with request id. The optional fields are `Error`'s, under
+    /// the same negotiation.
+    PublishError {
+        request_id: u64,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<ErrorCode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry: Option<RetryClass>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<ErrorDetail>,
+    },
     /// Ask the broker for a producer id.
     ///
     /// Only ever sent to a broker that advertised `FEATURE_IDEMPOTENT_PRODUCER`.
@@ -656,6 +679,42 @@ impl Message {
     /// Decode a frame's JSON payload.
     pub fn decode(frame: Frame) -> Result<Self> {
         serde_json::from_slice(&frame.payload).map_err(Error::Deserialize)
+    }
+
+    /// An `Error` with no code: the shape every client understands.
+    pub fn error(message: impl Into<String>) -> Self {
+        Message::Error {
+            message: message.into(),
+            code: None,
+            retry: None,
+            detail: None,
+        }
+    }
+
+    /// A `PublishError` with no code.
+    pub fn publish_error(request_id: u64, message: impl Into<String>) -> Self {
+        Message::PublishError {
+            request_id,
+            message: message.into(),
+            code: None,
+            retry: None,
+            detail: None,
+        }
+    }
+
+    /// Drop the error-code fields, for a client that did not offer
+    /// `FEATURE_ERROR_CODES`. Anything but an `Error` or `PublishError` is
+    /// returned unchanged.
+    pub fn without_error_code(self) -> Self {
+        match self {
+            Message::Error { message, .. } => Message::error(message),
+            Message::PublishError {
+                request_id,
+                message,
+                ..
+            } => Message::publish_error(request_id, message),
+            other => other,
+        }
     }
 }
 

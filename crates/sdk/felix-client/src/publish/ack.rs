@@ -91,6 +91,9 @@ pub(crate) async fn wait_for_ack(
         Some(Message::PublishError {
             request_id: ack_id,
             message,
+            code,
+            retry,
+            detail,
         }) if ack_id == request_id => {
             #[cfg(feature = "telemetry")]
             {
@@ -102,7 +105,13 @@ pub(crate) async fn wait_for_ack(
                     .ack_items_in_ok
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            Err(anyhow::anyhow!("publish failed: {message}"))
+            Err(crate::error::refused(
+                "publish failed",
+                message,
+                code,
+                retry,
+                detail,
+            ))
         }
         Some(Message::PublishRefused {
             request_id: ack_id,
@@ -174,10 +183,16 @@ pub(crate) async fn read_ack_message_with_timing(
             None => Message::PublishOk {
                 request_id: ack.request_id,
             },
-            Some(message) => Message::PublishError {
-                request_id: ack.request_id,
-                message,
-            },
+            Some(message) => {
+                let (code, retry) = ack.code.unzip();
+                Message::PublishError {
+                    request_id: ack.request_id,
+                    message,
+                    code,
+                    retry,
+                    detail: None,
+                }
+            }
         }
     } else {
         Message::decode(frame).context("decode message")?

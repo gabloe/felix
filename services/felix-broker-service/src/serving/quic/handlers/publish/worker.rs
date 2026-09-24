@@ -12,6 +12,7 @@ use super::{
     decrement_depth,
 };
 use crate::config::BrokerConfig;
+use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::handlers::subscribe::WriterLaneManager;
 use crate::serving::quic::{ClusterContext, GLOBAL_INGRESS_DEPTH};
 use crate::shards::lifecycle::fence;
@@ -189,9 +190,7 @@ pub(crate) fn build_publish_context(
                                 crate::cluster::lease::metrics::record_refusal(
                                     crate::cluster::lease::metrics::BOUNDARY_COMMIT,
                                 );
-                                Err(anyhow::anyhow!(
-                                    "lease lapsed before the record could be committed"
-                                ))
+                                Err(lease_lapsed())
                             }
                             _ => match fence::enter_or_keep(
                                 &mut held,
@@ -235,9 +234,7 @@ pub(crate) fn build_publish_context(
                             crate::cluster::lease::metrics::record_refusal(
                                 crate::cluster::lease::metrics::BOUNDARY_COMMIT,
                             );
-                            Err(anyhow::anyhow!(
-                                "lease lapsed before the record could be committed"
-                            ))
+                            Err(lease_lapsed())
                         }
                         _ => match fence::enter_or_keep(
                             &mut held,
@@ -308,14 +305,16 @@ pub(crate) fn build_publish_context(
                             )
                             .await
                             .map(|_| ())
-                            .map_err(|err| anyhow::anyhow!("{err}")),
+                            .map_err(anyhow::Error::from),
                             // The route said forward and there is nothing to
                             // forward with. Refusing beats writing another
                             // broker's shard locally.
-                            None => Err(anyhow::anyhow!(
+                            None => Err(ClientError::internal(format!(
                                 "no peer transport: this broker cannot forward to {}",
                                 target.node_id
-                            )),
+                            ))
+                            .with_retry(felix_wire::RetryClass::Retry)
+                            .into()),
                         }
                     }
                 };
@@ -366,6 +365,12 @@ pub(crate) fn build_publish_context(
         lane_manager: WriterLaneManager::new(config),
         ingress_wait: config.pub_ingress_wait,
     }
+}
+
+/// Refused before writing: this broker no longer holds the lease that lets it
+/// lead the shard.
+fn lease_lapsed() -> anyhow::Error {
+    ClientError::fenced("lease lapsed before the record could be committed").into()
 }
 
 #[cfg(test)]

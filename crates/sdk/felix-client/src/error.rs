@@ -3,7 +3,7 @@
 //! Each is typed rather than formatted into a string because the caller's
 //! next step depends on its fields, not its message.
 
-use felix_wire::{CursorErrorReason, PublishRefusalReason};
+use felix_wire::{CursorErrorReason, ErrorCode, ErrorDetail, PublishRefusalReason, RetryClass};
 
 /// The broker would not append an idempotent publish, and said why.
 ///
@@ -96,5 +96,62 @@ impl std::fmt::Display for SubscribeCursorError {
                 self.requested, self.available
             ),
         }
+    }
+}
+
+/// The broker refused a request and sent a typed code with it.
+///
+/// Only a broker that advertised `FEATURE_ERROR_CODES` sends one; from any
+/// other the same failure stays a plain error with the same text. The retry
+/// class is the broker's statement of whether the request may have been
+/// applied, and is the field to act on: a code this client does not know still
+/// carries one. Recover it from an `anyhow::Error` with `downcast_ref`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrokerError {
+    /// What went wrong.
+    pub code: ErrorCode,
+    /// What the caller may do about it.
+    pub retry: RetryClass,
+    /// Extra facts, such as why a shard is unavailable.
+    pub detail: Option<ErrorDetail>,
+    /// The broker's explanation, for logs.
+    pub message: String,
+    context: &'static str,
+}
+
+impl BrokerError {
+    /// Why a `shard_unavailable` shard cannot be served, when the broker said.
+    pub fn reason(&self) -> Option<&str> {
+        self.detail.as_ref()?.reason.as_deref()
+    }
+}
+
+impl std::fmt::Display for BrokerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.context, self.message)
+    }
+}
+
+impl std::error::Error for BrokerError {}
+
+/// A refusal as the caller sees it: typed when the broker sent a code, and
+/// otherwise the `"{context}: {message}"` text it has always been.
+pub(crate) fn refused(
+    context: &'static str,
+    message: String,
+    code: Option<ErrorCode>,
+    retry: Option<RetryClass>,
+    detail: Option<ErrorDetail>,
+) -> anyhow::Error {
+    match code {
+        Some(code) => BrokerError {
+            retry: retry.unwrap_or_else(|| code.default_retry()),
+            code,
+            detail,
+            message,
+            context,
+        }
+        .into(),
+        None => anyhow::anyhow!("{context}: {message}"),
     }
 }

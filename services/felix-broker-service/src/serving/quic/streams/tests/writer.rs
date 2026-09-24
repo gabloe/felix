@@ -42,6 +42,7 @@ async fn writer_loop_branches() -> Result<()> {
     let writer = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Default::default(),
         Arc::new(std::sync::atomic::AtomicUsize::new(1)),
         ack_throttle_tx,
         cancel_tx,
@@ -63,6 +64,7 @@ async fn writer_loop_branches() -> Result<()> {
     let writer = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Default::default(),
         Arc::new(std::sync::atomic::AtomicUsize::new(1)),
         ack_throttle_tx,
         cancel_tx,
@@ -83,6 +85,7 @@ async fn writer_loop_branches() -> Result<()> {
     let writer = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Default::default(),
         Arc::new(std::sync::atomic::AtomicUsize::new(1)),
         ack_throttle_tx,
         cancel_tx,
@@ -101,6 +104,7 @@ async fn writer_loop_branches() -> Result<()> {
     let writer = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Default::default(),
         Arc::new(std::sync::atomic::AtomicUsize::new(1)),
         ack_throttle_tx,
         cancel_tx,
@@ -155,6 +159,7 @@ async fn writer_loop_cancel_breaks_on_cancel() -> Result<()> {
     let writer = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Default::default(),
         Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         ack_throttle_tx,
         cancel_tx.clone(),
@@ -206,6 +211,7 @@ async fn writer_loop_records_timings_when_sampled() -> Result<()> {
     let writer = tokio::spawn(run_writer_loop(
         send,
         out_ack_rx,
+        Default::default(),
         Arc::new(std::sync::atomic::AtomicUsize::new(1)),
         ack_throttle_tx,
         cancel_tx,

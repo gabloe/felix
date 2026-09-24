@@ -160,6 +160,25 @@ pub enum QuorumWait {
     NotLeading,
 }
 
+/// Why a `Quorum` write could not be acknowledged. Either way the leader has
+/// already written it, so the client is told the outcome is unknown rather than
+/// that the write failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum QuorumError {
+    /// No majority within the budget.
+    #[error("the {what} is durable here but did not reach a majority within {timeout:?}")]
+    TimedOut {
+        what: &'static str,
+        timeout: std::time::Duration,
+    },
+    /// This broker stopped leading the shard before a majority held the write.
+    #[error("{detail} before the {what} could reach a quorum")]
+    LeadershipLost {
+        what: &'static str,
+        detail: &'static str,
+    },
+}
+
 /// Hold a `Quorum` publish until a majority of the shard's replica set has it.
 ///
 /// A `Leader` stream returns at once: local durability is the guarantee it
@@ -193,7 +212,11 @@ pub async fn await_quorum(
         return Ok(());
     };
     let Some(generation) = ingress.generation(shard) else {
-        anyhow::bail!("shard ownership changed before the batch could reach a quorum");
+        return Err(QuorumError::LeadershipLost {
+            what: "batch",
+            detail: "shard ownership changed",
+        }
+        .into());
     };
 
     // `last_offset` is inclusive, and the mark is one past what is held.
@@ -206,17 +229,21 @@ pub async fn await_quorum(
             crate::replication::metrics::record_quorum(
                 crate::replication::metrics::QUORUM_TIMED_OUT,
             );
-            Err(anyhow::anyhow!(
-                "the batch is durable here but did not reach a majority within {timeout:?}"
-            ))
+            Err(QuorumError::TimedOut {
+                what: "batch",
+                timeout,
+            }
+            .into())
         }
         crate::replication::quorum::QuorumWait::NotLeading => {
             crate::replication::metrics::record_quorum(
                 crate::replication::metrics::QUORUM_NOT_LEADING,
             );
-            Err(anyhow::anyhow!(
-                "shard leadership moved before the batch could reach a quorum"
-            ))
+            Err(QuorumError::LeadershipLost {
+                what: "batch",
+                detail: "shard leadership moved",
+            }
+            .into())
         }
     }
 }
@@ -260,7 +287,11 @@ pub async fn await_cache_quorum(
     };
     let tail = log.tail_offset().await?;
     let Some(generation) = ingress.generation(shard) else {
-        anyhow::bail!("shard ownership changed before the write could reach a quorum");
+        return Err(QuorumError::LeadershipLost {
+            what: "write",
+            detail: "shard ownership changed",
+        }
+        .into());
     };
     match marks.wait_for(shard, generation, tail, timeout).await {
         QuorumWait::Reached => Ok(()),
@@ -268,17 +299,21 @@ pub async fn await_cache_quorum(
             crate::replication::metrics::record_quorum(
                 crate::replication::metrics::QUORUM_TIMED_OUT,
             );
-            Err(anyhow::anyhow!(
-                "the write is durable here but did not reach a majority within {timeout:?}"
-            ))
+            Err(QuorumError::TimedOut {
+                what: "write",
+                timeout,
+            }
+            .into())
         }
         QuorumWait::NotLeading => {
             crate::replication::metrics::record_quorum(
                 crate::replication::metrics::QUORUM_NOT_LEADING,
             );
-            Err(anyhow::anyhow!(
-                "shard leadership moved before the write could reach a quorum"
-            ))
+            Err(QuorumError::LeadershipLost {
+                what: "write",
+                detail: "shard leadership moved",
+            }
+            .into())
         }
     }
 }

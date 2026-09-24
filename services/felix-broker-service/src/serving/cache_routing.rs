@@ -7,6 +7,7 @@
 use bytes::Bytes;
 
 use crate::serving::forward::{CacheRequest, ForwardKey, ForwardTarget};
+use crate::serving::quic::client_error::ClientError;
 use crate::shards::lifecycle::fence;
 use crate::shards::routing::{Dispatch, IngressRouter, dispatch, shard_for};
 use crate::shards::{ShardKey, ShardKind};
@@ -22,7 +23,7 @@ pub(crate) enum CacheRoute {
         target: ForwardTarget,
     },
     /// Nobody can serve it right now, and this says why.
-    Refused(String),
+    Refused(crate::shards::routing::Reason),
 }
 
 /// Resolve a cache key to the broker that owns it.
@@ -74,7 +75,7 @@ pub(crate) fn resolve_cache_route(
                 generation,
             },
         },
-        Dispatch::Unavailable(reason) => CacheRoute::Refused(reason.to_string()),
+        Dispatch::Unavailable(reason) => CacheRoute::Refused(reason),
     }
 }
 
@@ -108,7 +109,7 @@ pub(crate) async fn apply_cache_op(
     cache: &str,
     key: &str,
     request: CacheRequest,
-) -> Result<Option<Bytes>, String> {
+) -> anyhow::Result<Option<Bytes>> {
     match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
         CacheRoute::Local { shard, generation } => {
             let cache_store = broker.cache();
@@ -124,7 +125,7 @@ pub(crate) async fn apply_cache_op(
                 CacheRequest::Put { value, ttl_ms } => {
                     let ttl = (ttl_ms > 0).then(|| std::time::Duration::from_millis(ttl_ms));
                     let fenced = fence::enter(ingress, Some(&written), generation)
-                        .map_err(|refused| refused.to_string())?;
+                        .map_err(ClientError::from)?;
                     cache_store
                         .put(tenant_id, namespace, cache, shard, key, value, ttl)
                         .await;
@@ -136,8 +137,7 @@ pub(crate) async fn apply_cache_op(
                         ingress,
                         quorum_timeout,
                     )
-                    .await
-                    .map_err(|err| err.to_string())?;
+                    .await?;
                     None
                 }
                 CacheRequest::Get => {
@@ -147,7 +147,7 @@ pub(crate) async fn apply_cache_op(
                 }
                 CacheRequest::Delete => {
                     let fenced = fence::enter(ingress, Some(&written), generation)
-                        .map_err(|refused| refused.to_string())?;
+                        .map_err(ClientError::from)?;
                     let removed = cache_store
                         .delete(tenant_id, namespace, cache, shard, key)
                         .await;
@@ -159,15 +159,17 @@ pub(crate) async fn apply_cache_op(
                         ingress,
                         quorum_timeout,
                     )
-                    .await
-                    .map_err(|err| err.to_string())?;
+                    .await?;
                     removed
                 }
                 // Counter operations go through `apply_counter_op`, which owns the
                 // counter store; routing them here would answer from the wrong
                 // seam.
                 CacheRequest::CounterAdd { .. } | CacheRequest::CounterGet => {
-                    return Err("not a cache operation: counters route separately".to_string());
+                    return Err(ClientError::internal(
+                        "not a cache operation: counters route separately",
+                    )
+                    .into());
                 }
             })
         }
@@ -179,10 +181,12 @@ pub(crate) async fn apply_cache_op(
             // Refusing beats serving another broker's key locally, which is
             // exactly the divergence this path exists to prevent.
             let Some(pool) = peers else {
-                return Err(format!(
+                return Err(ClientError::internal(format!(
                     "no peer transport: this broker cannot forward to {}",
                     target.node_id
-                ));
+                ))
+                .with_retry(felix_wire::RetryClass::Retry)
+                .into());
             };
             crate::serving::forward::forward_cache_op(
                 pool,
@@ -193,9 +197,9 @@ pub(crate) async fn apply_cache_op(
                 &request,
             )
             .await
-            .map_err(|err| err.to_string())
+            .map_err(anyhow::Error::from)
         }
-        CacheRoute::Refused(reason) => Err(reason),
+        CacheRoute::Refused(reason) => Err(refused(&reason)),
     }
 }
 
@@ -217,11 +221,15 @@ pub(crate) async fn apply_counter_op(
     cache: &str,
     key: &str,
     request: CacheRequest,
-) -> Result<Option<i64>, String> {
+) -> anyhow::Result<Option<i64>> {
     match resolve_cache_route(ingress, tenant_id, namespace, cache, key) {
         CacheRoute::Local { shard, generation } => {
             let Some(counters) = broker.counters() else {
-                return Err("this broker has no durable storage for counters".to_string());
+                return Err(ClientError::internal(
+                    "this broker has no durable storage for counters",
+                )
+                .with_retry(felix_wire::RetryClass::Fatal)
+                .into());
             };
             match request {
                 CacheRequest::CounterAdd { delta } => {
@@ -234,20 +242,22 @@ pub(crate) async fn apply_counter_op(
                         kind: ShardKind::Cache,
                     };
                     let _fenced = fence::enter(ingress, Some(&shard_key), generation)
-                        .map_err(|refused| refused.to_string())?;
+                        .map_err(ClientError::from)?;
                     counters
                         .add(tenant_id, namespace, cache, shard, key, delta)
                         .await
                         .map(|(sum, _)| Some(sum))
-                        .map_err(|err| err.to_string())
+                        .map_err(storage)
                 }
                 CacheRequest::CounterGet => counters
                     .get(tenant_id, namespace, cache, shard, key)
                     .await
-                    .map_err(|err| err.to_string()),
+                    .map_err(storage),
                 // The counter path never builds these; reaching here is a bug
                 // in this file, not in the caller.
-                other => Err(format!("not a counter operation: {other:?}")),
+                other => {
+                    Err(ClientError::internal(format!("not a counter operation: {other:?}")).into())
+                }
             }
         }
         CacheRoute::Forward {
@@ -255,10 +265,12 @@ pub(crate) async fn apply_counter_op(
             target,
         } => {
             let Some(pool) = peers else {
-                return Err(format!(
+                return Err(ClientError::internal(format!(
                     "no peer transport: this broker cannot forward to {}",
                     target.node_id
-                ));
+                ))
+                .with_retry(felix_wire::RetryClass::Retry)
+                .into());
             };
             let answer = crate::serving::forward::forward_cache_op(
                 pool,
@@ -268,14 +280,13 @@ pub(crate) async fn apply_counter_op(
                 credential,
                 &request,
             )
-            .await
-            .map_err(|err| err.to_string())?;
+            .await?;
             answer
                 .map(|bytes| felix_storage::counter_log::decode_sum(&bytes))
                 .transpose()
-                .map_err(|err| err.to_string())
+                .map_err(|err| ClientError::internal(err.to_string()).into())
         }
-        CacheRoute::Refused(reason) => Err(reason),
+        CacheRoute::Refused(reason) => Err(refused(&reason)),
     }
 }
 
@@ -291,3 +302,11 @@ pub(crate) fn put_request(value: Bytes, ttl: Option<std::time::Duration>) -> Cac
 
 #[cfg(test)]
 mod tests;
+
+fn refused(reason: &crate::shards::routing::Reason) -> anyhow::Error {
+    ClientError::unavailable(reason, reason.to_string()).into()
+}
+
+fn storage(err: impl std::fmt::Display) -> anyhow::Error {
+    ClientError::new(felix_wire::ErrorCode::Storage, err.to_string()).into()
+}

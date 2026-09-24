@@ -132,7 +132,18 @@ async fn authenticate_stream(
             server_features: 0,
             listener_ports: Vec::new(),
         }),
-        Some(Message::Error { message }) => Err(AuthRejected(message).into()),
+        Some(Message::Error {
+            message,
+            code: Some(code),
+            retry,
+            detail,
+        }) => {
+            Err(
+                crate::error::refused("auth rejected", message.clone(), Some(code), retry, detail)
+                    .context(AuthRejected(message)),
+            )
+        }
+        Some(Message::Error { message, .. }) => Err(AuthRejected(message).into()),
         Some(other) => Err(anyhow::anyhow!("unexpected auth response: {other:?}")),
         None => Err(anyhow::anyhow!("auth response missing")),
     }
