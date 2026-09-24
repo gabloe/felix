@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790250454555,
+  "lastUpdate": 1790256872182,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -18480,6 +18480,72 @@ window.BENCHMARK_DATA = {
             "range": "66.30",
             "unit": "us",
             "extra": "trials: 5\nmedian: 583.00\nmean: 568.00\nstdev: 66.30\ncv: 11.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fac667d69f6f837e3b5e07dfce02f9623502917d",
+          "message": "fix(broker): let an in-flight credential refresh finish on shutdown (#661)\n\nThe control plane rotates a refresh token as soon as it answers a refresh.\nThe broker's refresh loop was spawned and never waited for, so a process\nexiting between that answer and the file write left a spent token on disk;\nthe next start presented it and the control plane revoked the whole chain.\n\nThe drain now waits for the loop, within the shared deadline. The loop only\nwatches for shutdown between refreshes, so one already in flight finishes and\nsaves its replacement first. If the deadline runs out mid-refresh the task is\naborted with a warning saying the next start may need a fresh token.\n\nA unit test cancels shutdown while a stub control plane is still answering and\nchecks the rotated token is saved. It fails if the loop is allowed to abandon\nthe request on shutdown. The drain wiring itself is covered by review: a\nprocess-level test would need a control plane that registers, heartbeats and\nsyncs a broker as well.\n\nAlso fixes graceful-shutdown.md, which said the broker has no pre-drain\nhold-off; it has one, off by default.",
+          "timestamp": "2026-09-24T06:31:49-07:00",
+          "tree_id": "b9215d3024c156d0c2f3ded24fa457a179fd13a9",
+          "url": "https://github.com/gabloe/felix/commit/fac667d69f6f837e3b5e07dfce02f9623502917d"
+        },
+        "date": 1790256869726,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 87,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 87.00\nmean: 87.40\nstdev: 0.89\ncv: 1.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 127,
+            "range": "2.68",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 127.00\nmean: 125.80\nstdev: 2.68\ncv: 2.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 148,
+            "range": "156.47",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 148.00\nmean: 218.20\nstdev: 156.47\ncv: 71.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 110,
+            "range": "1.52",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 110.00\nmean: 110.40\nstdev: 1.52\ncv: 1.37%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 233,
+            "range": "10.95",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 233.00\nmean: 236.00\nstdev: 10.95\ncv: 4.64%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 319,
+            "range": "50.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 319.00\nmean: 342.40\nstdev: 50.79\ncv: 14.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
