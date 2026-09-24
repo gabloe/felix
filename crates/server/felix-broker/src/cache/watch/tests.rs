@@ -133,3 +133,32 @@ async fn a_kept_up_watch_reports_no_lag() {
     assert_eq!(watch.recv().await.expect("delivered").offset, 0);
     assert_eq!(watch.lagged(), None);
 }
+
+/// Ending a shard's watches delivers what each had queued, then closes it
+/// cleanly -- not as a lag -- and leaves other shards' watchers alone.
+#[tokio::test]
+async fn ending_a_shard_drains_then_closes_its_watchers() {
+    let hub = CacheWatchHub::new();
+    let mut watch = register(&hub, CacheWatchFilter::Prefix(String::new()));
+    let mut other = hub.register(
+        "t1",
+        "ns",
+        "sessions",
+        1,
+        CacheWatchFilter::Prefix(String::new()),
+        8,
+    );
+    hub.cache_changed(change("a", 0));
+    hub.cache_changed(change("b", 1));
+
+    assert_eq!(hub.end_shard("t1", "ns", "sessions", 0), 1);
+
+    assert_eq!(watch.recv().await.expect("queued").offset, 0);
+    assert_eq!(watch.recv().await.expect("queued").offset, 1);
+    assert!(watch.recv().await.is_none(), "the watch should end");
+    assert_eq!(watch.lagged(), None, "an ended watch is not a lagged one");
+    assert!(
+        matches!(other.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+        "a watcher on another shard was ended"
+    );
+}

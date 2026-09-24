@@ -329,7 +329,7 @@ mod feed {
                     ownership
                 })),
                 lifecycle: Arc::new(tokio::sync::Mutex::new(ShardLifecycle::new("broker-a"))),
-                store: Arc::new(EphemeralShardStore),
+                store: Arc::new(EphemeralShardStore::default()),
                 ingress,
                 router: Arc::clone(&router),
             },

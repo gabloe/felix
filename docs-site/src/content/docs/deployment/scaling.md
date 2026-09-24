@@ -150,12 +150,22 @@ limit.
 Between the fence and the successor opening the shard, publishes to it are
 **refused**, not accepted somewhere the successor cannot see. The window is
 a few control-plane sync intervals — under a second on a local cluster, a
-few seconds with the default 5 s intervals. Subscriptions and cache reads
-on the old leader are ended when it releases the shard; a client with a seed
-list reconnects and is routed to the new owner.
+few seconds with the default 2 s broker sync interval and 5 s reconcile interval.
+
+Subscriptions and cache watches on the old leader are **ended** when it is
+fenced. Each reader first receives everything already queued for it, then its
+stream closes; the old leader stays up, so the close is the only signal a client
+gets. A write the old leader accepted just before the fence and commits after it
+reaches none of those readers; a reader that resumes by offset still finds it on
+the new owner. A sharded
+`ClusterClient` subscription reports `ShardLost` for that shard and resubscribes
+from the last offset it delivered; a sharded cache watch reports `ShardClosed`.
+Subscriptions are not migrated: the new owner serves the shard only once it has
+opened it, and a resubscribe before then is refused and retried.
 
 Every publish acknowledged before or during a move is on the new owner. The
-tests behind that claim are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`.
+tests behind these claims are in `crates/testing/felix-cluster/tests/routing/rebalance.rs`
+and `crates/testing/felix-cluster/tests/routing/moved_readers.rs`.
 
 ## Tuning
 

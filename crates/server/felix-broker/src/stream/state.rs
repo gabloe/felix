@@ -427,6 +427,19 @@ impl StreamState {
         }
     }
 
+    /// Drop every subscriber's sender, so each receiver drains what is queued
+    /// and then sees its channel close. Returns how many there were.
+    ///
+    /// The fanout snapshot holds clones of the senders, so it is emptied too;
+    /// otherwise the channels would stay open until the next publish.
+    pub(crate) fn end_subscribers(&self) -> usize {
+        let mut state = self.subscribers.lock();
+        let ended = state.senders.len();
+        state.senders.clear();
+        self.rebuild_subscriber_snapshot(&state);
+        ended
+    }
+
     /// The current fanout list.
     ///
     /// Test-only: the publish path takes the list from

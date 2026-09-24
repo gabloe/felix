@@ -54,6 +54,26 @@ impl Broker {
             .map_or(0, |state| state.in_flight.load(Ordering::Acquire))
     }
 
+    /// End every subscription this broker serves on one stream shard.
+    ///
+    /// Each subscriber still receives what was already queued for it; its feed
+    /// then ends, which is how a client learns to resubscribe elsewhere once
+    /// the shard has moved. Call only after writes to the shard have stopped,
+    /// or a publish landing afterwards reaches nobody. Returns how many ended.
+    pub async fn end_subscriptions(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+        shard: u32,
+    ) -> usize {
+        self.topics
+            .read()
+            .await
+            .get(&TopicKeyRef::new(tenant_id, namespace, stream, shard))
+            .map_or(0, |state| state.end_subscribers())
+    }
+
     pub(super) async fn get_stream_state(
         &self,
         tenant_id: &str,

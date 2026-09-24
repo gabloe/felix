@@ -190,13 +190,15 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
     } = deps;
     match (cluster, &config.controlplane_url, durable_storage) {
         (Some((router, ingress, lifecycle, ownership)), Some(base_url), storage) => {
+            let readers = shard_lifecycle::ShardReaders::new(Arc::clone(broker));
             let store: Arc<dyn shard_lifecycle::ShardStore> = match storage {
-                Some(storage) => Arc::new(shard_lifecycle::DurableShardStore::new(Arc::new(
-                    storage.clone(),
-                ))),
+                Some(storage) => Arc::new(
+                    shard_lifecycle::DurableShardStore::new(Arc::new(storage.clone()))
+                        .with_readers(readers),
+                ),
                 // Without durable storage there is no log to open, so taking a
                 // shard is bookkeeping only.
-                None => Arc::new(shard_lifecycle::EphemeralShardStore),
+                None => Arc::new(shard_lifecycle::EphemeralShardStore::with_readers(readers)),
             };
             let watch = tokio::spawn(shard_watch::run(
                 membership_client.clone(),

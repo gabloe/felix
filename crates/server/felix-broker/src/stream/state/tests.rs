@@ -164,3 +164,36 @@ fn append_batch_keeps_monotonic_sequences_and_trims_once() {
         ]
     );
 }
+
+/// Ending subscribers closes every channel, including the clones the fanout
+/// snapshot holds, after what was already queued.
+#[tokio::test]
+async fn ending_subscribers_drains_then_closes_each_one() {
+    let state = stream();
+    let (_first, mut first_rx) = state.register_subscriber();
+    let (_second, mut second_rx) = state.register_subscriber();
+    let snapshot = state.append_batch_at(&[Bytes::from_static(b"queued")], None, 16);
+    for entry in snapshot.iter() {
+        let envelope = crate::stream::delivery::DeliveryEnvelope::with_base_offset(
+            &[Bytes::from_static(b"queued")],
+            None,
+        );
+        entry
+            .sender
+            .try_send(crate::stream::delivery::QueuedDelivery::new(
+                envelope,
+                std::sync::Arc::clone(&state.queued_items),
+            ))
+            .expect("room in the queue");
+    }
+    drop(snapshot);
+
+    assert_eq!(state.end_subscribers(), 2);
+
+    for rx in [&mut first_rx, &mut second_rx] {
+        assert!(rx.recv().await.is_some(), "queued delivery was dropped");
+        assert!(rx.recv().await.is_none(), "the subscription should end");
+    }
+    assert_eq!(state.subscriber_count(), 0);
+    assert!(registered_ids(&state).is_empty());
+}

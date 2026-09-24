@@ -369,6 +369,46 @@ pub trait ShardStore: Send + Sync {
     /// This is the point at which "no accepted write is unaccounted for" is
     /// either true or not.
     async fn release(&self, key: &ShardKey) -> anyhow::Result<()>;
+    /// End the subscriptions and cache watches this broker serves for a shard
+    /// it has stopped serving: released, or reopened only to hand it off.
+    ///
+    /// The broker stays up, so without this a reader's feed simply goes quiet
+    /// and the client has no reason to look for the new leader. Each reader
+    /// gets what was already queued for it first.
+    async fn end_readers(&self, _key: &ShardKey) {}
+}
+
+/// Ends the readers of a released shard, for the stores that serve them.
+pub struct ShardReaders {
+    broker: std::sync::Arc<felix_broker::Broker>,
+}
+
+impl ShardReaders {
+    pub fn new(broker: std::sync::Arc<felix_broker::Broker>) -> Self {
+        Self { broker }
+    }
+
+    async fn end(&self, key: &ShardKey) {
+        let ended = match key.kind {
+            ShardKind::Stream => {
+                self.broker
+                    .end_subscriptions(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+                    .await
+            }
+            ShardKind::Cache => self.broker.cache_watches().map_or(0, |hub| {
+                hub.end_shard(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+            }),
+        };
+        if ended > 0 {
+            tracing::info!(
+                kind = ?key.kind,
+                name = %key.stream,
+                shard = key.shard,
+                ended,
+                "ended readers of a shard this broker no longer serves",
+            );
+        }
+    }
 }
 
 /// A [`ShardStore`] over the broker's durable storage.
@@ -378,11 +418,21 @@ pub trait ShardStore: Send + Sync {
 /// still only in the page cache when another node takes the shard.
 pub struct DurableShardStore {
     storage: std::sync::Arc<felix_broker::DurableStorage>,
+    readers: Option<ShardReaders>,
 }
 
 impl DurableShardStore {
     pub fn new(storage: std::sync::Arc<felix_broker::DurableStorage>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            readers: None,
+        }
+    }
+
+    /// End the shard's readers on release, as [`ShardStore::end_readers`] says.
+    pub fn with_readers(mut self, readers: ShardReaders) -> Self {
+        self.readers = Some(readers);
+        self
     }
 }
 
@@ -445,14 +495,32 @@ impl ShardStore for DurableShardStore {
             .await
             .map_err(|err| anyhow::anyhow!("flush shard log: {err}"))
     }
+
+    async fn end_readers(&self, key: &ShardKey) {
+        if let Some(readers) = &self.readers {
+            readers.end(key).await;
+        }
+    }
 }
 
 /// A [`ShardStore`] for a broker with no durable storage.
 ///
 /// Taking a shard is bookkeeping only: there is no log to open and nothing to
 /// flush, so both operations succeed immediately. Kept explicit rather than
-/// making the store optional, so the lifecycle has one code path.
-pub struct EphemeralShardStore;
+/// making the store optional, so the lifecycle has one code path. Readers
+/// are still ended on release: an ephemeral stream has subscribers too.
+#[derive(Default)]
+pub struct EphemeralShardStore {
+    readers: Option<ShardReaders>,
+}
+
+impl EphemeralShardStore {
+    pub fn with_readers(readers: ShardReaders) -> Self {
+        Self {
+            readers: Some(readers),
+        }
+    }
+}
 
 #[async_trait::async_trait]
 impl ShardStore for EphemeralShardStore {
@@ -462,6 +530,12 @@ impl ShardStore for EphemeralShardStore {
 
     async fn release(&self, _key: &ShardKey) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    async fn end_readers(&self, key: &ShardKey) {
+        if let Some(readers) = &self.readers {
+            readers.end(key).await;
+        }
     }
 }
 
@@ -481,12 +555,20 @@ pub async fn apply(
                     generation,
                     "shard opened and now serving",
                 ),
-                Opened::Draining => tracing::info!(
-                    stream = %key.stream,
-                    shard = key.shard,
-                    generation,
-                    "shard opened for a move; shipping to its successor, not serving",
-                ),
+                // How a move usually reaches the old leader: every assignment
+                // write bumps the generation, so the fence arrives as a new,
+                // draining generation rather than as a release of the current
+                // one. This broker has stopped serving the shard either way, so
+                // its readers end here too.
+                Opened::Draining => {
+                    store.end_readers(&key).await;
+                    tracing::info!(
+                        stream = %key.stream,
+                        shard = key.shard,
+                        generation,
+                        "shard opened for a move; shipping to its successor, not serving",
+                    );
+                }
                 // Reassigned while we were recovering it. Not an error, and
                 // deliberately not activated -- see `ShardLifecycle::opened`.
                 Opened::Stale => tracing::info!(
@@ -521,6 +603,7 @@ pub async fn apply(
                     "could not flush local shard state while releasing it",
                 );
             }
+            store.end_readers(&key).await;
             lifecycle.lock().await.released(&key, generation);
             tracing::info!(
                 stream = %key.stream,
