@@ -207,6 +207,20 @@ impl Client {
                 }
                 .into());
             }
+            Some(Message::Error {
+                message,
+                code,
+                retry,
+                detail,
+            }) => {
+                return Err(crate::error::refused(
+                    "cache watch refused",
+                    message,
+                    code,
+                    retry,
+                    detail,
+                ));
+            }
             other => return Err(anyhow::anyhow!("cache watch failed: {other:?}")),
         };
 

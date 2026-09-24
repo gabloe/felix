@@ -127,6 +127,7 @@ impl ClusterClient {
         // Every broker asked, so a redirect loop is reported rather than
         // followed forever.
         let mut visited: Vec<String> = Vec::new();
+        let mut went_back = false;
 
         for _ in 0..=MAX_REDIRECTS {
             let attempt = if retained {
@@ -149,6 +150,15 @@ impl ClusterClient {
                 Ok(watch) => return Ok(watch),
                 Err(err) => err,
             };
+            // An owner reached by redirect that answers `shard_unavailable` or
+            // `draining` has lost the shard since it was named. The entry broker
+            // routes by the current assignment, so ask it again, once.
+            if !visited.is_empty() && !went_back && super::route_went_stale(&error) {
+                went_back = true;
+                visited.clear();
+                client = self.client().await;
+                continue;
+            }
             let Some(redirect) = error.downcast_ref::<crate::NotLeaderError>().cloned() else {
                 return Err(error);
             };
