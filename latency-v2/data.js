@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790292102676,
+  "lastUpdate": 1790294253678,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19338,6 +19338,72 @@ window.BENCHMARK_DATA = {
             "range": "157.61",
             "unit": "us",
             "extra": "trials: 5\nmedian: 676.00\nmean: 656.80\nstdev: 157.61\ncv: 24.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "68a959476c3165130060a6c3d43e6424c626ac5d",
+          "message": "A stopping broker hands its shards to other brokers (#684)\n\n* fix(placement): move a draining broker's leaders before its followers\n\nBoth used to share the first move slot, in key order, so with the default\nlimit of one a follower replacement (a full copy) could hold the slot while\nthe draining broker's leaderships waited. Clients feel the leader, and a\nbroker stopping for a restart waits only until it leads nothing.\n\nSpec-Unaffected: only the order in which shards are offered a move slot changes; the pacing model's limits and the move protocol are the same.\n\n* feat(broker): hand shards to other brokers before shutting down\n\nOn SIGTERM a clustered broker now turns readiness off, asks the control\nplane to drain it and keeps serving until it leads no shard, for up to\nFELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS (default 30 s, 0 turns it off), and only\nthen closes its listener and drains as before. Each shard is moved rather\nthan failed over, so a rolling restart refuses no publish and subscriptions\nfollow the shard.\n\nThe handoff is skipped when the broker leads nothing, when no other broker\nis eligible, and when the control plane cannot be reached within 5 s; a\nsecond signal ends the wait. Shards still led at the timeout fail over as\nbefore. The drain does not outlive the process: registering again sets the\nnode live.\n\nThe cluster harness can now SIGTERM a broker, wait for it to exit and start\nit again under the same identity. The Helm chart passes the timeout and\ncounts it in the derived grace period.\n\n* docs: a stopping broker hands its shards off\n\nThe graceful-shutdown page gains the handoff step, a diagram, its metrics\nand the grace-period budget that now includes it; the env reference gains\nFELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS; the scaling page and the status row stop\ntelling operators to drain before a restart; the rebalancing plan records\nthe handoff and the leaders-first slot order.",
+          "timestamp": "2026-09-24T16:54:38-07:00",
+          "tree_id": "1003ee864cf438b291a156a5518a588aa325c6f6",
+          "url": "https://github.com/gabloe/felix/commit/68a959476c3165130060a6c3d43e6424c626ac5d"
+        },
+        "date": 1790294250740,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 130,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 130.20\nstdev: 0.45\ncv: 0.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 180,
+            "range": "2.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 180.00\nmean: 178.80\nstdev: 2.77\ncv: 1.55%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 210,
+            "range": "10.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 210.00\nmean: 210.00\nstdev: 10.17\ncv: 4.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 174,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 174.00\nmean: 173.40\nstdev: 0.89\ncv: 0.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 351,
+            "range": "14.15",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 351.00\nmean: 348.60\nstdev: 14.15\ncv: 4.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 465,
+            "range": "331.75",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 465.00\nmean: 616.80\nstdev: 331.75\ncv: 53.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
