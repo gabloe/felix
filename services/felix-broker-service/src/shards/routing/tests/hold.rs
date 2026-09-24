@@ -11,6 +11,7 @@ struct Broker {
     lifecycle: ShardLifecycle,
     ingress: Arc<IngressRouter>,
     assignments: HashMap<ShardKey, ShardAssignment>,
+    nodes: HashMap<String, NodeRef>,
 }
 
 impl Broker {
@@ -28,6 +29,7 @@ impl Broker {
             lifecycle,
             ingress,
             assignments: HashMap::new(),
+            nodes: catalog(),
         }
     }
 
@@ -44,8 +46,8 @@ impl Broker {
     /// Publish routes and the servable set together, as the feed does.
     fn publish(&self) {
         self.ingress.publish(
-            routing_table_from(&self.assignments, &catalog()),
-            &catalog(),
+            routing_table_from(&self.assignments, &self.nodes),
+            &self.nodes,
             self.lifecycle.servable(),
         );
     }
@@ -138,6 +140,33 @@ async fn a_write_routed_to_a_fenced_leader_elsewhere_waits_for_the_cut_over() {
     );
 
     // The shard moves here, and the write is served here.
+    a.apply(assignment(0, "broker-a", 3));
+    let (dispatch, fenced) = write.await.expect("dispatch");
+    assert_eq!(dispatch, Dispatch::Local { generation: 3 });
+    assert!(fenced, "a local write holds its place in the fence");
+}
+
+/// A drain moves the shard off a broker the catalog no longer counts as live,
+/// so the fenced leader reads as unavailable rather than as somewhere to
+/// forward. That is still a move, and the write waits for it.
+#[tokio::test]
+async fn a_write_to_a_draining_node_waits_for_the_cut_over() {
+    let mut a = Broker::new("broker-a", hold(5_000, 16));
+    a.apply(assignment(0, "broker-b", 1));
+    a.nodes
+        .insert("broker-b".to_string(), node("broker-b", 7002, false));
+    a.apply(draining(0, "broker-b", 2, "broker-a"));
+    assert!(matches!(
+        a.ingress.dispatch(&key(0)),
+        Dispatch::Unavailable(Reason::OwnerUnavailable(_))
+    ));
+
+    let write = dispatch_in_background(&a.ingress).await;
+    assert!(
+        !write.is_finished(),
+        "a write toward a drained node is held"
+    );
+
     a.apply(assignment(0, "broker-a", 3));
     let (dispatch, fenced) = write.await.expect("dispatch");
     assert_eq!(dispatch, Dispatch::Local { generation: 3 });

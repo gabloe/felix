@@ -132,10 +132,20 @@ pub(crate) async fn resolve_route(
     {
         return PublishRoute::local(handle.clone(), generation, fenced);
     }
-    let handle = broker
+    let handle = match broker
         .resolve_stream_handle(tenant_id, namespace, stream, shard)
         .await
-        .ok();
+    {
+        Ok(handle) => Some(handle),
+        Err(err) => {
+            tracing::debug!(
+                tenant_id, namespace, stream, shard, generation,
+                error = %err,
+                "publish refused: stream does not resolve",
+            );
+            None
+        }
+    };
     cache.insert(
         key_scratch.clone(),
         (handle.clone(), Instant::now() + STREAM_CACHE_TTL),

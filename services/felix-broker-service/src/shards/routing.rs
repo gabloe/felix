@@ -291,9 +291,10 @@ impl IngressRouter {
                     None => true,
                 },
                 Dispatch::Unavailable(Reason::Moving) => true,
-                // The leader named here is fenced and will not take it.
-                Dispatch::Forward { .. } => draining(&view, key),
-                _ => false,
+                // The leader named here is fenced and will not take it. A
+                // drain also takes that leader out of the live set, so the
+                // route reads as unavailable rather than as a forward.
+                _ => draining(&view, key),
             };
             if !moving {
                 return (settled(held, dispatch), None);
@@ -414,14 +415,14 @@ fn settled(held: Option<hold::Held<'_>>, dispatch: Dispatch) -> Dispatch {
     dispatch
 }
 
-/// What a write is told when the hold gives up. Forwarding to a fenced
-/// leader would only be refused there, so it is refused here, as moving. A
-/// local answer whose fence closed is left for the claim to refuse, as it
-/// always did.
+/// What a write is told when the hold gives up on a moving shard. Anything
+/// but a local answer is refused as moving: forwarding to a fenced leader
+/// would only be refused there. A local answer whose fence closed is left for
+/// the claim to refuse, as it always did.
 fn gave_up(dispatch: Dispatch) -> Dispatch {
     match dispatch {
-        Dispatch::Forward { .. } => Dispatch::Unavailable(Reason::Moving),
-        other => other,
+        Dispatch::Local { .. } => dispatch,
+        _ => Dispatch::Unavailable(Reason::Moving),
     }
 }
 
