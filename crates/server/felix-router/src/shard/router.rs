@@ -14,12 +14,26 @@ use crate::RegionRouter;
 pub struct ShardRouter {
     local_node_id: String,
     local_region: String,
-    table: ArcSwap<RoutingTable>,
+    routes: ArcSwap<Routes>,
     /// Which regions this node may reach. Policy, not placement.
     regions: RegionRouter<String>,
-    /// Node ids this router has ever been told about, so an assignment naming
-    /// one it has never seen is reported as unknown rather than not live.
-    known_nodes: ArcSwap<HashSet<String>>,
+}
+
+/// One published set of routes: the table and the node ids it was built
+/// against, swapped in together so a reader never pairs a table with another
+/// publish's catalog.
+#[derive(Debug, Default)]
+pub struct Routes {
+    table: Arc<RoutingTable>,
+    /// Node ids this router has been told about, so an assignment naming one
+    /// it has never seen is reported as unknown rather than not live.
+    known_nodes: HashSet<String>,
+}
+
+impl Routes {
+    pub fn table(&self) -> &Arc<RoutingTable> {
+        &self.table
+    }
 }
 
 impl ShardRouter {
@@ -31,9 +45,8 @@ impl ShardRouter {
         Self {
             local_node_id: local_node_id.into(),
             local_region: local_region.into(),
-            table: ArcSwap::from_pointee(RoutingTable::new()),
+            routes: ArcSwap::from_pointee(Routes::default()),
             regions,
-            known_nodes: ArcSwap::from_pointee(HashSet::new()),
         }
     }
 
@@ -46,21 +59,37 @@ impl ShardRouter {
     /// Whole-table rather than per-shard: a partial update would let a reader
     /// see half of a rebalance, and routes are small enough that rebuilding is
     /// cheaper than reasoning about that.
-    pub fn publish(&self, table: RoutingTable, nodes: &HashMap<String, NodeRef>) {
-        self.known_nodes
-            .store(Arc::new(nodes.keys().cloned().collect()));
-        self.table.store(Arc::new(table));
+    ///
+    /// Returns what was published, for a caller that pairs it with state of its
+    /// own and needs both to change in one swap.
+    pub fn publish(&self, table: RoutingTable, nodes: &HashMap<String, NodeRef>) -> Arc<Routes> {
+        let routes = Arc::new(Routes {
+            table: Arc::new(table),
+            known_nodes: nodes.keys().cloned().collect(),
+        });
+        self.routes.store(Arc::clone(&routes));
+        routes
     }
 
     /// The current table, for a caller that wants to read several routes
     /// against one consistent snapshot.
     pub fn snapshot(&self) -> Arc<RoutingTable> {
-        self.table.load_full()
+        Arc::clone(&self.routes.load().table)
+    }
+
+    /// The current routes, to resolve against later with [`Self::resolve_with`].
+    pub fn routes(&self) -> Arc<Routes> {
+        self.routes.load_full()
     }
 
     /// Resolve a shard against the current table.
     pub fn resolve(&self, key: &ShardKey) -> Resolution {
-        self.resolve_in(&self.table.load(), key, None)
+        self.resolve_in(&self.routes.load(), key, None)
+    }
+
+    /// Resolve a shard against routes the caller already holds.
+    pub fn resolve_with(&self, routes: &Routes, key: &ShardKey) -> Resolution {
+        self.resolve_in(routes, key, None)
     }
 
     /// Resolve a shard, rejecting a table older than the caller already knows
@@ -70,13 +99,13 @@ impl ShardRouter {
     /// honest answer is that its copy is stale, not that the shard is somewhere
     /// it has since moved from.
     pub fn resolve_at(&self, key: &ShardKey, wanted: u64) -> Resolution {
-        self.resolve_in(&self.table.load(), key, Some(wanted))
+        self.resolve_in(&self.routes.load(), key, Some(wanted))
     }
 
     /// Whether this node should store records for `key` shipped at `generation`.
     pub fn replica_role(&self, key: &ShardKey, generation: u64) -> ReplicaRole {
-        let table = self.table.load();
-        let Some(route) = table.get(key) else {
+        let routes = self.routes.load();
+        let Some(route) = routes.table.get(key) else {
             // Nothing known about the shard at all, so this node cannot confirm
             // membership. Behind rather than NotAReplica: the assignment may
             // simply not have arrived, and refusing permanently would strand a
@@ -109,8 +138,8 @@ impl ShardRouter {
         }
     }
 
-    fn resolve_in(&self, table: &RoutingTable, key: &ShardKey, wanted: Option<u64>) -> Resolution {
-        let Some(route) = table.get(key) else {
+    fn resolve_in(&self, routes: &Routes, key: &ShardKey, wanted: Option<u64>) -> Resolution {
+        let Some(route) = routes.table.get(key) else {
             // A caller expecting a generation for a shard this table has never
             // heard of is ahead of us, not looking at a missing assignment.
             return match wanted {
@@ -137,7 +166,7 @@ impl ShardRouter {
             };
         }
 
-        if !self.known_nodes.load().contains(&route.leader.node_id) {
+        if !routes.known_nodes.contains(&route.leader.node_id) {
             return Resolution::Unavailable(Unavailable::LeaderUnknown {
                 node_id: route.leader.node_id.clone(),
             });

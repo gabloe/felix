@@ -62,7 +62,7 @@ broker loops poll the control plane every 2 s and placement runs every 5 s.
 | Phase | What it does | Status |
 | --- | --- | --- |
 | 0 | Correctness: the write fence, waiting for group state and counters, conditional assignment writes, ending readers on a moved shard | in progress |
-| 1 | Fast switch-over: wake the loops instead of polling, long-poll the assignment feed, run placement when a report arrives, warm the destination, publish routes and servable shards together | planned |
+| 1 | Fast switch-over: wake the loops instead of polling, long-poll the assignment feed, run placement when a report arrives, warm the destination, publish routes and servable shards together | done |
 | 2 | No refused publishes: hold a publish to a moving shard briefly and forward it, a typed "shard moving" refusal the client retries, the destination not counted toward quorum while it copies | planned |
 | 3 | Subscriptions follow the shard: a final frame telling the client where to resume, and the client resuming there with no gap or duplicate | planned |
 | 4 | Pacing: count every copy in flight, a per-node limit, drains before rebalancing, start the fence within a lag threshold, a move timeout, a bandwidth limit on copies | planned |
@@ -106,6 +106,23 @@ work with its own status row.
 - Metrics for how long a move takes and how long its switch-over lasts.
 
 The target is a switch-over well under a second on a local cluster.
+
+Progress:
+
+- **Control plane** (merged, #662, #665). The change feed long-polls, a
+  caught-up or drained report runs placement at once, and the assignment
+  carries `successor`.
+- **Broker.** The watch long-polls the feed (20 s) and falls back to the sync
+  interval against a control plane that answers at once. The watch wakes the
+  routing feed; the feed wakes replication after acting on a change, so the
+  drained report goes out on the pass right after the fence. A broker named
+  as `successor` opens the shard's log and in-memory state while it is still
+  copying. The feed publishes routes and the servable set in one swap. The
+  destination records `felix_broker_shard_move_seconds` and
+  `felix_broker_shard_switchover_seconds`.
+  `a_move_switches_over_in_well_under_a_second` measures fence to first
+  accepted publish with every broker on the 2 s default interval: about
+  90 ms on a local debug build, against 8 s before.
 
 ## Checking the work
 

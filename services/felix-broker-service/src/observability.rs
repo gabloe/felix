@@ -197,7 +197,7 @@ fn install_metrics_recorder() -> PrometheusHandle {
         if let Some(handle) = METRICS_HANDLE.get() {
             return handle.clone();
         }
-        let handle = PrometheusBuilder::new()
+        let handle = builder()
             .install_recorder()
             .expect("install metrics recorder");
         let _ = METRICS_HANDLE.set(handle.clone());
@@ -205,10 +205,29 @@ fn install_metrics_recorder() -> PrometheusHandle {
     }
     #[cfg(not(test))]
     {
-        PrometheusBuilder::new()
+        builder()
             .install_recorder()
             .expect("install metrics recorder")
     }
+}
+
+/// Buckets only where a histogram is wanted; everything else keeps the
+/// exporter's default summary.
+fn builder() -> PrometheusBuilder {
+    use crate::shards::lifecycle::metrics as shard;
+    use metrics_exporter_prometheus::Matcher;
+    PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            Matcher::Full(shard::MOVE_SECONDS.to_string()),
+            shard::MOVE_BUCKETS,
+        )
+        .and_then(|builder| {
+            builder.set_buckets_for_metric(
+                Matcher::Full(shard::SWITCHOVER_SECONDS.to_string()),
+                shard::SWITCHOVER_BUCKETS,
+            )
+        })
+        .expect("histogram buckets are non-empty")
 }
 
 /// Initializes the tracing subscriber.

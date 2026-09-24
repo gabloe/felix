@@ -1,6 +1,6 @@
 //! Broker-side view of which shards this node owns.
 //!
-//! Snapshot once, then poll changes from where the snapshot left off. The
+//! Snapshot once, then follow changes from where the snapshot left off. The
 //! control plane guarantees those two together describe every committed change
 //! exactly once, so the interesting work here is what to do when that guarantee
 //! stops holding: the broker fell behind the retention window, or the sequence
@@ -10,6 +10,11 @@
 //! What must never happen is carrying on from a checkpoint the control plane can
 //! no longer honour, because that silently drops ownership changes and leaves
 //! this broker serving shards it no longer owns.
+//!
+//! Changes are long-polled: the control plane holds the request until one
+//! lands, so a fence or a cut-over reaches this broker as it is written rather
+//! than at its next poll. A control plane that predates long-polling answers at
+//! once, and the loop then waits out the interval as it always did.
 pub mod metrics;
 
 use std::collections::HashMap;
@@ -18,7 +23,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::shards::ShardKey;
@@ -26,6 +31,14 @@ use crate::shards::watch::metrics as mm;
 
 /// Ceiling on poll backoff after a failure.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// How long the control plane may hold a changes request open. Under its own
+/// 25 s cap, which sits under the idle timeout of common proxies.
+const LONG_POLL_WAIT: Duration = Duration::from_secs(20);
+
+/// Slack on top of [`LONG_POLL_WAIT`] before a held request counts as failed.
+/// Without a bound, a connection that died silently would stop the watch.
+const LONG_POLL_SLACK: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ShardAssignment {
@@ -162,11 +175,15 @@ pub fn check_continuity(since: u64, first_seq: Option<u64>, next_seq: u64) -> Op
     }
 }
 
-/// Poll shard ownership until `shutdown` fires.
+/// Follow shard ownership until `shutdown` fires.
 ///
 /// Never returns an error: the control plane being unreachable is not a reason
 /// for a broker to stop serving what it already owns. Failures back off, and are
 /// visible through `felix_broker_shard_watch_failures_total`.
+///
+/// `changed` is notified after every snapshot and every batch of changes that
+/// moved something, so the routing feed acts on it now rather than at its
+/// next tick.
 pub async fn run(
     client: reqwest::Client,
     base_url: String,
@@ -175,6 +192,7 @@ pub async fn run(
     // cluster when its first token expires.
     bearer: Option<crate::cluster::credential::NodeCredential>,
     ownership: Arc<RwLock<ShardOwnership>>,
+    changed: Arc<Notify>,
     interval: Duration,
     shutdown: CancellationToken,
 ) {
@@ -182,13 +200,11 @@ pub async fn run(
     // `None` means "no valid checkpoint": take a snapshot before polling.
     let mut checkpoint: Option<u64> = None;
     let mut failures: u32 = 0;
+    // The first snapshot is taken at once: nothing is gained by starting a
+    // broker's ownership view an interval late.
+    let mut delay = Duration::ZERO;
 
     loop {
-        let delay = if failures == 0 {
-            interval
-        } else {
-            backoff(interval, failures)
-        };
         tokio::select! {
             _ = shutdown.cancelled() => return,
             _ = tokio::time::sleep(delay) => {}
@@ -198,16 +214,31 @@ pub async fn run(
         // without it knowing refresh exists.
         let token = bearer.as_ref().map(|credential| credential.bearer());
         let token = token.as_deref().map(String::as_str);
-        let result = match checkpoint {
-            None => snapshot(&client, &base_url, token, &ownership).await,
-            Some(since) => poll(&client, &base_url, token, &ownership, since).await,
+        let started = tokio::time::Instant::now();
+        // Raced against shutdown: a long-poll can be held for tens of seconds,
+        // and shutdown must not wait for it.
+        let result = tokio::select! {
+            _ = shutdown.cancelled() => return,
+            result = async {
+                match checkpoint {
+                    None => snapshot(&client, &base_url, token, &ownership).await,
+                    Some(since) => poll(&client, &base_url, token, &ownership, since).await,
+                }
+            } => result,
         };
 
-        match result {
-            Ok(Progress::At(seq)) => {
+        delay = match result {
+            Ok(Progress::At {
+                seq,
+                changed: moved,
+            }) => {
                 failures = 0;
                 checkpoint = Some(seq);
                 mm::record_checkpoint(seq);
+                if moved {
+                    changed.notify_one();
+                }
+                next_delay(interval, moved, started.elapsed())
             }
             Ok(Progress::MustResync(reason)) => {
                 failures = 0;
@@ -216,6 +247,7 @@ pub async fn run(
                 tracing::warn!(?reason, "shard watch must resnapshot");
                 mm::record_resync(reason);
                 checkpoint = None;
+                interval
             }
             Err(err) => {
                 failures = failures.saturating_add(1);
@@ -225,13 +257,32 @@ pub async fn run(
                     error = %err,
                     "shard watch poll failed; retrying with backoff",
                 );
+                backoff(interval, failures)
             }
-        }
+        };
+    }
+}
+
+/// How long to wait before the next request.
+///
+/// None after a change, since the next request long-polls anyway. After an
+/// empty answer, whatever is left of `interval`: a long-poll that waited is
+/// already past it, and a control plane that ignores `wait_ms` answers at once
+/// and is polled on the interval as before rather than in a tight loop.
+fn next_delay(interval: Duration, changed: bool, took: Duration) -> Duration {
+    if changed {
+        Duration::ZERO
+    } else {
+        interval.saturating_sub(took)
     }
 }
 
 enum Progress {
-    At(u64),
+    /// Caught up to `seq`; `changed` if anything was applied on the way.
+    At {
+        seq: u64,
+        changed: bool,
+    },
     MustResync(Resync),
 }
 
@@ -257,7 +308,10 @@ async fn snapshot(
         next_seq = response.next_seq,
         "shard ownership seeded from snapshot",
     );
-    Ok(Progress::At(response.next_seq))
+    Ok(Progress::At {
+        seq: response.next_seq,
+        changed: true,
+    })
 }
 
 async fn poll(
@@ -269,7 +323,10 @@ async fn poll(
 ) -> Result<Progress> {
     let response: ChangesResponse = get(
         client,
-        &format!("{base_url}/v1/shard-assignments/changes?since={since}"),
+        &format!(
+            "{base_url}/v1/shard-assignments/changes?since={since}&wait_ms={}",
+            LONG_POLL_WAIT.as_millis()
+        ),
         bearer,
     )
     .await
@@ -280,14 +337,18 @@ async fn poll(
         return Ok(Progress::MustResync(reason));
     }
 
+    let mut changed = false;
     if !response.items.is_empty() {
         let mut owned = ownership.write().await;
         for change in &response.items {
-            owned.apply(&change.key, change.assignment.clone());
+            changed |= owned.apply(&change.key, change.assignment.clone());
         }
         mm::record_applied(response.items.len());
     }
-    Ok(Progress::At(response.next_seq))
+    Ok(Progress::At {
+        seq: response.next_seq,
+        changed,
+    })
 }
 
 async fn get<T: serde::de::DeserializeOwned>(
@@ -295,7 +356,7 @@ async fn get<T: serde::de::DeserializeOwned>(
     url: &str,
     bearer: Option<&str>,
 ) -> Result<T> {
-    let mut request = client.get(url);
+    let mut request = client.get(url).timeout(LONG_POLL_WAIT + LONG_POLL_SLACK);
     if let Some(bearer) = bearer {
         request = request.bearer_auth(bearer);
     }

@@ -204,6 +204,11 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                 // shard is bookkeeping only.
                 None => Arc::new(shard_lifecycle::EphemeralShardStore::with_readers(readers)),
             };
+            // The watch wakes the feed, and the feed wakes replication, so a
+            // fence or a cut-over runs through all three as soon as it is
+            // written rather than a tick apart at each hop.
+            let assignments_changed = Arc::new(tokio::sync::Notify::new());
+            let routes_changed = Arc::new(tokio::sync::Notify::new());
             let watch = tokio::spawn(shard_watch::run(
                 membership_client.clone(),
                 base_url.clone(),
@@ -211,6 +216,7 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                 // the same credential the rest of membership uses.
                 credential.clone(),
                 Arc::clone(ownership),
+                Arc::clone(&assignments_changed),
                 Duration::from_millis(config.controlplane_sync_interval_ms),
                 sync_shutdown.clone(),
             ));
@@ -220,8 +226,9 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                     lifecycle: Arc::clone(lifecycle),
                     store,
                     ingress: Arc::clone(ingress),
-                    router: Arc::clone(router),
                     client_endpoints: Some(Arc::clone(client_endpoints)),
+                    assignments_changed,
+                    routes_changed: Arc::clone(&routes_changed),
                 },
                 Some(shard_routing::CatalogSource {
                     client: membership_client.clone(),
@@ -264,6 +271,7 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                         reporter
                     }),
                     Duration::from_millis(config.controlplane_sync_interval_ms),
+                    routes_changed,
                     replication::RebuildPolicy {
                         max_concurrent: config.replication_rebuild_max_concurrent,
                         bytes_per_sec: config.replication_rebuild_bytes_per_sec,

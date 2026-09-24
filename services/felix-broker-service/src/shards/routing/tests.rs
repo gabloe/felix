@@ -179,11 +179,16 @@ async fn losing_a_shard_stops_local_service() {
         Dispatch::Local { generation: 1 }
     );
 
-    // Reassigned to broker-b.
+    // Reassigned to broker-b. Local state has not caught up yet, and the new
+    // route alone decides.
     let moved: HashMap<ShardKey, ShardAssignment> = [(key(0), assignment(0, "broker-b", 2))]
         .into_iter()
         .collect();
-    router.publish(routing_table_from(&moved, &nodes), &nodes);
+    ingress.publish(
+        routing_table_from(&moved, &nodes),
+        &nodes,
+        lifecycle.servable(),
+    );
 
     assert!(
         matches!(dispatch(Some(&ingress), &key(0)), Dispatch::Forward { .. }),
@@ -348,7 +353,8 @@ mod feed {
                 lifecycle: Arc::new(tokio::sync::Mutex::new(lifecycle)),
                 store: Arc::new(EphemeralShardStore::default()),
                 ingress,
-                router: Arc::clone(&router),
+                assignments_changed: Arc::default(),
+                routes_changed: Arc::default(),
             },
             router,
         )
@@ -459,6 +465,48 @@ mod feed {
         shutdown.cancel();
         let _ = feed.await;
         server.abort();
+    }
+
+    /// **A change the watch reports is acted on at once.** The tick is a
+    /// minute here, so only the wake can make the shard servable in time, and
+    /// replication is told the routes changed.
+    #[tokio::test]
+    async fn a_woken_feed_acts_before_its_next_tick() {
+        let (state, _router) = state(&[assignment(0, "broker-b", 1)]);
+        let ingress = Arc::clone(&state.ingress);
+        let ownership = Arc::clone(&state.ownership);
+        let assignments_changed = Arc::clone(&state.assignments_changed);
+        let routes_changed = Arc::clone(&state.routes_changed);
+        let shutdown = CancellationToken::new();
+        let feed = spawn_feed(state, None, Duration::from_secs(60), shutdown.clone());
+
+        // The first tick fires at once; let it pass.
+        until("the first tick to publish", || {
+            !matches!(
+                ingress.dispatch(&key(0)),
+                Dispatch::Unavailable(Reason::NotAssigned)
+            )
+        })
+        .await;
+
+        // The shard moves here, as a cut-over would.
+        ownership
+            .write()
+            .await
+            .apply(&key(0), Some(assignment(0, "broker-a", 2)));
+        let replication_woken = routes_changed.notified();
+        assignments_changed.notify_one();
+
+        until("the woken feed to serve the shard", || {
+            ingress.dispatch(&key(0)) == Dispatch::Local { generation: 2 }
+        })
+        .await;
+        tokio::time::timeout(Duration::from_secs(1), replication_woken)
+            .await
+            .expect("the feed should wake replication after acting on a change");
+
+        shutdown.cancel();
+        let _ = feed.await;
     }
 
     /// Cancellation ends the task rather than leaving it ticking.

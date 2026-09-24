@@ -21,6 +21,13 @@ impl Cluster {
         self.control_plane().place_shards().await
     }
 
+    /// Run the control plane's placement loop on `interval` and on the wakes a
+    /// move's reports send, as a deployment does. For a test that measures a
+    /// move rather than stepping it.
+    pub fn run_placement(&self, interval: Duration) {
+        self.control_plane().run_placement(interval);
+    }
+
     /// Step placement once with up to `max_concurrent` shard moves in flight.
     pub async fn place_shards_moving(&self, max_concurrent: usize) -> ReconcileOutcome {
         self.control_plane()

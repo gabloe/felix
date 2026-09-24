@@ -71,9 +71,10 @@ pub(crate) fn spawn_broker(
         .env("FELIX_INTERNAL_BIND", internal_addr.to_string())
         .env("FELIX_BROKER_METRICS_BIND", metrics_addr.to_string())
         .env("FELIX_DURABLE_STORAGE_DIR", &data_dir)
-        // Fast enough that ownership converges while a person is watching, and
-        // still a real poll rather than a fixed wait.
-        .env("FELIX_CONTROLPLANE_SYNC_INTERVAL_MS", "200")
+        .env(
+            "FELIX_CONTROLPLANE_SYNC_INTERVAL_MS",
+            config.sync_interval_ms.to_string(),
+        )
         .env(
             "RUST_LOG",
             std::env::var("RUST_LOG").as_deref().unwrap_or("info"),

@@ -784,3 +784,90 @@ async fn opening_a_shard_to_hand_it_off_completes() {
     .expect("the handoff open never finished");
     assert_eq!(own.lock().await.phase(&key(0)), Phase::Closed);
 }
+
+fn moving_to(successor: &str, generation: u64, state: &str) -> ShardAssignment {
+    ShardAssignment {
+        replicas: vec![successor.to_string()],
+        state: state.to_string(),
+        successor: Some(successor.to_string()),
+        ..assigned_to("broker-b", generation)
+    }
+}
+
+/// A destination prepares once per move, from the stage onward, and serves
+/// only after the cut-over names it leader.
+#[test]
+fn a_named_destination_prepares_once_and_serves_only_after_the_cut_over() {
+    let mut own = lifecycle();
+
+    assert_eq!(
+        own.observe(&key(0), Some(&moving_to("broker-a", 2, "active"))),
+        Action::Prepare { key: key(0) }
+    );
+    assert!(own.is_incoming(&key(0)));
+    assert!(
+        !own.may_serve(&key(0)),
+        "a destination must not serve before the cut-over"
+    );
+    // Re-delivered, and then fenced: already prepared.
+    assert_eq!(
+        own.observe(&key(0), Some(&moving_to("broker-a", 2, "active"))),
+        Action::None
+    );
+    assert_eq!(
+        own.observe(&key(0), Some(&moving_to("broker-a", 3, "draining"))),
+        Action::None
+    );
+
+    // The cut-over.
+    assert_eq!(
+        own.observe(&key(0), Some(&assigned_to("broker-a", 4))),
+        Action::Open {
+            key: key(0),
+            generation: 4
+        }
+    );
+    assert_eq!(own.opened(&key(0), 4), Opened::Activated);
+    assert!(
+        !own.is_incoming(&key(0)),
+        "an arrived move is no longer incoming"
+    );
+}
+
+/// A move that drops this broker as its destination forgets it, so a later
+/// move here prepares again.
+#[test]
+fn a_destination_dropped_from_a_move_forgets_it() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&moving_to("broker-a", 2, "active")));
+
+    assert_eq!(
+        own.observe(&key(0), Some(&moving_to("broker-c", 3, "active"))),
+        Action::None
+    );
+    assert!(!own.is_incoming(&key(0)));
+    assert_eq!(
+        own.observe(&key(0), Some(&moving_to("broker-a", 4, "active"))),
+        Action::Prepare { key: key(0) }
+    );
+}
+
+/// The old leader is the successor of nothing: a move away from it releases,
+/// never prepares.
+#[test]
+fn the_old_leader_does_not_treat_its_own_move_as_incoming() {
+    let mut own = lifecycle();
+    own.observe(&key(0), Some(&assigned_to("broker-a", 1)));
+    own.opened(&key(0), 1);
+
+    let staged = ShardAssignment {
+        successor: Some("broker-b".to_string()),
+        replicas: vec!["broker-b".to_string()],
+        ..assigned_to("broker-a", 2)
+    };
+    assert!(matches!(
+        own.observe(&key(0), Some(&staged)),
+        Action::Open { .. }
+    ));
+    assert!(!own.is_incoming(&key(0)));
+}

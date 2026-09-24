@@ -473,3 +473,103 @@ async fn a_drain_and_a_join_at_the_same_time_converge() {
     );
     cluster.shutdown().await;
 }
+
+/// **The switch-over is quick.** From the fence to the destination accepting a
+/// publish is well under a second, with every broker loop on the production
+/// 2 s interval and placement on a timer too slow to be what moves it. Only
+/// the wakes -- the long-polled assignment feed, the feed and replication
+/// woken on a change, placement woken by the reports -- can make it that fast.
+#[serial]
+#[tokio::test]
+async fn a_move_switches_over_in_well_under_a_second() {
+    use felix_controlplane_service::model::ShardState;
+    use felix_controlplane_service::store::ControlPlaneStore;
+
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        sync_interval_ms: 2_000,
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    let destination = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &owner)
+        .expect("two brokers");
+    let sent = publish_batch(&cluster, &owner, "before", 20).await;
+
+    cluster.run_placement(Duration::from_secs(60));
+    cluster.drain_node(&owner).await.expect("drain");
+    // Stages the move. Everything after is driven by the reports.
+    cluster.place_shards().await;
+
+    // Read straight from the store: an HTTP round trip per check would blur
+    // the moment the fence lands.
+    let store = &cluster.control_plane.as_ref().expect("control plane").store;
+    let deadline = std::time::Instant::now() + felix_cluster::wait::budget(Duration::from_secs(30));
+    let fenced_at = loop {
+        let draining = store
+            .list_shard_assignments()
+            .await
+            .expect("assignments")
+            .into_iter()
+            .any(|a| a.key.stream == STREAM && matches!(a.state, ShardState::Draining));
+        if draining {
+            break std::time::Instant::now();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the move never reached its fence"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    };
+
+    let mut attempt = 0usize;
+    let switch_over = loop {
+        attempt += 1;
+        let payload = format!("after-{attempt}").into_bytes();
+        if cluster
+            .publish_via(&destination, STREAM, payload)
+            .await
+            .is_ok()
+            && cluster
+                .owner(STREAM)
+                .await
+                .is_ok_and(|now| now == destination)
+        {
+            break fenced_at.elapsed();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{destination} never took the shard over"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let measured = cluster
+        .metric(&destination, "felix_broker_shard_switchover_seconds_sum")
+        .await
+        .ok()
+        .flatten();
+    println!(
+        "switch-over: {} ms from the fence to a publish accepted by {destination}; \
+         the destination measured {measured:?} s",
+        switch_over.as_millis()
+    );
+    assert!(
+        switch_over < felix_cluster::wait::budget(Duration::from_millis(1_000)),
+        "the switch-over took {} ms",
+        switch_over.as_millis()
+    );
+    assert!(
+        measured.is_some(),
+        "{destination} did not record the switch-over it served"
+    );
+
+    let got = replay_from(&cluster, &destination, Duration::from_secs(30)).await;
+    let lost = missing(&sent, &got);
+    assert!(lost.is_empty(), "records lost across the move: {lost:?}");
+    cluster.shutdown().await;
+}

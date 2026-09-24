@@ -221,14 +221,43 @@ impl Cluster {
             self.base_url.clone(),
             Some(credential),
             ownership,
+            Arc::default(),
             Duration::from_millis(10),
             shutdown,
         ))
     }
 
-    async fn shutdown(self) {
+    /// A watch polling every `interval`, reporting changes to `changed`.
+    fn watch_every(
+        &self,
+        interval: Duration,
+        ownership: Arc<RwLock<ShardOwnership>>,
+        changed: Arc<tokio::sync::Notify>,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(shard_watch::run(
+            self.client.clone(),
+            self.base_url.clone(),
+            Some(
+                felix_broker_service::cluster::credential::NodeCredential::new(self.bearer.clone()),
+            ),
+            ownership,
+            changed,
+            interval,
+            shutdown,
+        ))
+    }
+
+    async fn shutdown(mut self) {
         let _ = self.stop.send(());
-        let _ = self.server.await;
+        // A graceful shutdown waits for held long-polls, which answer only
+        // when their wait runs out; the test is done with them.
+        if tokio::time::timeout(Duration::from_millis(500), &mut self.server)
+            .await
+            .is_err()
+        {
+            self.server.abort();
+        }
     }
 }
 
@@ -424,4 +453,116 @@ async fn the_watch_picks_up_a_refreshed_credential() {
     shutdown.cancel();
     let _ = watch.await;
     cluster.shutdown().await;
+}
+
+/// **A change reaches the broker as it is written, not at the next poll.** The
+/// interval is far longer than the wait allowed here, so only a long-poll the
+/// control plane answers on the write can deliver it in time.
+#[tokio::test]
+async fn a_change_arrives_before_the_next_poll() {
+    let cluster = Cluster::start().await;
+    cluster.assign(0, "broker-a", ShardState::Assigning).await;
+
+    let ownership = Arc::new(RwLock::new(ShardOwnership::default()));
+    let changed = Arc::new(tokio::sync::Notify::new());
+    let shutdown = CancellationToken::new();
+    let watch = cluster.watch_every(
+        Duration::from_secs(30),
+        Arc::clone(&ownership),
+        Arc::clone(&changed),
+        shutdown.clone(),
+    );
+    assert!(until(async || ownership.read().await.len() == 1).await);
+    // The snapshot counted as a change.
+    tokio::time::timeout(Duration::from_secs(1), changed.notified())
+        .await
+        .expect("the snapshot should wake the feed");
+
+    // Let the watch settle into its long-poll before writing.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    cluster.assign(1, "broker-b", ShardState::Assigning).await;
+
+    assert!(
+        until(async || ownership.read().await.len() == 2).await,
+        "the change should arrive through the held request, well before the \
+         30 s interval",
+    );
+    tokio::time::timeout(Duration::from_secs(1), changed.notified())
+        .await
+        .expect("an applied change should wake the feed");
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(2), watch)
+        .await
+        .expect("shutdown must not wait for a held long-poll")
+        .expect("join");
+    cluster.shutdown().await;
+}
+
+/// **A control plane that ignores `wait_ms` is polled on the interval.** It
+/// answers every request at once; without the interval between empty answers
+/// the watch would spin.
+#[tokio::test]
+async fn a_control_plane_without_long_poll_is_polled_on_the_interval() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let requests = Arc::new(AtomicUsize::new(0));
+    let asked_to_wait = Arc::new(AtomicUsize::new(0));
+    let app = axum::Router::new()
+        .route(
+            "/v1/shard-assignments/snapshot",
+            axum::routing::get(|| async {
+                axum::Json(serde_json::json!({ "items": [], "next_seq": 0 }))
+            }),
+        )
+        .route(
+            "/v1/shard-assignments/changes",
+            axum::routing::get({
+                let requests = Arc::clone(&requests);
+                let asked_to_wait = Arc::clone(&asked_to_wait);
+                move |query: axum::extract::Query<std::collections::HashMap<String, String>>| {
+                    requests.fetch_add(1, Ordering::Relaxed);
+                    if query.contains_key("wait_ms") {
+                        asked_to_wait.fetch_add(1, Ordering::Relaxed);
+                    }
+                    async { axum::Json(serde_json::json!({ "items": [], "next_seq": 0 })) }
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+
+    let shutdown = CancellationToken::new();
+    let watch = tokio::spawn(shard_watch::run(
+        Client::builder().no_proxy().build().expect("client"),
+        format!("http://{addr}"),
+        None,
+        Arc::new(RwLock::new(ShardOwnership::default())),
+        Arc::default(),
+        Duration::from_millis(100),
+        shutdown.clone(),
+    ));
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let seen = requests.load(Ordering::Relaxed);
+    assert!(seen >= 3, "the watch should keep polling; saw {seen}");
+    assert!(
+        seen <= 15,
+        "{seen} polls in a second at a 100 ms interval: the watch is spinning \
+         on a control plane that answers at once",
+    );
+    assert_eq!(
+        asked_to_wait.load(Ordering::Relaxed),
+        seen,
+        "every poll asks to wait"
+    );
+
+    shutdown.cancel();
+    let _ = watch.await;
+    server.abort();
 }
