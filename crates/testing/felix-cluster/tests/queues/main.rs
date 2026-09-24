@@ -6,4 +6,5 @@
 //! `--test queues consumer_groups::`.
 
 mod consumer_groups;
+mod handoff;
 mod sharded_group;
