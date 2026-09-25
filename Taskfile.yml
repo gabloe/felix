@@ -39,10 +39,12 @@ tasks:
           task pg:up
         fi
       - |
+        # With a database, the store's Postgres tests run too; they are behind
+        # a feature so a plain `cargo test` never needs one.
         if [ -n "${FELIX_TEST_DATABASE_URL:-}" ]; then
-          cargo test --workspace
+          cargo test --workspace --features felix-controlplane-service/pg-tests
         elif docker version >/dev/null 2>&1; then
-          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo test --workspace
+          FELIX_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:55432/postgres" cargo test --workspace --features felix-controlplane-service/pg-tests
         else
           cargo test --workspace
         fi
