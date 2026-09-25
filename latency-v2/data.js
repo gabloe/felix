@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790298911815,
+  "lastUpdate": 1790299729456,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19536,6 +19536,72 @@ window.BENCHMARK_DATA = {
             "range": "246.72",
             "unit": "us",
             "extra": "trials: 5\nmedian: 464.00\nmean: 500.00\nstdev: 246.72\ncv: 49.34%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8f1736eb607906ac9c0ddb2a7fe89b9fe8d2fafe",
+          "message": "fix(fuzz): segment_record re-encodes with the record's producer mark (#690)\n\nRecords gained a producer mark (opens or continues a batch) with the\nidempotent-producer sequences, but the target still re-encoded every\ndecoded record with no mark and sized it without the producer tag. A\nrecord continuing a batch decoded fine and then failed the round trip.\n\nSpec-Unaffected: fuzz target only.",
+          "timestamp": "2026-09-24T18:12:06-07:00",
+          "tree_id": "2b3b64298b8be8e6f2bc9a81982d8795dc671e56",
+          "url": "https://github.com/gabloe/felix/commit/8f1736eb607906ac9c0ddb2a7fe89b9fe8d2fafe"
+        },
+        "date": 1790299727119,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 124,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 124.00\nmean: 124.00\nstdev: 1.00\ncv: 0.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 164,
+            "range": "1.79",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 163.80\nstdev: 1.79\ncv: 1.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 216,
+            "range": "58.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 216.00\nmean: 235.40\nstdev: 58.38\ncv: 24.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 167,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 167.00\nmean: 167.00\nstdev: 0.71\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 342,
+            "range": "11.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 342.00\nmean: 344.40\nstdev: 11.84\ncv: 3.44%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 512,
+            "range": "709.90",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 512.00\nmean: 937.60\nstdev: 709.90\ncv: 75.71%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
