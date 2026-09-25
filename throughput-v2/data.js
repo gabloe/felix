@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790299732981,
+  "lastUpdate": 1790301391526,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15444,6 +15444,58 @@ window.BENCHMARK_DATA = {
             "range": "2856.57",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 950348.58\nmean: 951300.81\nstdev: 2856.57\ncv: 0.30%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "98802b1e43a57d78c4cf4c061874ef7470916009",
+          "message": "test(broker): publish concurrency counts shared flushes, not wall clock (#696)\n\nThe test asserted a 2x wall-clock speedup for 16 concurrent publishes and\nread 0.49x under coverage on a busy CI runner with a fast disk, where\nflushes were being shared fine. Count flushes instead, as the storage-level\ngroup-commit test already does: serial is the control at one flush per\npublish, and concurrent must need at most half as many. Serialising the\nconcurrent publishes behind a mutex still fails it (64 flushes for 64).\n\nSpec-Unaffected: test and a read-only accessor.",
+          "timestamp": "2026-09-24T18:24:58-07:00",
+          "tree_id": "c8ad183f16aeb5beedbab56f0cf63ee8dbc4ae58",
+          "url": "https://github.com/gabloe/felix/commit/98802b1e43a57d78c4cf4c061874ef7470916009"
+        },
+        "date": 1790301390217,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 403933.27,
+            "range": "15120.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 403933.27\nmean: 401376.77\nstdev: 15120.47\ncv: 3.77%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 403933.27,
+            "range": "15120.47",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 403933.27\nmean: 401376.77\nstdev: 15120.47\ncv: 3.77%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 92603.56,
+            "range": "1995.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 92603.56\nmean: 92615.26\nstdev: 1995.24\ncv: 2.15%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 926035.59,
+            "range": "19952.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 926035.59\nmean: 926152.61\nstdev: 19952.42\ncv: 2.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
