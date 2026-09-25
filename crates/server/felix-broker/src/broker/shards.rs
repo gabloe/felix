@@ -267,4 +267,21 @@ impl StreamHandle {
     pub fn is_active(&self) -> bool {
         self.state.active.load(Ordering::Acquire)
     }
+
+    /// The shard's disk log, for a durable stream.
+    ///
+    /// For readers that address records by offset. Everything
+    /// [`StreamLog::read_from`] returns is at or below the log's tail, which is
+    /// the same bound a resumed subscription replays to.
+    pub fn log(&self) -> Option<&StreamLog> {
+        self.state.durable.as_ref()
+    }
+
+    /// Notified after every durable publish to this shard commits.
+    ///
+    /// To wait for new records without missing one, create the
+    /// `notified_owned()` future and `enable()` it *before* reading the tail.
+    pub fn appended(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.state.appended)
+    }
 }

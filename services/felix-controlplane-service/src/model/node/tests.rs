@@ -7,6 +7,7 @@ fn node() -> Node {
         spec: NodeSpec {
             advertise_addr: "10.0.0.4:7000".to_string(),
             client_addr: None,
+            kafka_addr: None,
             region: "us-west-2".to_string(),
             labels: BTreeMap::from([("rack".to_string(), "a1".to_string())]),
             capacity: NodeCapacity {
@@ -271,6 +272,7 @@ fn optional_spec_fields_default_when_absent() {
 
     let spec: NodeSpec = serde_json::from_value(json).expect("deserialize");
     assert!(spec.labels.is_empty());
+    assert!(spec.kafka_addr.is_none());
     assert_eq!(spec.capacity, NodeCapacity::default());
     assert_eq!(spec.validate(), Ok(()));
 }
@@ -362,6 +364,54 @@ fn a_zero_client_port_is_rejected() {
         node.validate(),
         Err(NodeValidationError::ZeroClientPort)
     ));
+}
+
+#[test]
+fn a_kafka_address_may_be_a_hostname_or_an_ip() {
+    for addr in [
+        "host.docker.internal:9092",
+        "broker-1:9092",
+        "10.0.0.4:9092",
+        "[::1]:9092",
+        "[2001:db8::7]:19092",
+    ] {
+        let mut node = node();
+        node.spec.kafka_addr = Some(addr.to_string());
+        assert_eq!(node.validate(), Ok(()), "kafka_addr {addr:?}");
+    }
+}
+
+#[test]
+fn an_unusable_kafka_address_is_rejected() {
+    for addr in [
+        "",
+        "broker-1",
+        "broker-1:",
+        ":9092",
+        "broker-1:port",
+        "broker-1:70000",
+        "::1:9092",
+        "[::1:9092",
+        "[not-v6]:9092",
+        "bad host:9092",
+        "-lead.example:9092",
+        "a..b:9092",
+    ] {
+        let mut node = node();
+        node.spec.kafka_addr = Some(addr.to_string());
+        assert_eq!(
+            node.validate(),
+            Err(NodeValidationError::InvalidKafkaAddr(addr.to_string())),
+            "kafka_addr {addr:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn a_zero_kafka_port_is_rejected() {
+    let mut node = node();
+    node.spec.kafka_addr = Some("host.docker.internal:0".to_string());
+    assert_eq!(node.validate(), Err(NodeValidationError::ZeroKafkaPort));
 }
 
 /// An operator can put a draining broker back into placement...

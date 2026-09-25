@@ -130,6 +130,11 @@ for a live or draining node whose heartbeat is inside the window.
                               "reasons": ["last heartbeat was 41200ms ago, past the 15000ms timeout; expiry has not run yet"] } } ] }
 ```
 
+A node's `spec` may also carry `client_addr`, the `host:port` Felix clients
+connect to, and `kafka_addr`, the `host:port` Kafka clients are told to connect
+to (present only on a broker running the Kafka listener; a hostname is
+allowed, an IPv6 host must be bracketed). Both are omitted when unset.
+
 `cluster:*` sits outside the tenant hierarchy and no tenant scope contains it,
 so a tenant admin cannot grant themselves cluster access. The tenant comes from
 the token's own `tid` claim rather than a path segment, and only selects which

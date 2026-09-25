@@ -9,6 +9,7 @@ fn with_membership(token: &str) -> BrokerConfig {
             node_id: "broker-a".to_string(),
             advertise_addr: "10.0.0.1:5000".to_string(),
             client_advertise_addr: None,
+            kafka_advertise_addr: None,
             refresh_token_file: None,
             node_token_file: None,
             region: "us-west-2".to_string(),

@@ -13,6 +13,26 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Kafka consumers can read durable streams.** A broker started with
+  `FELIX_KAFKA_LISTEN` serves the Kafka protocol, read-only, for consumers that
+  assign their own partitions: kcat, librdkafka programs and Java
+  `KafkaConsumer`s. A durable stream is topic `<namespace>.<stream>`, partition
+  N is shard N, and offsets are Felix's log offsets. It speaks `ApiVersions`,
+  SASL/PLAIN (tenant id as username, Felix token as password, reads checked as
+  `stream.subscribe`), `Metadata`, `ListOffsets` and a long-polling `Fetch`,
+  and a consumer follows a partition to its new leader after a move or
+  failover. `FELIX_KAFKA_ADVERTISE_ADDR`, `FELIX_KAFKA_TLS` (on by default,
+  with the broker's certificate), `FELIX_KAFKA_ANONYMOUS_TENANT`,
+  `FELIX_KAFKA_DEFAULT_NAMESPACE` and `FELIX_KAFKA_MAX_CONNECTIONS` configure
+  it. Each broker registers its advertised address as the node's new
+  `kafka_addr` field so any broker can name any partition's leader; migration
+  `0018_node_kafka_addr.sql` adds the column. Consumer groups are refused:
+  `FindCoordinator` answers `GROUP_AUTHORIZATION_FAILED` with a message saying
+  to assign partitions, so a group consumer fails with a reason instead of
+  hanging. `Produce` is refused with `POLICY_VIOLATION`. Metrics are under
+  `felix_kafka_*`. `docs/kafka-compatibility.md` replaces the spike write-up,
+  and the spike crate under `spikes/` is removed.
+
 - **Streams can be kept in a region.** A stream created with `"region"` has its
   leader and every replica only on brokers in that region, or in one the new
   directional allowlist `FELIX_REGION_BRIDGES` (`source>dest` pairs) bridges it

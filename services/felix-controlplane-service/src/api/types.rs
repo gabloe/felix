@@ -227,6 +227,10 @@ pub struct NodeRegistrationRequest {
     /// being refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_addr: Option<String>,
+    /// `host:port` Kafka clients are told to connect to. Set only by a broker
+    /// running its Kafka listener; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kafka_addr: Option<String>,
     pub region: String,
     #[serde(default)]
     pub labels: std::collections::BTreeMap<String, String>,

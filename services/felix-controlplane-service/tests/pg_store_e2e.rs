@@ -2028,6 +2028,7 @@ async fn pg_assignment_long_polls_do_not_hold_connections() -> Result<()> {
             spec: felix_controlplane_service::model::NodeSpec {
                 advertise_addr: "10.9.9.9:7000".to_string(),
                 client_addr: None,
+                kafka_addr: None,
                 region: "local".to_string(),
                 labels: Default::default(),
                 capacity: Default::default(),

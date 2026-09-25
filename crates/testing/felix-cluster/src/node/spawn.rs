@@ -82,6 +82,17 @@ pub(crate) fn spawn_broker(
             "RUST_LOG",
             std::env::var("RUST_LOG").as_deref().unwrap_or("info"),
         );
+    let kafka_addr = if config.kafka {
+        let port = ports::free_tcp()?.port();
+        let advertise = format!("{}:{port}", ports::docker_host());
+        command
+            .env("FELIX_KAFKA_LISTEN", format!("0.0.0.0:{port}"))
+            .env("FELIX_KAFKA_ADVERTISE_ADDR", &advertise)
+            .env("FELIX_KAFKA_TLS", "false");
+        Some(advertise)
+    } else {
+        None
+    };
     command.envs(config.broker_env.iter().map(|(key, value)| (key, value)));
 
     if config.inherit_output {
@@ -105,6 +116,7 @@ pub(crate) fn spawn_broker(
         client_addr,
         internal_addr,
         metrics_addr,
+        kafka_addr,
         data_dir,
         process: Some(process),
     })

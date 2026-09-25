@@ -1,8 +1,9 @@
-//! The client-facing QUIC listeners and their accept loops.
+//! The client-facing listeners and their accept loops: QUIC always, Kafka when
+//! `FELIX_KAFKA_LISTEN` is set.
 //!
-//! `build_server_config()` currently creates a **dev-only self-signed**
-//! certificate. Production deployments should use a real certificate chain and
-//! should not re-generate keys on each start.
+//! `server_identity()` currently creates a **dev-only self-signed**
+//! certificate, which both listeners serve. Production deployments should use
+//! a real certificate chain and should not re-generate keys on each start.
 
 use std::sync::Arc;
 
@@ -11,24 +12,39 @@ use felix_broker::Broker;
 use felix_transport::{QuicServer, TransportConfig};
 use quinn::ServerConfig;
 use rcgen::generate_simple_self_signed;
-use rustls::pki_types::PrivatePkcs8KeyDer;
+use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::cluster::client_endpoints::ClientEndpoints;
 use crate::cluster::lease::LeaseState;
-use crate::config::BrokerConfig;
+use crate::config::{BrokerConfig, KafkaListenerConfig};
 use crate::peer::PeerPool;
 use crate::replication::quorum::QuorumMarks;
+use crate::serving::kafka::{BrokerCluster, KafkaListener, STANDALONE_NODE_ID};
 use crate::serving::{auth::BrokerAuth, quic};
 use crate::shards::routing::IngressRouter;
 
+/// The certificate and key clients see, whichever listener they reach.
+pub(super) struct ServerIdentity {
+    cert: CertificateDer<'static>,
+    key: PrivatePkcs8KeyDer<'static>,
+}
+
+impl ServerIdentity {
+    /// The Kafka listener's TLS config over this certificate.
+    pub(super) fn kafka_tls(&self) -> Result<Arc<rustls::ServerConfig>> {
+        crate::serving::kafka::tls_config(self.cert.clone(), self.key.clone_key().into())
+    }
+}
+
 /// Bind one QUIC listener per configured address.
-pub(super) fn bind(config: &BrokerConfig) -> Result<Vec<Arc<QuicServer>>> {
-    // `build_server_config` currently uses a self-signed certificate suitable
-    // for local development.
-    let server_config = build_server_config().context("build QUIC server config")?;
+pub(super) fn bind(
+    config: &BrokerConfig,
+    identity: &ServerIdentity,
+) -> Result<Vec<Arc<QuicServer>>> {
+    let server_config = build_server_config(identity).context("build QUIC server config")?;
 
     // Apply transport-level configuration (flow control windows, pooling behavior, etc.)
     // derived from broker config.
@@ -151,17 +167,16 @@ pub(super) fn spawn_accept_loops(
         .collect()
 }
 
-/// Build the QUIC server TLS configuration.
+/// Generate the broker's client-facing certificate.
 ///
 /// Current behavior:
 /// - Generates a fresh self-signed certificate for `localhost` at startup.
-/// - Configures Quinn/Rustls with that certificate.
+/// - Writes it to `FELIX_TLS_CERT_EXPORT` when set.
 ///
 /// This is convenient for local development but **not appropriate for production**.
 /// Production should load a real certificate chain and private key (and should avoid
 /// regenerating keys on each start).
-pub(super) fn build_server_config() -> Result<ServerConfig> {
-    // Dev-only self-signed TLS config for QUIC endpoints.
+pub(super) fn server_identity() -> Result<ServerIdentity> {
     let cert = generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = cert.cert.der().clone();
     let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
@@ -177,10 +192,100 @@ pub(super) fn build_server_config() -> Result<ServerConfig> {
         export_certificate(&cert.cert.pem(), &path)?;
     }
 
+    Ok(ServerIdentity {
+        cert: cert_der,
+        key: key_der,
+    })
+}
+
+/// The QUIC server TLS configuration, over the broker's certificate.
+pub(super) fn build_server_config(identity: &ServerIdentity) -> Result<ServerConfig> {
     Ok(ServerConfig::with_single_cert(
-        vec![cert_der],
-        key_der.into(),
+        vec![identity.cert.clone()],
+        identity.key.clone_key().into(),
     )?)
+}
+
+/// Bind the Kafka listener, when one is configured.
+///
+/// Bound here, before anything is accepted, so a port conflict fails startup
+/// rather than surfacing later as a listener that never came up.
+pub(super) async fn bind_kafka(
+    config: &BrokerConfig,
+    identity: &ServerIdentity,
+    broker: &Arc<Broker>,
+    auth: &Arc<BrokerAuth>,
+    ingress: &Option<Arc<IngressRouter>>,
+    client_endpoints: &Arc<ClientEndpoints>,
+) -> Result<Option<KafkaListener>> {
+    let Some(kafka) = KafkaListenerConfig::from_env()? else {
+        return Ok(None);
+    };
+    let node_id = config
+        .membership
+        .as_ref()
+        .map_or(STANDALONE_NODE_ID, |membership| membership.node_id.as_str());
+    let cluster = BrokerCluster::new(
+        Arc::clone(auth),
+        ingress.clone(),
+        config
+            .membership
+            .as_ref()
+            .map(|_| Arc::clone(client_endpoints)),
+        node_id,
+        &kafka.advertise,
+    )?;
+    let tls = kafka.tls.then(|| identity.kafka_tls()).transpose()?;
+    if kafka.tls {
+        tracing::info!("kafka listener serves TLS: clients connect with SASL_SSL");
+    } else {
+        tracing::warn!(
+            "kafka listener without TLS (FELIX_KAFKA_TLS=false): SASL/PLAIN sends tokens in clear text"
+        );
+    }
+    if let Some(tenant) = &kafka.anonymous_tenant {
+        tracing::warn!(
+            tenant = %tenant,
+            "FELIX_KAFKA_ANONYMOUS_TENANT is set: unauthenticated Kafka clients can read every stream of this tenant"
+        );
+    }
+    let listener = KafkaListener::bind(
+        &kafka,
+        tls,
+        Arc::clone(broker),
+        Arc::new(cluster),
+        format!("felix-{node_id}"),
+    )
+    .await?;
+    tracing::info!(
+        addr = %listener.local_addr()?,
+        advertise = %kafka.advertise,
+        "kafka listener started (read-only)"
+    );
+    Ok(Some(listener))
+}
+
+/// Accept Kafka connections once the broker may serve, like the QUIC loops.
+pub(super) fn spawn_kafka(
+    listener: KafkaListener,
+    accept_shutdown: &CancellationToken,
+    connections: &TaskTracker,
+    seeded: &CancellationToken,
+    gate_readiness_on_sync: bool,
+) -> JoinHandle<()> {
+    let accept_shutdown = accept_shutdown.clone();
+    let connections = connections.clone();
+    let seeded = seeded.clone();
+    tokio::spawn(async move {
+        if gate_readiness_on_sync {
+            tokio::select! {
+                biased;
+                _ = accept_shutdown.cancelled() => return,
+                _ = seeded.cancelled() => {}
+            }
+        }
+        listener.serve(accept_shutdown, connections).await;
+    })
 }
 
 /// Write the broker's certificate where a client can trust it from.

@@ -136,6 +136,25 @@ felix_broker_credential_refreshes_total     # by outcome: ok, unavailable
 felix_broker_credential_rotations_total     # by outcome: ok, rejected — a token file rewritten from outside
 ```
 
+**Are Kafka consumers being served?** Only when the read-only Kafka listener
+is on (`FELIX_KAFKA_LISTEN`; see [Reading with Kafka clients](/felix/features/kafka/)):
+
+```prometheus
+felix_kafka_connections                     # gauge: Kafka connections open now
+felix_kafka_connections_total
+felix_kafka_requests_total                  # by api and error (none, not_leader_or_follower, ...)
+felix_kafka_refused_total                   # by reason: unknown_api, unsupported_api, frame_size, connection_limit
+felix_kafka_fetch_records_total
+felix_kafka_fetch_bytes_total
+felix_kafka_fetch_waits_total               # long polls, by outcome: data, timeout
+felix_kafka_fetch_wait_seconds              # histogram: how long those polls waited
+```
+
+A steady `not_leader_or_follower` rate means clients keep fetching from a
+broker that no longer leads the partition, which is normal for a moment after
+a shard moves and a stale Metadata view if it lasts. `group_authorization_failed`
+counts consumers that tried to join a group; Felix refuses those on purpose.
+
 **Alert on `felix_broker_credential_expires_in_seconds` crossing a threshold**,
 not only on the refresh and rotation counters. The counters say renewal is
 failing; the gauge says how long that has left to matter. It matters a lot: the

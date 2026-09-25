@@ -150,6 +150,7 @@ fn config(node_id: &str, port: u16) -> MembershipConfig {
         node_id: node_id.to_string(),
         advertise_addr: format!("10.0.0.4:{port}"),
         client_advertise_addr: None,
+        kafka_advertise_addr: None,
         region: "us-west-2".to_string(),
         region_bridges: Vec::new(),
     }

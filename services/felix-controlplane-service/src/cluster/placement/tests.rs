@@ -52,6 +52,7 @@ fn node(id: &str, lifecycle: NodeLifecycle, max_shards: Option<u32>) -> Node {
         spec: NodeSpec {
             advertise_addr: format!("10.0.0.4:{}", 7000 + id.len() as u16),
             client_addr: None,
+            kafka_addr: None,
             region: "us-west-2".to_string(),
             labels: Default::default(),
             capacity: NodeCapacity {

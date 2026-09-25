@@ -47,6 +47,8 @@ libc = { workspace = true }
 # runner with two cores starting nine brokers at once starves them all, and the
 # ephemeral ports they were handed are more likely to collide.
 serial_test = { workspace = true }
+# The Kafka tests run kcat in a container and need to bound how long it runs.
+tokio = { workspace = true, features = ["process"] }
 
 [lints]
 workspace = true

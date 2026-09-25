@@ -681,6 +681,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
+name = "crc32c"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
+dependencies = [
+ "rustc_version",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1111,6 +1120,7 @@ dependencies = [
  "felix-client",
  "felix-common",
  "felix-controlplane-service",
+ "felix-kafka",
  "felix-router",
  "felix-storage",
  "felix-transport",
@@ -1136,6 +1146,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tracing",
  "tracing-opentelemetry",
@@ -1283,6 +1294,25 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+]
+
+[[package]]
+name = "felix-kafka"
+version = "0.6.0-preview"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "felix-authz",
+ "felix-broker",
+ "felix-storage",
+ "futures",
+ "kafka-protocol",
+ "metrics",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -2147,6 +2177,20 @@ dependencies = [
  "signature 2.2.0",
  "simple_asn1",
  "zeroize",
+]
+
+[[package]]
+name = "kafka-protocol"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "099d5c2f1b40cd830cbf18ca4d2a0805f2875b811ca18f0372b2433e68fe2dda"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "crc",
+ "crc32c",
+ "indexmap",
+ "uuid",
 ]
 
 [[package]]

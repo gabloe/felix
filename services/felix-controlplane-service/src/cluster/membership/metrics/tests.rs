@@ -10,6 +10,7 @@ fn node(node_id: &str, region: &str, lifecycle: NodeLifecycle) -> Node {
         spec: NodeSpec {
             advertise_addr: "10.0.0.4:7000".to_string(),
             client_addr: None,
+            kafka_addr: None,
             region: region.to_string(),
             labels: BTreeMap::new(),
             capacity: NodeCapacity::default(),

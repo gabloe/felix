@@ -11,6 +11,7 @@ pub(crate) fn node(node_id: &str, port: u16) -> Node {
         spec: NodeSpec {
             advertise_addr: format!("10.0.0.4:{port}"),
             client_addr: None,
+            kafka_addr: None,
             region: "us-west-2".to_string(),
             labels: BTreeMap::from([("rack".to_string(), "a1".to_string())]),
             capacity: NodeCapacity {
@@ -33,6 +34,7 @@ pub(crate) fn node(node_id: &str, port: u16) -> Node {
 pub(crate) async fn run_node_contract(store: Arc<dyn ControlPlaneStore>) {
     let store: &dyn ControlPlaneStore = store.as_ref();
     register_is_readable(store).await;
+    optional_addresses_survive_a_round_trip(store).await;
     register_rejects_an_address_another_node_holds(store).await;
     reregistering_preserves_identity_and_bumps_incarnation(store).await;
     an_invalid_node_is_rejected(store).await;
@@ -195,6 +197,30 @@ async fn register_is_readable(store: &dyn ControlPlaneStore) {
     let fetched = store.get_node("broker-a").await.expect("get");
     assert_eq!(fetched, stored);
     assert_eq!(store.list_nodes().await.expect("list"), vec![stored]);
+}
+
+/// The optional listener addresses live in their own columns in Postgres, so
+/// every backend has to be shown to keep them.
+async fn optional_addresses_survive_a_round_trip(store: &dyn ControlPlaneStore) {
+    clear(store).await;
+    let mut with_addrs = node("broker-a", 7001);
+    with_addrs.spec.client_addr = Some("10.0.0.4:5001".to_string());
+    with_addrs.spec.kafka_addr = Some("host.docker.internal:9092".to_string());
+    let stored = store.register_node(with_addrs).await.expect("register");
+    assert_eq!(
+        stored.spec.kafka_addr.as_deref(),
+        Some("host.docker.internal:9092")
+    );
+    assert_eq!(store.get_node("broker-a").await.expect("get"), stored);
+
+    // A restart without the Kafka listener has to clear the address, or Kafka
+    // clients would keep being sent to a port nothing listens on.
+    let stored = store
+        .register_node(node("broker-a", 7001))
+        .await
+        .expect("re-register");
+    assert_eq!(stored.spec.kafka_addr, None);
+    assert_eq!(store.get_node("broker-a").await.expect("get"), stored);
 }
 
 async fn register_rejects_an_address_another_node_holds(store: &dyn ControlPlaneStore) {

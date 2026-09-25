@@ -394,3 +394,64 @@ fn a_redirect_to_a_draining_broker_carries_its_client_address() {
         "a draining broker must still not be offered to new clients",
     );
 }
+
+/// A node as registered by a broker running the Kafka listener.
+fn node_with_kafka_addr(node_id: &str, kafka_addr: &str, eligible: bool) -> serde_json::Value {
+    serde_json::json!({
+        "node": {
+            "node_id": node_id,
+            "spec": {
+                "advertise_addr": "10.0.0.4:7000",
+                "kafka_addr": kafka_addr,
+                "region": "us-west-2",
+            },
+        },
+        "placement": { "eligible": eligible },
+    })
+}
+
+/// Kafka addresses are usually hostnames, so unlike client addresses they are
+/// kept without being parsed as socket addresses, and come back sorted.
+#[test]
+fn kafka_endpoints_keep_hostnames_in_node_order() {
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [
+            node_with_kafka_addr("broker-b", "10.0.0.5:9092", true),
+            node_with_kafka_addr("broker-a", "host.docker.internal:9092", true),
+            node("broker-c", "10.0.0.6:7000", true),
+        ],
+    })));
+
+    let kafka: Vec<(&str, &str)> = catalog
+        .kafka_endpoints
+        .iter()
+        .map(|endpoint| (endpoint.node_id.as_str(), endpoint.addr.as_str()))
+        .collect();
+    assert_eq!(
+        kafka,
+        vec![
+            ("broker-a", "host.docker.internal:9092"),
+            ("broker-b", "10.0.0.5:9092"),
+        ],
+    );
+    assert!(
+        catalog.client_endpoints.is_empty(),
+        "a Kafka address must not be offered to Felix clients",
+    );
+}
+
+/// A draining broker still leads what it has not handed off, so a Kafka client
+/// must be able to reach it; a broker that is not routable at all must not be
+/// offered.
+#[test]
+fn kafka_endpoints_follow_routability_not_eligibility() {
+    let mut draining = node_with_kafka_addr("broker-a", "broker-a.internal:9092", false);
+    draining["placement"]["routable"] = serde_json::json!(true);
+    let down = node_with_kafka_addr("broker-b", "broker-b.internal:9092", false);
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [draining, down],
+    })));
+
+    assert_eq!(catalog.kafka_endpoints.len(), 1);
+    assert_eq!(catalog.kafka_endpoints[0].node_id, "broker-a");
+}

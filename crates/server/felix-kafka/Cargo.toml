@@ -1,0 +1,38 @@
+[package]
+name = "felix-kafka"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Read-only Kafka wire protocol over a Felix broker"
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["felix", "kafka"]
+categories = ["network-programming", "asynchronous"]
+# Built into the broker service, not consumed from a registry.
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+felix-authz = { path = "../felix-authz", version = "0.6.0-preview" }
+felix-broker = { path = "../felix-broker", version = "0.6.0-preview" }
+felix-storage = { path = "../felix-storage", version = "0.6.0-preview" }
+futures = "0.3"
+# `broker` is the half that decodes requests and encodes responses.
+kafka-protocol = { workspace = true, features = ["broker"] }
+metrics = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# `client` encodes requests and decodes responses, which is what a test
+# playing the consumer needs.
+kafka-protocol = { workspace = true, features = ["broker", "client"] }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1782,3 +1782,79 @@ async fn only_a_durable_stream_names_an_offset_to_resume_from() {
     assert_eq!(moved.resume_from, None);
     assert_eq!(moved.to, handoff());
 }
+
+#[tokio::test]
+async fn an_offset_reader_is_woken_by_a_durable_publish() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::None).await;
+    register(&broker, "orders", true).await;
+    let handle = broker
+        .resolve_stream_handle("t1", "default", "orders", 0)
+        .await
+        .expect("handle");
+    let log = handle.log().expect("durable log");
+    assert_eq!(log.tail_offset().await.expect("tail"), 0);
+
+    // Registered before the tail is read, as a long-polling reader does.
+    let woken = handle.appended().notified_owned();
+    tokio::pin!(woken);
+    woken.as_mut().enable();
+
+    let publisher = Arc::clone(&broker);
+    tokio::spawn(async move {
+        publisher
+            .publish("t1", "default", "orders", payload("late"))
+            .await
+            .expect("publish");
+    });
+    tokio::time::timeout(Duration::from_secs(5), woken)
+        .await
+        .expect("woken by the publish");
+    let records = log.read_from(0, 1 << 20).await.expect("read");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].payload, payload("late"));
+}
+
+#[tokio::test]
+async fn tenant_streams_lists_only_that_tenant_in_order() {
+    let dir = tempdir().expect("dir");
+    let (broker, _storage) = broker_with_storage(&dir, FsyncMode::None).await;
+    register(&broker, "zeta", true).await;
+    register(&broker, "alpha", false).await;
+    broker.register_tenant("t2").await.expect("tenant");
+    broker
+        .register_namespace("t2", "default")
+        .await
+        .expect("ns");
+    broker
+        .register_stream("t2", "default", "other", StreamMetadata::default())
+        .await
+        .expect("register");
+
+    let listed: Vec<_> = broker
+        .tenant_streams("t1")
+        .await
+        .into_iter()
+        .map(|(namespace, stream, metadata)| (namespace, stream, metadata.durable))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            ("default".to_string(), "alpha".to_string(), false),
+            ("default".to_string(), "zeta".to_string(), true),
+        ]
+    );
+    assert!(
+        broker
+            .stream_metadata("t1", "default", "zeta")
+            .await
+            .expect("registered")
+            .durable
+    );
+    assert!(
+        broker
+            .stream_metadata("t1", "default", "nope")
+            .await
+            .is_none()
+    );
+}

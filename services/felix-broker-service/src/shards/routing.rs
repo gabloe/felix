@@ -229,6 +229,16 @@ impl IngressRouter {
             .is_some_and(|route| !route.replicas.is_empty())
     }
 
+    /// The route last published for `key`: its leader and replicas.
+    pub fn route(&self, key: &ShardKey) -> Option<felix_router::Route> {
+        self.view
+            .load()
+            .routes
+            .table()
+            .get(&to_router_key(key))
+            .cloned()
+    }
+
     /// How many shards this stream or cache was placed with.
     ///
     /// Read from the published routes, which is an `ArcSwap` load and no lock.
