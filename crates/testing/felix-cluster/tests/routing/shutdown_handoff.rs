@@ -302,10 +302,19 @@ fn config_with_handoff(nodes: usize, stream: StreamSpec, handoff_ms: u64) -> Clu
     }
 }
 
+/// A publish the broker acknowledged: what, under which key, and when.
+#[derive(Clone)]
+struct Acked {
+    payload: Vec<u8>,
+    key: usize,
+    at: Instant,
+}
+
 /// Keyed publishers sharing one `ClusterClient` until told to stop, keeping
 /// what was acknowledged. A failed publish is never sent again.
 struct Publisher {
-    acknowledged: Arc<Mutex<Vec<Vec<u8>>>>,
+    keys: usize,
+    acknowledged: Arc<Mutex<Vec<Acked>>>,
     refused: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -318,7 +327,7 @@ impl Publisher {
 
     fn start(client: felix_client::ClusterClient, cluster: &Cluster, keys: usize) -> Self {
         let client = Arc::new(client);
-        let acknowledged: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+        let acknowledged: Arc<Mutex<Vec<Acked>>> = Arc::default();
         let refused = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let tasks = (0..Self::WORKERS)
@@ -334,8 +343,8 @@ impl Publisher {
                     let mut i = 0usize;
                     while !stop.load(Ordering::Relaxed) {
                         let payload = format!("during-{worker}-{i}").into_bytes();
-                        let key =
-                            bytes::Bytes::from(format!("k{}", (i * Self::WORKERS + worker) % keys));
+                        let key_index = (i * Self::WORKERS + worker) % keys;
+                        let key = bytes::Bytes::from(format!("k{key_index}"));
                         i += 1;
                         match client
                             .publish_keyed(
@@ -348,7 +357,11 @@ impl Publisher {
                             )
                             .await
                         {
-                            Ok(()) => acknowledged.lock().await.push(payload),
+                            Ok(()) => acknowledged.lock().await.push(Acked {
+                                payload,
+                                key: key_index,
+                                at: Instant::now(),
+                            }),
                             Err(_) => {
                                 refused.fetch_add(1, Ordering::Relaxed);
                             }
@@ -359,6 +372,7 @@ impl Publisher {
             })
             .collect();
         Self {
+            keys,
             acknowledged,
             refused,
             stop,
@@ -366,8 +380,42 @@ impl Publisher {
         }
     }
 
+    /// Keep publishing until at least `total` publishes are acknowledged and,
+    /// with `every_key_since`, every key has had one acknowledged since then,
+    /// or `bound` runs out. Returns whether that was reached; the caller's
+    /// assertions say what falling short means. Waits on progress rather than
+    /// a fixed time: a slow machine acknowledges less in any given window.
+    async fn wait_for(
+        &self,
+        total: usize,
+        every_key_since: Option<Instant>,
+        bound: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + felix_cluster::wait::budget(bound);
+        loop {
+            {
+                let acked = self.acknowledged.lock().await;
+                let keys_covered = every_key_since.is_none_or(|since| {
+                    let keys: std::collections::HashSet<usize> = acked
+                        .iter()
+                        .filter(|ack| ack.at >= since)
+                        .map(|ack| ack.key)
+                        .collect();
+                    keys.len() == self.keys
+                });
+                if acked.len() >= total && keys_covered {
+                    return true;
+                }
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     /// Stop, and return what was acknowledged and how many were refused.
-    async fn finish(self) -> (Vec<Vec<u8>>, usize) {
+    async fn finish(self) -> (Vec<Acked>, usize) {
         self.stop.store(true, Ordering::Relaxed);
         for task in self.tasks {
             task.await.expect("publisher");
@@ -544,13 +592,15 @@ async fn a_handoff_that_times_out_loses_no_acknowledged_record() {
         .await
         .expect("the broker exits once its drain is done");
     assert!(status.success(), "clean exit: {status}");
-    let still_led = cluster
+    let failed_over: Vec<u32> = cluster
         .shard_owners_for(STREAM)
         .await
         .expect("owners")
-        .values()
-        .filter(|owner| **owner == stopping)
-        .count();
+        .into_iter()
+        .filter(|(_, owner)| *owner == stopping)
+        .map(|(shard, _)| shard)
+        .collect();
+    let still_led = failed_over.len();
     assert!(
         moved > 0 && still_led > 0,
         "some shards should have moved and some still be led at exit: \
@@ -575,18 +625,38 @@ async fn a_handoff_that_times_out_loses_no_acknowledged_record() {
     }
     assert!(placed > 0, "the shards still led should have failed over");
 
-    // Writes to the new leaders too, then stop.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Writes to the new leaders too: every key, so every shard that failed
+    // over, has to take one before the publishers stop.
+    let failed_over_at = Instant::now();
+    publisher
+        .wait_for(100, Some(failed_over_at), Duration::from_secs(60))
+        .await;
     let (during, refused) = publisher.finish().await;
     assert!(
         during.len() > 100,
         "too little was acknowledged to prove anything ({} acked, {refused} refused)",
         during.len()
     );
-    owed.extend(during);
+    let after_failover: std::collections::HashSet<Vec<u8>> = during
+        .iter()
+        .filter(|ack| ack.at >= failed_over_at)
+        .map(|ack| ack.payload.clone())
+        .collect();
+    owed.extend(during.into_iter().map(|ack| ack.payload));
 
     let read = read_every_shard(&cluster, SHARDS).await;
     assert_exactly_once(&owed, &read);
+    for shard in &failed_over {
+        let (_, records) = read.iter().find(|(s, _)| s == shard).expect("read");
+        assert!(
+            records
+                .iter()
+                .any(|(_, payload)| after_failover.contains(payload)),
+            "shard {shard} failed over but took no acknowledged write afterwards \
+             ({} acknowledged after failover in all)",
+            after_failover.len()
+        );
+    }
     cluster.shutdown().await;
 }
 
@@ -615,7 +685,7 @@ async fn a_lone_broker_that_stops_keeps_what_it_acknowledged() {
     .await
     .expect("writer");
     let publisher = Publisher::start(writer, &cluster, 16);
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    publisher.wait_for(100, None, Duration::from_secs(30)).await;
 
     cluster.terminate_node(&node).expect("SIGTERM");
     let status = cluster
@@ -623,7 +693,8 @@ async fn a_lone_broker_that_stops_keeps_what_it_acknowledged() {
         .await
         .expect("a lone broker should not wait out the handoff timeout");
     assert!(status.success(), "clean exit: {status}");
-    let (owed, refused) = publisher.finish().await;
+    let (acked, refused) = publisher.finish().await;
+    let owed: Vec<Vec<u8>> = acked.into_iter().map(|ack| ack.payload).collect();
     assert!(
         owed.len() > 50,
         "too little was acknowledged to prove anything ({} acked, {refused} refused)",
