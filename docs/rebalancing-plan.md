@@ -431,6 +431,9 @@ shard are modelled as writes to the one log.
   only eligible brokers, so a group operation that reaches another broker for
   a shard a draining broker still leads is redirected without an address, and
   `group_sharded` cannot follow it until that shard has moved.
+- **A group's in-flight tracker outlives a move away and back.** It is kept
+  in the leader's memory and not cleared when the shard leaves, so after
+  A -> B -> A the first leader can hand out a record acked on B again (#685).
 - **A dead lease holder pauses the timed passes** until its lease expires,
   three reconcile intervals (15 s by default). Moves in flight carry on and
   woken passes still run, but a failover waiting on the timer waits that
