@@ -2,6 +2,7 @@
 """Reduce a session's cell directories to one row per cell and one per group.
 
     summarize.py <results-dir>
+    summarize.py --cell <cell-dir>     one console line for one cell
 
 Reads <results-dir>/cells/*/ as written by cells.sh and writes:
 
@@ -10,9 +11,17 @@ Reads <results-dir>/cells/*/ as written by cells.sh and writes:
               per-listener datagram share
   summary.md  trials of a cell grouped (name minus -tN): mean and spread
 
-Broker append MB/s is the headline throughput. The loadgen's throughput is
-an enqueue rate for fire-and-forget publishes and is kept beside it, not
-instead of it. Standard library only, so it runs anywhere the drivers do.
+The headline throughput is steady state, from each broker's 1 Hz counter
+series (<broker>.series.tsv): the window when every generator was running
+(gen.start/gen.end in its run output), less its first and last 10%, cut into
+one-second steps summed over brokers, and the median step reported. Summing
+per-generator averages, or dividing a before/after delta by the cell's
+length, both count the ramp and the tail where some generators have stopped,
+and misread an unfair split. Cells without a series are marked legacy and
+keep only the older numbers, which are also kept beside the new ones.
+
+The loadgen's throughput is an enqueue rate for fire-and-forget publishes.
+Standard library only, so it runs anywhere the drivers do.
 """
 
 import csv
@@ -31,6 +40,126 @@ BASE_KNOBS = {
     "FELIX_PUB_INGRESS_WAIT": "ingress_wait",
 }
 CLIENT_PORTS = range(5000, 5064)
+TRIM = 0.10
+
+
+def read_series(path):
+    """(hz, rows): rows are dicts of floats keyed by the header's columns."""
+    hz, cols, rows = 100.0, None, []
+    for line in path.read_text(errors="replace").splitlines():
+        if line.startswith("#"):
+            m = re.search(r"\bhz=(\d+)", line)
+            if m:
+                hz = float(m.group(1))
+            continue
+        parts = line.split("\t")
+        if cols is None:
+            cols = parts
+            continue
+        if len(parts) != len(cols):
+            continue
+        try:
+            rows.append({c: float(v) for c, v in zip(cols, parts)})
+        except ValueError:
+            continue
+    return hz, rows
+
+
+def at(rows, key, x):
+    """A counter linearly interpolated at time x; None outside the series."""
+    if not rows or x < rows[0]["t"] or x > rows[-1]["t"]:
+        return None
+    lo, hi = 0, len(rows) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if rows[mid]["t"] <= x:
+            lo = mid
+        else:
+            hi = mid
+    a, b = rows[lo], rows[hi]
+    if b["t"] == a["t"]:
+        return a.get(key)
+    va, vb = a.get(key), b.get(key)
+    if va is None or vb is None:
+        return None
+    return va + (vb - va) * (x - a["t"]) / (b["t"] - a["t"])
+
+
+def moving_window(series):
+    """First to last sample where append or ingress moved on any broker."""
+    lo = hi = None
+    for _, rows in series.values():
+        for prev, cur in zip(rows, rows[1:]):
+            if cur["append_bytes"] > prev["append_bytes"] or ingress(cur) > ingress(prev):
+                lo = prev["t"] if lo is None else min(lo, prev["t"])
+                hi = cur["t"] if hi is None else max(hi, cur["t"])
+    return lo, hi
+
+
+def ingress(row):
+    return sum(v for k, v in row.items() if (m := re.match(r"^port\.(\d+)\.bytes$", k)) and int(m.group(1)) in CLIENT_PORTS)
+
+
+def steady_state(series, gen_times):
+    """Median one-second aggregate rates over the trimmed all-generators window.
+
+    series: broker -> (hz, rows). gen_times: [(start, end)] per generator."""
+    out = {"ss_window": None}
+    if gen_times:
+        w0, w1 = max(s for s, _ in gen_times), min(e for _, e in gen_times)
+        out["ss_window"] = "gens"
+    else:
+        w0, w1 = moving_window(series)
+        out["ss_window"] = "counters" if w0 is not None else None
+    if w0 is None or w1 is None or w1 <= w0:
+        out["ss_window"] = "no-overlap" if gen_times else None
+        return out
+    a, b = w0 + TRIM * (w1 - w0), w1 - TRIM * (w1 - w0)
+    grid = [a + i for i in range(int(b - a) + 1)] if b - a >= 1 else [a, b]
+    if len(grid) < 2:
+        grid = [a, b]
+    steps = {k: [] for k in ("append", "publish", "ingress", "cores", "datagrams", "drops")}
+    for g0, g1 in zip(grid, grid[1:]):
+        dt = g1 - g0
+        acc = dict.fromkeys(steps, 0.0)
+        ok = True
+        for hz, rows in series.values():
+            for name, key in (("append", "append_bytes"), ("publish", "publish_bytes"), ("datagrams", "udp_in"),
+                              ("drops", "udp_rcvbuf_errors"), ("cores", "proc_ticks")):
+                v0, v1 = at(rows, key, g0), at(rows, key, g1)
+                if v0 is None or v1 is None:
+                    ok = False
+                    break
+                d = max(v1 - v0, 0.0)
+                acc[name] += d / hz if name == "cores" else d
+            if not ok:
+                break
+            i0 = ingress_at(rows, g0)
+            i1 = ingress_at(rows, g1)
+            acc["ingress"] += max(i1 - i0, 0.0)
+        if ok:
+            for k in steps:
+                steps[k].append(acc[k] / dt)
+    n = len(steps["append"])
+    out["ss_secs"] = b - a
+    out["ss_steps"] = n
+    out["ss_all_gens_secs"] = w1 - w0
+    if not n:
+        return out
+    med = statistics.median
+    out["ss_append_mb_s"] = med(steps["append"]) / 1e6
+    out["ss_publish_mb_s"] = med(steps["publish"]) / 1e6
+    out["ss_ingress_mb_s"] = med(steps["ingress"]) / 1e6
+    out["ss_datagrams_s"] = med(steps["datagrams"])
+    out["ss_cores"] = med(steps["cores"])
+    # Drops come in bursts; a median would read zero. Mean over the window.
+    out["ss_drops_s"] = statistics.mean(steps["drops"])
+    return out
+
+
+def ingress_at(rows, x):
+    keys = [k for k in rows[0] if (m := re.match(r"^port\.(\d+)\.bytes$", k)) and int(m.group(1)) in CLIENT_PORTS]
+    return sum(at(rows, k, x) or 0.0 for k in keys)
 
 
 def kv_lines(path):
@@ -147,6 +276,7 @@ def cell_row(cdir):
                 d = delta(before, after, key)
                 if d:
                     ports[int(mp.group(1))] = ports.get(int(mp.group(1)), 0) + d
+    row["snap_append_mb_s"] = snap_rate(cdir, brokers)
     row["build_sha"] = ",".join(sorted(set(s for s in shas if s)))
     row["listen_ports"] = "|".join(listen)
     row["broker_append_mb_s"] = fsum(appends)
@@ -171,11 +301,18 @@ def cell_row(cdir):
     row["port_imbalance"] = (max(ports.values()) / min(ports.values())) if len(ports) > 1 else None
 
     client_mb, client_msg, p50, p99, dp50, lcpu = [], [], None, None, None, []
+    gen_times, gen_rates = [], []
     for g in gens:
-        j = loadgen_json(cdir / f"{g}.run.txt") if (cdir / f"{g}.run.txt").exists() else None
+        run = cdir / f"{g}.run.txt"
+        j = loadgen_json(run) if run.exists() else None
         lcpu.append(num(kv_lines(cdir / f"{g}.after.txt"), "s.cpu_busy"))
+        rk = kv_lines(run)
+        gs, ge = num(rk, "gen.start"), num(rk, "gen.end")
+        if gs is not None and ge is not None:
+            gen_times.append((gs, ge))
         if not j:
             continue
+        gen_rates.append((g, j.get("throughput_mb_s")))
         client_mb.append(j.get("throughput_mb_s"))
         client_msg.append(j.get("throughput_msg_s", j.get("publish_throughput_msg_s")))
         if p50 is None:
@@ -189,8 +326,61 @@ def cell_row(cdir):
     row["client_msg_s"] = fsum(client_msg)
     row["lat_p50_us"], row["lat_p99_us"], row["delivery_p50_us"] = p50, p99, dp50
     row["loadgen_cpu_busy_max"] = fmax(lcpu)
+    rates = [r for _, r in gen_rates if r]
+    row["gen_mb_s"] = " ".join(f"{g.replace('felixperf-', '')}:{r:.0f}" for g, r in gen_rates if r is not None)
+    row["gen_fairness"] = max(rates) / min(rates) if len(rates) > 1 else None
+    row["gen_start_skew_s"] = (max(s for s, _ in gen_times) - min(s for s, _ in gen_times)) if gen_times else None
+    row["gen_end_skew_s"] = (max(e for _, e in gen_times) - min(e for _, e in gen_times)) if gen_times else None
+    series = {}
+    for b in brokers:
+        p = cdir / f"{b}.series.tsv"
+        if p.exists():
+            hz, rows = read_series(p)
+            if len(rows) >= 2:
+                series[b] = (hz, rows)
+    row["legacy"] = not series or len(series) < len(brokers)
+    ss = {} if row["legacy"] else steady_state(series, gen_times if len(gen_times) == len(gens) else [])
+    for k in SS_COLS:
+        row[k] = ss.get(k)
     row["results"] = sum(1 for g in gens if (cdir / f"{g}.run.txt").exists() and loadgen_json(cdir / f"{g}.run.txt"))
     return row
+
+
+SS_COLS = ("ss_window", "ss_all_gens_secs", "ss_secs", "ss_steps", "ss_append_mb_s", "ss_ingress_mb_s",
+           "ss_publish_mb_s", "ss_datagrams_s", "ss_drops_s", "ss_cores")
+
+
+def snap_rate(cdir, brokers):
+    """Append MB/s from the before/after snapshots over the whole cell, the
+    older and coarser measure, kept for comparison."""
+    total, secs = 0.0, []
+    for b in brokers:
+        before = kv_lines(cdir / f"{b}.before.txt")
+        after = kv_lines(cdir / f"{b}.after.txt")
+        d = delta(before, after, "m.append_bytes")
+        t0, t1 = num(before, "t"), num(after, "t")
+        if d is None or t0 is None or t1 is None or t1 <= t0:
+            return None
+        total += d
+        secs.append(t1 - t0)
+    return total / max(secs) / 1e6 if secs else None
+
+
+def cell_console_line(cdir):
+    r = cell_row(cdir)
+    if not r:
+        return ""
+    old = f"sampler append {fmt(r['broker_append_mb_s'])}, snapshots {fmt(r['snap_append_mb_s'])}, client sum {fmt(r['client_mb_s'])} MB/s"
+    fair = f"; gens {r['gen_mb_s']} (max/min {fmt(r['gen_fairness'], 2)})" if r["gen_mb_s"] else ""
+    if r["legacy"] or r["ss_append_mb_s"] is None:
+        why = "legacy, no series" if r["legacy"] else f"no steady window ({r['ss_window']})"
+        return f"{why}: {old}{fair}"
+    return (
+        f"steady append {fmt(r['ss_append_mb_s'])} MB/s, ingress {fmt(r['ss_ingress_mb_s'])} MB/s, "
+        f"drops {fmt(r['ss_drops_s'], 0)}/s, cores {fmt(r['ss_cores'], 2)} "
+        f"over {fmt(r['ss_secs'], 0)}s of {fmt(r['ss_all_gens_secs'], 0)}s all-gens ({r['ss_window']}){fair}; "
+        f"old: {old}"
+    )
 
 
 def fmt(v, digits=1):
@@ -210,6 +400,11 @@ def spread(vals):
 
 
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--cell":
+        line = cell_console_line(Path(sys.argv[2]))
+        if line:
+            print(line)
+        return
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     rows = [r for r in (cell_row(d) for d in sorted((root / "cells").glob("*")) if d.is_dir()) if r]
     if not rows:
@@ -249,16 +444,27 @@ def main():
     lines += [
         "## Cells",
         "",
-        "Broker MB/s is appended bytes (header included) over the window the counter moved, "
-        "summed over brokers; spread is (max-min)/mean over trials.",
+        "Append and ingress MB/s are steady state: the median one-second rate, summed over brokers, "
+        "over the window every generator was running less its first and last 10%. Append counts "
+        "record bytes (header included); ingress counts UDP bytes (IP/UDP headers included) on the "
+        "client listener ports. Drops/s is UDP RcvbufErrors averaged over that window; cores is "
+        "broker process CPU. Fair is the fastest generator's MB/s over the slowest's. The old "
+        "columns are the sampler's moving-counter append rate and the sum of client averages. "
+        "`legacy` marks cells recorded without a series. Spread is (max-min)/mean over trials.",
         "",
-        "| cell | n | ref | knobs | broker MB/s (spread) | client MB/s | p50 / p99 us | sync ms | fan-in | broker CPU % | gen CPU % | rcvbuf err | ports |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| cell | n | ref | knobs | append MB/s (spread) | ingress MB/s | drops/s | cores | fair | old append / client MB/s | p50 / p99 us | sync ms | fan-in | broker CPU % | gen CPU % | rcvbuf err | ports |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for g, rs in groups.items():
         ok = [r for r in rs if r["done"]]
         use = ok or rs
-        bm, bs = spread([r["broker_append_mb_s"] for r in use])
+        bm, _ = spread([r["broker_append_mb_s"] for r in use])
+        legacy = all(r["legacy"] or r["ss_append_mb_s"] is None for r in use)
+        sa, ss = spread([r["ss_append_mb_s"] for r in use])
+        si, _ = spread([r["ss_ingress_mb_s"] for r in use])
+        sd, _ = spread([r["ss_drops_s"] for r in use])
+        sc, _ = spread([r["ss_cores"] for r in use])
+        sf, _ = spread([r["gen_fairness"] for r in use])
         cm, _ = spread([r["client_mb_s"] for r in use])
         p50, _ = spread([r["lat_p50_us"] for r in use])
         p99, _ = spread([r["lat_p99_us"] for r in use])
@@ -277,7 +483,8 @@ def main():
             knobs += " client:" + r0["loadgen_env"]
         lines.append(
             f"| {g} | {len(ok)}/{len(rs)} | {r0['ref']} {r0['build_sha']} | {knobs} | "
-            f"{fmt(bm)} ({fmt(bs, 0)}%) | {fmt(cm)} | {fmt(p50, 0)} / {fmt(p99, 0)} | {fmt(sm, 2)} | {fmt(fi)} | "
+            f"{'legacy' if legacy else f'{fmt(sa)} ({fmt(ss, 0)}%)'} | {fmt(si)} | {fmt(sd, 0)} | {fmt(sc, 2)} | {fmt(sf, 2)} | "
+            f"{fmt(bm)} / {fmt(cm)} | {fmt(p50, 0)} / {fmt(p99, 0)} | {fmt(sm, 2)} | {fmt(fi)} | "
             f"{fmt(cpu, 0)} | {fmt(lcpu, 0)} | {fmt(rb, 0)} | {r0['port_share']} |"
         )
     lines.append("")

@@ -8,7 +8,9 @@
 #   meta.env                 the cell's arguments, build label and overrides
 #   <broker>.before.txt      counters + running binary sha/ref + full FELIX_* env
 #   <broker>.after.txt       counters + 1 Hz sampler summary (CPU, append MB/s)
-#   <loadgen>.run.txt        the instrument's output (LOADGEN_JSON last)
+#   <broker>.series.tsv      the sampler's raw 1 Hz counters (bytes, UDP, CPU ticks)
+#   <loadgen>.run.txt        the instrument's output (LOADGEN_JSON, then
+#                            gen.start/gen.end wall clock around the run)
 #   <loadgen>.after.txt      generator CPU summary
 #   <broker>.profile.txt     with profiling on: per-thread CPU, perf heads
 #   <broker>.folded.gz       with profiling on: collapsed stacks
@@ -293,9 +295,13 @@ export FELIX_MTU_UPPER_BOUND=4096
 ${lg_env}ulimit -n 1048576 || true
 mkdir -p /var/tmp/felix-cells
 o=/var/tmp/felix-cells/${name}.out; e=/var/tmp/felix-cells/${name}.err
+s=\$(date +%s.%N)
 felix-loadgen --brokers '${BROKER_ADDRS}' --tenant perf --token-file '${TOKEN_FILE}' --environment 'azure-${SESSION}-${name}' $* > \$o 2> \$e || { echo '!! case failed'; tail -15 \$e; exit 1; }
+t=\$(date +%s.%N)
 grep -v '^LOADGEN_JSON' \$o | tail -c 1200
 grep '^LOADGEN_JSON' \$o | tail -1
+echo gen.start=\$s
+echo gen.end=\$t
 echo __RUNOK__" > "${dir}/${lg}.run.txt" 2>&1 ) &
     pids+=("$!")
   done
@@ -304,6 +310,7 @@ echo __RUNOK__" > "${dir}/${lg}.run.txt" 2>&1 ) &
   par_on "${dir}" after "felix-agent sampler-stop '${name}'
 felix-agent snapshot" "${BROKER_VMS[@]}" || rc=1
   par_on "${dir}" after "felix-agent sampler-stop '${name}'" "${gens[@]}" || true
+  fetch_series "${dir}" "${name}"
   if want_profile "${name}"; then
     par_on "${dir}" profile "felix-agent profile-report '${name}'
 felix-agent profile-collapse '${name}'" "${BROKER_VMS[@]}" || true
@@ -326,10 +333,34 @@ felix-agent profile-collapse '${name}'" "${BROKER_VMS[@]}" || true
   return 0
 }
 
-# One line per cell on the console: what the brokers stored against what the
-# clients think they sent.
+# fetch_series <dir> <tag>: each broker's raw sampler series into the cell
+# dir. A cell without one still summarizes, from the snapshots alone.
+fetch_series() {
+  local dir="$1" tag="$2" vm pids=() p
+  for vm in "${BROKER_VMS[@]}"; do
+    (
+      b64="${dir}/${vm}.series.gz.b64"
+      if ! fetch_file "${vm}" "/var/tmp/felix-samples/${tag}.series.gz.b64" "${b64}" 2>/dev/null \
+          || ! { base64 -d < "${b64}" 2>/dev/null || base64 -D < "${b64}"; } | gunzip > "${dir}/${vm}.series.tsv"; then
+        echo "!! no series from ${vm}" >&2
+        rm -f "${dir}/${vm}.series.tsv"
+      fi
+      rm -f "${b64}"
+    ) &
+    pids+=("$!")
+  done
+  for p in ${pids[@]+"${pids[@]}"}; do wait "${p}" || true; done
+}
+
+# One line per cell on the console: the steady-state rates from the broker
+# series (summarize.py --cell), or, for a cell without a series, what the
+# brokers stored against what the clients think they sent.
 cell_line() {
-  local dir="$1" broker client
+  local dir="$1" broker client line
+  if line="$(python3 "${here}/summarize.py" --cell "${dir}" 2>/dev/null)" && [ -n "${line}" ]; then
+    log "   ${line}"
+    return 0
+  fi
   broker="$(grep -h '^s.append_mb_s=' "${dir}"/felixperf-broker-*.after.txt 2>/dev/null \
     | awk -F= '{ s += $2 } END { if (NR) printf "%.1f", s; else printf "-" }')"
   client="$(grep -ho '"throughput_mb_s":[0-9.]*' "${dir}"/*.run.txt 2>/dev/null \
