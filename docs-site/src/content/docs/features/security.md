@@ -249,7 +249,9 @@ IdP trust is configured per tenant in the control plane store. Each tenant has a
 The control plane validates:
 - `iss` matches an allowed issuer for the tenant
 - `aud` matches one of the configured audiences
-- signature via JWKS (cached with TTL)
+- signature via JWKS (cached with TTL; an unknown `kid` re-fetches the JWKS
+  at most once per 30 seconds per URL, because it is reachable before the
+  signature is checked)
 - `exp` with clock skew and `iat` not in the future
 
 ### Token Exchange (OIDC → Felix)
@@ -291,7 +293,9 @@ Felix tokens are JWTs minted by the control plane and validated by brokers.
 - `exp`, `iat`
 - `perms`: effective permissions
 - **Algorithm**: EdDSA (Ed25519) only; Felix-issued tokens never use RSA.
-  Tenant key rotation is published via JWKS.
+  The tenant JWKS publishes the current key and any previous ones, and
+  verification tries them all. There is no operator command to rotate a
+  tenant's signing key yet; a tenant keeps the key it was created with.
 
 ### RBAC Model (Casbin)
 
@@ -330,7 +334,7 @@ tenant.manage:tenant:t1
 ### Group-Based RBAC from IdP Claims
 
 If tenant issuer config sets `groups_claim`, exchange maps each incoming group
-to `group:<name>` (preserving `group:` prefix when already present) and adds a
+to `group:<name>` (always prefixed, so `group:ops` and `ops` stay distinct) and adds a
 transient grouping edge for evaluation:
 
 ```text

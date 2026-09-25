@@ -239,6 +239,17 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **IdP group claims are always prefixed.** A group claim value `X` now maps to
+  the RBAC subject `group:X` even when `X` already starts with `group:`, so an
+  IdP group named `group:operators` is no longer treated as the `operators`
+  group. Where an IdP was set up to emit pre-prefixed values, rename the
+  groupings (`group:group:<name>`) or emit the bare name.
+
+- **Token exchange and refresh refusals are counted.** Both now land in
+  `felix_controlplane_auth_rejected_total`; unusable refresh tokens use the new
+  `refresh_refused` reason. The refresh replay, bad-secret, revoked and issued
+  counters are now in the control plane's metrics table.
+
 - **`MovePolicy` is no longer `Copy`.** It carries the region allowlist
   (`regions: Arc<RegionRouter<String>>`); clone it where it was copied. The
   control-plane `Stream` model gains `region: Option<String>`, and the broker's
@@ -386,6 +397,14 @@ for what the current release actually guarantees.
   instead.
 
 ### Fixed
+
+- **Forged upstream tokens can no longer make the control plane hammer an
+  IdP.** A token with an allowlisted issuer and an unknown `kid` made
+  `/token/exchange` re-fetch that issuer's JWKS before any signature check, one
+  fetch per request, with no credential needed. Each JWKS URL is now fetched at
+  most once per 30 seconds, concurrent misses share the fetch in progress, and
+  JWKS and discovery requests time out after 10 seconds. A key the IdP rotates
+  in is accepted within 30 seconds of its first use.
 
 - **A broker that took a shard over replays all of it.** A follower's
   replay ring was filled when the first replicated batch opened the stream
