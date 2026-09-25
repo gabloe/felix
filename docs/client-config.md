@@ -126,3 +126,4 @@ bench_embed_ts: false
 - Client throughput is gated by publish parallelism. A single connection with one stream will bottleneck regardless of broker tuning.
 - The shared in-flight byte budget prevents additional publish streams from multiplying hidden backlog.
 - `publish_sharding=hash_stream` preserves per-stream ordering while spreading across workers; `rr` is best for uniform, high-concurrency loads.
+- The `hash_stream` seed is per client, so separate clients publishing the same stream land on different publish connections, and so on different broker listeners when the broker binds several (`FELIX_QUIC_LISTENERS`). Within one client a stream always uses one connection.

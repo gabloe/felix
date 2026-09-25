@@ -43,6 +43,9 @@ pub struct Client {
     publish_workers: Arc<Vec<PublishWorker>>,
     publish_sharding: PublishSharding,
     publish_admission: Arc<PublishAdmission>,
+    // Shared by every publisher from this client, so a stream keeps one
+    // writer however many publishers publish to it.
+    publish_stream_hasher: ahash::RandomState,
 
     // Per-stream cache workers: each owns exactly one bi-directional QUIC stream and
     // serializes cache round-trips (encode -> write -> read -> decode).

@@ -237,6 +237,7 @@ async fn publish_batch_binary_appends_bench_ts_when_enabled() -> Result<()> {
             Arc::new(PublishAdmission::new(
                 crate::config::DEFAULT_PUBLISH_INFLIGHT_BYTES,
             )),
+            ahash::RandomState::new(),
             true,
         )),
     };

@@ -501,6 +501,7 @@ pub(crate) struct PublisherInner {
     pub(crate) rr: AtomicUsize,
     admission: Arc<PublishAdmission>,
     stream_cache: Mutex<StreamShardCache>,
+    stream_hasher: ahash::RandomState,
     bench_embed_ts: bool,
     /// Intersection of every worker's advertised flags.
     ///
@@ -519,6 +520,7 @@ impl PublisherInner {
             Arc::new(PublishAdmission::new(
                 crate::config::DEFAULT_PUBLISH_INFLIGHT_BYTES,
             )),
+            ahash::RandomState::new(),
         )
     }
 
@@ -526,6 +528,7 @@ impl PublisherInner {
         workers: Arc<Vec<PublishWorker>>,
         sharding: PublishSharding,
         admission: Arc<PublishAdmission>,
+        stream_hasher: ahash::RandomState,
     ) -> Self {
         let server_flags = workers
             .iter()
@@ -537,6 +540,7 @@ impl PublisherInner {
             rr: AtomicUsize::new(0),
             admission,
             stream_cache: Mutex::new(StreamShardCache::new(STREAM_SHARD_CACHE_CAPACITY)),
+            stream_hasher,
             bench_embed_ts: false,
             server_flags,
         }
@@ -546,9 +550,10 @@ impl PublisherInner {
         workers: Arc<Vec<PublishWorker>>,
         sharding: PublishSharding,
         admission: Arc<PublishAdmission>,
+        stream_hasher: ahash::RandomState,
         bench_embed_ts: bool,
     ) -> Self {
-        let mut inner = Self::with_admission(workers, sharding, admission);
+        let mut inner = Self::with_admission(workers, sharding, admission, stream_hasher);
         inner.bench_embed_ts = bench_embed_ts;
         inner
     }

@@ -437,6 +437,14 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **Clients publishing one stream spread across a broker's listeners.** The
+  stream-to-publish-stream hash used a seed fixed for the whole process, so
+  every `Client` in a process sent a given stream down the same pool slot, and
+  so to the same listener. On a four-listener broker fed by four load
+  generators, two ports carried all the publish data (3.1 GB and 9.4 GB) and
+  the other two only handshakes. The seed is now per client; one client still
+  keeps each stream on one writer.
+
 - **Concurrent "ensure signing keys" calls agree on one key set.** Postgres
   and in-memory control-plane stores checked for a tenant's keys and wrote new
   ones in separate steps, so racing callers each generated keys and all but

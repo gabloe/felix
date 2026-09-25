@@ -84,3 +84,29 @@ fn stream_cache_eviction_preserves_recent_entries() {
     assert_eq!(cache.get(StreamKeyRef::new("t1", "ns", "b")), Some(1));
     assert_eq!(cache.get(StreamKeyRef::new("t1", "ns", "c")), Some(2));
 }
+
+fn selected_index(publisher: &crate::publish::Publisher, stream: &str) -> usize {
+    let selected = publisher
+        .select_worker("t", "ns", stream)
+        .expect("select worker");
+    publisher
+        .inner
+        .workers
+        .iter()
+        .position(|worker| std::ptr::eq(worker, selected))
+        .expect("selected worker is in the pool")
+}
+
+/// Every client in a process publishing one stream must not pick the same
+/// pool slot: the slot is a connection, and a connection is one broker
+/// listener, so a shared pick piles a whole load generator onto one port.
+#[tokio::test]
+async fn separate_clients_spread_one_stream_across_the_pool() {
+    let picks: std::collections::HashSet<usize> = (0..32)
+        .map(|_| selected_index(&make_publisher(PublishSharding::HashStream, 4), "orders"))
+        .collect();
+    assert!(
+        picks.len() > 1,
+        "32 clients all hashed one stream to worker {picks:?}"
+    );
+}
