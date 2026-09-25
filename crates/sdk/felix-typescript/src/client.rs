@@ -461,8 +461,7 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        self
-            .cluster()?
+        self.cluster()?
             .group_ack(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
@@ -480,8 +479,7 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        self
-            .cluster()?
+        self.cluster()?
             .group_nack(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
@@ -517,8 +515,7 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        self
-            .cluster()?
+        self.cluster()?
             .group_discard(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
@@ -536,8 +533,7 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        self
-            .cluster()?
+        self.cluster()?
             .group_redrive(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
