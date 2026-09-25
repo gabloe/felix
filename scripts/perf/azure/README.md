@@ -101,6 +101,9 @@ SESSION=v060-a LOCATION=eastus2 BROKER_COUNT=1 BROKER_VM_SIZE=Standard_L8as_v4 \
   BROKER_REFS="main 8f1736eb" FP_REFS=main ./session.sh
 SESSION=v060-a ./session-a.sh
 
+`CONTROLPLANE_VM_SIZE` (default `Standard_D2as_v5`) moves the control plane to another VM family when the
+Dasv5 family quota (20 vCPUs by default) is taken by brokers and generators, e.g. `Standard_D2s_v5`.
+
 # B: three D4as_v5 brokers on Premium SSD. #375 rows, #547 on slow storage, RF=1 for #425.
 SESSION=v060-b LOCATION=westus3 BROKER_COUNT=3 LOADGEN_COUNT=2 SHARDS=12 \
   BROKER_REFS="main 8f1736eb" ./session.sh
