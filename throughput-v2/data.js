@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790342341724,
+  "lastUpdate": 1790344094761,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15964,6 +15964,58 @@ window.BENCHMARK_DATA = {
             "range": "16582.89",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1117279.24\nmean: 1111098.59\nstdev: 16582.89\ncv: 1.49%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "21d2dc469a9476733a75cfcf6d588fee884c797f",
+          "message": "feat(kafka): read Felix streams with Kafka consumers (#707)\n\n* feat(broker): let offset readers wait for a shard's next commit\n\nA reader that polls the log by offset, rather than holding a subscription,\nneeds to know when a shard grew. Each stream shard now carries a Notify\nwoken after every durable publish commits, exposed on StreamHandle with the\nshard's disk log. Broker also lists a tenant's streams and returns one\nstream's metadata, which a catalog-shaped reader needs.\n\n* feat(cluster): carry a broker's Kafka listener address in its registration\n\nA Kafka client learns every broker's address from Metadata, so each broker\nhas to know where the others' Kafka listeners are. Nodes register an\noptional kafka_addr beside client_addr (FELIX_KAFKA_ADVERTISE_ADDR, falling\nback to FELIX_KAFKA_LISTEN, and only when the listener is on), the control\nplane validates and stores it, and the node catalog hands brokers the\nroutable nodes' addresses. Unlike client_addr it may be a hostname, which is\nhow Kafka listeners are usually advertised.\n\n* feat(kafka): answer Kafka consumers from a broker's shard logs\n\nA new crate, felix-kafka, speaks enough of the Kafka protocol for a\nconsumer that assigns its own partitions: ApiVersions, SASL/PLAIN, Metadata,\nListOffsets and Fetch. A topic is <namespace>.<stream>, a partition is a\nshard and offsets are Felix's own. A fetch with too little to return waits\non the shards' append notifications, up to the client's max_wait_ms.\n\nConsumer groups are refused: FindCoordinator answers\nGROUP_AUTHORIZATION_FAILED with a message saying Felix has none, which a\nclient reports instead of waiting for a coordinator forever.\n\nCodecs come from the kafka-protocol crate. Its record-batch encoder and\ndecoder carry the compression codecs a Produce path will need behind\nfeatures.\n\n* fix(kafka): offer what librdkafka needs before it will fetch or authenticate\n\nlibrdkafka derives features from ApiVersions pairs, not single APIs. It\nfetches record batches (Fetch v4+) only from a broker listing Produce v3,\nand uses SASL only when SaslHandshake v0 is listed. Without them kcat\nauthenticated nowhere and retried an unsupported Fetch v2 forever.\n\nProduce v3-8 is now offered and refused with POLICY_VIOLATION and a message\n(acks=0 gets no answer, as Kafka does). SaslHandshake v0 is offered and a v0\nhandshake refused, since its exchange runs outside Kafka framing.\n\n* feat(broker): serve read-only Kafka consumers when FELIX_KAFKA_LISTEN is set\n\nThe broker binds a Kafka listener beside its QUIC ones and hands each\nconnection to felix-kafka. Tokens are verified by the same BrokerAuth as\nthe QUIC Auth frame, partition leaders come from the ingress router, and\nother brokers' Kafka addresses from the node catalog. TLS (SASL_SSL) is on\nby default and uses the broker's client certificate, now generated once for\nboth listeners. FELIX_KAFKA_ANONYMOUS_TENANT is a development switch that\nlets unauthenticated connections read one tenant.\n\nThe listener waits for the initial sync like the QUIC loops, and its\nconnections end on shutdown between requests or mid long-poll.\ntests/kafka_kcat.rs drives it with kcat: metadata, consume from beginning,\noffset and end, offset queries, long-poll, SASL_SSL, anonymous, a bad\ntoken, a refused produce, and -G exiting with the reason.\n\n* test(cluster): kcat reads a topic led by several brokers and follows a move\n\nThe harness can give each broker a Kafka listener (ClusterConfig::kafka).\nWith three brokers and a durable three-shard stream led by at least two of\nthem, kcat bootstrapped at one broker lists every broker and reads every\npartition with Felix's offsets. A kcat parked in a long-poll on a shard's\nleader then follows an operator move: the old leader answers\nNOT_LEADER_OR_FOLLOWER, kcat refreshes Metadata and reads the new records\nfrom the new leader.\n\n* chore(demos): lock felix-kafka and its codecs for the out-of-workspace demos\n\nThe demos build felix-broker-service, which now depends on felix-kafka.\n\n* docs: document read-only Kafka compatibility and retire the shim spike\n\ndocs/kafka-compatibility.md replaces the spike write-up: what the listener\nanswers, how topics, partitions, offsets and credentials map, the error\ntable, why consumer groups are refused (with kcat's actual output), produce,\nconfiguration and the design choices. A new docs-site page, Reading with\nKafka Clients, covers setup, use cases with commands, leader moves,\ntroubleshooting and limits.\n\nwhy-felix.md and the status table now say read-only consumption ships and\nproduce does not. spikes/kafka-shim is removed; the listener supersedes it.\n\n* test(kafka): the long-poll test waits long enough that only the wake-up passes it\n\nlibrdkafka's default 500 ms fetch wait re-polled fast enough to pass\nwithout the commit wake-up. A 30 s wait fails without it.\n\n* chore(kafka): classify felix-kafka as AGPL server code, and keep the SASL password out of test panics\n\n* test(kafka): leave kcat's arguments out of the timeout panic entirely",
+          "timestamp": "2026-09-25T06:45:09-07:00",
+          "tree_id": "17e95403c156149616ec775e94f29037a1493325",
+          "url": "https://github.com/gabloe/felix/commit/21d2dc469a9476733a75cfcf6d588fee884c797f"
+        },
+        "date": 1790344093948,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 387151.31,
+            "range": "16064.26",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 387151.31\nmean: 386959.57\nstdev: 16064.26\ncv: 4.15%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 387151.31,
+            "range": "16064.26",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 387151.31\nmean: 386959.57\nstdev: 16064.26\ncv: 4.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93504.12,
+            "range": "496.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93504.12\nmean: 93623.36\nstdev: 496.42\ncv: 0.53%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 935041.25,
+            "range": "4964.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 935041.25\nmean: 936233.63\nstdev: 4964.16\ncv: 0.53%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
