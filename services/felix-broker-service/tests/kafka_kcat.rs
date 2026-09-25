@@ -399,10 +399,24 @@ async fn kcat_receives_a_record_published_while_its_fetch_waits() {
     let consumer = {
         let felix = Arc::clone(&felix);
         tokio::spawn(async move {
-            // No -e: kcat keeps fetching until it has one record (-c 1).
+            // No -e: kcat keeps fetching until it has one record (-c 1). A
+            // 30 s fetch wait means only the commit wake-up can deliver it in time.
             felix
                 .kcat(&[
-                    "-C", "-t", TOPIC, "-p", "0", "-o", "1", "-c", "1", "-q", "-f", "%o:%s\\n",
+                    "-C",
+                    "-t",
+                    TOPIC,
+                    "-p",
+                    "0",
+                    "-o",
+                    "1",
+                    "-c",
+                    "1",
+                    "-q",
+                    "-f",
+                    "%o:%s\\n",
+                    "-X",
+                    "fetch.wait.max.ms=30000",
                 ])
                 .await
         })
@@ -415,7 +429,7 @@ async fn kcat_receives_a_record_published_while_its_fetch_waits() {
     let output = consumer.await.expect("task");
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(records(&output), ["1:new"]);
-    assert!(published.elapsed() < Duration::from_secs(10));
+    assert!(published.elapsed() < Duration::from_secs(3));
 }
 
 #[tokio::test]
