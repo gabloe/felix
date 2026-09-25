@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790367204332,
+  "lastUpdate": 1790367508648,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16328,6 +16328,58 @@ window.BENCHMARK_DATA = {
             "range": "8580.09",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 947882.09\nmean: 950323.71\nstdev: 8580.09\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bee4cb42106126f49dcd56fb3a8a1a768d9f8c42",
+          "message": "perf(storage): wake the io_uring flush thread when a request is queued (#716)\n\n* test(broker-service): concurrent publishes share flushes through the worker pool\n\nA worker that waited on each flush before claiming the next publish would\npin group-commit fan-in at one; this catches that at the service layer,\nwhich no test covered.\n\n* test(storage): a flush through io_uring must not wait behind another log's\n\n* perf(storage): wake the io_uring flush thread when a request is queued\n\nThe ring's service thread blocks in submit_and_wait(1). A flush queued\nwhile others were in flight sat in the channel until one of them\ncompleted, so one log's slow sync delayed every other log's. Callers now\nsignal an eventfd the thread keeps a poll armed on, and the wait returns\non either a completion or new work.",
+          "timestamp": "2026-09-25T13:10:30-07:00",
+          "tree_id": "5d48c5c5fd892903ae17516317754a4f24d96962",
+          "url": "https://github.com/gabloe/felix/commit/bee4cb42106126f49dcd56fb3a8a1a768d9f8c42"
+        },
+        "date": 1790367508141,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 389982.24,
+            "range": "13373.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 389982.24\nmean: 389853.79\nstdev: 13373.40\ncv: 3.43%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 389982.24,
+            "range": "13373.40",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 389982.24\nmean: 389853.79\nstdev: 13373.40\ncv: 3.43%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93354.98,
+            "range": "666.22",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93354.98\nmean: 93336.42\nstdev: 666.22\ncv: 0.71%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 933549.78,
+            "range": "6662.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 933549.78\nmean: 933364.19\nstdev: 6662.23\ncv: 0.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
