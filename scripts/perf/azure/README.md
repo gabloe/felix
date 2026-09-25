@@ -157,10 +157,19 @@ the Rust standard library itself is still built without frame pointers.
 and git SHA) and full `FELIX_*` environment; counters before and after
 (append bytes and records, sync count and duration, group-commit fan-in,
 quorum failures, UDP `RcvbufErrors`/`InErrors`, datagrams per listener port);
-a 1 Hz sampler's CPU and append-rate summary on every broker and generator;
-the instrument's output. `summarize.py` writes `cells.csv` and `summary.md`.
-**Broker append MB/s is the throughput number**: fire-and-forget publishes make
-the client's figure an enqueue rate. Durable cells start from a wiped
+a 1 Hz sampler's CPU and append-rate summary on every broker and generator,
+and each broker's raw 1 Hz series (`<broker>.series.tsv`: append and publish
+bytes, bytes per listener port, UDP datagrams and `RcvbufErrors`, process CPU
+ticks); the instrument's output, with wall-clock `gen.start`/`gen.end` around
+it. `summarize.py` writes `cells.csv` and `summary.md`.
+**Steady-state broker append MB/s is the throughput number**: the median
+one-second rate, summed over brokers, over the window when every generator was
+running, less its first and last 10%. Generators do not start together, finish
+together or get equal shares, so summing their averages or dividing a
+before/after delta by the cell's length both miss by a wide margin; those older
+figures stay in the table for comparison, and cells recorded before the series
+existed are marked `legacy`. Fire-and-forget publishes also make the client's
+figure an enqueue rate. Durable cells start from a wiped
 `/data/felix` and dropped page cache (`WIPE_DURABLE=1`; off in session C, where
 a whole-cluster wipe under live replicas is its own experiment). `fio-baseline.sh`
 takes the device baseline; the drivers run it first.
