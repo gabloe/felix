@@ -39,11 +39,12 @@ const DEFAULT_MTU_DISCOVERY_UPPER_BOUND: u16 =
 
 const DEFAULT_MAX_UDP_PAYLOAD_SIZE: u16 = 65527;
 const DEFAULT_UDP_BUFFER_BYTES: usize = 8 * 1024 * 1024;
-// Three keep-alives fit inside the idle window, so a subscription survives two
-// lost packets before the connection is declared dead. Both are quinn's own
-// idle default and a third of it; what matters is the ratio.
-const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+// The idle timeout is how long a peer that died without closing (SIGKILL, a
+// pulled cable) takes to be noticed, and a publish waiting on that connection
+// waits that long before it can go elsewhere. So it is short. Three keep-alives
+// fit inside it, so a healthy but quiet connection survives two lost packets.
+const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(6);
+const DEFAULT_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Transport-level configuration defaults.
 ///

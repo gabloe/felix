@@ -25,7 +25,8 @@ use crate::timings;
 /// Deliberately well above the broker's own commit-ack budget
 /// (`FELIX_ACK_WAIT_TIMEOUT_MS`, 2s by default) so this never fires ahead of the
 /// broker's own timeout — it is a backstop for a broker that answers nothing at
-/// all, not a competing deadline.
+/// all, not a competing deadline. A broker that dies does not get this far: the
+/// read fails as soon as the transport's idle timeout closes the connection.
 const ACK_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// What a publish's ack says, beyond success or failure.

@@ -1728,8 +1728,8 @@ absent; they are listed in that script rather than here.
 | --- | --- | --- |
 | `FELIX_CLIENT_CONFIG` | — | Path to a client config file. |
 | `FELIX_AUTH_TENANT`, `FELIX_AUTH_TOKEN`, `FELIX_TOKEN` | — | Credentials a client presents. `FELIX_TOKEN` is also the token `felix-controlplane admin` sends, unless `--token` is given. |
-| `FELIX_KEEPALIVE_MS` | — | QUIC keep-alive interval. |
-| `FELIX_MAX_IDLE_TIMEOUT_MS` | `60000` | QUIC idle timeout before a connection is dropped. |
+| `FELIX_KEEPALIVE_MS` | `2000` | QUIC keep-alive interval. Keep it well under the idle timeout, on both client and broker, or quiet connections are dropped. |
+| `FELIX_MAX_IDLE_TIMEOUT_MS` | `6000` | QUIC idle timeout before a connection is dropped. Also how long a broker that died without closing (killed, unplugged) takes to be noticed, and so how long a publish in flight to it waits before a `ClusterClient` retries elsewhere. |
 | `FELIX_EVENT_ROUTER_MAX_PENDING` | `16384` | Events buffered by the client's router before it applies backpressure. |
 | `FELIX_SUB_DEDICATED_THREAD`, `FELIX_SUB_DEDICATED_QUEUE_CAPACITY` | — | Give a subscription its own thread and queue. |
 | `FELIX_SUB_DELIVERY_SHAPING`, `FELIX_SUB_EGRESS_CONNS` | — | Delivery shaping and egress fan-out on the broker. |

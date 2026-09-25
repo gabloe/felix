@@ -398,6 +398,16 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **A failover no longer costs a publisher 30 seconds.** A publish in flight to
+  a leader that was killed waited out the 30 s ack timeout, because a killed
+  broker sends no QUIC close and the connection only died at the 30 s idle
+  timeout. The default QUIC idle timeout is now 6 s and keep-alives go every
+  2 s (`FELIX_MAX_IDLE_TIMEOUT_MS`, `FELIX_KEEPALIVE_MS`), so the dead
+  connection fails the waiting publish and `ClusterClient` retries on the new
+  leader in about 6 s. Quiet connections stay open on the keep-alives. A client
+  or broker that overrides only one of the two should keep the keep-alive well
+  under the idle timeout.
+
 - **Forged upstream tokens can no longer make the control plane hammer an
   IdP.** A token with an allowlisted issuer and an unknown `kid` made
   `/token/exchange` re-fetch that issuer's JWKS before any signature check, one

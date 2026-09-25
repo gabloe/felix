@@ -921,7 +921,8 @@ a credential.
 QUIC connection errors are surfaced as connection-level failures:
 
 - **Certificate validation failure**: TLS handshake error
-- **Connection timeout**: No response within QUIC idle timeout
+- **Connection timeout**: No response within the QUIC idle timeout (6 s by
+  default, `FELIX_MAX_IDLE_TIMEOUT_MS`)
 - **Connection reset**: Broker restart or network issue
 
 **Retry logic**:
