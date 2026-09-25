@@ -128,21 +128,22 @@ Plenty of reasons, and most of them are good ones.
 - **You already run Kafka in production.** It works, your team knows it, and the
   operational cost you would save is a cost you have already paid. Replacing
   working infrastructure to reduce system count is rarely worth it.
-- **You need Kafka wire compatibility.** Felix does not speak Kafka's protocol,
-  so Kafka Connect, Streams, ksqlDB, Debezium and every tool that expects a Kafka
-  broker will not work against it. If you need that ecosystem, use something that
-  speaks the protocol.
+- **You need Kafka wire compatibility.** Felix speaks enough Kafka for a
+  consumer that assigns its own partitions: `kcat`, a librdkafka program or a
+  Java `KafkaConsumer` can read a durable Felix stream, offsets included (see
+  [Reading with Kafka clients](/felix/features/kafka/)). It does not speak
+  enough for the ecosystem. Kafka Connect, Streams, ksqlDB, Debezium and
+  MirrorMaker all run on consumer groups, and Felix refuses groups on purpose.
+  Nor does it accept writes from Kafka producers. If you need that ecosystem,
+  use something that speaks the whole protocol.
 
-  This is a decision rather than a gap nobody got to. A shim was built far
-  enough to measure: 533 lines gets `kcat` reading a Felix shard with correct
-  offsets, because Felix's offsets and shards already have the shape Kafka
-  assumes. What that does *not* get is the ecosystem, all of which needs the
-  consumer-group coordinator — and a client asked to join a group against a
-  broker that has none does not fail, it hangs in "waiting for group rebalance".
-  Building the coordinator means building a rebalance protocol Felix
-  deliberately does not have and owning its behaviour across Kafka versions.
-  The full finding, including what everyone else who tried this had to build,
-  is in [`docs/kafka-shim-spike.md`](https://github.com/gabloe/felix/blob/main/docs/kafka-shim-spike.md).
+  The refusal is a decision rather than a gap nobody got to. Building a group
+  coordinator means building a rebalance protocol Felix deliberately does not
+  have and owning its behaviour across Kafka versions. What Felix does instead
+  is answer a group consumer with an error that says so, rather than leave it
+  hanging in "waiting for group rebalance". The details, including what other
+  Kafka-compatible systems had to build, are in
+  [`docs/kafka-compatibility.md`](https://github.com/gabloe/felix/blob/main/docs/kafka-compatibility.md).
 - **You need AMQP.** Exchanges, bindings, topic routing, per-message TTL, priority
   queues — the whole RabbitMQ model. Felix has none of it. A queue in Felix is a
   group of workers reading one shard, and that is the extent of it.
