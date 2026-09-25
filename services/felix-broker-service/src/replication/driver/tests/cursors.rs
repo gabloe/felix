@@ -306,3 +306,100 @@ async fn a_replica_removed_from_the_set_is_dropped() {
         "a replica removed from the set was still shipped to",
     );
 }
+
+/// A follower only reachable at one address; anything sent elsewhere is a
+/// dial to a port nobody listens on any more.
+struct FollowerAt {
+    addr: SocketAddr,
+    dialled: Mutex<Vec<SocketAddr>>,
+    stored: AcceptingFollower,
+}
+
+impl PeerRequester for FollowerAt {
+    async fn request(
+        &self,
+        node_id: &str,
+        addr: SocketAddr,
+        message: InternalMessage,
+    ) -> std::result::Result<InternalMessage, PeerError> {
+        self.dialled.lock().expect("lock").push(addr);
+        if addr != self.addr {
+            return Err(PeerError::Unavailable {
+                node_id: node_id.to_string(),
+                detail: "connection refused".to_string(),
+            });
+        }
+        self.stored.request(node_id, addr, message).await
+    }
+}
+
+/// **A follower that comes back at a new address is shipped to there.**
+///
+/// A restarted broker re-registers on new ports, but its leader's generation
+/// does not change, so the cursor outlives the restart. The address has to
+/// come from the current route rather than from the cursor, or the leader
+/// dials the dead port for the rest of the generation and a move onto the
+/// restarted broker never catches up.
+#[tokio::test]
+async fn a_follower_that_moved_address_is_shipped_to_at_the_new_one() {
+    let (broker, _dir) = leader_with(3).await;
+    let router = router(LOCAL, &["broker-b"], 4);
+    let moved: SocketAddr = "10.0.0.2:9002".parse().expect("addr");
+    let follower = FollowerAt {
+        addr: moved,
+        dialled: Mutex::new(Vec::new()),
+        stored: AcceptingFollower::default(),
+    };
+    let marks = QuorumMarks::new();
+    let mut cursors = HashMap::new();
+
+    // The first pass reaches only the old address, which is gone.
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+    assert!(follower.stored.batches().is_empty());
+
+    // Same generation, same replica set; only the catalog's address changed.
+    let mut nodes = nodes();
+    nodes.get_mut("broker-b").expect("broker-b").advertise_addr = moved;
+    let table = RoutingTable::build(
+        [(key(), LOCAL.to_string(), vec!["broker-b".to_string()], 4)],
+        &nodes,
+    );
+    router.publish(table, &nodes);
+    replicate_once(
+        &follower,
+        &broker,
+        &router,
+        &marks,
+        None,
+        &mut cursors,
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+
+    assert_eq!(
+        follower.dialled.lock().expect("lock").last(),
+        Some(&moved),
+        "the leader kept dialling the address the follower had before",
+    );
+    assert_eq!(
+        follower
+            .stored
+            .batches()
+            .first()
+            .map(|(_, first, n)| (*first, *n)),
+        Some((0, 3)),
+    );
+}

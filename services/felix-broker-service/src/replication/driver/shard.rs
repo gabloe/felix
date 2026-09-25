@@ -721,11 +721,16 @@ pub(super) fn reconcile_followers(entry: &mut ShardCursors, route: &Route) {
         .followers
         .retain(|cursor| route.replicas.iter().any(|r| r.node_id == cursor.node_id));
     for replica in &route.replicas {
-        if !entry
+        // A follower that restarts comes back at a new address while the
+        // generation, and so its cursor, carries on. The route has the
+        // current address; the cursor only the one it was created with.
+        if let Some(cursor) = entry
             .followers
-            .iter()
-            .any(|cursor| cursor.node_id == replica.node_id)
+            .iter_mut()
+            .find(|cursor| cursor.node_id == replica.node_id)
         {
+            cursor.addr = replica.advertise_addr;
+        } else {
             entry.followers.push(FollowerCursor::new(
                 replica.node_id.clone(),
                 replica.advertise_addr,

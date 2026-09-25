@@ -405,6 +405,16 @@ for what the current release actually guarantees.
   most once per 30 seconds, concurrent misses share the fetch in progress, and
   JWKS and discovery requests time out after 10 seconds. A key the IdP rotates
   in is accepted within 30 seconds of its first use.
+- **A leader ships to a restarted follower at its new address.** A
+  follower's cursor kept the address it was created with for the whole
+  generation, so a broker that restarted on new ports, still in the
+  replica set, was dialled at its old one until the shard's generation
+  changed. A move staged onto a broker that had just restarted never
+  caught up and sat at `staged` until the move timeout. The cursor now
+  takes each pass's address from the route, so the follower is reached
+  within one catalog refresh (`FELIX_CONTROLPLANE_SYNC_INTERVAL_MS`)
+  (`a_follower_that_moved_address_is_shipped_to_at_the_new_one`, and in
+  `felix-cluster`, `a_restarted_broker_takes_shards_again`).
 
 - **A broker that took a shard over replays all of it.** A follower's
   replay ring was filled when the first replicated batch opened the stream
