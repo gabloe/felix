@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use super::follow::{ClusterCacheWatch, WatchTarget};
 use super::sharded::{ShardOffsets, ShardedCacheWatch};
 use super::{ClusterClient, MAX_REDIRECTS};
 use crate::cache::{CacheWatch, CacheWatchFilter};
@@ -25,40 +26,35 @@ impl ClusterClient {
     /// and one shard alone would miss every matching key on the others. Use
     /// [`ClusterClient::watch_cache_sharded`] for that.
     ///
+    /// The watch follows its shard when the shard later moves to another
+    /// broker; see [`ClusterCacheWatch`].
+    ///
     /// The client this wrapper holds is **not** replaced, for the same reason
     /// a subscribe redirect does not replace it: a redirect is about one
     /// shard, not about which broker is generally worth talking to.
     pub async fn watch_cache(
-        &self,
+        self: &Arc<Self>,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
         filter: CacheWatchFilter,
         from_offset: Option<u64>,
-    ) -> Result<CacheWatch> {
-        self.watch_following_redirects(
-            tenant_id,
-            namespace,
-            cache,
-            filter,
-            None,
-            from_offset,
-            false,
-        )
-        .await
+    ) -> Result<ClusterCacheWatch> {
+        let target = WatchTarget::new(tenant_id, namespace, cache, filter, None);
+        self.open_watch(target, from_offset, false).await
     }
 
     /// Like [`ClusterClient::watch_cache`], but delivering each matching key's
     /// current value before live changes.
     pub async fn watch_cache_retained(
-        &self,
+        self: &Arc<Self>,
         tenant_id: &str,
         namespace: &str,
         cache: &str,
         filter: CacheWatchFilter,
-    ) -> Result<CacheWatch> {
-        self.watch_following_redirects(tenant_id, namespace, cache, filter, None, None, true)
-            .await
+    ) -> Result<ClusterCacheWatch> {
+        let target = WatchTarget::new(tenant_id, namespace, cache, filter, None);
+        self.open_watch(target, None, true).await
     }
 
     /// Watch a key prefix across **every** shard of a cache, merged into one
@@ -111,19 +107,45 @@ impl ClusterClient {
         .await
     }
 
-    /// Open a watch on whichever broker owns its shard.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn watch_following_redirects(
-        &self,
-        tenant_id: &str,
-        namespace: &str,
-        cache: &str,
-        filter: CacheWatchFilter,
-        shard: Option<u32>,
+    /// Open a watch on whichever broker owns its shard, following that shard
+    /// if it later moves.
+    pub(crate) async fn open_watch(
+        self: &Arc<Self>,
+        target: WatchTarget,
         from_offset: Option<u64>,
         retained: bool,
-    ) -> Result<CacheWatch> {
-        let mut client = self.client().await;
+    ) -> Result<ClusterCacheWatch> {
+        let entry = self.client().await;
+        let (client, watch) = self
+            .watch_via(entry, &target, from_offset, retained)
+            .await?;
+        Ok(ClusterCacheWatch::new(
+            Arc::clone(self),
+            target,
+            from_offset,
+            client,
+            watch,
+        ))
+    }
+
+    /// Open a watch on whichever broker owns its shard, asking `first` before
+    /// anyone else.
+    pub(crate) async fn watch_via(
+        &self,
+        first: Arc<Client>,
+        target: &WatchTarget,
+        from_offset: Option<u64>,
+        retained: bool,
+    ) -> Result<(Arc<Client>, CacheWatch)> {
+        let WatchTarget {
+            tenant_id,
+            namespace,
+            cache,
+            filter,
+            shard,
+        } = target;
+        let shard = *shard;
+        let mut client = first;
         // Every broker asked, so a redirect loop is reported rather than
         // followed forever.
         let mut visited: Vec<String> = Vec::new();
@@ -147,7 +169,7 @@ impl ClusterClient {
                     .await
             };
             let error = match attempt {
-                Ok(watch) => return Ok(watch),
+                Ok(watch) => return Ok((client, watch)),
                 Err(err) => err,
             };
             // An owner reached by redirect that answers `shard_unavailable` or

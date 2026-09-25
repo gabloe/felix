@@ -50,13 +50,13 @@ pub struct CacheWatchItem {
     /// Set when the watch lagged and the broker ended it. Re-watching with
     /// `start = resumeFrom` is gapless.
     pub lagged_resume_from: Option<BigInt>,
-    /// Set when the watch's shard moved to another broker, which ended it.
+    /// Set when the watch's shard moved to another broker. The watch follows
+    /// it there on its own and carries on where it left off.
     pub shard_moved: Option<ShardMoved>,
 }
 
-/// Where a shard went when it moved to another broker. A cache watch
-/// re-watches from `resumeFrom` when it is set, and otherwise from the offset
-/// after the last change seen; a sharded subscription follows on its own.
+/// Where a shard went when it moved to another broker. Cache watches and
+/// sharded subscriptions follow it on their own; this is a notice.
 #[napi(object)]
 pub struct ShardMoved {
     /// Where the old owner says to resume, when it could say.

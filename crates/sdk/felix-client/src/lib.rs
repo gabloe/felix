@@ -68,8 +68,8 @@ pub use auth::{RefreshingToken, TokenFuture, TokenProvider};
 pub use cache::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
 pub use client::Client;
 pub use cluster::{
-    ClusterClient, ClusterSubscription, ReconnectPolicy, ShardEvent, ShardOffsets,
-    ShardedCacheWatch, ShardedCacheWatchItem, ShardedGroup, ShardedGroupRecord,
+    ClusterCacheWatch, ClusterClient, ClusterSubscription, ReconnectPolicy, ShardEvent,
+    ShardOffsets, ShardedCacheWatch, ShardedCacheWatchItem, ShardedGroup, ShardedGroupRecord,
     ShardedSubscription,
 };
 pub use config::{ClientConfig, ClientSubQueuePolicy};
