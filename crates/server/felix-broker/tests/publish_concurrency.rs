@@ -11,10 +11,10 @@
 //! bisects that: it drives `Broker::publish` directly, with no QUIC transport
 //! and none of the service's ingress workers in the path.
 //!
-//! - A speedup here means `felix-broker` is *not* the serialiser, and the cause
+//! - Shared flushes here mean `felix-broker` is *not* the serialiser, and the cause
 //!   is above it in `services/felix-broker-service` (the per-connection publish workers, which
 //!   map a stream handle to exactly one worker via `handle.id() % worker_count`).
-//! - No speedup here means the serialisation is in `felix-broker` itself, and
+//! - One flush per publish here means the serialisation is in `felix-broker` itself, and
 //!   this test is where to debug it.
 
 use std::sync::Arc;
@@ -68,8 +68,8 @@ async fn register(broker: &Broker, stream: &str) {
 
 /// **Concurrent publishes to one durable stream should share device flushes.**
 ///
-/// The ratio is the measurement, exactly as in the storage-level test. This one
-/// says whether the broker preserves the concurrency the storage layer needs.
+/// Counted in flushes, as in the storage-level test. This one says whether the
+/// broker preserves the concurrency the storage layer needs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_publishes_to_one_stream_share_a_flush() {
     let dir = tempdir().expect("dir");
@@ -89,6 +89,15 @@ async fn concurrent_publishes_to_one_stream_share_a_flush() {
         .await
         .expect("warm concurrent");
 
+    let storage = broker.durable_storage().expect("durable storage");
+    let serial_log = storage
+        .open_stream("t1", "default", "serial", 0)
+        .expect("serial log");
+    let concurrent_log = storage
+        .open_stream("t1", "default", "concurrent", 0)
+        .expect("concurrent log");
+
+    let serial_flushes_before = serial_log.flushes();
     let serial_start = Instant::now();
     for _ in 0..PUBLISHES {
         broker
@@ -97,8 +106,10 @@ async fn concurrent_publishes_to_one_stream_share_a_flush() {
             .expect("publish");
     }
     let serial = serial_start.elapsed();
+    let serial_flushes = serial_log.flushes() - serial_flushes_before;
 
     let per_task = PUBLISHES / CONCURRENCY;
+    let concurrent_flushes_before = concurrent_log.flushes();
     let concurrent_start = Instant::now();
     let mut tasks = Vec::with_capacity(CONCURRENCY);
     for _ in 0..CONCURRENCY {
@@ -121,23 +132,29 @@ async fn concurrent_publishes_to_one_stream_share_a_flush() {
         task.await.expect("task");
     }
     let concurrent = concurrent_start.elapsed();
+    let concurrent_flushes = concurrent_log.flushes() - concurrent_flushes_before;
 
     let speedup = serial.as_secs_f64() / concurrent.as_secs_f64().max(f64::EPSILON);
     eprintln!(
-        "{PUBLISHES} durable publishes: serial {serial:?}, {CONCURRENCY}-way concurrent \
-         {concurrent:?} -> speedup {speedup:.2}x"
-    );
-    eprintln!(
-        "  per publish: serial {:?}, concurrent {:?}",
-        serial / PUBLISHES as u32,
-        concurrent / PUBLISHES as u32
+        "{PUBLISHES} durable publishes: serial {serial_flushes} flushes in {serial:?}, \
+         {CONCURRENCY}-way concurrent {concurrent_flushes} flushes in {concurrent:?} \
+         (wall-clock speedup {speedup:.2}x, for information only)"
     );
 
+    // Flushes, not wall clock: on a busy runner with a fast disk, publishes
+    // that share flushes perfectly well can still measure slower than serial
+    // (0.49x under coverage on CI). Serial is the control; each publish there
+    // waits alone and pays its own flush.
     assert!(
-        speedup > 2.0,
-        "concurrent publishes were not meaningfully cheaper than serial ones \
-         (speedup {speedup:.2}x with {CONCURRENCY} in flight). The broker is serialising \
-         publishes before they reach the device flush, so group commit has nothing to \
-         coalesce -- which is the fan-in of 1 measured in the Azure sessions."
+        serial_flushes >= PUBLISHES as u64 / 2,
+        "the serial run coalesced ({serial_flushes} flushes for {PUBLISHES} publishes), \
+         so it is not a control for the concurrent one"
+    );
+    assert!(
+        concurrent_flushes * 2 <= serial_flushes,
+        "concurrent publishes did not share flushes: {concurrent_flushes} flushes for \
+         {PUBLISHES} publishes against {serial_flushes} when serial. The broker is \
+         serialising publishes before they reach the device flush, so group commit has \
+         nothing to coalesce -- which is the fan-in of 1 measured in the Azure sessions."
     );
 }

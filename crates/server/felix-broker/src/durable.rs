@@ -288,6 +288,12 @@ impl StreamLog {
         self.log.unsynced_bytes()
     }
 
+    /// How many flushes this log has issued. Group commit shows up as far
+    /// fewer flushes than appends when appends arrive together.
+    pub fn flushes(&self) -> u64 {
+        self.log.flushes()
+    }
+
     /// Force a flush regardless of the configured policy.
     pub async fn sync(&self) -> Result<()> {
         self.log.sync().await.map_err(storage_error)
