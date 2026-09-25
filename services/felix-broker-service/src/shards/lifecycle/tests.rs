@@ -38,7 +38,8 @@ fn an_assignment_does_not_serve_until_the_log_is_open() {
         action,
         Action::Open {
             key: key(0),
-            generation: 3
+            generation: 3,
+            new_term: true,
         }
     );
     assert_eq!(own.phase(&key(0)), Phase::Opening);
@@ -107,7 +108,8 @@ fn a_newer_generation_reopens() {
         action,
         Action::Open {
             key: key(0),
-            generation: 4
+            generation: 4,
+            new_term: false,
         }
     );
     assert_eq!(own.phase(&key(0)), Phase::Opening);
@@ -185,7 +187,8 @@ fn a_closed_shard_can_be_reacquired() {
         action,
         Action::Open {
             key: key(0),
-            generation: 6
+            generation: 6,
+            new_term: true,
         }
     );
     assert_eq!(own.opened(&key(0), 6), Opened::Activated);
@@ -220,7 +223,8 @@ fn a_new_generation_retries_a_failed_open() {
         action,
         Action::Open {
             key: key(0),
-            generation: 2
+            generation: 2,
+            new_term: true,
         }
     );
 }
@@ -325,6 +329,8 @@ mod driver {
     struct RecordingStore {
         opened: StdMutex<Vec<ShardKey>>,
         released: StdMutex<Vec<ShardKey>>,
+        /// Every call, in order, so a term's reset can be seen to come first.
+        calls: StdMutex<Vec<&'static str>>,
         fail_open: AtomicBool,
         fail_release: AtomicBool,
     }
@@ -336,7 +342,12 @@ mod driver {
                 return Err(anyhow::anyhow!("injected open failure"));
             }
             self.opened.lock().expect("lock").push(key.clone());
+            self.calls.lock().expect("lock").push("open");
             Ok(())
+        }
+
+        async fn begin_term(&self, _key: &ShardKey) {
+            self.calls.lock().expect("lock").push("begin_term");
         }
 
         async fn release(&self, key: &ShardKey) -> anyhow::Result<()> {
@@ -357,6 +368,38 @@ mod driver {
                 (key(*shard), assignment)
             })
             .collect()
+    }
+
+    /// A group's in-flight state belongs to one term of leading. Reopening a
+    /// shard this broker is serving keeps it, including the reopen that
+    /// fences it for a move; leading again after the move resets it first.
+    #[tokio::test]
+    async fn only_leading_again_after_a_move_begins_a_new_term() {
+        let own = Mutex::new(lifecycle());
+        let store = RecordingStore::default();
+        let step = |assignment: ShardAssignment| {
+            let own = &own;
+            let store = &store;
+            async move {
+                reconcile(own, store, &HashMap::from([(key(0), assignment)])).await;
+                std::mem::take(&mut *store.calls.lock().expect("lock"))
+            }
+        };
+
+        assert_eq!(
+            step(assigned_to("broker-a", 1)).await,
+            ["begin_term", "open"]
+        );
+        // A replica staged for a move: a new generation, same leader.
+        assert_eq!(step(assigned_to("broker-a", 2)).await, ["open"]);
+        // The fence.
+        assert_eq!(step(draining_on("broker-a", 3)).await, ["open"]);
+        assert!(step(assigned_to("broker-b", 4)).await.is_empty());
+        assert_eq!(
+            step(assigned_to("broker-a", 5)).await,
+            ["begin_term", "open"]
+        );
+        assert!(own.lock().await.may_serve_at(&key(0), 5));
     }
 
     #[tokio::test]
@@ -610,7 +653,8 @@ fn a_draining_assignment_stops_serving_and_stays_stopped() {
         action,
         Action::Open {
             key: key(0),
-            generation: 4
+            generation: 4,
+            new_term: false,
         },
         "the new generation is recovered so replication can ship from it",
     );
@@ -680,7 +724,8 @@ fn a_drained_shard_reassigned_here_serves_again() {
         own.observe(&key(0), Some(&assigned_to("broker-a", 5))),
         Action::Open {
             key: key(0),
-            generation: 5
+            generation: 5,
+            new_term: true,
         }
     );
     assert_eq!(own.opened(&key(0), 5), Opened::Activated);
@@ -824,7 +869,8 @@ fn a_named_destination_prepares_once_and_serves_only_after_the_cut_over() {
         own.observe(&key(0), Some(&assigned_to("broker-a", 4))),
         Action::Open {
             key: key(0),
-            generation: 4
+            generation: 4,
+            new_term: true,
         }
     );
     assert_eq!(own.opened(&key(0), 4), Opened::Activated);

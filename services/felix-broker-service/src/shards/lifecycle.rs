@@ -101,7 +101,14 @@ pub enum Opened {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Open and recover the local log, then report back.
-    Open { key: ShardKey, generation: u64 },
+    Open {
+        key: ShardKey,
+        generation: u64,
+        /// This broker was not serving the shard when this generation
+        /// arrived, so another may have led it since. What it remembers from
+        /// serving it before is stale and has to go before it serves again.
+        new_term: bool,
+    },
     /// Stop writes, drain, flush, and close.
     Release { key: ShardKey, generation: u64 },
     /// A move is bringing the shard here. Get ready to serve it; nothing
@@ -447,10 +454,16 @@ impl ShardLifecycle {
     }
 
     fn begin_open(&mut self, key: &ShardKey, generation: u64, draining: bool) -> Action {
+        // Only a reopen of a shard it is serving continues a term. Anything
+        // else -- released, fenced, failed -- may have let another broker lead
+        // in between, and a generation gap cannot rule that out: assignments
+        // arrive as a coalesced set, not one write at a time.
+        let new_term = self.phase(key) != Phase::Active;
         self.set(key, Phase::Opening, generation, draining);
         Action::Open {
             key: key.clone(),
             generation,
+            new_term,
         }
     }
 
@@ -517,6 +530,9 @@ pub trait ShardStore: Send + Sync {
         _quiet: bool,
     ) {
     }
+    /// Drop what this broker kept from an earlier term of leading `key`,
+    /// before it serves the shard again. Runs while the shard is not serving.
+    async fn begin_term(&self, _key: &ShardKey) {}
     /// Get ready to serve a shard a move is bringing here: open its log and
     /// load what serving it needs, so taking it over is quick.
     ///
@@ -546,6 +562,19 @@ impl ShardReaders {
     ) -> Self {
         self.endpoints = Some(endpoints);
         self
+    }
+
+    /// Forget the consumer groups' in-flight state for a stream shard, so it
+    /// is rebuilt from the cursors that came back with the shard.
+    async fn begin_term(&self, key: &ShardKey) {
+        if key.kind != ShardKind::Stream {
+            return;
+        }
+        if let Some(groups) = self.broker.group_reader() {
+            groups
+                .reset_shard(&key.tenant_id, &key.namespace, &key.stream, key.shard)
+                .await;
+        }
     }
 
     /// Open the shard's log and its in-memory state in the background.
@@ -757,6 +786,12 @@ impl ShardStore for DurableShardStore {
         }
     }
 
+    async fn begin_term(&self, key: &ShardKey) {
+        if let Some(readers) = &self.readers {
+            readers.begin_term(key).await;
+        }
+    }
+
     fn prepare(&self, key: &ShardKey) {
         if let Some(readers) = &self.readers {
             readers.prepare(key);
@@ -814,7 +849,11 @@ pub async fn apply(
     match action {
         Action::None => {}
         Action::Prepare { key } => store.prepare(&key),
-        Action::Open { key, generation } => match store.open(&key, generation).await {
+        Action::Open {
+            key,
+            generation,
+            new_term,
+        } => match open(store, &key, generation, new_term).await {
             Ok(()) => {
                 // Bound first: matching on the locked call would hold the guard
                 // through the arms, and a handoff ends its readers under the lock.
@@ -885,6 +924,18 @@ pub async fn apply(
             );
         }
     }
+}
+
+async fn open(
+    store: &dyn ShardStore,
+    key: &ShardKey,
+    generation: u64,
+    new_term: bool,
+) -> anyhow::Result<()> {
+    if new_term {
+        store.begin_term(key).await;
+    }
+    store.open(key, generation).await
 }
 
 /// End a shard's readers once the writes already inside its fence are done,

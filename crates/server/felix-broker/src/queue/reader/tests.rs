@@ -378,3 +378,53 @@ async fn a_redelivered_record_reports_its_attempt_number() {
         .expect("poll");
     assert_eq!(again[0].attempts, 2);
 }
+
+#[tokio::test]
+async fn a_reset_shard_resumes_from_a_cursor_moved_elsewhere() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fx = open(dir.path());
+    publish(&fx.log, &["a", "b", "c"]).await;
+    let now = Instant::now();
+    let claimed = fx
+        .reader
+        .poll(&key(), &fx.log, 10, now)
+        .await
+        .expect("poll");
+    assert_eq!(payloads(&claimed), ["a", "b", "c"]);
+    fx.reader.ack(&key(), 0).await.expect("ack");
+
+    // Another leader finished the rest while this one was not serving, and
+    // the cursor it wrote came back with the shard.
+    fx.reader
+        .cursors
+        .commit(T, NS, S, 0, G, 3)
+        .await
+        .expect("commit");
+
+    let lapsed = now + VIS * 2;
+    fx.reader.reset_shard(T, NS, S, 0).await;
+    let again = fx
+        .reader
+        .poll(&key(), &fx.log, 10, lapsed)
+        .await
+        .expect("poll");
+    assert!(again.is_empty(), "handed out {:?} again", payloads(&again));
+}
+
+#[tokio::test]
+async fn resetting_one_shard_leaves_another_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fx = open(dir.path());
+    publish(&fx.log, &["a", "b"]).await;
+    let now = Instant::now();
+    fx.reader.poll(&key(), &fx.log, 1, now).await.expect("poll");
+
+    fx.reader.reset_shard(T, NS, S, 1).await;
+    // Still claimed: the tracker for shard 0 was not touched.
+    let next = fx
+        .reader
+        .poll(&key(), &fx.log, 10, now)
+        .await
+        .expect("poll");
+    assert_eq!(payloads(&next), ["b"]);
+}
