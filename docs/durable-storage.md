@@ -229,6 +229,20 @@ flush.
 This is the same mechanism behind PostgreSQL's `commit_delay` and the WAL
 group-commit paths in MySQL and RocksDB.
 
+### Where the flush runs
+
+The winner does not run the `fsync` itself: it would block a reactor thread.
+Each log has a flush thread of its own, started on its first flush and stopped
+after 10 s without one, and the winner hands the sync to it over a channel and
+awaits the answer. The thread only ever runs that log's flushes, so a flush
+does not queue behind reads, rollovers or other shards the way it would on
+Tokio's shared blocking pool. The job owns the file handles it syncs, so a
+caller that gives up (a disconnected publisher) cannot close a file under a
+sync in progress, and the sync still completes for whoever flushes next. If a
+thread cannot be started, the flush falls back to the blocking pool.
+[storage-performance.md](storage-performance.md#9-each-log-flushes-on-its-own-thread)
+has the measurements.
+
 ## Segments and rollover
 
 A shard's log is one *active* segment plus any number of sealed ones, and the
@@ -472,17 +486,18 @@ cursors.
 | `FELIX_DURABLE_PREALLOCATE` | `true` | Reserve segment blocks at creation |
 | `FELIX_DURABLE_VERIFY_ALL_ON_OPEN` | `false` | Checksum every segment at startup |
 | `FELIX_DURABLE_REPAIR_CHECKSUM_TAIL` | `false` | Truncate a complete trailing record that fails its checksum (see below) |
-| `FELIX_STORAGE_IO_URING` | `0` | Submit device flushes to `io_uring` instead of the blocking pool (Linux only) |
+| `FELIX_STORAGE_IO_URING` | `0` | Submit device flushes to `io_uring` instead of the log's flush thread (Linux only) |
 
 Invalid combinations fail at startup, not at the first publish.
 
-`FELIX_STORAGE_IO_URING=1` replaces the `spawn_blocking` hand-off on the flush
-path with `IORING_OP_FSYNC` on one process-wide ring. It is Linux-only and
-default off: a kernel too old for the opcode, or a container that forbids the
-syscall, falls back to the blocking pool rather than failing, because durability
-must not depend on an optimisation being available. A perf session measured
-956.7 MB/s against 917.2 with it on, every run better and no overlap between the
-two distributions.
+`FELIX_STORAGE_IO_URING=1` replaces the hand-off to the log's flush thread
+with `IORING_OP_FSYNC` (with `DATASYNC`, like the thread's `fdatasync`) on one
+process-wide ring. It is Linux-only and default off: a kernel too old for the
+opcode, or a container that forbids the syscall, falls back to the flush thread
+rather than failing, because durability must not depend on an optimisation
+being available. The kernel runs the sync on a worker thread of its own, so a
+single log's flush is not faster this way; see
+[storage-performance.md](storage-performance.md#9-each-log-flushes-on-its-own-thread).
 
 ```sh
 FELIX_DURABLE_STORAGE_DIR=/var/lib/felix/streams \

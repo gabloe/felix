@@ -26,8 +26,10 @@
 //! Every platform-specific call degrades to a correct no-op or to the portable
 //! equivalent, so an unsupported target loses performance and never correctness.
 //!
-//! On Linux, `uring_fsync` can take a log's flushes off the blocking pool.
+//! A log's flushes run on its own thread (`flusher`), or on Linux can be
+//! submitted to `io_uring` instead (`uring_fsync`).
 
+pub(crate) mod flusher;
 #[cfg(target_os = "linux")]
 pub(crate) mod uring_fsync;
 

@@ -114,6 +114,37 @@ The step from one publisher to two costs ~38% in **both** columns. That is not
 the herd — it is the price of parking and waking at all, which an uncontended
 publisher never pays. Everything past two is the herd.
 
+### 9. Each log flushes on its own thread
+
+An `fsync` blocks, so it cannot run on a reactor thread. Handing it to
+`spawn_blocking` keeps the reactor free but puts the flush in Tokio's one
+blocking-pool queue, shared with reads, rollovers and every other shard's
+flushes, and that hand-off gets slower the more shards flush at once.
+
+Each log has a thread that runs only its flushes, so a flush is one channel send
+and one wake-up. The thread starts on the log's first flush and exits after 10 s
+without one, so quiet shards do not hold threads.
+
+Round trip for a no-op flush, i.e. the dispatch alone (`dispatch_overhead` in
+`crates/server/felix-storage/src/io/flusher/tests.rs`, release build, 4 runtime
+workers, one task per log), mean / p99 in µs:
+
+| Logs flushing at once | macOS `spawn_blocking` | macOS flush thread | Linux `spawn_blocking` | Linux flush thread |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 7.5 / 16 | 7.3 / 15 | 38 / 166 | 20 / 46 |
+| 8 | 53 / 218 | 17 / 43 | 99 / 1,066 | 36 / 106 |
+| 32 | 223 / 734 | 46 / 111 | 407 / 4,579 | 124 / 248 |
+
+macOS is an M4 Max laptop; Linux is a Docker Desktop VM on the same machine
+(16 vCPUs), so read the ratios rather than the absolute numbers. On NVMe, where
+a `fdatasync` can be tens of microseconds, the pool's hand-off under
+contention was larger than the sync it protected.
+
+`FELIX_STORAGE_IO_URING=1` submits flushes to one process-wide ring instead.
+The kernel still runs each `fsync` on a worker thread of its own, and in the
+same VM a single log's real `fdatasync` round trip measured ~47 µs through the
+ring against ~24 µs on a flush thread, so it stays opt-in.
+
 ## Where the time goes
 
 ```mermaid

@@ -132,3 +132,35 @@ async fn concurrent_on_commit_appends_all_land_exactly_once() {
     sorted.dedup();
     assert_eq!(sorted.len(), 32, "duplicate or lost records");
 }
+
+/// A durable append must not queue for the shared blocking pool. That pool
+/// also serves reads, rollovers and every other shard's work, so a flush
+/// dispatched through it waits behind all of that, and the wait grows with
+/// the number of shards flushing at once.
+#[test]
+fn a_saturated_blocking_pool_does_not_hold_up_a_durable_append() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let dir = tempdir().expect("dir");
+        let log = open(&dir, FsyncMode::OnCommit);
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let occupant = tokio::task::spawn_blocking(move || {
+            let _ = held.recv();
+        });
+
+        let append =
+            tokio::time::timeout(Duration::from_secs(5), log.append(&records(&["durable"]))).await;
+        release.send(()).expect("release the pool");
+        occupant.await.expect("occupant");
+
+        let result = append
+            .expect("the append waited on the blocking pool")
+            .expect("append");
+        assert!(log.durable_offset() > result.last_offset);
+    });
+}
