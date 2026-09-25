@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790314442752,
+  "lastUpdate": 1790317356482,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15756,6 +15756,58 @@ window.BENCHMARK_DATA = {
             "range": "10615.81",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1146763.59\nmean: 1148548.69\nstdev: 10615.81\ncv: 0.92%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b8139ee8acd26bc697c723d8418074ae16ea09a7",
+          "message": "Token exchange review: bound JWKS refreshes, keep group subjects distinct, count refusals (#702)\n\n* fix(controlplane): rate-limit JWKS refreshes forced by unknown kids\n\nA kid missing from the cached JWKS triggered a fetch before the token's\nsignature was checked, so anyone who knew a tenant's issuer could make the\ncontrol plane call the IdP once per forged token. Each JWKS URL is now\nfetched at most once per 30 seconds; concurrent misses queue behind the\nfetch in progress and read its result. A key the IdP rotates in is still\naccepted once the floor has passed. Fetches also time out after 10 seconds,\nsince refreshes now wait on each other.\n\nRefs #524\n\n* fix(controlplane): always prefix IdP group claims\n\ngroup_subject accepted either a raw group name or one already carrying the\ngroup: prefix, so an IdP group named group:operators and one named operators\nboth became the subject group:operators. At an IdP that lets users create\ngroups but keeps names unique, that let someone borrow an existing group's\ngrants by creating its prefixed lookalike. Every claim value is now prefixed,\nso group:operators maps to group:group:operators. Policies that relied on the\nIdP emitting pre-prefixed values need their groupings renamed.\n\nRefs #524\n\n* fix(controlplane): count token exchange and refresh refusals\n\nExchange and refresh answered 401/403 directly instead of going through\nbearer::refused, so neither showed up in\nfelix_controlplane_auth_rejected_total. Both now do: exchange with the\nexisting missing_token, invalid_token and forbidden reasons, and every\nunusable refresh token under a new refresh_refused reason, one label for\nall of them just as the caller gets one answer. The replay and bad-secret\ncounters were already incremented; a test now holds all of them, using a\nthread-local recorder that counts increments.\n\nRefs #524\n\n* docs(auth): JWKS refresh floor, group prefixing, refusal counters\n\nDescribes the per-URL JWKS refresh floor and fetch timeout, the\nalways-prefixed group mapping, and exchange and refresh refusals in the\nrefused-credentials counter; adds the refresh replay, bad-secret, revoked\nand issued counters to the metrics table. Also corrects a claim that tenant\nkey rotation is published via JWKS: the JWKS serves current and previous\nkeys, but nothing rotates a tenant's key yet.\n\nRefs #524\n\n* docs(security): group claims are always prefixed\n\nRefs #524",
+          "timestamp": "2026-09-24T23:19:18-07:00",
+          "tree_id": "7ff89ed6259d4b391364b5a66dda03d582f58031",
+          "url": "https://github.com/gabloe/felix/commit/b8139ee8acd26bc697c723d8418074ae16ea09a7"
+        },
+        "date": 1790317355896,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 534456.87,
+            "range": "38307.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 534456.87\nmean: 547239.94\nstdev: 38307.69\ncv: 7.00%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 534456.87,
+            "range": "38307.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 534456.87\nmean: 547239.94\nstdev: 38307.69\ncv: 7.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 113814.76,
+            "range": "3417.88",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 113814.76\nmean: 112336.33\nstdev: 3417.88\ncv: 3.04%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1138147.57,
+            "range": "34178.75",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1138147.57\nmean: 1123363.35\nstdev: 34178.75\ncv: 3.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
