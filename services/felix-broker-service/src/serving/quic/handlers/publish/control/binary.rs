@@ -11,6 +11,7 @@ use felix_authz::{Action, Namespace, StreamName, TenantId, stream_resource};
 use felix_broker::Broker;
 use felix_wire::Frame;
 use tokio::sync::{Mutex, Semaphore, mpsc, watch};
+use tracing::Instrument;
 
 use super::batch::handle_publish_batch_message;
 use crate::observability::timings;
@@ -126,47 +127,50 @@ pub(crate) async fn handle_binary_publish_batch_control(
         stream = %batch.stream,
         count = batch.payloads.len()
     );
-    let _enter = span.enter();
-    let payloads = batch
-        .payloads
-        .into_iter()
-        .map(Bytes::from)
-        .collect::<Vec<_>>();
-    let payload_bytes = payload_len_sum(&payloads);
-    let fanout_start = t_now_if(sample);
-    let r = enqueue_publish(
-        publish_ctx,
-        PublishJob {
-            target,
-            payloads,
-            response: None,
-            acked_on_enqueue: false,
-            admission_permit: None,
-            fenced: None,
-        },
-        publish_ctx.overflow_policy(),
-        Some(cancel_tx.subscribe()),
-    )
-    .await;
-    match r {
-        Ok(true) => {
-            count_publish_accepted("accepted", payload_bytes);
+    async move {
+        let payloads = batch
+            .payloads
+            .into_iter()
+            .map(Bytes::from)
+            .collect::<Vec<_>>();
+        let payload_bytes = payload_len_sum(&payloads);
+        let fanout_start = t_now_if(sample);
+        let r = enqueue_publish(
+            publish_ctx,
+            PublishJob {
+                target,
+                payloads,
+                response: None,
+                acked_on_enqueue: false,
+                admission_permit: None,
+                fenced: None,
+            },
+            publish_ctx.overflow_policy(),
+            Some(cancel_tx.subscribe()),
+        )
+        .await;
+        match r {
+            Ok(true) => {
+                count_publish_accepted("accepted", payload_bytes);
+            }
+            Ok(false) => {
+                count_publish("dropped");
+            }
+            Err(err) => {
+                count_publish("error");
+                tracing::warn!(error = %err, "publish enqueue failed");
+            }
         }
-        Ok(false) => {
-            count_publish("dropped");
-        }
-        Err(err) => {
-            count_publish("error");
-            tracing::warn!(error = %err, "publish enqueue failed");
-        }
-    }
 
-    if let Some(start) = fanout_start {
-        let fanout_ns = start.elapsed().as_nanos() as u64;
-        timings::record_fanout_ns(fanout_ns);
-        t_histogram!("felix_broker_ingress_enqueue_ns").record(fanout_ns as f64);
+        if let Some(start) = fanout_start {
+            let fanout_ns = start.elapsed().as_nanos() as u64;
+            timings::record_fanout_ns(fanout_ns);
+            t_histogram!("felix_broker_ingress_enqueue_ns").record(fanout_ns as f64);
+        }
+        Ok(())
     }
-    Ok(())
+    .instrument(span)
+    .await
 }
 
 /// Handle a binary publish batch that asked to be acknowledged.

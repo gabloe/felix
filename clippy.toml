@@ -1,0 +1,8 @@
+# A span guard held across an `.await` exits on whichever worker resumes the
+# task, leaving a stale id on the entering worker's span stack. The registry
+# later panics cloning it ("tried to clone a span that already closed").
+# Use `.instrument(span)` instead.
+await-holding-invalid-types = [
+    { path = "tracing::span::Entered", reason = "use `.instrument(span)` on the future instead" },
+    { path = "tracing::span::EnteredSpan", reason = "use `.instrument(span)` on the future instead" },
+]

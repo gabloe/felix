@@ -1,6 +1,7 @@
 //! This module sets up observability for the broker service, including tracing and metrics.
 //! It configures a tracing subscriber with optional OpenTelemetry (OTLP) integration for distributed tracing.
-//! The OTLP tracing setup is best-effort: if it fails, tracing falls back to local logging only.
+//! OTLP export is on only when `OTEL_EXPORTER_OTLP_ENDPOINT` (or the traces-specific
+//! variant) is set; otherwise tracing is local logging only.
 //! It installs a Prometheus metrics recorder and provides an HTTP server exposing `/metrics`, `/live`, and `/ready` endpoints.
 //! Metrics serving is asynchronous and uses `axum` to handle requests.
 //! In tests, metrics recorder initialization is cached to avoid conflicts, and subscriber initialization is adapted accordingly.
@@ -28,7 +29,7 @@ static OBS_INIT: OnceLock<()> = OnceLock::new();
 /// Initializes observability for the service.
 ///
 /// Sets up the global OpenTelemetry text map propagator (W3C Trace Context),
-/// builds an OTLP tracer provider (best-effort),
+/// builds an OTLP tracer provider when an endpoint is configured,
 /// configures the tracing subscriber with environment filtering and formatting,
 /// and installs a Prometheus metrics recorder.
 ///
@@ -42,7 +43,6 @@ pub(crate) fn init_observability(service_name: &str) -> PrometheusHandle {
             opentelemetry_sdk::propagation::TraceContextPropagator::new(),
         );
 
-        // Attempt to build an OTLP tracer provider; optional and may fail silently.
         let provider = build_tracer_provider(service_name);
 
         // Use environment variable for log filtering; default to "info" if unset or invalid.
@@ -94,14 +94,29 @@ where
     .await
 }
 
+/// Whether an OTLP endpoint was configured. Without one the exporter would
+/// default to `localhost:4317` and fail every batch where no collector runs,
+/// so tracing export stays off unless asked for.
+fn otlp_endpoint_configured() -> bool {
+    [
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+    ]
+    .iter()
+    .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
+}
+
 /// Builds an OpenTelemetry tracer provider with OTLP exporter for the given service.
 ///
 /// Attaches resource attributes describing the service and environment.
 /// Uses Tokio runtime for batch processing of spans.
-/// Returns `None` if installation fails (best-effort).
+/// Returns `None` when no OTLP endpoint is configured or the exporter cannot be built.
 fn build_tracer_provider(
     service_name: &str,
 ) -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    if !otlp_endpoint_configured() {
+        return None;
+    }
     let resource = Resource::builder_empty()
         .with_attributes(resource_attributes(service_name))
         .build();

@@ -295,10 +295,12 @@ stops working. See [Graceful shutdown](/felix/deployment/graceful-shutdown/).
 
 ## Distributed tracing
 
-The broker builds an OTLP tracer provider on startup and installs a
-`tracing-opentelemetry` layer when one is available. It is best-effort: if the
-collector cannot be reached the broker starts anyway and logs without traces,
-because losing telemetry must not stop a broker from serving.
+Tracing export is off unless an OTLP endpoint is set. With
+`OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) set,
+the broker and control plane build an OTLP tracer provider on startup and
+install a `tracing-opentelemetry` layer; without either, they log locally and
+export nothing. An unreachable collector does not stop a broker from serving:
+failed exports are logged by the exporter and the spans are dropped.
 
 **Configuration** is by environment variable. Felix does take a YAML config file
 (`FELIX_BROKER_CONFIG`, see [Configuration](/felix/reference/configuration/)),
