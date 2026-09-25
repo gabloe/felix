@@ -1,8 +1,8 @@
 //! Running a broker node: startup order, readiness gating and the shutdown drain.
 //!
 //! ## Process lifecycle
-//! - The broker starts long-running background tasks (QUIC accept loop, metrics server,
-//!   and optional control-plane sync).
+//! - The broker starts long-running background tasks (QUIC accept loop, the
+//!   optional Kafka listener, metrics server, and optional control-plane sync).
 //! - The process remains alive until the provided shutdown future completes. In
 //!   production that is SIGTERM or SIGINT: SIGTERM is what Kubernetes, systemd, and
 //!   `docker stop` send, so handling only SIGINT would abort in-flight work on every
@@ -165,9 +165,19 @@ where
         ))
     };
 
-    let quic_servers = listeners::bind(&config)?;
+    let identity = listeners::server_identity()?;
+    let quic_servers = listeners::bind(&config, &identity)?;
     let broker = Arc::new(broker);
-    let accept_tasks = listeners::spawn_accept_loops(
+    let kafka = listeners::bind_kafka(
+        &config,
+        &identity,
+        &broker,
+        &auth,
+        &ingress_router,
+        &client_endpoints,
+    )
+    .await?;
+    let mut accept_tasks = listeners::spawn_accept_loops(
         &quic_servers,
         listeners::AcceptLoops {
             broker: &broker,
@@ -184,6 +194,15 @@ where
             client_endpoints: &client_endpoints,
         },
     );
+    if let Some(kafka) = kafka {
+        accept_tasks.push(listeners::spawn_kafka(
+            kafka,
+            &accept_shutdown,
+            &connections,
+            &seeded,
+            gate_readiness_on_sync,
+        ));
+    }
 
     // One holder, shared by every control-plane caller: the metadata sync
     // here, and membership below. A refresh swaps what is inside it, so a

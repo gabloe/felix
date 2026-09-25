@@ -9,12 +9,14 @@ mod defaults;
 pub mod durable;
 mod env;
 mod file;
+pub mod kafka;
 mod membership;
 mod print;
 mod subscriber;
 mod validate;
 
 pub use durable::DurableStorageConfig;
+pub use kafka::KafkaListenerConfig;
 pub use membership::MembershipConfig;
 pub use subscriber::{SubStreamMode, SubscriberLaneShard};
 

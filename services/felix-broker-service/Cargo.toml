@@ -65,6 +65,7 @@ felix-broker = { path = "../../crates/server/felix-broker", version = "0.6.0-pre
 felix-common = { path = "../../crates/server/felix-common", version = "0.6.0-preview", features = ["lifecycle"] }
 felix-client = { path = "../../crates/sdk/felix-client", version = "0.6.0-preview" }
 felix-authz = { path = "../../crates/server/felix-authz", version = "0.6.0-preview" }
+felix-kafka = { path = "../../crates/server/felix-kafka", version = "0.6.0-preview" }
 felix-transport = { path = "../../crates/protocol/felix-transport", version = "0.6.0-preview" }
 felix-wire = { path = "../../crates/protocol/felix-wire", version = "0.6.0-preview" }
 felix-storage = { path = "../../crates/server/felix-storage", version = "0.6.0-preview" }
@@ -90,6 +91,8 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 tokio = { workspace = true }
+# TLS on the Kafka listener, which is plain TCP rather than QUIC.
+tokio-rustls = { workspace = true }
 # `TaskTracker` and `CancellationToken` back the graceful drain in `node/shutdown.rs`.
 tokio-util = { workspace = true }
 tracing = { workspace = true }
@@ -107,6 +110,8 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# The Kafka tests run kcat in a container.
+tokio = { workspace = true, features = ["process"] }
 serial_test = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
