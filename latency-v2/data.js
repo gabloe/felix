@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790347725704,
+  "lastUpdate": 1790361437101,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -20526,6 +20526,72 @@ window.BENCHMARK_DATA = {
             "range": "518.48",
             "unit": "us",
             "extra": "trials: 5\nmedian: 598.00\nmean: 883.20\nstdev: 518.48\ncv: 58.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dbb594eab8579496127d28885b6ab6623593717e",
+          "message": "perf(azure): harness for the v0.6.0 campaign (source builds, broker-side metrics, session drivers) (#711)\n\n* perf(azure): build broker refs from source inside the session\n\nGenerator 0 builds each BROKER_REFS entry (resolved to a full SHA) during\nprovisioning, optionally a frame-pointer variant, and serves the tarballs\non :8088 inside the VNet. seed.sh installs every build under\n/opt/felix/<name>/ behind a symlink, so switching builds is a relink and a\nrestart. RELEASE_URL overrides the release tarball; the provisioning wait\nis configurable and defaults to 120 minutes.\n\nBrokers read a second EnvironmentFile, /etc/felix/overrides.env, which\nsurvives the broker.env rewrite and starts from calibrated knobs\n(ack-on-commit, io_uring, IO threads, listener count). felix-agent is the\nVM-side helper every per-cell operation goes through. sysctls, fio,\niptables, perf and pidstat are installed; t2 pins the generators and\ncontrol plane to zone 1.\n\n* perf(azure): measure cells from the broker side\n\ncells.sh brackets each loadgen run with broker snapshots (running binary\nand git SHA, full FELIX_* environment, storage and UDP counters,\ndatagrams per listener port) and 1 Hz samplers on every broker and\ngenerator, wipes storage and drops caches before durable cells, and can\nprofile a cell with perf and pidstat. summarize.py reduces the cell\ndirectories to cells.csv and a per-group summary.md, with broker append\nMB/s as the throughput number.\n\n* perf(azure): unattended drivers for the v0.6.0 sessions\n\nsession-a.sh: listener sweep (#557/#559) and flush-dispatch arms on NVMe\n(#547). session-b.sh: durability rows and cache puts on Premium SSD\n(#375), the #547 arms on slow storage, RF=1 rows for #425. session-c.sh:\nRF=3 Leader against Quorum across zones (#425). Each resumes where it\nstopped.\n\n* perf(azure): change knobs, builds and sweeps on a live session\n\nbroker-env.sh edits overrides.env or switches the active build, restarts\nand waits for /ready. deploy-ref.sh builds any branch, tag or SHA on\ngenerator 0 and installs it without reprovisioning. sweep.sh runs every\ncombination of broker and client knob values as ordinary cells.\n\n* perf(azure): older matrices set fsync through overrides.env\n\nA drop-in's Environment= loses to any EnvironmentFile, so the fsync mode\nnow goes into overrides.env. The quorum matrix keys its ingest cell and\nruns the durable Quorum pass at both fsync modes.\n\n* docs(perf): how to run the v0.6.0 Azure sessions",
+          "timestamp": "2026-09-25T11:33:22-07:00",
+          "tree_id": "b914913eec58eeccc42308e56d10f48618574a70",
+          "url": "https://github.com/gabloe/felix/commit/dbb594eab8579496127d28885b6ab6623593717e"
+        },
+        "date": 1790361434520,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 91,
+            "range": "5.12",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 91.00\nmean: 91.20\nstdev: 5.12\ncv: 5.61%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 135,
+            "range": "7.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 135.00\nmean: 135.80\nstdev: 7.98\ncv: 5.88%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 169,
+            "range": "12.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 169.20\nstdev: 12.07\ncv: 7.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 106,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 106.00\nmean: 106.40\nstdev: 1.14\ncv: 1.07%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 245,
+            "range": "12.10",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 245.00\nmean: 243.00\nstdev: 12.10\ncv: 4.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1385,
+            "range": "1256.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1385.00\nmean: 1425.00\nstdev: 1256.92\ncv: 88.20%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
