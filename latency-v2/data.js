@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790344749976,
+  "lastUpdate": 1790344918172,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -20394,6 +20394,72 @@ window.BENCHMARK_DATA = {
             "range": "62.37",
             "unit": "us",
             "extra": "trials: 5\nmedian: 667.00\nmean: 635.60\nstdev: 62.37\ncv: 9.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "153e9066571f574dbc226ebde7c083efeea0bee1",
+          "message": "fix(controlplane): racing signing-key ensures agree on one stored key set (#709)\n\nensure_signing_key_current read the tenant's keys and, finding none,\ngenerated and wrote a set in a separate step. Concurrent callers each\ngenerated keys; the last write won and every other caller returned keys\nthat were no longer stored, so anything they signed would not verify.\n\nPostgres now takes the tenant row lock, re-reads, and inserts only if\nstill absent, as bootstrap_tenant_auth does. There is no unique\nconstraint on \"one current key per tenant\" (the key is tenant, kid,\nstatus), so ON CONFLICT cannot choose a winner. The in-memory store\nchecks and inserts under one write lock, and bootstrap uses the same\ninstall-if-absent helper so it cannot overwrite a concurrent ensure.\nRaft was already safe: install-if-absent is applied through the log.\n\nA signing-key contract now runs 24 concurrent ensures per round against\nmemory, Postgres and Raft.",
+          "timestamp": "2026-09-25T06:56:30-07:00",
+          "tree_id": "b8c3d46471d96f56f89c98feb557140e1135b417",
+          "url": "https://github.com/gabloe/felix/commit/153e9066571f574dbc226ebde7c083efeea0bee1"
+        },
+        "date": 1790344914940,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 98,
+            "range": "0.45",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 98.00\nmean: 98.20\nstdev: 0.45\ncv: 0.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 135,
+            "range": "4.60",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 135.00\nmean: 133.20\nstdev: 4.60\ncv: 3.46%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 177,
+            "range": "24.13",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 177.00\nmean: 177.60\nstdev: 24.13\ncv: 13.59%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 132,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 131.60\nstdev: 0.55\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 265,
+            "range": "5.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 265.00\nmean: 267.00\nstdev: 5.70\ncv: 2.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 581,
+            "range": "506.39",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 581.00\nmean: 860.80\nstdev: 506.39\ncv: 58.83%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
