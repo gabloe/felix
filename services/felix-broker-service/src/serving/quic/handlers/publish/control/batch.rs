@@ -292,7 +292,7 @@ pub(crate) async fn handle_publish_batch_message(
                     ack_throttle_tx,
                     encoding.error(
                         request_id,
-                        refused_as_not_found(refusal, &tenant_id, &namespace, &stream),
+                        refusal_for_client(refusal, &tenant_id, &namespace, &stream),
                     ),
                 )
                 .await,
@@ -508,23 +508,33 @@ pub(crate) async fn handle_publish_batch_message(
     Ok(())
 }
 
-/// The batch is already with the worker, so it may still land: overloaded, but
-/// with the outcome unknown rather than "not applied".
-/// The refusal's code, in the words every client has always been given for an
-/// unroutable publish.
-pub(super) fn refused_as_not_found(
+/// Why a publish that never got a target was refused, as the client sees it.
+///
+/// Only a stream that does not resolve is "stream not found", in the words
+/// clients without codes have always matched on. Anything else -- a shard that
+/// is not servable, a lapsed lease, an owner this broker cannot forward to --
+/// keeps its own code, reason and message: calling it not found would make a
+/// retryable refusal read as a permanent one.
+pub(super) fn refusal_for_client(
     refusal: Option<ClientError>,
     tenant_id: &str,
     namespace: &str,
     stream: &str,
 ) -> ClientError {
-    refusal
-        .unwrap_or_else(|| ClientError::not_found(""))
-        .reworded(format!(
-            "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
-        ))
+    match refusal {
+        Some(refusal) if *refusal.code() != felix_wire::ErrorCode::NotFound => refusal.prefixed(
+            &format!("publish to {tenant_id}/{namespace}/{stream} refused"),
+        ),
+        refusal => refusal
+            .unwrap_or_else(|| ClientError::not_found(""))
+            .reworded(format!(
+                "stream not found: tenant={tenant_id} namespace={namespace} stream={stream}"
+            )),
+    }
 }
 
+/// The batch is already with the worker, so it may still land: overloaded, but
+/// with the outcome unknown rather than "not applied".
 pub(super) fn overloaded_after_enqueue() -> ClientError {
     ClientError::overloaded("server overloaded").with_retry(felix_wire::RetryClass::OutcomeUnknown)
 }

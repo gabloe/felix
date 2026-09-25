@@ -60,6 +60,7 @@ Field definitions:
   | `0x0080` | `BINARY_PUBLISH_ACK_OWNER` | Modifier on `0x0010`: the batch was forwarded, and the ack names the shard's owner |
   | `0x0100` | `BINARY_PUBLISH_IDEMPOTENT` | Modifier on `0x0008`: the batch carries an idempotent producer's id and sequence |
   | `0x0200` | `BINARY_PUBLISH_ACK_CODE` | Modifier on `0x0010`: a failed ack carries an error code and retry class |
+  | `0x0400` | `BINARY_PUBLISH_ACK_DETAIL` | Modifier on `0x0200`: the code is followed by the error's `detail` (reason, suggested wait) |
 
   Because these bits change how the payload is parsed, a receiver MUST reject a
   frame carrying any bit it does not recognise rather than masking it off — see
@@ -807,6 +808,19 @@ u8  retry           1 retry, 2 retry_after, 3 redirect, 4 outcome_unknown, 5 fat
 A code number the client does not know is kept as unknown and its retry class
 still applies; a retry byte it does not know is read as `fatal`.
 
+With `0x0400` (`BINARY_PUBLISH_ACK_DETAIL`) as well, set only alongside `0x0200`
+and only for a client that offered it, the error's `detail` follows the code:
+
+```
+u16 reason_len      0 when there is no reason
+u8[reason_len] reason     UTF-8, e.g. "moving" for shard_unavailable
+u64 retry_after_ms  0 when the broker suggests no wait
+```
+
+It is `publish_error.detail` in binary: without it a binary publisher is told
+`shard_unavailable` but not whether the shard is moving, fenced or still opening,
+nor how long a move suggests waiting.
+
 This is the response to a `0x0008` publish. It carries exactly the information the
 JSON `publish_ok` / `publish_error` messages do; a client that published with the
 JSON encoding still receives those JSON messages instead.
@@ -941,8 +955,9 @@ no cluster behind it has no topology to report, and advertises `0`.
 
 A client that offers `FEATURE_ERROR_CODES` in `auth` gets a typed `code` and a
 `retry` class on every `error` and `publish_error` the broker sends it, and on a
-failed binary ack if it also offered `BINARY_PUBLISH_ACK_CODE`. A client that did
-not offer the bit gets the same frames as before, with no new fields. The broker
+failed binary ack if it also offered `BINARY_PUBLISH_ACK_CODE` (and the `detail`
+there too if it offered `BINARY_PUBLISH_ACK_DETAIL`). A client that did not offer
+the bit gets the same frames as before, with no new fields. The broker
 advertises the bit too, so a client can tell "no code applies" from "this broker
 predates codes". That includes a refused `auth`: the broker reads the offer
 before answering it.
@@ -969,7 +984,7 @@ client MUST act on the class it received, not on this table.
 | --- | --- | --- | --- | --- |
 | `unauthenticated` | `fatal` | 1 | The stream has not authenticated, or the credential was refused. | A request before `auth`; a token that does not verify. |
 | `forbidden` | `fatal` | 2 | The credential does not grant this operation. | A missing permission, or a tenant other than the token's. Also a forward the owner refused on the client's credential. |
-| `not_found` | `retry_after` | 3 | The tenant, namespace, stream or cache does not exist on this broker. | An unknown stream or cache. Retryable because a broker learns streams from the control plane, and one promoted a moment ago says "not found" for a stream it is about to serve. |
+| `not_found` | `retry_after` | 3 | The tenant, namespace, stream or cache does not exist on this broker. | An unknown stream or cache. Retryable because a broker learns streams from the control plane, and one promoted a moment ago says "not found" for a stream it is about to serve. A publish refused for any other reason keeps that reason's own code and text: an unservable shard is `shard_unavailable`, never "stream not found". |
 | `invalid_request` | `fatal` | 4 | The request can never succeed as sent. | A malformed frame or batch, unknown frame flags, a missing `request_id`, a second `auth`, a bad watch filter or shard. |
 | `shard_unavailable` | `retry` | 5 | Nobody can serve the shard right now. `detail.reason` says why: `not_assigned`, `owner_unavailable`, `not_ready`, `stale`, `fenced`, `moving` or `region_not_routable`. | The shard is unassigned, its owner unreachable, still opening, or the routing view is behind; `fenced` when this broker's lease lapsed, the owner's epoch was superseded, or the shard stopped serving here between admitting a write and claiming its place in the log (nothing was written). `moving` when the shard is being moved to another broker and the move had not cut over within `FELIX_SHARD_MOVE_HOLD_MS`, or too many publishes were already waiting on moving shards; `detail.retry_after_ms` then suggests when to try again. `region_not_routable` when the leader is in a region this broker has no `FELIX_REGION_BRIDGES` bridge to, so it will not forward there; a client routing to the leader directly is not refused. An older client sees the reason as text and treats the error like any other `shard_unavailable`. |
 | `not_leader` | `redirect` | 6 | Another broker owns the shard. | Only where the `not_leader` message cannot be sent: to a client without `FEATURE_REDIRECT`, or a publish this broker cannot forward. |
@@ -991,8 +1006,9 @@ shard went and then sends it there, forwarded if that is another broker. A
 client sees a slower acknowledgement, not an error. Only a move that takes
 longer than `FELIX_SHARD_MOVE_HOLD_MS` (2 s by default), or a burst beyond
 `FELIX_SHARD_MOVE_HOLD_MAX` held publishes, is answered with
-`shard_unavailable` / `moving`. A client without `FEATURE_ERROR_CODES` gets the
-same `publish_error` text it always did for a shard it cannot reach. Cache
+`shard_unavailable` / `moving`. A client without `FEATURE_ERROR_CODES` gets
+only the `publish_error` text, which names the stream and the reason, such as
+`publish to t1/ns/orders refused: shard is moving to another broker`. Cache
 and counter operations are held and forwarded the same way, under the same
 bounds. A consumer-group operation is held too, and once the move cuts over is
 answered with `NotLeader` naming the new owner (an error with code

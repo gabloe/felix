@@ -249,3 +249,39 @@ async fn a_binary_ack_carries_its_code_to_the_caller() -> Result<()> {
     server_task.await.context("server task join")??;
     Ok(())
 }
+
+/// A binary publisher learns why a shard refused it and how long to wait,
+/// which is what `ClusterClient` backs off on.
+#[tokio::test]
+async fn a_binary_ack_carries_its_detail_to_the_caller() -> Result<()> {
+    let bytes = felix_wire::binary::encode_publish_ack_bytes_detailed(
+        10,
+        Some("publish to t1/ns/orders refused: shard is moving to another broker"),
+        Some((
+            &felix_wire::ErrorCode::ShardUnavailable,
+            felix_wire::RetryClass::Retry,
+        )),
+        Some(&felix_wire::ErrorDetail {
+            reason: Some("moving".to_string()),
+            retry_after_ms: Some(100),
+        }),
+        None,
+    )?;
+    let (mut recv, shutdown_tx, server_task) = open_ack_stream_bytes(Some(bytes.to_vec())).await?;
+    let mut scratch = BytesMut::with_capacity(64 * 1024);
+    let err = maybe_wait_for_ack(&mut recv, AckMode::PerMessage, Some(10), &mut scratch)
+        .await
+        .expect_err("refused");
+    let broker = err
+        .downcast_ref::<crate::BrokerError>()
+        .expect("typed refusal");
+    assert_eq!(broker.code, felix_wire::ErrorCode::ShardUnavailable);
+    assert_eq!(broker.reason(), Some("moving"));
+    assert_eq!(
+        broker.detail.as_ref().and_then(|d| d.retry_after_ms),
+        Some(100)
+    );
+    let _ = shutdown_tx.send(());
+    server_task.await.context("server task join")??;
+    Ok(())
+}

@@ -836,3 +836,99 @@ async fn handle_publish_batch_message_ack_waiter_queue_closed() {
         _ => panic!("unexpected outgoing"),
     }
 }
+
+/// Run one acked batch for `t1/ns/stream` through a broker whose shard is
+/// owned here but not yet opened, and return what it answered.
+async fn refused_batch(encoding: AckEncoding) -> Outgoing {
+    let broker = broker_with_stream().await;
+    let (mut publish_ctx, _rx, _tx) = make_publish_context(1);
+    publish_ctx.ingress = Some(Arc::new(ingress_for("broker-a", false)));
+    let mut cache = HashMap::new();
+    let mut key = String::new();
+    let (out_tx, mut out_rx) = mpsc::channel(1);
+    let out_depth = Arc::new(AtomicUsize::new(0));
+    let (throttle_tx, _throttle_rx) = watch::channel(false);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+    let (cancel_tx, _cancel_rx) = watch::channel(false);
+    let ack_waiters = Arc::new(Semaphore::new(1));
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
+
+    handle_publish_batch_message(
+        0,
+        &broker,
+        &publish_ctx,
+        &mut cache,
+        &mut key,
+        false,
+        false,
+        encoding,
+        &out_tx,
+        &out_depth,
+        &throttle_tx,
+        &ack_timeout_state,
+        &cancel_tx,
+        &ack_waiters,
+        &ack_waiter_tx,
+        "t1".to_string(),
+        "ns".to_string(),
+        "stream".to_string(),
+        vec![b"payload".to_vec()],
+        None,
+        Some(11),
+        Some(felix_wire::AckMode::PerBatch),
+        false,
+        String::new(),
+        None,
+    )
+    .await
+    .expect("refused batch");
+    out_rx.recv().await.expect("outgoing")
+}
+
+/// The stream exists; the shard just is not servable yet. Saying "stream not
+/// found" makes a retryable condition look permanent.
+#[tokio::test]
+async fn an_unservable_shard_is_shard_unavailable_not_not_found() {
+    let Outgoing::Message(Message::PublishError {
+        request_id,
+        message,
+        code,
+        retry,
+        detail,
+    }) = refused_batch(AckEncoding::Json).await
+    else {
+        panic!("expected publish_error");
+    };
+    assert_eq!(request_id, 11);
+    assert_eq!(code, Some(felix_wire::ErrorCode::ShardUnavailable));
+    assert_eq!(retry, Some(felix_wire::RetryClass::Retry));
+    assert_eq!(detail.and_then(|d| d.reason).as_deref(), Some("not_ready"));
+    assert!(!message.contains("not found"), "{message}");
+    assert!(message.contains("t1/ns/stream"), "{message}");
+}
+
+/// A binary ack carries the same code and the reason behind it.
+#[tokio::test]
+async fn a_binary_ack_for_an_unservable_shard_carries_its_reason() {
+    let Outgoing::PublishAck {
+        request_id,
+        error,
+        code,
+        detail,
+        ..
+    } = refused_batch(AckEncoding::Binary).await
+    else {
+        panic!("expected a binary ack");
+    };
+    assert_eq!(request_id, 11);
+    let error = error.expect("a failed ack");
+    assert!(!error.contains("not found"), "{error}");
+    assert_eq!(
+        code,
+        Some((
+            felix_wire::ErrorCode::ShardUnavailable,
+            felix_wire::RetryClass::Retry
+        ))
+    );
+    assert_eq!(detail.and_then(|d| d.reason).as_deref(), Some("not_ready"));
+}

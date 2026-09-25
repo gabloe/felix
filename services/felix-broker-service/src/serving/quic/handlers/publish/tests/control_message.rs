@@ -714,3 +714,62 @@ async fn handle_publish_message_ack_waiter_queue_closed() {
         _ => panic!("unexpected outgoing"),
     }
 }
+
+/// The single-publish path answers an unservable shard the same way the batch
+/// path does: retryable, with its reason, and not as a missing stream.
+#[tokio::test]
+async fn handle_publish_message_unservable_shard_is_shard_unavailable() {
+    let broker = broker_with_stream().await;
+    let (mut publish_ctx, _rx, _tx) = make_publish_context(1);
+    publish_ctx.ingress = Some(Arc::new(ingress_for("broker-a", false)));
+    let mut cache = HashMap::new();
+    let mut key = String::new();
+    let (out_tx, mut out_rx) = mpsc::channel(1);
+    let out_depth = Arc::new(AtomicUsize::new(0));
+    let (throttle_tx, _throttle_rx) = watch::channel(false);
+    let ack_timeout_state = Arc::new(Mutex::new(AckTimeoutState::new(Instant::now())));
+    let (cancel_tx, _cancel_rx) = watch::channel(false);
+    let ack_waiters = Arc::new(Semaphore::new(1));
+    let (ack_waiter_tx, _ack_waiter_rx) = mpsc::channel(1);
+    handle_publish_message(
+        &broker,
+        &publish_ctx,
+        &mut cache,
+        &mut key,
+        false,
+        false,
+        &out_tx,
+        &out_depth,
+        &throttle_tx,
+        &ack_timeout_state,
+        &cancel_tx,
+        &ack_waiters,
+        &ack_waiter_tx,
+        Duration::from_millis(10),
+        "t1".to_string(),
+        "ns".to_string(),
+        "stream".to_string(),
+        vec![1, 2, 3],
+        None,
+        Some(42),
+        Some(felix_wire::AckMode::PerMessage),
+        false,
+        String::new(),
+    )
+    .await
+    .expect("refused publish");
+    let Outgoing::Message(Message::PublishError {
+        message,
+        code,
+        retry,
+        detail,
+        ..
+    }) = out_rx.recv().await.expect("outgoing")
+    else {
+        panic!("expected publish_error");
+    };
+    assert_eq!(code, Some(felix_wire::ErrorCode::ShardUnavailable));
+    assert_eq!(retry, Some(felix_wire::RetryClass::Retry));
+    assert_eq!(detail.and_then(|d| d.reason).as_deref(), Some("not_ready"));
+    assert!(!message.contains("not found"), "{message}");
+}

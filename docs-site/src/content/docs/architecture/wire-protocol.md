@@ -116,7 +116,9 @@ Bit field for optional features:
 | 6   | 0x0040 | Batch carries a routing key prefix (modifier on bit 0) |
 | 7   | 0x0080 | Batch was forwarded; the ack names the shard's owner (modifier on bit 4) |
 | 8   | 0x0100 | Batch carries an idempotent producer's id and sequence (modifier on bit 3) |
-| 9-15| -      | Reserved (must be 0) |
+| 9   | 0x0200 | A failed ack carries an error code and retry class (modifier on bit 4) |
+| 10  | 0x0400 | A failed ack's code is followed by its `detail`: reason and suggested wait (modifier on bit 9) |
+| 11-15| -     | Reserved (must be 0) |
 
 Receivers must **reject** a frame carrying a flag bit they do not recognise, rather
 than ignoring the bit. These bits select how the payload is parsed, so ignoring an
@@ -657,9 +659,19 @@ The response to an acked binary publish, sent when `flags & 0x0010 != 0`:
  </g>
 </svg>
 
-It carries exactly the information the JSON `publish_ok` / `publish_error` messages
-do. A client that published with the JSON encoding still receives those JSON
-messages instead — the reply always matches the encoding of the request.
+A failed ack can carry more, each piece behind its own flag bit and only for a
+client that offered that bit:
+
+- `0x0200`: a `u16` error code and a `u8` retry class after the message.
+- `0x0400`, only with `0x0200`: the error's `detail` after the code, as a `u16`
+  reason length, the reason, and a `u64` suggested wait in milliseconds (`0` for
+  none). This is how a binary publisher learns that a `shard_unavailable` shard is
+  `moving` rather than `fenced`, and how long to wait.
+
+With both, it carries exactly the information the JSON `publish_ok` /
+`publish_error` messages do. A client that published with the JSON encoding still
+receives those JSON messages instead — the reply always matches the encoding of the
+request.
 
 ## Capability negotiation
 

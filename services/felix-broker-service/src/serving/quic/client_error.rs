@@ -128,6 +128,10 @@ impl ClientError {
         self.retry
     }
 
+    pub(crate) fn detail(&self) -> Option<&ErrorDetail> {
+        self.detail.as_ref()
+    }
+
     pub(crate) fn message(&self) -> &str {
         &self.message
     }
@@ -290,6 +294,7 @@ impl From<Fenced> for ClientError {
 pub(crate) struct ErrorCodeSupport {
     json: AtomicBool,
     binary_ack: AtomicBool,
+    binary_ack_detail: AtomicBool,
 }
 
 impl ErrorCodeSupport {
@@ -301,6 +306,10 @@ impl ErrorCodeSupport {
         );
         self.binary_ack.store(
             felix_wire::supports(peer_flags, felix_wire::FLAG_BINARY_PUBLISH_ACK_CODE),
+            Ordering::Relaxed,
+        );
+        self.binary_ack_detail.store(
+            felix_wire::supports(peer_flags, felix_wire::FLAG_BINARY_PUBLISH_ACK_DETAIL),
             Ordering::Relaxed,
         );
     }
@@ -317,6 +326,11 @@ impl ErrorCodeSupport {
     /// Whether a failed binary ack may carry its code.
     pub(crate) fn binary_ack(&self) -> bool {
         self.binary_ack.load(Ordering::Relaxed)
+    }
+
+    /// Whether a failed binary ack may carry its detail as well as its code.
+    pub(crate) fn binary_ack_detail(&self) -> bool {
+        self.binary_ack_detail.load(Ordering::Relaxed)
     }
 }
 

@@ -52,9 +52,9 @@ pub(crate) struct Common {
 /// dies on, and *counts* rather than hides — a nonzero `publish_retries` in the
 /// JSON is data about the cluster's readiness, not noise to bury:
 ///
-/// - **routing convergence** — a non-owner ingress answers "stream not found"
-///   while its control-plane routing snapshot is unsettled, so a forwarded
-///   publish fails for a window;
+/// - **routing convergence** — while the routing snapshot is unsettled a
+///   broker answers `shard_unavailable` (or "stream not found", before the
+///   stream reaches it), so a publish fails for a window;
 /// - **client backpressure** — the publisher's bounded queue is momentarily
 ///   full because acks have not drained, which is the client telling the
 ///   caller to slow down, not a failure to deliver.
@@ -62,6 +62,12 @@ pub(crate) struct Common {
 /// Neither is a completed round trip, so the retry is excluded from the
 /// latency sample the way a warmup message is.
 fn is_retriable_transient(err: &anyhow::Error) -> bool {
+    if err
+        .downcast_ref::<felix_client::BrokerError>()
+        .is_some_and(|broker| broker.code == felix_wire::ErrorCode::ShardUnavailable)
+    {
+        return true;
+    }
     let text = format!("{err:#}");
     text.contains("stream not found")
         || text.contains("cannot be subscribed")
