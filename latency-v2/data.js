@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790317354149,
+  "lastUpdate": 1790318002000,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -20064,6 +20064,72 @@ window.BENCHMARK_DATA = {
             "range": "1994.85",
             "unit": "us",
             "extra": "trials: 5\nmedian: 304.00\nmean: 1182.60\nstdev: 1994.85\ncv: 168.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ef15c995a86be351ed6013923bbc8f269655e4a3",
+          "message": "fix(replication): ship to a restarted follower at its new address (#703)\n\nA follower's cursor kept the address it was created with for the whole\ngeneration. A broker that restarts re-registers on new ports while its\nleaders' generations carry on, so the leader kept dialling the dead port\nuntil the shard's generation next changed.\n\nThis is what made a_restarted_broker_takes_shards_again time out: the\nrebalance staged a shard onto the restarted broker at a new generation,\nthe leader's catalog still held the old address (a wake does not refresh\nit for a node it already knows), and the cursor created in that pass\npinned it. The destination never caught up and the move sat at `staged`\nuntil the 30-minute move timeout.\n\nreconcile_followers now takes each existing cursor's address from the\nroute, so the follower is reached within one catalog refresh.\n\nSpec-Unaffected: only the network address a leader dials a follower at is refreshed; which followers exist, what they hold, reports, marks and promotion are unchanged.",
+          "timestamp": "2026-09-24T23:30:12-07:00",
+          "tree_id": "0d2576dd6348e0f90fd1504102d0d7d0d2d90593",
+          "url": "https://github.com/gabloe/felix/commit/ef15c995a86be351ed6013923bbc8f269655e4a3"
+        },
+        "date": 1790317999314,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 168,
+            "range": "5.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 168.00\nmean: 165.60\nstdev: 5.27\ncv: 3.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 214,
+            "range": "9.31",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 214.00\nmean: 215.80\nstdev: 9.31\ncv: 4.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 270,
+            "range": "146.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 270.00\nmean: 362.60\nstdev: 146.76\ncv: 40.48%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 205,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 204.60\nstdev: 1.14\ncv: 0.56%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 411,
+            "range": "8.29",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 411.00\nmean: 411.20\nstdev: 8.29\ncv: 2.02%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 540,
+            "range": "121.72",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 540.00\nmean: 577.80\nstdev: 121.72\ncv: 21.07%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
