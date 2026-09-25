@@ -53,7 +53,17 @@ struct Ring {
 /// kernel could hand the number to an unrelated file.
 struct Submission {
     file: Arc<File>,
+    op: Op,
     reply: oneshot::Sender<io::Result<()>>,
+}
+
+#[derive(Clone, Copy)]
+enum Op {
+    Fsync,
+    /// Completes when the descriptor becomes readable. Tests use it on a pipe
+    /// to hold an operation in the ring for as long as they like.
+    #[cfg(test)]
+    PollReadable,
 }
 
 type Waiting = HashMap<u64, (Arc<File>, oneshot::Sender<io::Result<()>>)>;
@@ -77,11 +87,21 @@ pub(crate) fn enabled() -> bool {
 /// `None` means the ring is unavailable and the caller should use its own
 /// fallback.
 pub(crate) async fn fsync(file: Arc<File>) -> Option<io::Result<()>> {
+    submit(file, Op::Fsync).await
+}
+
+/// Wait through the ring for `file` to become readable.
+#[cfg(test)]
+async fn poll_readable(file: Arc<File>) -> Option<io::Result<()>> {
+    submit(file, Op::PollReadable).await
+}
+
+async fn submit(file: Arc<File>, op: Op) -> Option<io::Result<()>> {
     let ring = ring()?;
     let (reply, wait) = oneshot::channel();
     // A send failure means the service thread is gone, which is the same
     // situation as no ring at all.
-    if ring.tx.send(Submission { file, reply }).is_err() {
+    if ring.tx.send(Submission { file, op, reply }).is_err() {
         return None;
     }
     match wait.await {
@@ -171,10 +191,15 @@ fn push(uring: &mut IoUring, waiting: &mut Waiting, submission: Submission) -> b
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     // `DATASYNC`, matching `io::sync_data` on the blocking path: an append
     // changes data and size, not the metadata a full fsync also writes.
-    let entry = opcode::Fsync::new(types::Fd(submission.file.as_raw_fd()))
-        .flags(types::FsyncFlags::DATASYNC)
-        .build()
-        .user_data(id);
+    let fd = types::Fd(submission.file.as_raw_fd());
+    let entry = match submission.op {
+        Op::Fsync => opcode::Fsync::new(fd)
+            .flags(types::FsyncFlags::DATASYNC)
+            .build(),
+        #[cfg(test)]
+        Op::PollReadable => opcode::PollAdd::new(fd, libc::POLLIN as u32).build(),
+    }
+    .user_data(id);
     // Safety: `waiting` keeps the `File` alive until its completion is
     // collected, so the descriptor stays open for the whole operation.
     let pushed = unsafe { uring.submission().push(&entry).is_ok() };
@@ -187,3 +212,6 @@ fn push(uring: &mut IoUring, waiting: &mut Waiting, submission: Submission) -> b
     }
     pushed
 }
+
+#[cfg(test)]
+mod tests;
