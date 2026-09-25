@@ -127,8 +127,8 @@ You do not have to rewrite every client to try it. Each broker can run a Kafka
 listener, and a durable stream then looks like a Kafka topic: partitions are
 shards and offsets are Felix's own. Existing Kafka producers write to it,
 idempotent ones included, and a consumer that assigns its own partitions reads
-from it, so `kcat`, librdkafka programs and Java clients can be pointed at Felix
-one at a time while the rest of a system moves over. What it does not speak is
+from it, so `kcat` and librdkafka programs can be pointed at Felix one at a
+time while the rest of a system moves over. (The Java client is not tested yet.) What it does not speak is
 anything built on consumer groups or transactions; that limit is spelled out
 under [When not to use Felix](#when-not-to-use-felix), and the details are in
 [Kafka compatibility](/felix/features/kafka/).

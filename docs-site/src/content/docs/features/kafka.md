@@ -4,8 +4,9 @@ description: "Read durable Felix streams with Kafka consumers that assign their 
 ---
 
 A Felix broker can serve Kafka clients. Turn on the Kafka listener and a durable
-stream shows up as a Kafka topic. `kcat`, a librdkafka program or a Java client
-can list it, look up offsets, read records from it and write records to it. The
+stream shows up as a Kafka topic. `kcat` or any librdkafka-based client can
+list it, look up offsets, read records from it and write records to it. The Java
+client speaks the same protocol but has not been tested against Felix yet. The
 offsets are the same ones a Felix client sees, and a Kafka producer's records go
 through the same publish path as a Felix client's.
 
