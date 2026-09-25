@@ -89,14 +89,47 @@ async fn an_abandoned_call_still_runs_its_work() {
 }
 
 #[tokio::test]
-async fn a_panicking_job_is_reported_and_the_next_one_gets_a_new_thread() {
+async fn a_panicking_job_is_reported_and_the_thread_keeps_serving() {
     let flusher = Flusher::new("test-flush");
     let err = flusher
         .run(|| panic!("injected"))
         .await
         .expect_err("a panic is a failed flush");
-    assert!(err.to_string().contains("stopped"), "{err}");
-    flusher.run(|| Ok(())).await.expect("a fresh thread");
+    assert!(err.to_string().contains("panicked"), "{err}");
+    flusher.run(|| Ok(())).await.expect("the next flush");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flush_queued_behind_a_panicking_one_still_runs() {
+    let flusher = Arc::new(Flusher::new("test-flush"));
+    let (started_tx, started) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    let first = {
+        let flusher = Arc::clone(&flusher);
+        tokio::spawn(async move {
+            flusher
+                .run(move || {
+                    started_tx.send(()).expect("started");
+                    release_rx.recv().expect("release");
+                    panic!("injected")
+                })
+                .await
+        })
+    };
+    started.recv().expect("the first flush started");
+    // Queued on the same thread while the first is still running.
+    let second = {
+        let flusher = Arc::clone(&flusher);
+        tokio::spawn(async move { flusher.run(|| Ok(())).await })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    release.send(()).expect("release");
+
+    assert!(first.await.expect("task").is_err(), "the panic is reported");
+    second
+        .await
+        .expect("task")
+        .expect("a healthy flush queued behind a panic is not failed with it");
 }
 
 #[test]
