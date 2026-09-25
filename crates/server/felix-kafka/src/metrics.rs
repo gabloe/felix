@@ -44,6 +44,37 @@ pub(crate) fn long_poll(outcome: &'static str, waited: std::time::Duration) {
     metrics::histogram!("felix_kafka_fetch_wait_seconds").record(waited.as_secs_f64());
 }
 
+/// Records a produce wrote, and their payload bytes. A duplicate is not
+/// counted here: nothing was written.
+pub(crate) fn produced(records: u64, bytes: u64) {
+    metrics::counter!("felix_kafka_produce_records_total").increment(records);
+    metrics::counter!("felix_kafka_produce_bytes_total").increment(bytes);
+}
+
+/// Records of an idempotent batch that was already in the log, answered
+/// without writing them again.
+pub(crate) fn duplicate(records: u64) {
+    metrics::counter!("felix_kafka_produce_duplicate_records_total").increment(records);
+}
+
+/// Record keys and headers dropped because Felix records cannot carry them.
+pub(crate) fn dropped(keys: u64, headers: u64) {
+    if keys > 0 {
+        metrics::counter!("felix_kafka_produce_dropped_total", "field" => "key").increment(keys);
+    }
+    if headers > 0 {
+        metrics::counter!("felix_kafka_produce_dropped_total", "field" => "headers")
+            .increment(headers);
+    }
+}
+
+/// A partition of a produce that was refused, by Kafka error. Counted per
+/// partition: `felix_kafka_requests_total` keeps only a request's first error.
+pub(crate) fn produce_refused(error: i16) {
+    metrics::counter!("felix_kafka_produce_errors_total", "error" => error_name(error))
+        .increment(1);
+}
+
 fn api_name(api: ApiKey) -> &'static str {
     match api {
         ApiKey::ApiVersions => "ApiVersions",
@@ -60,6 +91,11 @@ fn api_name(api: ApiKey) -> &'static str {
         ApiKey::LeaveGroup => "LeaveGroup",
         ApiKey::OffsetCommit => "OffsetCommit",
         ApiKey::OffsetFetch => "OffsetFetch",
+        ApiKey::InitProducerId => "InitProducerId",
+        ApiKey::AddPartitionsToTxn => "AddPartitionsToTxn",
+        ApiKey::AddOffsetsToTxn => "AddOffsetsToTxn",
+        ApiKey::EndTxn => "EndTxn",
+        ApiKey::TxnOffsetCommit => "TxnOffsetCommit",
         _ => "other",
     }
 }
@@ -82,6 +118,17 @@ fn error_name(code: i16) -> &'static str {
         Some(E::UnknownTopicId) => "unknown_topic_id",
         Some(E::InvalidRequest) => "invalid_request",
         Some(E::PolicyViolation) => "policy_violation",
+        Some(E::CorruptMessage) => "corrupt_message",
+        Some(E::MessageTooLarge) => "message_too_large",
+        Some(E::RequestTimedOut) => "request_timed_out",
+        Some(E::InvalidRecord) => "invalid_record",
+        Some(E::UnsupportedForMessageFormat) => "unsupported_for_message_format",
+        Some(E::OutOfOrderSequenceNumber) => "out_of_order_sequence_number",
+        Some(E::DuplicateSequenceNumber) => "duplicate_sequence_number",
+        Some(E::UnknownProducerId) => "unknown_producer_id",
+        Some(E::TransactionalIdAuthorizationFailed) => "transactional_id_authorization_failed",
+        Some(E::ClusterAuthorizationFailed) => "cluster_authorization_failed",
+        Some(E::UnknownServerError) => "unknown_server_error",
         Some(_) => "other",
     }
 }

@@ -1,8 +1,11 @@
-//! Felix log records as a Kafka v2 record batch.
+//! Felix log records as a Kafka v2 record batch, and a producer's batches as
+//! Felix payloads (`decode`).
 //!
 //! Offsets are not translated: a Felix shard's offsets start at zero and are
 //! contiguous, which is Kafka's model already. Timestamps are the broker's
 //! append time in milliseconds. Felix records have no key and no headers.
+
+pub(crate) mod decode;
 
 use bytes::{Bytes, BytesMut};
 use felix_storage::log::LogRecord;

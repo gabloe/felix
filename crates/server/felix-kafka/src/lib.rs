@@ -21,5 +21,7 @@ mod records;
 mod service;
 mod topic;
 
-pub use cluster::{Cluster, Endpoint, Placement, Principal, ShardRef, kafka_node_id};
+pub use cluster::{
+    Cluster, Endpoint, Placement, Principal, ShardRef, WriteError, WritePermit, kafka_node_id,
+};
 pub use service::{KafkaService, Settings};

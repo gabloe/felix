@@ -173,8 +173,12 @@ where
         &identity,
         &broker,
         &auth,
-        &ingress_router,
-        &client_endpoints,
+        listeners::KafkaClusterView {
+            ingress: &ingress_router,
+            client_endpoints: &client_endpoints,
+            lease: &lease,
+            quorum_marks: &quorum_marks,
+        },
     )
     .await?;
     let mut accept_tasks = listeners::spawn_accept_loops(

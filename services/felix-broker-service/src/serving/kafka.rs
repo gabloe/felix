@@ -11,8 +11,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use felix_authz::AuthzError;
-use felix_broker::Broker;
-use felix_kafka::{Cluster, Endpoint, KafkaService, Placement, Principal, Settings, ShardRef};
+use felix_broker::{Broker, PublishOutcome, StreamHandle};
+use felix_kafka::{
+    Cluster, Endpoint, KafkaService, Placement, Principal, Settings, ShardRef, WriteError,
+    WritePermit,
+};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 use tokio_rustls::TlsAcceptor;
@@ -20,9 +23,12 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::cluster::client_endpoints::ClientEndpoints;
+use crate::cluster::lease::LeaseState;
 use crate::config::KafkaListenerConfig;
+use crate::replication::quorum::{QuorumError, QuorumMarks};
 use crate::serving::auth::BrokerAuth;
-use crate::shards::routing::{Dispatch, IngressRouter, Reason, dispatch};
+use crate::shards::lifecycle::fence;
+use crate::shards::routing::{Dispatch, IngressRouter, Reason, dispatch, dispatch_write};
 use crate::shards::{ShardKey, ShardKind};
 
 /// A TLS handshake that has not finished by now is abandoned, so a client
@@ -38,6 +44,9 @@ pub struct BrokerCluster {
     ingress: Option<Arc<IngressRouter>>,
     endpoints: Option<Arc<ClientEndpoints>>,
     local: Endpoint,
+    lease: Option<Arc<LeaseState>>,
+    marks: Option<Arc<QuorumMarks>>,
+    quorum_timeout: Duration,
 }
 
 impl BrokerCluster {
@@ -57,7 +66,35 @@ impl BrokerCluster {
             ingress,
             endpoints,
             local,
+            lease: None,
+            marks: None,
+            quorum_timeout: Duration::from_secs(5),
         })
+    }
+
+    /// What a write checks and waits on, as the QUIC publish path does: the
+    /// lease that lets this broker lead, and the quorum marks a `Quorum`
+    /// stream's write waits for. Both `None` outside a cluster.
+    pub fn with_writes(
+        mut self,
+        lease: Option<Arc<LeaseState>>,
+        marks: Option<Arc<QuorumMarks>>,
+        quorum_timeout: Duration,
+    ) -> Self {
+        self.lease = lease;
+        self.marks = marks;
+        self.quorum_timeout = quorum_timeout;
+        self
+    }
+
+    fn key(shard: &ShardRef<'_>) -> ShardKey {
+        ShardKey {
+            tenant_id: shard.tenant_id.to_string(),
+            namespace: shard.namespace.to_string(),
+            stream: shard.stream.to_string(),
+            shard: shard.shard,
+            kind: ShardKind::Stream,
+        }
     }
 }
 
@@ -105,13 +142,7 @@ impl Cluster for BrokerCluster {
     }
 
     fn placement(&self, shard: &ShardRef<'_>) -> Placement {
-        let key = ShardKey {
-            tenant_id: shard.tenant_id.to_string(),
-            namespace: shard.namespace.to_string(),
-            stream: shard.stream.to_string(),
-            shard: shard.shard,
-            kind: ShardKind::Stream,
-        };
+        let key = Self::key(shard);
         let route = self
             .ingress
             .as_deref()
@@ -143,6 +174,60 @@ impl Cluster for BrokerCluster {
             },
             Dispatch::Unavailable(_) => Placement::Unavailable,
         }
+    }
+
+    async fn admit_write(&self, shard: &ShardRef<'_>) -> Result<WritePermit, WriteError> {
+        // The same gates as a QUIC publish (`route.rs`, then the worker's
+        // commit fence): a valid lease, the shard dispatched here, and a
+        // place in its fence so a move waits for this write. Checked right
+        // before the write, so the authoritative lease check is the only one.
+        if self
+            .lease
+            .as_ref()
+            .is_some_and(|lease| !lease.is_valid_now())
+        {
+            crate::cluster::lease::metrics::record_refusal(
+                crate::cluster::lease::metrics::BOUNDARY_COMMIT,
+            );
+            return Err(WriteError::NotLeader);
+        }
+        let key = Self::key(shard);
+        let ingress = self.ingress.as_deref();
+        match dispatch_write(ingress, &key).await {
+            (Dispatch::Local { generation }, held) => {
+                let mut held = held;
+                match fence::enter_or_keep(&mut held, ingress, Some(&key), generation) {
+                    Ok(Some(guard)) => Ok(WritePermit::holding(guard)),
+                    Ok(None) => Ok(WritePermit::default()),
+                    Err(_) => Err(WriteError::NotLeader),
+                }
+            }
+            // A Kafka client goes to the leader itself, so nothing is
+            // forwarded: it is sent back to Metadata.
+            _ => Err(WriteError::NotLeader),
+        }
+    }
+
+    async fn await_consistency(
+        &self,
+        shard: &ShardRef<'_>,
+        handle: &StreamHandle,
+        outcome: &PublishOutcome,
+    ) -> Result<(), WriteError> {
+        let key = self.ingress.as_ref().map(|_| Self::key(shard));
+        crate::replication::quorum::await_quorum(
+            handle,
+            key.as_ref(),
+            outcome,
+            self.marks.as_deref(),
+            self.ingress.as_deref(),
+            self.quorum_timeout,
+        )
+        .await
+        .map_err(|err| match err.downcast_ref::<QuorumError>() {
+            Some(QuorumError::TimedOut { .. }) => WriteError::QuorumTimeout,
+            _ => WriteError::LeadershipLost,
+        })
     }
 }
 

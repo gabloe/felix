@@ -27,7 +27,7 @@ use felix_broker_service::config::KafkaListenerConfig;
 use felix_broker_service::serving::auth::{BrokerAuth, ControlPlaneKeyStore};
 use felix_broker_service::serving::kafka::{BrokerCluster, KafkaListener, tls_config};
 use felix_storage::EphemeralCache;
-use felix_storage::log::{FsyncMode, LogConfig};
+use felix_storage::log::{FsyncMode, LogConfig, LogRecord, RecordMark};
 use jsonwebtoken::Algorithm;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
 use tempfile::TempDir;
@@ -72,8 +72,28 @@ impl Felix {
             .expect("publish");
     }
 
+    /// Every record of one shard, from the broker's log.
+    async fn log_records(&self, shard: u32) -> Vec<LogRecord> {
+        let handle = self
+            .broker
+            .resolve_stream_handle(TENANT, "orders", "created", shard)
+            .await
+            .expect("handle");
+        handle
+            .log()
+            .expect("durable")
+            .read_from(0, usize::MAX)
+            .await
+            .expect("read")
+    }
+
     /// kcat against the SASL/PLAIN listener, with this tenant's token.
     async fn kcat(&self, args: &[&str]) -> Output {
+        self.kcat_with_input(args, "").await
+    }
+
+    /// [`Self::kcat`], with `input` on kcat's stdin: what `-P` produces.
+    async fn kcat_with_input(&self, args: &[&str], input: &str) -> Output {
         let mut all = vec![
             "-b",
             self.plain.as_str(),
@@ -87,7 +107,7 @@ impl Felix {
         let password = format!("sasl.password={}", self.token);
         all.extend(["-X", password.as_str()]);
         all.extend_from_slice(args);
-        kcat(&all, None).await
+        kcat_fed(&all, None, input).await
     }
 }
 
@@ -113,6 +133,12 @@ async fn kcat_available() -> bool {
 }
 
 async fn kcat(args: &[&str], certs: Option<&Path>) -> Output {
+    kcat_fed(args, certs, "").await
+}
+
+/// Run kcat with `input` on its stdin, then closed.
+async fn kcat_fed(args: &[&str], certs: Option<&Path>, input: &str) -> Output {
+    use tokio::io::AsyncWriteExt;
     let mut command = Command::new("docker");
     command.args(["run", "--rm", "-i"]);
     if cfg!(target_os = "linux") {
@@ -121,8 +147,18 @@ async fn kcat(args: &[&str], certs: Option<&Path>) -> Output {
     if let Some(certs) = certs {
         command.args(["-v", &format!("{}:/certs:ro", certs.display())]);
     }
-    command.arg(KCAT_IMAGE).args(args).kill_on_drop(true);
-    tokio::time::timeout(KCAT_BOUND, command.output())
+    command
+        .arg(KCAT_IMAGE)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().expect("run docker");
+    let mut stdin = child.stdin.take().expect("stdin");
+    stdin.write_all(input.as_bytes()).await.expect("write");
+    drop(stdin);
+    tokio::time::timeout(KCAT_BOUND, child.wait_with_output())
         .await
         // No arguments in the message: they carry the SASL password.
         .unwrap_or_else(|_| panic!("kcat did not finish within {KCAT_BOUND:?}"))
@@ -230,7 +266,7 @@ async fn start() -> Felix {
 }
 
 /// A broker auth that knows one tenant key, and a token signed by it that may
-/// read the tenant's streams.
+/// read and write the tenant's streams.
 fn auth_and_token() -> (Arc<BrokerAuth>, String) {
     let private_key = [9u8; 32];
     let public_key = SigningKey::from_bytes(&private_key)
@@ -268,7 +304,10 @@ fn auth_and_token() -> (Arc<BrokerAuth>, String) {
         .mint(
             &TenantId::new(TENANT),
             "p:kafka-test",
-            vec!["stream.subscribe:stream:t1/orders/*".to_string()],
+            vec![
+                "stream.subscribe:stream:t1/orders/*".to_string(),
+                "stream.publish:stream:t1/orders/*".to_string(),
+            ],
         )
         .expect("mint");
     (Arc::new(BrokerAuth::with_key_store(key_store)), token)
@@ -544,45 +583,202 @@ async fn kcat_joining_a_group_exits_with_a_readable_error() {
     assert!(started.elapsed() < KCAT_BOUND);
 }
 
+/// What kcat -P needs beyond the SASL settings: the topic, and one partition
+/// so offsets are easy to predict.
+fn produce_args<'a>(partition: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = vec!["-P", "-t", TOPIC, "-p", partition];
+    args.extend_from_slice(extra);
+    args
+}
+
+/// `offset:value` for every record in one shard, read with Felix's own log.
+async fn logged(felix: &Felix, shard: u32) -> Vec<String> {
+    felix
+        .log_records(shard)
+        .await
+        .into_iter()
+        .map(|record| {
+            format!(
+                "{}:{}",
+                record.offset,
+                String::from_utf8_lossy(&record.payload)
+            )
+        })
+        .collect()
+}
+
+async fn consume(felix: &Felix, partition: &str) -> Vec<String> {
+    let output = felix
+        .kcat(&[
+            "-C",
+            "-t",
+            TOPIC,
+            "-p",
+            partition,
+            "-o",
+            "beginning",
+            "-e",
+            "-q",
+            "-f",
+            "%o:%s\\n",
+        ])
+        .await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    records(&output)
+}
+
+/// **What kcat produces, Felix and kcat read back at the same offsets.** A
+/// record already published through Felix keeps offset 0; the produced ones
+/// follow it.
 #[tokio::test]
-async fn kcat_producing_is_refused_with_a_reason() {
+async fn kcat_produces_and_felix_and_kcat_read_the_same_records() {
     if !kcat_available().await {
         return;
     }
     let felix = start().await;
-    let mut command = Command::new("docker");
-    command.args(["run", "--rm", "-i"]);
-    if cfg!(target_os = "linux") {
-        command.args(["--network", "host"]);
+    felix.publish(0, &["felix"]).await;
+    let output = felix
+        .kcat_with_input(&produce_args("0", &[]), "a\nb\nc\n")
+        .await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let expected = ["0:felix", "1:a", "2:b", "3:c"];
+    assert_eq!(logged(&felix, 0).await, expected);
+    assert_eq!(consume(&felix, "0").await, expected);
+}
+
+#[tokio::test]
+async fn kcat_produces_with_every_compression_codec() {
+    if !kcat_available().await {
+        return;
     }
-    let output = {
-        use tokio::io::AsyncWriteExt;
-        let mut child = command
-            .args([
-                KCAT_IMAGE,
-                "-b",
-                felix.anonymous.as_str(),
-                "-P",
-                "-t",
-                TOPIC,
-                "-p",
-                "0",
-            ])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("spawn");
-        let mut stdin = child.stdin.take().expect("stdin");
-        stdin.write_all(b"hello\n").await.expect("write");
-        drop(stdin);
-        tokio::time::timeout(KCAT_BOUND, child.wait_with_output())
-            .await
-            .expect("kcat -P finished")
-            .expect("output")
-    };
-    let text = stderr(&output);
+    let felix = start().await;
+    let mut expected = Vec::new();
+    for codec in ["gzip", "snappy", "lz4", "zstd"] {
+        let setting = format!("compression.codec={codec}");
+        let input: String = (0..20).map(|i| format!("{codec}-{i}\n")).collect();
+        let output = felix
+            .kcat_with_input(&produce_args("1", &["-X", &setting]), &input)
+            .await;
+        assert!(output.status.success(), "{codec}: {}", stderr(&output));
+        expected.extend((0..20).map(|i| format!("{codec}-{i}")));
+    }
+    let values: Vec<String> = logged(&felix, 1)
+        .await
+        .into_iter()
+        .map(|line| line.split_once(':').expect("offset:value").1.to_string())
+        .collect();
+    assert_eq!(values, expected);
+}
+
+/// acks=0, 1 and all each land their records; only 1 and all were answered,
+/// and kcat does not care either way.
+#[tokio::test]
+async fn kcat_produces_with_acks_zero_one_and_all() {
+    if !kcat_available().await {
+        return;
+    }
+    let felix = start().await;
+    for acks in ["0", "1", "all"] {
+        let setting = format!("acks={acks}");
+        let output = felix
+            .kcat_with_input(
+                &produce_args("2", &["-X", &setting]),
+                &format!("acks-{acks}\n"),
+            )
+            .await;
+        assert!(output.status.success(), "acks={acks}: {}", stderr(&output));
+    }
+    assert_eq!(
+        logged(&felix, 2).await,
+        ["0:acks-0", "1:acks-1", "2:acks-all"]
+    );
+}
+
+/// An idempotent kcat gets a producer id and its records go through the
+/// log's producer sequences: each record carries the id and the next
+/// sequence, which is what lets a re-send be recognised on any leader.
+#[tokio::test]
+async fn kcat_produces_idempotently() {
+    if !kcat_available().await {
+        return;
+    }
+    let felix = start().await;
+    let input: String = (0..50).map(|i| format!("r{i}\n")).collect();
+    let output = felix
+        .kcat_with_input(
+            &produce_args("0", &["-X", "enable.idempotence=true"]),
+            &input,
+        )
+        .await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    let stored = felix.log_records(0).await;
+    assert_eq!(stored.len(), 50, "each record once");
+    let mut producer = None;
+    for (sequence, record) in stored.iter().enumerate() {
+        assert_eq!(record.payload, format!("r{sequence}").as_bytes());
+        let RecordMark::Opens(batch) = record.mark else {
+            panic!("record {} carries no producer mark", record.offset);
+        };
+        assert_eq!(batch.sequence, sequence as u64);
+        assert_eq!(
+            *producer.get_or_insert(batch.producer_id),
+            batch.producer_id
+        );
+    }
+}
+
+/// kcat -K splits each line into a key and a value. The key picked the
+/// partition (here -p does) and is not stored: Felix records have no key.
+#[tokio::test]
+async fn kcat_produces_keyed_records_and_the_value_is_kept() {
+    if !kcat_available().await {
+        return;
+    }
+    let felix = start().await;
+    let output = felix
+        .kcat_with_input(&produce_args("1", &["-K", ":"]), "k1:v1\nk2:v2\n")
+        .await;
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(logged(&felix, 1).await, ["0:v1", "1:v2"]);
+    let output = felix
+        .kcat(&[
+            "-C",
+            "-t",
+            TOPIC,
+            "-p",
+            "1",
+            "-o",
+            "beginning",
+            "-e",
+            "-q",
+            "-f",
+            "%k|%s\\n",
+        ])
+        .await;
+    assert_eq!(records(&output), ["|v1", "|v2"]);
+}
+
+/// A transactional producer fails fast, and says why.
+#[tokio::test]
+async fn kcat_transactional_producer_is_refused_readably() {
+    if !kcat_available().await {
+        return;
+    }
+    let felix = start().await;
+    let started = Instant::now();
+    let output = felix
+        .kcat_with_input(
+            &produce_args("0", &["-X", "transactional.id=kcat-tx"]),
+            "never\n",
+        )
+        .await;
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    eprintln!("kcat -P with transactional.id said:\n{text}");
     assert!(!output.status.success(), "{text}");
-    assert!(text.contains("Policy violation"), "{text}");
+    assert!(
+        text.contains("Felix does not support Kafka transactions"),
+        "{text}"
+    );
+    assert!(started.elapsed() < KCAT_BOUND);
+    assert!(logged(&felix, 0).await.is_empty(), "a transaction wrote");
 }

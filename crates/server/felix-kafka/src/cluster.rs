@@ -6,8 +6,11 @@
 //! single in-process broker, and keeps control-plane and routing types out of
 //! it.
 
+use std::any::Any;
+
 use async_trait::async_trait;
 use felix_authz::{Action, Namespace, PermissionMatcher, StreamName, TenantId, stream_resource};
+use felix_broker::{PublishOutcome, StreamHandle};
 
 /// The broker's side of the Kafka listener.
 #[async_trait]
@@ -25,6 +28,50 @@ pub trait Cluster: Send + Sync + 'static {
 
     /// Who serves one shard right now.
     fn placement(&self, shard: &ShardRef<'_>) -> Placement;
+
+    /// Admit one write to a shard, the way a Felix publish is admitted: this
+    /// broker must lead the shard, hold its lease, and the shard's write fence
+    /// must be open. Hold the permit until the write is durable, so a move
+    /// waits for it.
+    async fn admit_write(&self, shard: &ShardRef<'_>) -> Result<WritePermit, WriteError>;
+
+    /// Wait until a written batch has what its stream's consistency asks for:
+    /// a majority of the replica set on a `Quorum` stream, nothing more on a
+    /// `Leader` one.
+    async fn await_consistency(
+        &self,
+        shard: &ShardRef<'_>,
+        handle: &StreamHandle,
+        outcome: &PublishOutcome,
+    ) -> Result<(), WriteError>;
+}
+
+/// A write's place in its shard's fence. Dropping it lets a move proceed.
+#[derive(Default)]
+pub struct WritePermit {
+    _guard: Option<Box<dyn Any + Send + Sync>>,
+}
+
+impl WritePermit {
+    /// A permit that holds `guard` until it is dropped.
+    pub fn holding(guard: impl Any + Send + Sync) -> Self {
+        Self {
+            _guard: Some(Box::new(guard)),
+        }
+    }
+}
+
+/// Why a write was not taken, or not confirmed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteError {
+    /// This broker does not lead the shard, or stopped leading it before the
+    /// write claimed its offsets. Nothing was written.
+    NotLeader,
+    /// Written here, but a majority did not confirm it in time. It may
+    /// survive or not.
+    QuorumTimeout,
+    /// Leadership moved after the write and before a majority held it.
+    LeadershipLost,
 }
 
 /// A broker's Kafka listener, as clients are told to reach it.
@@ -87,7 +134,7 @@ pub struct Principal {
 
 #[derive(Debug, Clone)]
 enum Access {
-    /// The dev switch: every stream of the tenant is readable.
+    /// The dev switch: every stream of the tenant is readable and writable.
     Anonymous,
     Token(PermissionMatcher),
 }
@@ -102,8 +149,8 @@ impl Principal {
         }
     }
 
-    /// A principal for an unauthenticated connection, allowed to read every
-    /// stream of `tenant_id`. Only for the anonymous dev switch.
+    /// A principal for an unauthenticated connection, allowed to read and
+    /// write every stream of `tenant_id`. Only for the anonymous dev switch.
     pub fn anonymous(tenant_id: impl Into<String>) -> Self {
         Self {
             tenant_id: tenant_id.into(),
@@ -118,10 +165,20 @@ impl Principal {
     /// Whether this principal may read a stream: the same check as a QUIC
     /// subscribe, `stream.subscribe` on the stream's resource.
     pub fn may_read(&self, namespace: &str, stream: &str) -> bool {
+        self.may(Action::StreamSubscribe, namespace, stream)
+    }
+
+    /// Whether this principal may write a stream: the same check as a QUIC
+    /// publish, `stream.publish` on the stream's resource.
+    pub fn may_publish(&self, namespace: &str, stream: &str) -> bool {
+        self.may(Action::StreamPublish, namespace, stream)
+    }
+
+    fn may(&self, action: Action, namespace: &str, stream: &str) -> bool {
         match &self.access {
             Access::Anonymous => true,
             Access::Token(matcher) => matcher.allows(
-                Action::StreamSubscribe,
+                action,
                 &stream_resource(
                     &TenantId::new(&self.tenant_id),
                     &Namespace::new(namespace),

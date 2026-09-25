@@ -4,7 +4,7 @@ use kafka_protocol::messages::{ApiKey, ApiVersionsRequest, MetadataRequest};
 use super::Fixture;
 
 #[tokio::test]
-async fn api_versions_advertises_the_read_path_and_find_coordinator() {
+async fn api_versions_advertises_reads_writes_and_find_coordinator() {
     let fixture = Fixture::anonymous().await;
     let mut client = fixture.connect();
     for version in 0..=3 {
@@ -21,9 +21,10 @@ async fn api_versions_advertises_the_read_path_and_find_coordinator() {
         assert_eq!(range(ApiKey::Metadata), Some((0, 12)));
         assert_eq!(range(ApiKey::ListOffsets), Some((1, 7)));
         assert_eq!(range(ApiKey::FindCoordinator), Some((0, 4)));
-        // Offered only so librdkafka will fetch record batches; refused.
-        assert_eq!(range(ApiKey::Produce), Some((3, 8)));
+        assert_eq!(range(ApiKey::Produce), Some((3, 9)));
+        assert_eq!(range(ApiKey::InitProducerId), Some((0, 4)));
         assert_eq!(range(ApiKey::JoinGroup), None);
+        assert_eq!(range(ApiKey::EndTxn), None);
     }
 }
 

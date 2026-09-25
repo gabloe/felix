@@ -41,7 +41,7 @@ pub(in crate::api::tests) fn request(
 }
 
 /// `(offset, value)` for every record in a partition's answer.
-fn records(partition: &PartitionData) -> Vec<(i64, String)> {
+pub(in crate::api::tests) fn records(partition: &PartitionData) -> Vec<(i64, String)> {
     let Some(bytes) = partition.records.clone().filter(|b| !b.is_empty()) else {
         return Vec::new();
     };

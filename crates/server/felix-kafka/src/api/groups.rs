@@ -6,7 +6,8 @@
 //! `GROUP_AUTHORIZATION_FAILED` and a message naming the reason: librdkafka
 //! treats that code as fatal for the group and hands it to the application,
 //! where `kcat -G` prints it and exits. The group APIs behind it get the same
-//! answer if a client sends one anyway.
+//! answer if a client sends one anyway. A transactional producer asking for
+//! its coordinator gets the transaction refusal instead; see `transactions`.
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -26,17 +27,31 @@ pub(crate) const MESSAGE: &str = "Felix has no Kafka consumer groups; assign par
 
 const REFUSED: ResponseError = ResponseError::GroupAuthorizationFailed;
 
+/// `FindCoordinator`'s key type for a transaction coordinator.
+const TRANSACTION_KEY: i8 = 1;
+
 pub(super) fn refuse(api: ApiKey, frame: &mut Bytes, version: i16) -> Result<(Bytes, i16)> {
     let code = REFUSED.code();
     match api {
         ApiKey::FindCoordinator => {
             let request =
                 FindCoordinatorRequest::decode(frame, version).context("decode FindCoordinator")?;
-            tracing::info!(
-                group = request.key.as_str(),
-                "refused a kafka consumer group: Felix has no group coordinator"
-            );
-            let message = Some(StrBytes::from_static_str(MESSAGE));
+            // Key type 1 is a transactional producer looking for its
+            // transaction coordinator; it gets the transaction refusal.
+            let (code, message) = if request.key_type == TRANSACTION_KEY {
+                tracing::info!("refused a kafka transactional producer: Felix has no transactions");
+                (
+                    super::transactions::REFUSED.code(),
+                    super::transactions::MESSAGE,
+                )
+            } else {
+                tracing::info!(
+                    group = request.key.as_str(),
+                    "refused a kafka consumer group: Felix has no group coordinator"
+                );
+                (code, MESSAGE)
+            };
+            let message = Some(StrBytes::from_static_str(message));
             // v4 batches keys; earlier versions answer the one key at the top
             // level.
             let response = if version >= 4 {

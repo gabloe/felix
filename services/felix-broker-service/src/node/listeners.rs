@@ -206,6 +206,15 @@ pub(super) fn build_server_config(identity: &ServerIdentity) -> Result<ServerCon
     )?)
 }
 
+/// What the Kafka listener needs of the cluster: where shards are and who
+/// may be sent where, and what a write checks and waits on.
+pub(super) struct KafkaClusterView<'a> {
+    pub(super) ingress: &'a Option<Arc<IngressRouter>>,
+    pub(super) client_endpoints: &'a Arc<ClientEndpoints>,
+    pub(super) lease: &'a Option<Arc<LeaseState>>,
+    pub(super) quorum_marks: &'a Arc<QuorumMarks>,
+}
+
 /// Bind the Kafka listener, when one is configured.
 ///
 /// Bound here, before anything is accepted, so a port conflict fails startup
@@ -215,9 +224,14 @@ pub(super) async fn bind_kafka(
     identity: &ServerIdentity,
     broker: &Arc<Broker>,
     auth: &Arc<BrokerAuth>,
-    ingress: &Option<Arc<IngressRouter>>,
-    client_endpoints: &Arc<ClientEndpoints>,
+    view: KafkaClusterView<'_>,
 ) -> Result<Option<KafkaListener>> {
+    let KafkaClusterView {
+        ingress,
+        client_endpoints,
+        lease,
+        quorum_marks,
+    } = view;
     let Some(kafka) = KafkaListenerConfig::from_env()? else {
         return Ok(None);
     };
@@ -234,7 +248,12 @@ pub(super) async fn bind_kafka(
             .map(|_| Arc::clone(client_endpoints)),
         node_id,
         &kafka.advertise,
-    )?;
+    )?
+    .with_writes(
+        lease.clone(),
+        Some(Arc::clone(quorum_marks)),
+        std::time::Duration::from_millis(config.publish_quorum_timeout_ms.max(1)),
+    );
     let tls = kafka.tls.then(|| identity.kafka_tls()).transpose()?;
     if kafka.tls {
         tracing::info!("kafka listener serves TLS: clients connect with SASL_SSL");
