@@ -1,5 +1,6 @@
 //! One pass of placement over a metadata snapshot, as a pure function.
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::moves::{MovePolicy, Moves, move_step};
 use super::rendezvous::{choose, choose_replicas, promote};
@@ -183,6 +184,11 @@ pub fn plan_with(
         (keys.len() as u32).div_ceil(eligible.len() as u32).max(1)
     };
 
+    let regions = Arc::clone(&policy.regions);
+    let region_of: HashMap<&str, &String> = nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), &node.spec.region))
+        .collect();
     let mut moves = Moves::counting(existing, policy);
 
     // Slots go to drains first, then to rebalancing, and last to shards whose
@@ -199,11 +205,31 @@ pub fn plan_with(
             .then_with(|| order(a).cmp(&order(b)))
     });
 
+    let is_empty_cluster = eligible.is_empty();
     let mut shards = Vec::with_capacity(keys.len());
     for key in keys {
         let placeable = placeable_of.get(owner_of(&key).as_str()).copied();
         let replication_factor = placeable.map_or(1, |p| p.replication_factor);
         let durable = placeable.is_none_or(|p| p.durable);
+
+        // A node in a region this shard may not be in is, for this shard,
+        // draining: it is given nothing, and whatever it holds is moved off
+        // it the way a drain moves it. Only a stream with a home region is
+        // constrained; for any other every node is allowed.
+        let home = placeable.and_then(|p| p.region);
+        let allowed = |id: &str| match home {
+            None => true,
+            Some(home) => region_of
+                .get(id)
+                .is_some_and(|region| regions.can_route(home, region)),
+        };
+        let eligible: Vec<&Node> = eligible
+            .iter()
+            .copied()
+            .filter(|node| allowed(&node.node_id))
+            .collect();
+        let is_live = |id: &str| is_live(id) && allowed(id);
+        let is_draining = |id: &str| is_draining(id) || (!allowed(id) && is_serving(id));
 
         // The leader is still serving: a move, not a reassignment, unless
         // there is no log to move.
@@ -294,7 +320,14 @@ pub fn plan_with(
                 );
                 Decision::Place(leader.to_string(), replicas)
             }
-            None if eligible.is_empty() => Decision::Unplaceable(Unplaceable::NoEligibleNode),
+            None if eligible.is_empty() => match home {
+                Some(region) if !is_empty_cluster => {
+                    Decision::Unplaceable(Unplaceable::NoNodeInRegion {
+                        region: region.clone(),
+                    })
+                }
+                _ => Decision::Unplaceable(Unplaceable::NoEligibleNode),
+            },
             None => Decision::Unplaceable(Unplaceable::AllNodesAtCapacity),
         };
         shards.push(ShardPlan { key, decision });
@@ -373,6 +406,8 @@ struct Placeable<'a> {
     /// Whether there is a log to hand off. An ephemeral stream is reassigned
     /// outright.
     durable: bool,
+    /// The home region, for a stream that has one.
+    region: Option<&'a String>,
 }
 
 impl<'a> Placeable<'a> {
@@ -385,6 +420,7 @@ impl<'a> Placeable<'a> {
             shards: stream.shards,
             replication_factor: stream.replication_factor.max(1),
             durable: stream.durable,
+            region: stream.region.as_ref(),
         }
     }
 
@@ -398,6 +434,7 @@ impl<'a> Placeable<'a> {
             replication_factor: cache.replication_factor.max(1),
             // A cache is durable wherever the broker is; assume it is.
             durable: true,
+            region: None,
         }
     }
 

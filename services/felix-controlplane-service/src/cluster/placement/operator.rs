@@ -58,6 +58,13 @@ pub enum Refused {
     AlreadyLeads(String),
     /// The destination is at its `max_shards` cap.
     AtCapacity(String),
+    /// The destination's region may not hold this stream's data: it is not
+    /// the stream's region and has no bridge from it.
+    RegionNotAllowed {
+        node: String,
+        region: String,
+        home: String,
+    },
     /// A move or replacement is already in progress; cancel it first.
     Moving,
     /// The leader is down; failover places the shard, not a move.
@@ -77,6 +84,7 @@ impl Refused {
             Self::NotLive { .. } => "destination_not_live",
             Self::AlreadyLeads(_) => "already_leader",
             Self::AtCapacity(_) => "at_capacity",
+            Self::RegionNotAllowed { .. } => "region_not_allowed",
             Self::Moving => "already_moving",
             Self::LeaderUnavailable(_) => "leader_unavailable",
             Self::Blocked(_) => "move_limit",
@@ -95,6 +103,10 @@ impl std::fmt::Display for Refused {
             }
             Self::AlreadyLeads(node) => write!(f, "node {node} already leads this shard"),
             Self::AtCapacity(node) => write!(f, "node {node} is at its max_shards capacity"),
+            Self::RegionNotAllowed { node, region, home } => write!(
+                f,
+                "node {node} is in region {region}, which has no bridge from this stream's region {home}"
+            ),
             Self::Moving => write!(
                 f,
                 "a move or replacement is already in progress for this shard; cancel it first"
@@ -123,7 +135,7 @@ pub fn start_move(
     destination: &str,
 ) -> Result<OperatorStep, Refused> {
     let existing = assignment_of(catalog, key)?;
-    let (_, durable) = placeable_of(catalog, key).ok_or(Refused::UnknownShard)?;
+    let (_, durable, home) = placeable_of(catalog, key).ok_or(Refused::UnknownShard)?;
     let node = catalog
         .nodes
         .iter()
@@ -133,6 +145,15 @@ pub fn start_move(
         return Err(Refused::NotLive {
             node: destination.to_string(),
             lifecycle: node.status.lifecycle,
+        });
+    }
+    if let Some(home) = home
+        && !catalog.policy.regions.can_route(home, &node.spec.region)
+    {
+        return Err(Refused::RegionNotAllowed {
+            node: destination.to_string(),
+            region: node.spec.region.clone(),
+            home: home.clone(),
         });
     }
     if existing.leader == destination {
@@ -155,7 +176,7 @@ pub fn start_move(
     {
         return Err(Refused::AtCapacity(destination.to_string()));
     }
-    let mut moves = Moves::counting(catalog.existing, catalog.policy);
+    let mut moves = Moves::counting(catalog.existing, catalog.policy.clone());
     moves
         .begin_requested(&existing.leader, destination)
         .map_err(Refused::Blocked)?;
@@ -188,7 +209,7 @@ pub fn start_move(
 /// same move again.
 pub fn cancel_move(catalog: &Catalog<'_>, key: &ShardKey) -> Result<OperatorStep, Refused> {
     let existing = assignment_of(catalog, key)?;
-    let (replication_factor, _) = placeable_of(catalog, key).ok_or(Refused::UnknownShard)?;
+    let (replication_factor, _, _) = placeable_of(catalog, key).ok_or(Refused::UnknownShard)?;
     let (step, assignment) = if existing.state == ShardState::Draining {
         // A leader that is down cannot take the shard back; failover
         // promotes a replica that holds the log instead.
@@ -257,9 +278,12 @@ fn assignment_of<'a>(
         .ok_or(Refused::UnknownShard)
 }
 
-/// The replication factor and durability of the stream or cache `key` is a
-/// shard of, if it still exists.
-fn placeable_of(catalog: &Catalog<'_>, key: &ShardKey) -> Option<(u32, bool)> {
+/// The replication factor, durability and home region of the stream or cache
+/// `key` is a shard of, if it still exists.
+fn placeable_of<'a>(
+    catalog: &Catalog<'a>,
+    key: &ShardKey,
+) -> Option<(u32, bool, Option<&'a String>)> {
     match key.kind {
         ShardKind::Stream => catalog
             .streams
@@ -270,7 +294,7 @@ fn placeable_of(catalog: &Catalog<'_>, key: &ShardKey) -> Option<(u32, bool)> {
                     && s.stream == key.stream
             })
             .filter(|s| key.shard < s.shards)
-            .map(|s| (s.replication_factor.max(1), s.durable)),
+            .map(|s| (s.replication_factor.max(1), s.durable, s.region.as_ref())),
         ShardKind::Cache => catalog
             .caches
             .iter()
@@ -280,7 +304,7 @@ fn placeable_of(catalog: &Catalog<'_>, key: &ShardKey) -> Option<(u32, bool)> {
                     && c.cache == key.stream
             })
             .filter(|c| key.shard < c.shards)
-            .map(|c| (c.replication_factor.max(1), true)),
+            .map(|c| (c.replication_factor.max(1), true, None)),
     }
 }
 
@@ -337,7 +361,7 @@ pub async fn run_operator(
         let (fence, read) = super::PlacementRead::load_fenced(store, liveness)
             .await
             .map_err(OperatorError::Store)?;
-        let step = decide(&read.catalog(policy)).map_err(OperatorError::Refused)?;
+        let step = decide(&read.catalog(policy.clone())).map_err(OperatorError::Refused)?;
         let decided = FencedStep { step, fence };
         match write_operator_step(store, &decided)
             .await

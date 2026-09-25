@@ -467,7 +467,7 @@ pub fn spawn_reconciler(
             if !held && !woken {
                 continue;
             }
-            if let Some(pass) = plan_pass(store.as_ref(), &liveness, policy).await {
+            if let Some(pass) = plan_pass(store.as_ref(), &liveness, policy.clone()).await {
                 apply_pass(store.as_ref(), &pass, &mut clock, &wakes).await;
             }
         }

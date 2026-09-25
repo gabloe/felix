@@ -353,6 +353,27 @@ fn from_env_or_yaml_invalid_socket_in_yaml_fails() {
 
 #[serial]
 #[test]
+fn from_env_reads_region_bridges() {
+    let _env = clear_felix_env();
+    unsafe {
+        env::set_var("FELIX_REGION_BRIDGES", "eu>us");
+    }
+    let regions = ControlPlaneConfig::from_env()
+        .expect("from_env")
+        .shard_moves
+        .regions;
+    assert!(regions.can_route(&"eu".to_string(), &"us".to_string()));
+    assert!(!regions.can_route(&"us".to_string(), &"eu".to_string()));
+
+    unsafe {
+        env::set_var("FELIX_REGION_BRIDGES", "eu-us");
+    }
+    assert!(ControlPlaneConfig::from_env().is_err());
+    let _env = clear_felix_env();
+}
+
+#[serial]
+#[test]
 fn from_env_rejects_invalid_oidc_algorithm() {
     let _env = clear_felix_env();
     unsafe {
@@ -445,6 +466,7 @@ bootstrap:
                 fence_max_lag_records: 500,
                 timeout_millis: Some(60_000),
                 paused: false,
+                ..Default::default()
             }
         );
     }

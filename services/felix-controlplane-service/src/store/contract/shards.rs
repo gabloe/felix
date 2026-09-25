@@ -81,6 +81,7 @@ pub(crate) async fn seed(store: &dyn ControlPlaneStore) {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtMostOnce,
             durable: true,
+            region: None,
         })
         .await;
 
@@ -926,6 +927,7 @@ async fn deleting_a_stream_or_cache_takes_its_shard_assignments_with_it(
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtMostOnce,
             durable: true,
+            region: None,
         })
         .await
         .expect("create the stream to delete");

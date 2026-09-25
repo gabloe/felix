@@ -7,6 +7,7 @@ mod moves;
 mod operator;
 mod pacing;
 mod reconciler;
+mod regions;
 mod rendezvous;
 mod replicas;
 mod wakes;
@@ -41,6 +42,7 @@ fn replicated_stream(name: &str, shards: u32, replication_factor: u32) -> Stream
         consistency: ConsistencyLevel::Leader,
         delivery: DeliveryGuarantee::AtMostOnce,
         durable: true,
+        region: None,
     }
 }
 

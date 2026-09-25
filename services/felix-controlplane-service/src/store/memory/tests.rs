@@ -145,6 +145,7 @@ async fn namespace_stream_cache_errors_and_cascades() {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: false,
+            region: None,
         })
         .await
         .expect("stream");

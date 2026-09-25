@@ -95,6 +95,7 @@ pub(crate) async fn one_shard_cluster() -> (
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtMostOnce,
             durable: true,
+            region: None,
         })
         .await
         .expect("stream");

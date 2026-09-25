@@ -16,7 +16,9 @@ use axum::response::IntoResponse;
 
 use crate::api::AppState;
 use crate::api::ensure_tenant_namespace;
-use crate::api::error::{ApiError, api_conflict, api_internal, api_not_found};
+use crate::api::error::{
+    ApiError, api_conflict, api_internal, api_not_found, api_validation_error,
+};
 use crate::api::types::{
     StreamChangesResponse, StreamCreateRequest, StreamListResponse, StreamSnapshotResponse,
 };
@@ -87,6 +89,12 @@ pub(crate) async fn create_stream(
 ) -> Result<impl IntoResponse, ApiError> {
     require_stream_manage(&state, &tenant_id, &headers, &namespace, &body.stream).await?;
     ensure_tenant_namespace(&state, &tenant_id, &namespace).await?;
+    let region = match body.region {
+        Some(region) if region.trim().is_empty() => {
+            return Err(api_validation_error("region must not be empty when set"));
+        }
+        region => region,
+    };
     let stream = Stream {
         tenant_id,
         namespace,
@@ -98,6 +106,7 @@ pub(crate) async fn create_stream(
         consistency: body.consistency,
         delivery: body.delivery,
         durable: body.durable,
+        region,
     };
     match state.store.create_stream(stream.clone()).await {
         Ok(created) => Ok((StatusCode::CREATED, Json(created))),

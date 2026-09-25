@@ -572,6 +572,7 @@ async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: false,
+            region: Some("eu-west-1".to_string()),
         })
         .await?;
     store
@@ -588,6 +589,11 @@ async fn postgres_store_full_roundtrip() -> anyhow::Result<()> {
             },
         )
         .await?;
+    // The region is written with the stream and survives a patch.
+    assert_eq!(
+        store.get_stream(&stream_key).await?.region.as_deref(),
+        Some("eu-west-1")
+    );
 
     let cache_key = CacheKey {
         tenant_id: "t1".to_string(),

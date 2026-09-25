@@ -82,6 +82,10 @@ pub struct StreamCreateRequest {
     pub consistency: ConsistencyLevel,
     pub delivery: DeliveryGuarantee,
     pub durable: bool,
+    /// The region the stream's data belongs to. Placement keeps every copy
+    /// in it, or in a region it has a bridge to. Omitted means any region.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

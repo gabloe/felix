@@ -62,6 +62,7 @@ fn stream(tenant_id: &str, namespace: &str, name: &str) -> Stream {
         consistency: ConsistencyLevel::Leader,
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: false,
+        region: None,
     }
 }
 

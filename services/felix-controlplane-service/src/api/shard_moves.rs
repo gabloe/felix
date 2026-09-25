@@ -158,7 +158,7 @@ pub(crate) async fn placement_plan(
     let read = PlacementRead::load(state.store.as_ref(), &state.node_liveness)
         .await
         .map_err(|ref err| api_internal("read placement state", err))?;
-    let plan = read.plan(state.move_policy);
+    let plan = read.plan(state.move_policy.clone());
     let items = plan
         .shards
         .into_iter()
@@ -262,7 +262,7 @@ async fn run(
     match run_operator(
         state.store.as_ref(),
         &state.node_liveness,
-        state.move_policy,
+        state.move_policy.clone(),
         &state.placement_wakes,
         decide,
     )

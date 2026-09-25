@@ -123,6 +123,10 @@ pub enum Unplaceable {
     /// is visible, and it resolves on its own when a replica catches up or the
     /// old leader returns.
     NoCaughtUpReplica,
+    /// The stream belongs to `region`, and no live node is in it or in a
+    /// region it has a bridge to. Not placed elsewhere: that is exactly the
+    /// copy the region policy exists to refuse.
+    NoNodeInRegion { region: String },
 }
 
 impl std::fmt::Display for Unplaceable {
@@ -135,6 +139,10 @@ impl std::fmt::Display for Unplaceable {
             Self::NoCaughtUpReplica => write!(
                 f,
                 "the leader is gone and no replica holding this shard's log can take over"
+            ),
+            Self::NoNodeInRegion { region } => write!(
+                f,
+                "no live node is in region {region} or in a region bridged from it"
             ),
         }
     }

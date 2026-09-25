@@ -49,7 +49,8 @@ impl ControlPlaneConfig {
             shard_reconcile_interval_ms: parse_positive_env("FELIX_SHARD_RECONCILE_INTERVAL_MS")
                 .unwrap_or(DEFAULT_SHARD_RECONCILE_INTERVAL_MS),
         };
-        let shard_moves = shard_moves_from_env();
+        let mut shard_moves = shard_moves_from_env();
+        shard_moves.regions = std::sync::Arc::new(region_bridges_from_env()?);
         let readiness_timeout_ms = parse_positive_env("FELIX_READINESS_TIMEOUT_MS")
             .unwrap_or(DEFAULT_READINESS_TIMEOUT_MS);
         let readiness_cache_ttl_ms = parse_positive_env("FELIX_READINESS_CACHE_TTL_MS")
@@ -140,6 +141,21 @@ impl ControlPlaneConfig {
     }
 }
 
+/// The region allowlist placement holds a stream with a home region to.
+/// Unset is no bridges: such a stream stays in its own region. The router's
+/// local region goes unused here; placement asks about a stream's region, not
+/// the control plane's.
+fn region_bridges_from_env() -> Result<felix_router::RegionRouter<String>> {
+    let bridges = match std::env::var("FELIX_REGION_BRIDGES") {
+        Ok(spec) => felix_router::parse_bridges(&spec).context("parse FELIX_REGION_BRIDGES")?,
+        Err(_) => Vec::new(),
+    };
+    Ok(felix_router::RegionRouter::with_bridges(
+        String::new(),
+        bridges,
+    ))
+}
+
 /// How shard moves are paced, from the environment.
 fn shard_moves_from_env() -> crate::cluster::placement::MovePolicy {
     let parse = |name: &str| {
@@ -167,5 +183,6 @@ fn shard_moves_from_env() -> crate::cluster::placement::MovePolicy {
         },
         // Read from the store each pass, not configured.
         paused: false,
+        regions: defaults.regions,
     }
 }
