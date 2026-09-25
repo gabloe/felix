@@ -23,10 +23,11 @@
 //! Linux-only server, and the dividend is small. See #547 and #548.
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io;
-use std::os::unix::io::RawFd;
-use std::sync::OnceLock;
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use io_uring::{IoUring, opcode, types};
 use tokio::sync::oneshot;
@@ -46,10 +47,16 @@ struct Ring {
 }
 
 /// One flush waiting to be pushed into the ring, and where to send its result.
+///
+/// Owns the file until the completion arrives. A caller that stops waiting
+/// would otherwise close the descriptor under an in-flight sync, and the
+/// kernel could hand the number to an unrelated file.
 struct Submission {
-    fd: RawFd,
+    file: Arc<File>,
     reply: oneshot::Sender<io::Result<()>>,
 }
+
+type Waiting = HashMap<u64, (Arc<File>, oneshot::Sender<io::Result<()>>)>;
 
 /// Whether flushes should go through `io_uring`.
 ///
@@ -65,16 +72,16 @@ pub(crate) fn enabled() -> bool {
     })
 }
 
-/// `fsync` the descriptor through the ring.
+/// `fdatasync` the file through the ring.
 ///
 /// `None` means the ring is unavailable and the caller should use its own
 /// fallback.
-pub(crate) async fn fsync(fd: RawFd) -> Option<io::Result<()>> {
+pub(crate) async fn fsync(file: Arc<File>) -> Option<io::Result<()>> {
     let ring = ring()?;
     let (reply, wait) = oneshot::channel();
     // A send failure means the service thread is gone, which is the same
     // situation as no ring at all.
-    if ring.tx.send(Submission { fd, reply }).is_err() {
+    if ring.tx.send(Submission { file, reply }).is_err() {
         return None;
     }
     match wait.await {
@@ -107,7 +114,7 @@ fn ring() -> Option<&'static Ring> {
             .spawn(move || {
                 // Owned exclusively by this thread: the submission and
                 // completion queues are not safe to touch from several.
-                let mut waiting: HashMap<u64, oneshot::Sender<io::Result<()>>> = HashMap::new();
+                let mut waiting = Waiting::new();
                 loop {
                     // With nothing outstanding there is nothing to drain, so
                     // block for work. With requests in flight, never block on
@@ -131,7 +138,7 @@ fn ring() -> Option<&'static Ring> {
 
                     if let Err(err) = uring.submit_and_wait(1) {
                         // Nothing outstanding can be called durable.
-                        for (_, reply) in waiting.drain() {
+                        for (_, (_file, reply)) in waiting.drain() {
                             let _ = reply.send(Err(io::Error::new(err.kind(), err.to_string())));
                         }
                         continue;
@@ -141,7 +148,7 @@ fn ring() -> Option<&'static Ring> {
                         .map(|cqe| (cqe.user_data(), cqe.result()))
                         .collect();
                     for (id, result) in completions {
-                        if let Some(reply) = waiting.remove(&id) {
+                        if let Some((_file, reply)) = waiting.remove(&id) {
                             let outcome = if result < 0 {
                                 Err(io::Error::from_raw_os_error(-result))
                             } else {
@@ -160,20 +167,19 @@ fn ring() -> Option<&'static Ring> {
 
 /// Queue one fsync. Answers the caller directly if the ring has no room, so a
 /// full queue is a reported error rather than a lost request.
-fn push(
-    uring: &mut IoUring,
-    waiting: &mut HashMap<u64, oneshot::Sender<io::Result<()>>>,
-    submission: Submission,
-) -> bool {
+fn push(uring: &mut IoUring, waiting: &mut Waiting, submission: Submission) -> bool {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let entry = opcode::Fsync::new(types::Fd(submission.fd))
+    // `DATASYNC`, matching `io::sync_data` on the blocking path: an append
+    // changes data and size, not the metadata a full fsync also writes.
+    let entry = opcode::Fsync::new(types::Fd(submission.file.as_raw_fd()))
+        .flags(types::FsyncFlags::DATASYNC)
         .build()
         .user_data(id);
-    // Safety: the caller holds the `File` across its await, so the descriptor
-    // stays open until the completion is delivered.
+    // Safety: `waiting` keeps the `File` alive until its completion is
+    // collected, so the descriptor stays open for the whole operation.
     let pushed = unsafe { uring.submission().push(&entry).is_ok() };
     if pushed {
-        waiting.insert(id, submission.reply);
+        waiting.insert(id, (submission.file, submission.reply));
     } else {
         let _ = submission
             .reply
