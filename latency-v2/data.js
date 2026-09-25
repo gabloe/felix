@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790367505664,
+  "lastUpdate": 1790367974617,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -20790,6 +20790,72 @@ window.BENCHMARK_DATA = {
             "range": "912.49",
             "unit": "us",
             "extra": "trials: 5\nmedian: 627.00\nmean: 1139.80\nstdev: 912.49\ncv: 80.06%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "925d9cec8fbdc505805c5d090c81a844dd84e8fd",
+          "message": "perf(azure): steady-state throughput from a 1 Hz broker series (#717)\n\nGenerators start and stop at different times and get unequal shares, so\nsumming their averages or dividing a before/after delta by the cell's length\nmisread aggregate throughput by up to ~70%.\n\nThe broker sampler now records append/publish bytes, per-port bytes, UDP\nInDatagrams/RcvbufErrors and process CPU ticks each second, and the driver\nfetches the raw series into the cell dir. Generators print wall-clock\ngen.start/gen.end around felix-loadgen. summarize.py takes the median\none-second rate over the window when all generators ran (trimmed 10% each\nend), reports append and ingress MB/s, drops/s, cores and per-generator\nfairness beside the old numbers, and marks cells without a series legacy.\nThe per-cell console line uses the steady-state numbers.",
+          "timestamp": "2026-09-25T13:14:31-07:00",
+          "tree_id": "a4ba078a01ac9104e7759355ad4616db48d00226",
+          "url": "https://github.com/gabloe/felix/commit/925d9cec8fbdc505805c5d090c81a844dd84e8fd"
+        },
+        "date": 1790367971705,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 98,
+            "range": "0.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 98.00\nmean: 97.60\nstdev: 0.89\ncv: 0.92%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 128,
+            "range": "1.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 128.00\nmean: 127.40\nstdev: 1.34\ncv: 1.05%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 164,
+            "range": "15.64",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 164.00\nmean: 165.80\nstdev: 15.64\ncv: 9.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 132,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 131.60\nstdev: 1.14\ncv: 0.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 263,
+            "range": "4.38",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 263.00\nmean: 262.80\nstdev: 4.38\ncv: 1.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 361,
+            "range": "344.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 361.00\nmean: 495.60\nstdev: 344.55\ncv: 69.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
