@@ -421,6 +421,34 @@ The model needed nothing new: a held operation has not been admitted, which
 `FelixShard.tla` already allows for any write, and the logs that ride the
 shard are modelled as writes to the one log.
 
+### A group's in-flight state across a move away and back
+
+What a group has handed out and not yet finished lives in the leader's memory,
+beside the durable cursor. It belongs to one term of leading the shard. A
+broker that led it, moved it away and got it back used to reopen with the
+tracker from its first term, so after A -> B -> A it handed out again records
+the group had acknowledged on B (#685).
+
+The lifecycle now marks an open as a new term when the broker was not serving
+the shard just before: released, fenced, or failed. Before that open, the
+shard's trackers are dropped (`GroupReader::reset_shard`), and the next group
+operation rebuilds them from the cursor log that came back with the shard.
+Reopening a shard the broker is still serving keeps them. Every assignment
+write bumps the generation, so that covers staging a replica, and the fence
+itself, which reaches the old leader as a new draining generation rather than
+a release. Clearing on every open would redeliver what is in flight at each of
+those.
+
+Not serving is the signal rather than a gap in generations, because the
+lifecycle sees a coalesced set of assignments, and several writes to one shard
+between two reads are normal. A cancelled move that retakes the shard after
+its fence resets too; nobody else led in between, so that costs a redelivery
+of what was in flight and nothing more.
+
+`handoff::a_shard_moved_away_and_back_hands_out_nothing_already_acked` acks on
+A, finishes everything on B, and moves the shard back: without the change A
+hands out offset 11, which B had finished.
+
 ## What is left
 
 - **A plain client does not follow a group redirect.** Group operations over
@@ -431,9 +459,6 @@ shard are modelled as writes to the one log.
   only eligible brokers, so a group operation that reaches another broker for
   a shard a draining broker still leads is redirected without an address, and
   `group_sharded` cannot follow it until that shard has moved.
-- **A group's in-flight tracker outlives a move away and back.** It is kept
-  in the leader's memory and not cleared when the shard leaves, so after
-  A -> B -> A the first leader can hand out a record acked on B again (#685).
 - **A dead lease holder pauses the timed passes** until its lease expires,
   three reconcile intervals (15 s by default). Moves in flight carry on and
   woken passes still run, but a failover waiting on the timer waits that

@@ -25,7 +25,8 @@ use crate::error::{BrokerError, Result};
 ///
 /// Trackers are built on first touch from the durable cursor, and are in memory
 /// only: losing them redelivers whatever was in flight, which is the same thing
-/// losing the leader does.
+/// losing the leader does. They belong to one term of leading the shard; see
+/// [`GroupReader::reset_shard`].
 #[derive(Debug)]
 pub struct GroupReader {
     cursors: Arc<ConsumerGroups>,
@@ -207,6 +208,22 @@ impl GroupReader {
         }
         let tracker = self.tracker_for(key).await?;
         Ok(tracker.lock().await.redrive(offset))
+    }
+
+    /// Forget what every group has in flight on one shard, so the next
+    /// operation rebuilds it from the durable cursor.
+    ///
+    /// For a broker about to lead the shard again after someone else may have:
+    /// its trackers are from its last term, and whatever the other leader
+    /// finished is in the cursor log copied back with the shard, not here. Kept,
+    /// they would hand out records the group has already acknowledged.
+    pub async fn reset_shard(&self, tenant_id: &str, namespace: &str, stream: &str, shard: u32) {
+        self.trackers.lock().await.retain(|key, _| {
+            !(key.shard == shard
+                && key.stream == stream
+                && key.namespace == namespace
+                && key.tenant_id == tenant_id)
+        });
     }
 
     async fn settle(

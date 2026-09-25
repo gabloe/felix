@@ -150,11 +150,15 @@ what a client sees.
   gets the same frame and is reopened by the caller.
 - **Group state, counters and producer sequences move with the shard.** The
   drained report waits for the successor to hold the group cursors, dead
-  letters and counters, and producer sequences are in the log's records.
+  letters and counters, and producer sequences are in the log's records. A
+  broker that gets a shard back rebuilds its groups' in-flight state from the
+  cursors rather than keeping what it held last time, so nothing finished
+  elsewhere is handed out again.
 
 > `continuous_publishing_through_a_move_is_never_refused`,
 > `a_subscription_follows_its_shard_to_the_new_owner`,
 > `a_moved_shard_keeps_its_group_state_and_counters`,
+> `a_shard_moved_away_and_back_hands_out_nothing_already_acked`,
 > `a_producer_keeps_its_sequence_across_a_planned_move`,
 > `a_durable_publish_claimed_after_the_fence_is_refused`.
 

@@ -556,3 +556,106 @@ async fn writes_of_every_kind_through_a_move_are_never_refused() {
     );
     cluster.shutdown().await;
 }
+
+/// Poll and ack through `via` until it has nothing left, once it serves the
+/// group. Every offset it hands out is checked against `acked` first.
+async fn finish_via(cluster: &Cluster, via: &str, acked: &mut HashSet<u64>) -> usize {
+    let mut finished = 0;
+    let deadline = tokio::time::Instant::now() + wait::budget(Duration::from_secs(30));
+    loop {
+        let claimed = match cluster
+            .group_poll_records_via(via, STREAM, 0, GROUP, 10)
+            .await
+        {
+            Ok(claimed) => claimed,
+            // Named owner and serving are different moments.
+            Err(err) => {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "{via} never served the group: {err:#}"
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        if claimed.is_empty() {
+            return finished;
+        }
+        for record in claimed {
+            assert!(
+                !acked.contains(&record.offset),
+                "{via} handed out offset {} after the group acked it",
+                record.offset,
+            );
+            cluster
+                .group_ack_via(via, STREAM, 0, GROUP, record.offset)
+                .await
+                .expect("ack");
+            acked.insert(record.offset);
+            finished += 1;
+        }
+    }
+}
+
+/// Move the stream's shard to `to` by hand and wait for the cut-over.
+async fn move_to(cluster: &Cluster, to: &str) {
+    cluster.start_move(STREAM, 0, to).await.expect("start move");
+    wait::until(Duration::from_secs(60), "the move to cut over", || async {
+        cluster.place_shards().await;
+        cluster.owner(STREAM).await.is_ok_and(|owner| owner == to)
+    })
+    .await
+    .expect("move");
+}
+
+async fn publish_jobs(cluster: &Cluster, via: &str, from: usize, count: usize) {
+    for i in from..from + count {
+        cluster
+            .publish_keyed_via_settled(
+                via,
+                STREAM,
+                b"k",
+                format!("job-{i}").into_bytes(),
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("publish");
+    }
+}
+
+/// **A shard moved away and back hands out nothing the group finished while
+/// it was gone.** The group acks records on the first leader, the shard moves
+/// to a second broker where the group finishes everything, and then moves
+/// back. What the first leader remembered handing out is from before it let
+/// the shard go; the group's cursor, copied back with the shard, is the truth.
+#[tokio::test]
+#[serial]
+async fn a_shard_moved_away_and_back_hands_out_nothing_already_acked() {
+    let cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let first = cluster.owner(STREAM).await.expect("owner");
+    let second = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &first)
+        .expect("two brokers");
+
+    let mut acked = HashSet::new();
+    publish_jobs(&cluster, &first, 0, 10).await;
+    assert!(finish_via(&cluster, &first, &mut acked).await > 0);
+
+    move_to(&cluster, &second).await;
+    publish_jobs(&cluster, &second, 10, 10).await;
+    assert!(finish_via(&cluster, &second, &mut acked).await > 0);
+
+    move_to(&cluster, &first).await;
+    publish_jobs(&cluster, &first, 20, 5).await;
+    // Only the records published since the move back are owed.
+    assert_eq!(finish_via(&cluster, &first, &mut acked).await, 5);
+    cluster.shutdown().await;
+}
