@@ -29,6 +29,10 @@ pub struct ClusterConfig {
     /// Extra environment for every broker, set after the harness's own so a
     /// test can override any of them. Empty by default.
     pub broker_env: Vec<(String, String)>,
+    /// Give every broker a plaintext Kafka listener. Off by default. It binds
+    /// every interface and advertises the address a kcat container reaches
+    /// the host by, since the tests drive it from Docker.
+    pub kafka: bool,
 }
 
 impl Default for ClusterConfig {
@@ -44,6 +48,7 @@ impl Default for ClusterConfig {
             sync_interval_ms: 200,
             regions: Vec::new(),
             broker_env: Vec::new(),
+            kafka: false,
         }
     }
 }

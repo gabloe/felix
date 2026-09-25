@@ -19,6 +19,9 @@ pub struct BrokerNode {
     /// Where peer brokers forward to. This is what the catalog advertises.
     pub internal_addr: SocketAddr,
     pub metrics_addr: SocketAddr,
+    /// The Kafka listener's advertised `host:port`, when the cluster was
+    /// started with [`ClusterConfig::kafka`](crate::ClusterConfig::kafka).
+    pub kafka_addr: Option<String>,
     pub data_dir: PathBuf,
     /// `None` once the node has been stopped.
     process: Option<Child>,
