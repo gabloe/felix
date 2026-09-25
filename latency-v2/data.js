@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790308130273,
+  "lastUpdate": 1790308416436,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19734,6 +19734,72 @@ window.BENCHMARK_DATA = {
             "range": "218.90",
             "unit": "us",
             "extra": "trials: 5\nmedian: 571.00\nmean: 666.00\nstdev: 218.90\ncv: 32.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e01b509a015bd1318df384b60155f74e535a8128",
+          "message": "Enforce a stream's home region in placement and forwarding (#698)\n\n* feat(router): read a region bridge allowlist\n\nRegionRouter gains with_bridges, and parse_bridges reads the\ncomma-separated source>dest form FELIX_REGION_BRIDGES uses. A malformed\npair is an error, not a skipped entry.\n\n* feat(controlplane): place a stream only in its home region\n\nA stream can be created with a region. Its leader and replicas then go\nonly to brokers in that region or one FELIX_REGION_BRIDGES bridges it to,\non first placement, moves, follower replacement, failover and operator\nmoves. A broker outside the allowed regions is treated as draining for\nthat stream's shards, so a copy already there is moved back in through\nthe normal move steps. With no allowed broker live the shard is reported\nNoNodeInRegion rather than placed elsewhere; an operator move out of the\nregion is refused as region_not_allowed.\n\nStreams without a region are placed exactly as before. MovePolicy carries\nthe allowlist and so is Clone rather than Copy. Migration 0017 adds a\nnullable streams.region column.\n\nSpec-Unaffected: a node outside a stream's allowed regions is handled by the existing drain path for that shard; placement only draws from a smaller candidate set, and the move, fence and failover steps are unchanged.\n\n* feat(broker): configurable region bridges and a typed region refusal\n\nBrokers read FELIX_REGION_BRIDGES into the shard router's region policy,\nso a broker can forward to a leader in a bridged region; before this the\nallowlist could not be set and every cross-region forward was refused.\nA refused forward now reaches the client as shard_unavailable with reason\nregion_not_routable instead of owner_unavailable, since it is policy and\nnot a down leader. Old clients see the new reason as text.\n\n* test(cluster): a two-region cluster keeps a homed stream in its region\n\nThe harness can give each broker a region and a stream a home region.\nWith eu and us brokers and no bridge, every copy of an eu stream lands in\neu, an operator move to us is refused, and the us broker refuses a publish\ninstead of forwarding it into eu.\n\n* docs: say what region enforcement covers now\n\nThe status row moves to Partial and lists what is and is not enforced.\nDocument FELIX_REGION_BRIDGES, a stream's region, region_not_allowed and\nthe region_not_routable reason, and correct pages that said nothing\nconsults the allowlist.\n\n* fix(demos): build against a stream request with a region\n\nStreamCreateRequest gained an optional region; the two demos that build\none by literal set it to None.",
+          "timestamp": "2026-09-24T20:45:52-07:00",
+          "tree_id": "efc6fa1e31684e712f2624d7be91d53265645654",
+          "url": "https://github.com/gabloe/felix/commit/e01b509a015bd1318df384b60155f74e535a8128"
+        },
+        "date": 1790308413584,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 95,
+            "range": "1.34",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 95.00\nmean: 95.60\nstdev: 1.34\ncv: 1.40%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 126,
+            "range": "9.29",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 126.00\nmean: 130.60\nstdev: 9.29\ncv: 7.11%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 163,
+            "range": "26.30",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 163.00\nmean: 175.60\nstdev: 26.30\ncv: 14.98%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 130,
+            "range": "0.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 130.00\nmean: 130.40\nstdev: 0.55\ncv: 0.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 259,
+            "range": "9.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 259.00\nmean: 262.40\nstdev: 9.26\ncv: 3.53%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 381,
+            "range": "269.78",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 381.00\nmean: 528.20\nstdev: 269.78\ncv: 51.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
