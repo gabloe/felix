@@ -25,7 +25,9 @@ use crate::serving::quic::handlers::publish::route::{
     publish_target, resolve_route, resolve_shard,
 };
 use crate::serving::quic::handlers::publish::{PublishContext, PublishJob, StreamHandleCache};
-use crate::serving::quic::telemetry::{log_decode_error, t_counter, t_histogram, t_now_if};
+use crate::serving::quic::telemetry::{
+    count_publish, count_publish_accepted, log_decode_error, payload_len_sum, t_histogram, t_now_if,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_binary_publish_batch_control(
@@ -114,7 +116,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
         felix_wire::internal::AckMode::None,
         &auth_ctx.token,
     ) else {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         return Ok(());
     };
     let span = tracing::info_span!(
@@ -130,6 +132,7 @@ pub(crate) async fn handle_binary_publish_batch_control(
         .into_iter()
         .map(Bytes::from)
         .collect::<Vec<_>>();
+    let payload_bytes = payload_len_sum(&payloads);
     let fanout_start = t_now_if(sample);
     let r = enqueue_publish(
         publish_ctx,
@@ -147,13 +150,13 @@ pub(crate) async fn handle_binary_publish_batch_control(
     .await;
     match r {
         Ok(true) => {
-            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+            count_publish_accepted("accepted", payload_bytes);
         }
         Ok(false) => {
-            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            count_publish("dropped");
         }
         Err(err) => {
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             tracing::warn!(error = %err, "publish enqueue failed");
         }
     }
@@ -242,7 +245,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
                 counters.pub_batches_in_err.fetch_add(1, Ordering::Relaxed);
             }
             log_decode_error("acked_binary_publish_batch", &anyhow!(err), frame);
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             reply_error(ClientError::invalid("malformed publish batch")).await?;
             return Ok(());
         }
@@ -260,7 +263,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         return Ok(());
     };
     if auth_ctx.tenant_id != batch.tenant_id {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         reply_error(ClientError::forbidden("tenant mismatch")).await?;
         return Ok(());
     }
@@ -270,7 +273,7 @@ pub(crate) async fn handle_acked_binary_publish_batch_control(
         &StreamName::new(batch.stream.as_str()),
     );
     if !auth_ctx.matcher.allows(Action::StreamPublish, &resource) {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         reply_error(ClientError::forbidden("forbidden")).await?;
         return Ok(());
     }

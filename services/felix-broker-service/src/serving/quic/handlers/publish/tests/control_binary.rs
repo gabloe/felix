@@ -167,3 +167,58 @@ async fn handle_binary_publish_batch_control_enqueue_error_is_ok() {
     .await;
     assert!(result.is_ok());
 }
+
+/// The binary batch is the data path, so it is the one the publish counters
+/// most need to see: requests per batch, bytes as the payloads' sum.
+#[tokio::test]
+async fn an_accepted_binary_batch_is_counted_with_its_payload_bytes() {
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    let _local = metrics::set_default_local_recorder(&recorder);
+
+    let broker = Broker::new(EphemeralCache::new().into());
+    broker.register_tenant("tenant").await.expect("tenant");
+    broker
+        .register_namespace("tenant", "ns")
+        .await
+        .expect("namespace");
+    broker
+        .register_stream(
+            "tenant",
+            "ns",
+            "stream",
+            felix_broker::StreamMetadata::default(),
+        )
+        .await
+        .expect("stream");
+    let (publish_ctx, mut rx, _tx) = make_publish_context(4);
+    let mut cache = HashMap::new();
+    let mut key = String::new();
+    let payloads = vec![vec![0u8; 4096], vec![1u8; 100]];
+    let frame = felix_wire::binary::encode_publish_batch("tenant", "ns", "stream", &payloads)
+        .expect("encode publish batch");
+    let auth_ctx = make_auth_ctx("tenant", &["stream.publish:stream:tenant/ns/*"]);
+    handle_binary_publish_batch_control(
+        &broker,
+        &mut cache,
+        &mut key,
+        &publish_ctx,
+        &frame,
+        Some(&auth_ctx),
+        false,
+        &watch::channel(false).0,
+    )
+    .await
+    .expect("publish");
+    assert!(rx.try_recv().is_ok(), "the batch was not enqueued");
+
+    let rendered = handle.render();
+    assert!(
+        rendered.contains(r#"felix_publish_requests_total{result="accepted"} 1"#),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("felix_publish_bytes_total 4196"),
+        "{rendered}"
+    );
+}

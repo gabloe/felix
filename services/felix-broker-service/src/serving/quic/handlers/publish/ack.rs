@@ -197,7 +197,6 @@ pub(crate) enum AckWaiterResult {
     PublishBatchTimeout {
         request_id: u64,
         encoding: AckEncoding,
-        payload_bytes: Vec<usize>,
     },
 }
 
