@@ -396,6 +396,15 @@ for what the current release actually guarantees.
   themselves, because resetting the schema failed on a foreign key and the
   tests sharing it deadlocked. They now run with the database `task test`
   starts, serially, and a setup failure fails them.
+- **A `Quorum` shard is replaced when its leader dies mid-publish.** A leader
+  reported a follower caught up only when it held the leader's whole log, so a
+  publish landing between shipping and the report left every follower one
+  record short and the report named nobody. A leader killed right then left
+  the control plane no replica it may promote, and the shard stayed down for
+  good while its producers were told `stream not found`. Under `Quorum` a
+  follower now counts as caught up when it holds everything up to the offset a
+  majority holds, which is every record that can have been acknowledged.
+  `Leader` streams and moves still require an exact copy.
 
 - **The move limits hold across control-plane instances.** Each placement
   write was conditional only on its own shard's generation, so two

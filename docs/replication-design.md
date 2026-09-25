@@ -407,14 +407,24 @@ Three things this deliberately does not do:
 ### Who may be promoted
 
 A leader reports, on every replication pass, which of its followers hold every
-record it does. The leader is the only party that can say: it knows both its own
-tail and how far each follower has acknowledged, where a follower knows only
-where it is.
+record it may have acknowledged. The leader is the only party that can say: it
+knows both its own tail and how far each follower has acknowledged, where a
+follower knows only where it is.
 
-The bound is **zero** — a follower is caught up when it is missing nothing. A
-bound above zero is a bound on how much a promotion may silently lose, and there
-is no honest value for it that is not a policy decision; zero needs no such
-decision, and a follower reaches it constantly on a healthy shard.
+The bound is **zero** — a follower is caught up when it is missing nothing a
+client was promised. What that covers depends on the stream. Under `Leader` a
+write is acknowledged before it ships, so it is the leader's whole log. Under
+`Quorum` it is the log up to the offset a majority holds, which is the most the
+mark sent with the report can release; the mark already out is a floor. The
+tail would be wrong there: a publish landing between shipping and the report
+leaves every follower one record short of it, the report names nobody, and a
+leader that dies right then can never be replaced, because nothing else will
+report on the shard again. During a move the leader reports against its tail
+under either level, since the cut-over hands over an exact copy.
+
+A bound above zero is a bound on how much a promotion may silently lose, and
+there is no honest value for it that is not a policy decision; zero needs no
+such decision, and a follower reaches it constantly on a healthy shard.
 
 Reports expire, after the node expiry timeout plus one heartbeat. A report says
 a follower *was* caught up; the leader kept writing afterwards, and promoting on

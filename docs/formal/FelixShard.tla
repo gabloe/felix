@@ -67,6 +67,17 @@
 (* it received. `Promotion = "log-order"` promotes the live replica with   *)
 (* the highest (last generation, length), Raft's election restriction.     *)
 (*                                                                         *)
+(* `ReportBound` is what a follower must hold to be reported caught up.    *)
+(* "acknowledged", the design: under `Quorum`, everything up to the offset *)
+(* a majority holds, the most the mark sent with the report can release,  *)
+(* and the leader's whole log otherwise or once it has stopped. "tail"     *)
+(* demands the whole log under `Quorum` too, and TLC finds a report naming *)
+(* nobody while a majority holds every acknowledged record -- a leader     *)
+(* dying then leaves nothing to promote (QuorumReportNamesASuccessor).     *)
+(* "unpaired" measures at the majority's offset but reports the full       *)
+(* length, so the mark can run past what the holders were measured at, and *)
+(* TLC finds the acknowledged record the promoted follower lacks.          *)
+(*                                                                         *)
 (* `Resends` lets a client send a write it has no answer for again, as an  *)
 (* idempotent producer does after a lost acknowledgement or a leader       *)
 (* change. The serving broker appends it unless it already knows the       *)
@@ -119,7 +130,8 @@ CONSTANTS
     Resends,        \* whether a client may send an unanswered write again
     SequencesInLog, \* whether a re-send is checked against the log, or the leader's own writes
     Cancel,         \* whether an operator may cancel a fenced move
-    CancelCas       \* whether that cancel, too, lands only at the generation it read
+    CancelCas,      \* whether that cancel, too, lands only at the generation it read
+    ReportBound     \* what a follower must hold to be reported: "acknowledged", "tail", "unpaired"
 
 ASSUME Promotion \in {"leader-report", "log-order"}
 ASSUME ReportBeforeAck \in BOOLEAN
@@ -129,6 +141,7 @@ ASSUME CasWrites \in BOOLEAN
 ASSUME StageMove \in BOOLEAN /\ LearnerVotes \in BOOLEAN
 ASSUME Resends \in BOOLEAN /\ SequencesInLog \in BOOLEAN
 ASSUME Cancel \in BOOLEAN /\ CancelCas \in BOOLEAN
+ASSUME ReportBound \in {"acknowledged", "tail", "unpaired"}
 ASSUME Eps < L /\ Margin >= 0
 
 VARIABLES
@@ -458,13 +471,35 @@ LearnHwm(b, f) ==
 \* is invisible to it, as it is to the broker's fence -- which is why the
 \* claim has to check the fence rather than trust the report to cover it.
 \* A write that holds the fence from admission is counted from there.
+\* Whether `m` holds the first `k` records of `b`'s log.
+HoldsPrefix(m, b, k) ==
+    Len(log[m]) >= k /\ SubSeq(log[m], 1, k) = SubSeq(log[b], 1, k)
+
+\* The most of `b`'s log a majority holds, `b` included and halted followers
+\* not: `quorum_offset_without`.
+MajorityLen(b) ==
+    LET held == { k \in 0..Len(log[b]) :
+                    MajorityOf({ m \in Brokers \ halted : HoldsPrefix(m, b, k) } \cup {b},
+                               QuorumSet) }
+    IN IF held = {} THEN 0 ELSE CHOOSE k \in held : \A j \in held : j <= k
+
+\* What a follower must hold to be reported caught up. Under `Quorum`, the
+\* records the mark sent with this report may release, and never below the
+\* mark already out; otherwise, and once the leader has stopped for a move,
+\* all of it.
+ReportAt(b) ==
+    IF ReportBound /= "tail" /\ Quorum /\ ~stopped[b]
+    THEN IF MajorityLen(b) >= hwm[b] THEN MajorityLen(b) ELSE hwm[b]
+    ELSE Len(log[b])
+
 Report(b) ==
     /\ LeaseValid(b)
     /\ leader = b /\ bgen[b] = gen
     /\ inflight = <<>>
     /\ inflight' = << [holders |-> { f \in Brokers \ {b} :
-                                        log[f] = log[b] /\ f \notin halted },
-                       len     |-> Len(log[b]),
+                                        HoldsPrefix(f, b, ReportAt(b)) /\ f \notin halted },
+                       len     |-> IF ReportBound = "unpaired" THEN Len(log[b])
+                                                             ELSE ReportAt(b),
                        drained |-> stopped[b] /\ pending[b] = 0 /\ (Held => queued[b] = 0),
                        gen     |-> bgen[b]] >>
     /\ UNCHANGED << now, clock, gen, leader, cpExpiry, report, bgen, bexpiry,
@@ -697,6 +732,16 @@ AckedSurvive ==
         \A id \in acked :
             \/ \E i \in 1..Len(log[b]) : log[b][i].id = id
             \/ AckOnAdmit /\ id \in {queued[b], pending[b]}
+
+\* Under `Quorum`, a report from a leader still serving names a follower that
+\* may take over whenever a majority of the replicas is still replicating.
+\* Otherwise a leader dying just after it leaves nobody to promote, however
+\* many followers hold every record a client was promised.
+QuorumReportNamesASuccessor ==
+    (Quorum /\ inflight /= <<>> /\ ~inflight[1].drained /\ ~stopped[leader]
+            /\ inflight[1].gen = bgen[leader])
+        => \/ inflight[1].holders /= {}
+           \/ ~Majority(Brokers \ halted)
 
 \* Two brokers never hold different acknowledged records at one offset.
 \* Compared by write rather than by (generation, write): a re-sent write

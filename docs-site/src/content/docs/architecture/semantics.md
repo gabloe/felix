@@ -161,6 +161,12 @@ happen"* — the record may well have landed on the leader. Retry through an
 idempotent producer, which re-sends under the same sequence and cannot land
 it twice.
 
+Losing the leader does not stop a `Quorum` stream the same way. A follower that
+holds every record up to the quorum mark holds everything a client was told is
+stored, so it may be promoted even when the leader died holding newer records no
+follower had yet. Those were never acknowledged, and an idempotent producer
+sends them again to the new leader.
+
 `Leader` is one round trip instead of two, and it moves the moment you find out.
 If the leader dies holding a record nothing else has, the control plane will not
 promote a replica, because promoting one would open the shard **without** that

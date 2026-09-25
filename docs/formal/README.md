@@ -101,6 +101,7 @@ bootstrap of a follower below the leader's base.
 | `NoStaleCommit` | No broker commits at a generation the control plane has superseded. |
 | `StagedCopyNeverDelaysAck` | A `Quorum` write the stream's own replicas would acknowledge is never held back by a destination's copy. A latency property, checked only where a destination is staged. |
 | `NoDuplicate` | No log holds one write twice. Checked where writes are re-sent. |
+| `QuorumReportNamesASuccessor` | Under `Quorum`, a report from a leader still serving names a follower that may take over, whenever a majority is still replicating. A liveness property in invariant form, checked in `FelixShard.cfg`. |
 
 ## The configurations, and what each must do
 
@@ -116,7 +117,9 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardThinMargin.cfg` | drifting clocks with `Margin = 0` and `Eps = 0` | violate `AtMostOneServing` |
 | `FelixShardNoCommitCheck.cfg` | commit-time lease check removed | violate `NoStaleCommit` |
 | `FelixShardNoReportOrder.cfg` | the design *before* #268: a `Quorum` ack released before the report describing it lands | violate `AckedSurvive` |
-| `FelixShard.cfg` | the design as implemented: report-before-mark, promotion from the leader's report | pass every invariant (2.0M states) |
+| `FelixShard.cfg` | the design as implemented: report-before-mark, followers reported against the offset a majority holds, promotion from the leader's report | pass every invariant (1.5M states) |
+| `FelixShardReportAtTail.cfg` | the same with followers reported only when level with the leader's tail | violate `QuorumReportNamesASuccessor` |
+| `FelixShardReportUnpaired.cfg` | followers measured at the majority's offset, but the report claiming the whole log | violate `AckedSurvive` |
 | `FelixShardHandoff.cfg` | a planned move off a live leader: fence, drained report, cut over; writes hold the fence from admission | pass every invariant (2.6M states) |
 | `FelixShardHandoffNoWait.cfg` | the same move cutting over without waiting for the drained report | violate `AtMostOneServing` |
 | `FelixShardStalePlannerCas.cfg` | two instances moving the shard, one acting on a held read; writes conditional on the generation read | pass every invariant (2.6M states) |
