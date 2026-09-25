@@ -177,7 +177,8 @@ Felix is pre-1.0 and in active development. **It has not been run in production 
 anyone**, including its author.
 
 What exists today: multi-broker clusters, a durable log with crash recovery,
-replication with leader leases and failover, a cache with expiry and counters,
+replication with leader leases and failover, online rebalancing (live shard
+moves, drain and join), a cache with expiry and counters,
 consumer groups with acknowledgements and redelivery, a control plane over REST,
 and tenant-scoped tokens with OIDC token exchange.
 
@@ -186,8 +187,8 @@ What does not exist yet:
 - **Per-stream retention** — a policy can be recorded on a stream and nothing
   reads it. Retention itself works, but it is configured per broker and is off
   unless you set it, so by default a log grows until the disk does.
-- **Rebalancing** — a shard whose leader is alive is never moved, however uneven
-  that leaves the cluster.
+- **Load-aware placement** — rebalancing evens out shard counts, not load, so a
+  broker leading its share of hot shards is left as it is.
 - **Tiered storage, cross-region bridges, encryption at rest, and audit
   logging.**
 - **Clients beyond Rust, Python and TypeScript.**
