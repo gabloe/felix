@@ -182,32 +182,67 @@ cmd_snapshot() {
   echo "__SNAP_END__"
 }
 
-# sampler-start <tag>: /proc/stat, the felix process's CPU ticks and the
-# broker's append-bytes counter, once a second, until sampler-stop. Armed
-# before the load: run-command dispatch takes seconds, so a sample taken
+# The ports the series records bytes for, in column order.
+series_ports() {
+  p=$PORT_FIRST
+  while [ "$p" -lt $((PORT_FIRST + PORT_COUNT)) ]; do printf '%s ' "$p"; p=$((p + 1)); done
+  echo "$PORT_INTERNAL"
+}
+
+# sampler-start <tag>: once a second until sampler-stop, one line of
+# /proc/stat, the felix process's CPU ticks, the broker's append and publish
+# byte counters, UDP InDatagrams/RcvbufErrors and the per-port byte counters.
+# Armed before the load: run-command dispatch takes seconds, so a sample taken
 # "during" the load from the operator often lands after it.
 cmd_sampler_start() {
   tag="$1"
   mkdir -p "$SAMPLES"
-  rm -f "$SAMPLES/$tag.txt" "$SAMPLES/$tag.stop"
+  rm -f "$SAMPLES/$tag.txt" "$SAMPLES/$tag.stop" "$SAMPLES/$tag.series.tsv" "$SAMPLES/$tag.series.gz.b64"
   url=$(metrics_url || true)
   nohup "$0" _sample "$tag" "$url" >/dev/null 2>&1 &
   echo "sampler=$tag"
 }
 
+# Columns: t, cpu user+nice sys idle iowait irq softirq steal, proc ticks,
+# append bytes, publish bytes, udp InDatagrams, udp RcvbufErrors, then bytes
+# per port in series_ports order. Each line costs one scrape, one iptables
+# list and a few small /proc reads.
 cmd__sample() {
   tag="$1"; url="${2:-}"; f="$SAMPLES/$tag.txt"; i=0
+  ports=$(series_ports)
+  ipt=0
+  if command -v iptables >/dev/null && iptables -w -nL FELIX_PORTS >/dev/null 2>&1; then ipt=1; fi
   while [ "$i" -lt 3600 ] && [ ! -e "$SAMPLES/$tag.stop" ]; do
     t=$(date +%s.%N)
-    c=$(awk '/^cpu / { print $2 + $3, $4, $5, $6, $7, $8, $9; exit }' /proc/stat)
     pid=$(pidof -s felix-broker 2>/dev/null || pidof -s felix-loadgen 2>/dev/null || true)
     pt=0
     if [ -n "$pid" ]; then pt=$(awk '{ print $14 + $15 }' "/proc/$pid/stat" 2>/dev/null || echo 0); fi
-    ab=0
+    m="0 0"
     if [ -n "$url" ]; then
-      ab=$(curl -s -m 1 "$url" | awk '/^felix_storage_append_bytes_total/ { s += $NF } END { printf "%.0f", s }')
+      m=$(curl -s -m 1 "$url" | awk '
+        /^#/ { next }
+        { n = $1; sub(/\{.*/, "", n)
+          if (n == "felix_storage_append_bytes_total") a += $NF
+          else if (n == "felix_publish_bytes_total") p += $NF }
+        END { printf "%.0f %.0f", a, p }')
     fi
-    echo "$t $c $pt ${ab:-0}" >> "$f"
+    pb=""
+    if [ "$ipt" = 1 ]; then
+      pb=$(iptables -w -nvxL FELIX_PORTS 2>/dev/null | awk '/dpt:/ {
+        for (i = 1; i <= NF; i++) if ($i ~ /^dpt:/) printf "%s:%s ", substr($i, 5), $2 }')
+    fi
+    awk -v t="$t" -v pt="$pt" -v m="${m:-0 0}" -v pb="$pb" -v ports="$ports" '
+      FILENAME == "/proc/stat" && /^cpu / { c = ($2 + $3) " " $4 " " $5 " " $6 " " $7 " " $8 " " $9 }
+      FILENAME == "/proc/net/snmp" && /^Udp:/ {
+        if (!h) { for (i = 2; i <= NF; i++) k[$i] = i; h = 1 }
+        else { ind = $(k["InDatagrams"]); rb = $(k["RcvbufErrors"]) }
+      }
+      END {
+        n = split(pb, kv, " "); for (i = 1; i <= n; i++) { split(kv[i], x, ":"); b[x[1]] = x[2] }
+        line = t " " c " " pt " " m " " (ind + 0) " " (rb + 0)
+        n = split(ports, pp, " "); for (i = 1; i <= n; i++) line = line " " (b[pp[i]] + 0)
+        print line
+      }' /proc/stat /proc/net/snmp >> "$f" || true
     i=$((i + 1))
     sleep 1
   done
@@ -217,6 +252,8 @@ cmd__sample() {
 # busy, so the idle head and tail do not dilute the loaded middle. Append
 # throughput is taken over the window between the first and last second the
 # counter moved, so it does not depend on when the operator's calls landed.
+# The raw counters also go out as <tag>.series.gz.b64 for the operator to
+# fetch; summarize.py cuts the steady-state window from them.
 cmd_sampler_stop() {
   tag="$1"
   touch "$SAMPLES/$tag.stop"
@@ -254,6 +291,18 @@ cmd_sampler_stop() {
         printf "s.append_bytes=%.0f\ns.append_secs=%.2f\ns.append_mb_s=%.1f\ns.append_peak_mb_s=%.1f\n", bytes, secs, bytes / secs / 1e6, R / 1e6
       }
     }' "$f"
+  series="$SAMPLES/$tag.series.tsv"
+  {
+    echo "# hz=$(getconf CLK_TCK) nproc=$(nproc) host=$(hostname)"
+    printf 't\tproc_ticks\tappend_bytes\tpublish_bytes\tudp_in\tudp_rcvbuf_errors'
+    for p in $(series_ports); do printf '\tport.%s.bytes' "$p"; done
+    echo
+    # Milliseconds are plenty, and the shorter stamp keeps the fetch small.
+    awk 'NF >= 14 { $1 = sprintf("%.3f", $1); $2 = $3 = $4 = $5 = $6 = $7 = $8 = ""; print }' "$f" \
+      | tr -s ' ' | tr ' ' '\t'
+  } > "$series"
+  gzip -9 -c "$series" | base64 -w0 > "$SAMPLES/$tag.series.gz.b64"
+  echo "s.series_b64_bytes=$(wc -c < "$SAMPLES/$tag.series.gz.b64")"
   echo "__SAMPLE_END__"
 }
 
