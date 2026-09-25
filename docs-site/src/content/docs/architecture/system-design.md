@@ -58,6 +58,13 @@ Postgres, or by an in-memory store. It owns tenants, namespaces, streams, caches
 
 Brokers serve clients over QUIC and reach each other over a separate QUIC endpoint with its own protocol. Each one leads some shards, replicates the ones it leads to followers, forwards what it does not lead, and refuses what it cannot route — a request served locally by a broker that does not own it is exactly the divergence the ownership check exists to prevent.
 
+A broker can also run a Kafka listener beside its QUIC one. It is a second front
+door onto the same shards, not a separate system: a Kafka produce goes through
+the broker's own publish path on the shard's leader, and a fetch reads the
+shard's log by offset. Unlike QUIC requests, Kafka requests are never
+forwarded; Kafka clients find a partition's leader through Metadata and go to
+it themselves. See [Kafka compatibility](/felix/features/kafka/).
+
 
 ## Data Flow Patterns
 

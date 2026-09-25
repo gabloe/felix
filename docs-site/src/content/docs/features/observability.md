@@ -137,7 +137,7 @@ felix_broker_credential_rotations_total     # by outcome: ok, rejected — a tok
 ```
 
 **Are Kafka clients being served?** Only when the Kafka listener is on
-(`FELIX_KAFKA_LISTEN`; see [Kafka clients](/felix/features/kafka/)):
+(`FELIX_KAFKA_LISTEN`; see [Kafka compatibility](/felix/features/kafka/)):
 
 ```prometheus
 felix_kafka_connections                     # gauge: Kafka connections open now

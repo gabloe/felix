@@ -30,7 +30,7 @@ for what the current release actually guarantees.
   `felix_kafka_produce_duplicate_records_total`,
   `felix_kafka_produce_errors_total` and `felix_kafka_produce_dropped_total`.
   `FELIX_KAFKA_ANONYMOUS_TENANT` now allows writes as well as reads. The
-  docs-site page "Reading with Kafka Clients" is now "Kafka Clients".
+  docs-site page "Reading with Kafka Clients" is now "Kafka Compatibility".
 
 - **Kafka consumers can read durable streams.** A broker started with
   `FELIX_KAFKA_LISTEN` serves the Kafka protocol, read-only, for consumers that

@@ -74,6 +74,16 @@ the territory.
   </Card>
 </CardGrid>
 
+## Already using Kafka?
+
+<CardGrid>
+  <LinkCard
+    title="Kafka compatibility"
+    href="/felix/features/kafka/"
+    description="Point existing Kafka producers and partition-assigning consumers at a Felix broker. Topics are streams, partitions are shards, offsets are Felix's. No consumer groups or transactions."
+  />
+</CardGrid>
+
 ## See it behave
 
 The demos are not simulations — each one runs a real broker and real clients, and
@@ -141,6 +151,7 @@ rule and one replication path.
 | **Batch processing** | Time- and count-bounded batching for throughput |
 | **TTL support** | Time-to-live on cache entries with lazy expiration |
 | **Work queues** | Consumer groups with acknowledgements, redelivery and dead letters |
+| **[Kafka compatibility](/felix/features/kafka/)** | Kafka producers, and consumers that assign their own partitions, work against durable streams |
 | **Backpressure** | Explicit flow control at six checkpoints to prevent cascade failures |
 | **Metrics** | Prometheus-compatible metrics endpoint |
 | **Observability** | Structured logging with optional per-stage telemetry |
@@ -168,6 +179,9 @@ boundaries — including what Felix is deliberately *not*.
     - Replication with leader leases, quorum acknowledgement and failover
     - A log-backed cache: routed to one owner, replicated, put/get/delete
     - Consumer groups: poll, acknowledge, redeliver, dead-letter, redrive
+    - [Kafka compatibility](/felix/features/kafka/): Kafka producers (idempotent
+      ones included) and partition-assigning consumers against durable
+      streams; no Kafka consumer groups or transactions
     - A control plane over REST, holding metadata in Raft — no external
       database — or in Postgres, and capability negotiation on the wire
     - Tenant-scoped tokens, RBAC, and OIDC token exchange

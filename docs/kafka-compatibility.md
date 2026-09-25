@@ -9,7 +9,7 @@ its own offsets works; anything built on `group.id` and `subscribe()` does not,
 and neither does a producer with `transactional.id`.
 
 The user-facing guide, with quick start, use cases and troubleshooting, is
-[Kafka clients](https://gabloe.github.io/felix/features/kafka/).
+[Kafka compatibility](https://gabloe.github.io/felix/features/kafka/).
 This page is the reference: what is implemented, how Felix maps onto Kafka's
 model, and why it stops where it does.
 

@@ -1,5 +1,5 @@
 ---
-title: "Kafka Clients"
+title: "Kafka Compatibility"
 description: "Read durable Felix streams with Kafka consumers that assign their own partitions, and write to them with Kafka producers, idempotent ones included."
 ---
 
