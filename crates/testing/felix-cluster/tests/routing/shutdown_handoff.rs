@@ -280,3 +280,358 @@ async fn a_single_broker_stops_without_waiting_for_a_handoff() {
     assert!(status.success(), "clean exit: {status}");
     cluster.shutdown().await;
 }
+
+/// Brokers that start with `handoff_ms` as their handoff timeout.
+fn config_with_handoff(nodes: usize, stream: StreamSpec, handoff_ms: u64) -> ClusterConfig {
+    ClusterConfig {
+        nodes,
+        streams: vec![stream],
+        broker_env: vec![
+            (
+                "FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS".to_string(),
+                handoff_ms.to_string(),
+            ),
+            // A publisher holds its connection open, so the drain would wait
+            // out its whole default deadline.
+            (
+                "FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS".to_string(),
+                "3000".to_string(),
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Keyed publishers sharing one `ClusterClient` until told to stop, keeping
+/// what was acknowledged. A failed publish is never sent again.
+struct Publisher {
+    acknowledged: Arc<Mutex<Vec<Vec<u8>>>>,
+    refused: Arc<AtomicUsize>,
+    stop: Arc<AtomicBool>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Publisher {
+    /// Several in flight at once: one at a time, a debug-build `Quorum`
+    /// publish is too slow to put much through a one-second window.
+    const WORKERS: usize = 8;
+
+    fn start(client: felix_client::ClusterClient, cluster: &Cluster, keys: usize) -> Self {
+        let client = Arc::new(client);
+        let acknowledged: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+        let refused = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let tasks = (0..Self::WORKERS)
+            .map(|worker| {
+                let (client, acknowledged, refused, stop) = (
+                    Arc::clone(&client),
+                    Arc::clone(&acknowledged),
+                    Arc::clone(&refused),
+                    Arc::clone(&stop),
+                );
+                let (tenant, namespace) = (cluster.tenant_id.clone(), cluster.namespace.clone());
+                tokio::spawn(async move {
+                    let mut i = 0usize;
+                    while !stop.load(Ordering::Relaxed) {
+                        let payload = format!("during-{worker}-{i}").into_bytes();
+                        let key =
+                            bytes::Bytes::from(format!("k{}", (i * Self::WORKERS + worker) % keys));
+                        i += 1;
+                        match client
+                            .publish_keyed(
+                                &tenant,
+                                &namespace,
+                                STREAM,
+                                payload.clone(),
+                                key,
+                                felix_wire::AckMode::PerMessage,
+                            )
+                            .await
+                        {
+                            Ok(()) => acknowledged.lock().await.push(payload),
+                            Err(_) => {
+                                refused.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                })
+            })
+            .collect();
+        Self {
+            acknowledged,
+            refused,
+            stop,
+            tasks,
+        }
+    }
+
+    /// Stop, and return what was acknowledged and how many were refused.
+    async fn finish(self) -> (Vec<Vec<u8>>, usize) {
+        self.stop.store(true, Ordering::Relaxed);
+        for task in self.tasks {
+            task.await.expect("publisher");
+        }
+        let acknowledged = self.acknowledged.lock().await.clone();
+        (acknowledged, self.refused.load(Ordering::Relaxed))
+    }
+}
+
+/// A shard and the `(offset, payload)` records read back from it.
+type ShardRecords = (u32, Vec<(u64, Vec<u8>)>);
+
+/// Replay every shard from its current leader until each has been quiet for
+/// a while, and return each shard's `(offset, payload)` in delivery order.
+async fn read_every_shard(cluster: &Cluster, shards: u32) -> Vec<ShardRecords> {
+    let owners = cluster.shard_owners_for(STREAM).await.expect("owners");
+    let mut readers = Vec::new();
+    for shard in 0..shards {
+        let owner = owners.get(&shard).expect("every shard is led").clone();
+        let (client, mut subscription) = felix_cluster::wait::until_some(
+            Duration::from_secs(30),
+            &format!("replay shard {shard} on {owner}"),
+            || async { cluster.replay_shard(&owner, STREAM, shard).await.ok() },
+        )
+        .await
+        .expect("replay");
+        readers.push(tokio::spawn(async move {
+            let _client = client;
+            let mut records = Vec::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(2), subscription.next_event()).await
+                {
+                    Ok(Ok(Some(event))) => records.push((
+                        event.offset.expect("a durable stream carries offsets"),
+                        event.payload.to_vec(),
+                    )),
+                    Ok(Ok(None)) => break,
+                    Ok(Err(err)) => panic!("replay of shard {shard} failed: {err:#}"),
+                    Err(_) => break,
+                }
+            }
+            (shard, records)
+        }));
+    }
+    let mut out = Vec::new();
+    for reader in readers {
+        out.push(reader.await.expect("reader"));
+    }
+    out
+}
+
+/// Every acknowledged record is in the stream exactly once, no record is
+/// there twice, and every shard's offsets run from 0 without a gap.
+fn assert_exactly_once(owed: &[Vec<u8>], read: &[ShardRecords]) {
+    let mut seen: std::collections::HashMap<&[u8], usize> = std::collections::HashMap::new();
+    for (shard, records) in read {
+        let offsets: Vec<u64> = records.iter().map(|(offset, _)| *offset).collect();
+        let expected: Vec<u64> = (0..offsets.len() as u64).collect();
+        assert_eq!(
+            offsets, expected,
+            "shard {shard}: every offset once and in order"
+        );
+        for (_, payload) in records {
+            *seen.entry(payload.as_slice()).or_default() += 1;
+        }
+    }
+    let twice: Vec<String> = seen
+        .iter()
+        // The harness's own start-up probes are published once per broker.
+        .filter(|(payload, count)| **count > 1 && *payload != b"harness-probe")
+        .map(|(payload, count)| format!("{} x{count}", String::from_utf8_lossy(payload)))
+        .collect();
+    assert!(twice.is_empty(), "stored more than once: {twice:?}");
+    let missing: Vec<String> = owed
+        .iter()
+        .filter(|payload| !seen.contains_key(payload.as_slice()))
+        .map(|payload| String::from_utf8_lossy(payload).into_owned())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} of {} acknowledged records are gone: {missing:?}",
+        missing.len(),
+        owed.len()
+    );
+}
+
+/// **A handoff that times out loses no acknowledged record.** Sixteen
+/// `Quorum` shards, three copies each, on four brokers; publishers ask for a
+/// per-message ack, which for `Quorum` means a majority has the record even
+/// with `FELIX_ACK_ON_COMMIT` off. The stopping broker gets 1.5 s to hand off
+/// while placement runs one move at a time, so some shards move and the rest
+/// are still led when it gives up; those fail over once it has exited. Every
+/// acknowledged record is then read back from the new leaders exactly once,
+/// with no gap in any shard's offsets.
+///
+/// `Leader` consistency makes no such promise: the ack goes out before a
+/// follower has the record, so a failover may lose it.
+#[serial]
+#[tokio::test]
+async fn a_handoff_that_times_out_loses_no_acknowledged_record() {
+    const SHARDS: u32 = 16;
+    let mut cluster = Cluster::start(config_with_handoff(
+        4,
+        StreamSpec::quorum(STREAM, SHARDS, 3),
+        1_500,
+    ))
+    .await
+    .expect("start cluster");
+    let owners = cluster.shard_owners_for(STREAM).await.expect("owners");
+    let stopping = cluster
+        .node_ids()
+        .into_iter()
+        .max_by_key(|node| owners.values().filter(|owner| *owner == node).count())
+        .expect("a broker");
+    let led = owners.values().filter(|owner| **owner == stopping).count();
+    assert!(
+        led >= 3,
+        "{stopping} should lead several shards, leads {led}"
+    );
+    let addrs = cluster.broker_addrs();
+
+    let mut owed = Vec::new();
+    for i in 0..64 {
+        let payload = format!("before-{i}").into_bytes();
+        let node = cluster.node_ids()[i % 4].clone();
+        cluster
+            .publish_keyed_via_settled(
+                &node,
+                STREAM,
+                format!("k{i}").as_bytes(),
+                payload.clone(),
+                Duration::from_secs(30),
+            )
+            .await
+            .expect("publish before the stop");
+        owed.push(payload);
+    }
+
+    let writer =
+        felix_cluster::client::connect_cluster(&addrs, &cluster.tenant_id, &cluster.client_token)
+            .await
+            .expect("writer");
+    let publisher = Publisher::start(writer, &cluster, 64);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let log_path = cluster
+        .node(&stopping)
+        .expect("node")
+        .data_dir
+        .join("broker.log");
+    let timed_out = || {
+        std::fs::read_to_string(&log_path)
+            .unwrap_or_default()
+            .contains("shutdown handoff timed out")
+    };
+    let signalled = Instant::now();
+    cluster.terminate_node(&stopping).expect("SIGTERM");
+
+    // Moves until the handoff gives up. A move takes three or four passes, so
+    // one at a time, a pass every 300 ms, leaves shards led when 1.5 s is up.
+    let mut moved = 0usize;
+    while !timed_out() {
+        moved += cluster.place_shards_moving(1).await.moved;
+        assert!(
+            signalled.elapsed() < EXIT_WITHIN,
+            "the handoff did not time out ({moved} move steps)"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    // No placement while it drains, or the moves in flight finish on the
+    // still-serving broker and nothing fails over.
+    let status = cluster
+        .wait_for_exit(&stopping, EXIT_WITHIN)
+        .await
+        .expect("the broker exits once its drain is done");
+    assert!(status.success(), "clean exit: {status}");
+    let still_led = cluster
+        .shard_owners_for(STREAM)
+        .await
+        .expect("owners")
+        .values()
+        .filter(|owner| **owner == stopping)
+        .count();
+    assert!(
+        moved > 0 && still_led > 0,
+        "some shards should have moved and some still be led at exit: \
+         {moved} move steps, {still_led} still led"
+    );
+
+    // The rest fail over.
+    let mut placed = 0usize;
+    let exited_at = Instant::now();
+    loop {
+        let outcome = cluster.place_shards_moving(1).await;
+        placed += outcome.placed + outcome.failed;
+        let owners = cluster.shard_owners_for(STREAM).await.unwrap_or_default();
+        if owners.len() == SHARDS as usize && owners.values().all(|owner| owner != &stopping) {
+            break;
+        }
+        assert!(
+            exited_at.elapsed() < Duration::from_secs(60),
+            "shards still on {stopping}: {owners:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(placed > 0, "the shards still led should have failed over");
+
+    // Writes to the new leaders too, then stop.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let (during, refused) = publisher.finish().await;
+    assert!(
+        during.len() > 100,
+        "too little was acknowledged to prove anything ({} acked, {refused} refused)",
+        during.len()
+    );
+    owed.extend(during);
+
+    let read = read_every_shard(&cluster, SHARDS).await;
+    assert_exactly_once(&owed, &read);
+    cluster.shutdown().await;
+}
+
+/// **A lone broker that stops keeps what it acknowledged.** There is nowhere
+/// to hand off, so it stops at once, under a publisher asking for per-message
+/// acks with `FELIX_ACK_ON_COMMIT` off (the ack goes out once the record is
+/// queued, before it is written). The drain is what has to get those records
+/// to disk: every acknowledged one is there when the broker comes back.
+#[serial]
+#[tokio::test]
+async fn a_lone_broker_that_stops_keeps_what_it_acknowledged() {
+    const SHARDS: u32 = 4;
+    let mut cluster = Cluster::start(config_with_handoff(
+        1,
+        StreamSpec::new(STREAM, SHARDS),
+        30_000,
+    ))
+    .await
+    .expect("start cluster");
+    let node = cluster.node_ids()[0].clone();
+    let writer = felix_cluster::client::connect_cluster(
+        &cluster.broker_addrs(),
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await
+    .expect("writer");
+    let publisher = Publisher::start(writer, &cluster, 16);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    cluster.terminate_node(&node).expect("SIGTERM");
+    let status = cluster
+        .wait_for_exit(&node, Duration::from_secs(15))
+        .await
+        .expect("a lone broker should not wait out the handoff timeout");
+    assert!(status.success(), "clean exit: {status}");
+    let (owed, refused) = publisher.finish().await;
+    assert!(
+        owed.len() > 50,
+        "too little was acknowledged to prove anything ({} acked, {refused} refused)",
+        owed.len()
+    );
+
+    cluster.restart_node(&node).await.expect("restart");
+    let read = read_every_shard(&cluster, SHARDS).await;
+    assert_exactly_once(&owed, &read);
+    cluster.shutdown().await;
+}

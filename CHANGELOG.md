@@ -387,6 +387,24 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **A broker that took a shard over replays all of it.** A follower's
+  replay ring was filled when the first replicated batch opened the stream
+  and was never touched again, so after a failover or a planned move a
+  reader from the start got that first batch and then the live edge,
+  skipping everything replicated in between. The records were on disk; a
+  cursor-based subscribe had the same hole. The ring is now emptied as
+  replicated records move the tail, and a reader is served from the log
+  (`records_replicated_after_the_first_batch_replay_from_the_start`, and
+  in `felix-cluster`, `a_handoff_that_times_out_loses_no_acknowledged_record`).
+- **Client: out-of-order publish acks no longer break the stream.** The
+  broker answers acked publishes as each completes, so on a publish stream
+  carrying several at once a `Quorum` or forwarded publish can be answered
+  after one sent behind it. The client required acks in request order and
+  treated any other as a protocol error, failing every publish outstanding
+  on that stream and reconnecting. Each answer now goes to the request it
+  names (`acks_answered_out_of_order_reach_their_own_requests`).
+
+
 - **The move limits hold across control-plane instances.** Each placement
   write was conditional only on its own shard's generation, so two
   Postgres-backed instances, or a pass and an operator's request on another

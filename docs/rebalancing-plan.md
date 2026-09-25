@@ -388,6 +388,28 @@ record once and in order, and the broker exits cleanly. Before the change the
 same test saw a failover and refused publishes. It also restarts a broker that
 handed off and sees it lead again, and stops a lone broker without waiting.
 
+Two more tests cover the ends of that bound. With sixteen `Quorum` shards
+(three copies, per-message acks) on four brokers and a 1.5 s timeout, the
+stopping broker hands some shards off and still leads others when it gives
+up; those fail over once it exits, and every acknowledged record is read back
+from the new leaders exactly once, with no gap in any shard's offsets
+(`a_handoff_that_times_out_loses_no_acknowledged_record`). A lone broker
+stopped under per-message acks with `FELIX_ACK_ON_COMMIT` off (acked once
+queued) has every acknowledged record on restart
+(`a_lone_broker_that_stops_keeps_what_it_acknowledged`). The claim is for
+`Quorum`: a `Leader` stream acknowledges before a follower has the record, so
+a shard that fails over can lose what its leader acknowledged last.
+
+The first of those found two bugs. A broker that took a shard over, by
+failover or by a move, replayed only the first replicated batch and then the
+live edge: its replay ring was filled when that batch opened the stream and
+never touched again, though the records were on its disk. The ring is now
+emptied as replicated records move the tail
+(`records_replicated_after_the_first_batch_replay_from_the_start`). And the
+client required publish acks in request order, while the broker answers each
+as it completes; a `Quorum` publish answered after the one behind it failed
+every publish on that stream (`acks_answered_out_of_order_reach_their_own_requests`).
+
 ### Holding cache, counter and group operations
 
 Every cache and counter operation now goes through the same hold as a
@@ -484,10 +506,12 @@ fails without it with no address in the redirect.
   three reconcile intervals (15 s by default). Moves in flight carry on and
   woken passes still run, but a failover waiting on the timer waits that
   long. A holder that shuts down releases the lease and costs nothing.
-- **A shutdown handoff is bounded.** A broker stopping hands its shards off
-  for up to `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`; what it still leads then
-  fails over. Moves are paced like any other, so a broker leading many
-  unreplicated shards needs a longer timeout (and grace period).
+- **A shutdown handoff is bounded.** What a stopping broker still leads when
+  `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS` runs out fails over. For a `Quorum`
+  stream that loses no acknowledged record; for a `Leader` or unreplicated
+  one it can, as any failover can. Moves are paced like any other, so a
+  broker leading many unreplicated shards needs a longer timeout (and grace
+  period).
 - **Load-aware placement** is separate work with its own status row.
 
 ## Checking the work
