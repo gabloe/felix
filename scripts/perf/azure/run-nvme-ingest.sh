@@ -8,7 +8,9 @@
 set -euo pipefail
 : "${SESSION:?SESSION=<name>}"
 here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib.sh
 source "${here}/lib.sh"
+# shellcheck disable=SC1090
 source "${here}/sessions/${SESSION}.env"
 export GROUP="${GROUP}"
 
@@ -28,25 +30,21 @@ cat /tmp/c.out
 echo __RUNOK__" | tee "${out}/${label}.out" | grep -E 'ingest:|LOADGEN_JSON' || true
 }
 
-# Set the durable fsync mode on every broker via a systemd drop-in (survives the
-# ExecStartPre that regenerates broker.env), then restart and wait for re-register.
+# Set the durable fsync mode on every broker in /etc/felix/overrides.env (a
+# drop-in's Environment= loses to the regenerated broker.env), then restart
+# and wait for re-register.
 set_fsync() {
   mode="$1"
   echo ">> setting FELIX_DURABLE_FSYNC_MODE=${mode} on brokers"
   for i in "${!brokers[@]}"; do
-    run_on_str "$(broker_vm "${i}")" "mkdir -p /etc/systemd/system/felix-broker.service.d
-printf '[Service]\nEnvironment=FELIX_DURABLE_FSYNC_MODE=${mode}\n' > /etc/systemd/system/felix-broker.service.d/10-fsync.conf
+    agent_on "$(broker_vm "${i}")" "rm -f /etc/systemd/system/felix-broker.service.d/10-fsync.conf
 systemctl daemon-reload
-systemctl restart felix-broker
-sleep 3
-systemctl is-active felix-broker
-echo __RUNOK__" | tail -1
+felix-agent env-set FELIX_DURABLE_FSYNC_MODE=${mode} >/dev/null
+felix-agent restart" | grep '^state='
   done
   sleep 8
 }
 
-INMEM=""
-DUR=""
 # 4 KiB ingest ramp; total scales with concurrency so each publisher does ~200k.
 ramp() {
   stream="$1"; tag="$2"
