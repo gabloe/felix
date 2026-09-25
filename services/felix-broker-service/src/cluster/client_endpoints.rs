@@ -22,6 +22,8 @@ pub struct ClientEndpoints {
     /// included, since a draining broker still leads what it has not handed
     /// off.
     redirects: ArcSwap<Vec<BrokerEndpoint>>,
+    /// Kafka listener addresses of every routable broker that runs one.
+    kafka: ArcSwap<Vec<BrokerEndpoint>>,
 }
 
 impl ClientEndpoints {
@@ -29,7 +31,7 @@ impl ClientEndpoints {
         Self::default()
     }
 
-    /// Replace both lists with this refresh of the node catalog.
+    /// Replace every list with this refresh of the node catalog.
     ///
     /// Whole-list rather than merged: a broker that has stopped advertising a
     /// client address, or stopped being eligible, has to leave the answer, and
@@ -40,6 +42,7 @@ impl ClientEndpoints {
             .store(Arc::new(catalog.client_endpoints.clone()));
         self.redirects
             .store(Arc::new(catalog.redirect_endpoints.clone()));
+        self.kafka.store(Arc::new(catalog.kafka_endpoints.clone()));
     }
 
     /// The client address to name in a redirect to `node_id`, if the cluster
@@ -54,6 +57,11 @@ impl ClientEndpoints {
 
     pub fn snapshot(&self) -> Arc<Vec<BrokerEndpoint>> {
         self.endpoints.load_full()
+    }
+
+    /// Where Kafka clients may connect, sorted by node id.
+    pub fn kafka_snapshot(&self) -> Arc<Vec<BrokerEndpoint>> {
+        self.kafka.load_full()
     }
 }
 

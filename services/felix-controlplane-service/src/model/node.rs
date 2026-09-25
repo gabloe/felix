@@ -36,6 +36,10 @@ pub enum NodeValidationError {
     InvalidClientAddr(String),
     #[error("client_addr must specify a non-zero port")]
     ZeroClientPort,
+    #[error("kafka_addr {0:?} is not a valid host:port address")]
+    InvalidKafkaAddr(String),
+    #[error("kafka_addr must specify a non-zero port")]
+    ZeroKafkaPort,
     #[error("advertise_addr must specify a non-zero port")]
     ZeroAdvertisePort,
     #[error("label keys must not be empty")]
@@ -157,6 +161,13 @@ pub struct NodeSpec {
     /// field that only affects discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_addr: Option<String>,
+    /// `host:port` Kafka clients are told to connect to for this broker.
+    ///
+    /// Present only when the broker runs its Kafka-protocol listener. May be a
+    /// DNS name rather than an IP, since Kafka advertised listeners usually
+    /// are. Not required to be unique, for the same reason as `client_addr`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kafka_addr: Option<String>,
     pub region: String,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
@@ -172,6 +183,9 @@ impl NodeSpec {
         validate_advertise_addr(&self.advertise_addr)?;
         if let Some(client_addr) = &self.client_addr {
             validate_client_addr(client_addr)?;
+        }
+        if let Some(kafka_addr) = &self.kafka_addr {
+            validate_kafka_addr(kafka_addr)?;
         }
         validate_labels(&self.labels)?;
         self.capacity.validate()
@@ -314,6 +328,42 @@ fn validate_client_addr(addr: &str) -> Result<(), NodeValidationError> {
         return Err(NodeValidationError::ZeroClientPort);
     }
     Ok(())
+}
+
+/// Unlike the QUIC addresses this accepts a hostname: a Kafka client resolves
+/// it itself, and containerised setups advertise names like
+/// `host.docker.internal:9092`. An IPv6 host must be bracketed, otherwise the
+/// port cannot be told apart from the address.
+fn validate_kafka_addr(addr: &str) -> Result<(), NodeValidationError> {
+    let invalid = || NodeValidationError::InvalidKafkaAddr(addr.to_string());
+    let (host, port) = addr.rsplit_once(':').ok_or_else(invalid)?;
+    let port: u16 = port.parse().map_err(|_| invalid())?;
+    if let Some(inner) = host.strip_prefix('[') {
+        let inner = inner.strip_suffix(']').ok_or_else(invalid)?;
+        inner.parse::<std::net::Ipv6Addr>().map_err(|_| invalid())?;
+    } else if !is_hostname_or_ipv4(host) {
+        return Err(invalid());
+    }
+    if port == 0 {
+        return Err(NodeValidationError::ZeroKafkaPort);
+    }
+    Ok(())
+}
+
+/// A DNS name (RFC 1123 labels) or a dotted IPv4 address, which is itself a
+/// valid name syntactically.
+fn is_hostname_or_ipv4(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= MAX_IDENTIFIER_LEN
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
 }
 
 fn validate_labels(labels: &BTreeMap<String, String>) -> Result<(), NodeValidationError> {

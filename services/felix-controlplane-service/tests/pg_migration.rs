@@ -168,6 +168,7 @@ async fn seed(store: &(dyn ControlPlaneAuthStore + Send + Sync)) {
             spec: NodeSpec {
                 advertise_addr: "10.0.0.4:7000".to_string(),
                 client_addr: None,
+                kafka_addr: None,
                 region: "local".to_string(),
                 labels: BTreeMap::new(),
                 capacity: NodeCapacity {

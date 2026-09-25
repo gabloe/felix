@@ -209,6 +209,7 @@ fn node_named(node_id: &str) -> Node {
         spec: NodeSpec {
             advertise_addr: "10.0.0.4:7000".to_string(),
             client_addr: None,
+            kafka_addr: None,
             region: "r1".to_string(),
             labels: Default::default(),
             capacity: NodeCapacity::default(),

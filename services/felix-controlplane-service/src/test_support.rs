@@ -106,6 +106,7 @@ pub(crate) async fn one_shard_cluster() -> (
                 spec: NodeSpec {
                     advertise_addr: format!("10.0.0.4:{}", 7100 + i),
                     client_addr: None,
+                    kafka_addr: None,
                     region: "local".to_string(),
                     labels: Default::default(),
                     capacity: NodeCapacity::default(),

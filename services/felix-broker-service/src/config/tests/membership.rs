@@ -127,3 +127,29 @@ fn region_bridges_are_read_and_a_malformed_one_fails_startup() {
     let err = BrokerConfig::from_env().expect_err("should fail");
     assert!(err.to_string().contains("FELIX_REGION_BRIDGES"), "{err}");
 }
+
+/// Only a broker running the Kafka listener registers a Kafka address, and it
+/// defaults to the bind address when nothing more specific is advertised.
+#[test]
+fn the_kafka_address_is_registered_only_with_the_listener_on() {
+    use super::super::membership::kafka_advertise_addr;
+
+    assert_eq!(kafka_advertise_addr(None, None), None);
+    assert_eq!(kafka_advertise_addr(Some("kafka.example:9092"), None), None);
+    assert_eq!(
+        kafka_advertise_addr(Some("kafka.example:9092"), Some("  ")),
+        None
+    );
+    assert_eq!(
+        kafka_advertise_addr(None, Some("0.0.0.0:9092")).as_deref(),
+        Some("0.0.0.0:9092")
+    );
+    assert_eq!(
+        kafka_advertise_addr(Some(" "), Some("0.0.0.0:9092")).as_deref(),
+        Some("0.0.0.0:9092")
+    );
+    assert_eq!(
+        kafka_advertise_addr(Some(" host.docker.internal:9092 "), Some("0.0.0.0:9092")).as_deref(),
+        Some("host.docker.internal:9092")
+    );
+}

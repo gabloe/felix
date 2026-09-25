@@ -25,6 +25,10 @@ pub struct MembershipConfig {
     /// no client should hold, and the only safe answer for one whose operator
     /// has not said where clients reach it.
     pub client_advertise_addr: Option<String>,
+    /// `host:port` Kafka clients are told to connect to for this broker.
+    ///
+    /// Set only when the Kafka listener is on. See [`kafka_advertise_addr`].
+    pub kafka_advertise_addr: Option<String>,
     pub region: String,
     /// `(source, dest)` region pairs traffic may cross, from
     /// `FELIX_REGION_BRIDGES`. This broker forwards to a shard's leader only
@@ -154,8 +158,33 @@ pub(super) fn membership_from_env(
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
+        kafka_advertise_addr: kafka_advertise_addr(
+            std::env::var("FELIX_KAFKA_ADVERTISE_ADDR").ok().as_deref(),
+            std::env::var("FELIX_KAFKA_LISTEN").ok().as_deref(),
+        ),
         region: std::env::var("FELIX_REGION_ID").unwrap_or_else(|_| "local".to_string()),
     }))
+}
+
+/// The Kafka address to register, from `FELIX_KAFKA_ADVERTISE_ADDR` and
+/// `FELIX_KAFKA_LISTEN`.
+///
+/// `None` unless the listener is on, even if an advertised address is set:
+/// registering one would send Kafka clients to a port nothing listens on.
+/// Without an explicit advertised address the bind address is used. Empty or
+/// blank values count as unset.
+pub(crate) fn kafka_advertise_addr(
+    advertise: Option<&str>,
+    listen: Option<&str>,
+) -> Option<String> {
+    let non_empty = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let listen = non_empty(listen)?;
+    Some(non_empty(advertise).unwrap_or(listen))
 }
 
 /// Warn when peers would be told to connect somewhere nothing is listening.

@@ -48,6 +48,9 @@ struct RegistrationRequest<'a> {
     /// registers exactly the body it did before this field existed.
     #[serde(skip_serializing_if = "Option::is_none")]
     client_addr: Option<&'a str>,
+    /// Only a broker running the Kafka listener sends one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kafka_addr: Option<&'a str>,
     region: &'a str,
 }
 
@@ -170,6 +173,7 @@ pub async fn register(
             node_id: &config.node_id,
             advertise_addr: &config.advertise_addr,
             client_addr: config.client_advertise_addr.as_deref(),
+            kafka_addr: config.kafka_advertise_addr.as_deref(),
             region: &config.region,
         })
         .send()

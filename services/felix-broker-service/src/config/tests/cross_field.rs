@@ -127,6 +127,7 @@ fn joining_with(token: &str, refresh: bool, token_file: bool) -> BrokerConfig {
             node_id: "broker-a".to_string(),
             advertise_addr: "10.0.0.1:5000".to_string(),
             client_advertise_addr: None,
+            kafka_advertise_addr: None,
             refresh_token_file: refresh.then(|| "/run/felix/refresh".into()),
             node_token_file: token_file.then(|| "/run/felix/node.token".into()),
             region: "us-west-2".to_string(),

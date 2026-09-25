@@ -7,6 +7,7 @@ fn catalog(endpoints: Vec<BrokerEndpoint>) -> NodeCatalog {
         nodes: Default::default(),
         client_endpoints: endpoints.clone(),
         redirect_endpoints: endpoints,
+        kafka_endpoints: Vec::new(),
     }
 }
 
@@ -68,4 +69,27 @@ fn a_refresh_drops_a_redirect_it_no_longer_reports() {
 
     endpoints.refresh(&catalog(Vec::new()));
     assert_eq!(endpoints.redirect_addr("broker-a"), None);
+}
+
+/// The Kafka list is refreshed with the others, and replaced rather than
+/// merged: a broker that turned its Kafka listener off must stop being handed
+/// to Kafka clients.
+#[test]
+fn a_refresh_replaces_the_kafka_endpoints() {
+    let endpoints = ClientEndpoints::new();
+    assert!(endpoints.kafka_snapshot().is_empty());
+
+    let mut with_kafka = catalog(Vec::new());
+    with_kafka.kafka_endpoints = vec![
+        endpoint("broker-a", "host.docker.internal:9092"),
+        endpoint("broker-b", "10.0.0.5:9092"),
+    ];
+    endpoints.refresh(&with_kafka);
+    let held = endpoints.kafka_snapshot();
+    assert_eq!(held.len(), 2);
+    assert_eq!(held[0].addr, "host.docker.internal:9092");
+
+    endpoints.refresh(&catalog(vec![endpoint("broker-a", "10.0.0.4:5000")]));
+    assert!(endpoints.kafka_snapshot().is_empty());
+    assert_eq!(held.len(), 2, "a held snapshot changed under a refresh");
 }

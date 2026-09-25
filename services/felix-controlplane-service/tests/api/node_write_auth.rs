@@ -104,6 +104,7 @@ async fn seed_node(store: &InMemoryStore, node_id: &str, port: u16) {
             spec: NodeSpec {
                 advertise_addr: format!("10.0.0.4:{port}"),
                 client_addr: None,
+                kafka_addr: None,
                 region: "us-west-2".to_string(),
                 labels: BTreeMap::new(),
                 capacity: NodeCapacity::default(),

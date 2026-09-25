@@ -30,6 +30,11 @@ pub struct NodeCatalog {
     /// Not offered to new clients, but a redirect to a draining broker that
     /// still leads the shard needs its address.
     pub redirect_endpoints: Vec<BrokerEndpoint>,
+    /// Kafka listener addresses of every routable broker that runs one, sorted
+    /// by node id. Routable rather than eligible for the same reason as
+    /// redirects: a Kafka client has to reach whoever leads the partition,
+    /// draining or not.
+    pub kafka_endpoints: Vec<BrokerEndpoint>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +61,9 @@ struct NodeSpec {
     /// has not said where clients reach it.
     #[serde(default)]
     client_addr: Option<String>,
+    /// Present only on a broker running the Kafka listener.
+    #[serde(default)]
+    kafka_addr: Option<String>,
     region: String,
 }
 
@@ -100,6 +108,7 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
     let mut catalog = HashMap::with_capacity(response.items.len());
     let mut client_endpoints = Vec::new();
     let mut redirect_endpoints = Vec::new();
+    let mut kafka_endpoints = Vec::new();
     for item in response.items {
         // The control plane's own verdict, which folds in lifecycle and
         // heartbeat age together. A broker re-deriving that from the lifecycle
@@ -126,6 +135,14 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
                 redirect_endpoints.push(endpoint);
             }
         }
+        // Not parsed as a socket address: Kafka advertised listeners are
+        // usually hostnames, and the control plane has already validated it.
+        if routable && let Some(kafka_addr) = &item.node.spec.kafka_addr {
+            kafka_endpoints.push(BrokerEndpoint {
+                node_id: item.node.node_id.clone(),
+                addr: kafka_addr.clone(),
+            });
+        }
         let Ok(advertise_addr) = item.node.spec.advertise_addr.parse() else {
             tracing::warn!(
                 node_id = %item.node.node_id,
@@ -145,10 +162,12 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
         );
     }
     client_endpoints.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    kafka_endpoints.sort_by(|a, b| a.node_id.cmp(&b.node_id));
     NodeCatalog {
         nodes: catalog,
         client_endpoints,
         redirect_endpoints,
+        kafka_endpoints,
     }
 }
 
