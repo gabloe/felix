@@ -112,6 +112,22 @@ impl LogInner {
         Ok(durable_upto)
     }
 
+    /// Whether a flush now would have nothing to do: no unsynced bytes in the
+    /// active segment, no retired segment awaiting its seal, and the durable
+    /// bound already at the tail.
+    ///
+    /// The bound check is what keeps the first tick after a rollover flushing:
+    /// the seal synced the retired records but only a flush publishes them as
+    /// durable. Checked in the same order as `flush` reads its inputs, so a
+    /// rollover landing in between is seen as a pending seal.
+    pub(super) fn fully_durable(&self) -> bool {
+        let (synced, tail) = {
+            let segments = self.segments.read();
+            (segments.active().is_synced(), segments.tail_offset())
+        };
+        synced && self.pending_seal.lock().is_none() && self.durability.durable_upto() >= tail
+    }
+
     /// Wait until every offset below `target` is durable, flushing if needed.
     pub(super) async fn ensure_durable(self: &Arc<Self>, target: Offset) -> Result<()> {
         self.durability
