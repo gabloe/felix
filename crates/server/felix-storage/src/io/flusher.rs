@@ -142,9 +142,13 @@ fn serve(queue: mpsc::Receiver<Job>, slot: Weak<Mutex<Option<mpsc::Sender<Job>>>
                 }
             }
         };
+        // A panic is this flush's failure, not the thread's: if it took the
+        // thread down, flushes already queued behind it would fail with it.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job.work))
+            .unwrap_or_else(|_| Err(io::Error::other("flush panicked")));
         // A caller that stopped waiting is not an error here: the sync still
         // ran, and a later flush relies on it having run.
-        let _ = job.reply.send((job.work)());
+        let _ = job.reply.send(result);
     }
 }
 
