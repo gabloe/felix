@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790298914951,
+  "lastUpdate": 1790299732981,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15392,6 +15392,58 @@ window.BENCHMARK_DATA = {
             "range": "15714.16",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1515789.31\nmean: 1510259.64\nstdev: 15714.16\ncv: 1.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8f1736eb607906ac9c0ddb2a7fe89b9fe8d2fafe",
+          "message": "fix(fuzz): segment_record re-encodes with the record's producer mark (#690)\n\nRecords gained a producer mark (opens or continues a batch) with the\nidempotent-producer sequences, but the target still re-encoded every\ndecoded record with no mark and sized it without the producer tag. A\nrecord continuing a batch decoded fine and then failed the round trip.\n\nSpec-Unaffected: fuzz target only.",
+          "timestamp": "2026-09-24T18:12:06-07:00",
+          "tree_id": "2b3b64298b8be8e6f2bc9a81982d8795dc671e56",
+          "url": "https://github.com/gabloe/felix/commit/8f1736eb607906ac9c0ddb2a7fe89b9fe8d2fafe"
+        },
+        "date": 1790299732019,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 402319.66,
+            "range": "9779.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 402319.66\nmean: 400856.09\nstdev: 9779.93\ncv: 2.44%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 402319.66,
+            "range": "9779.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 402319.66\nmean: 400856.09\nstdev: 9779.93\ncv: 2.44%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 95034.86,
+            "range": "285.66",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 95034.86\nmean: 95130.08\nstdev: 285.66\ncv: 0.30%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 950348.58,
+            "range": "2856.57",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 950348.58\nmean: 951300.81\nstdev: 2856.57\ncv: 0.30%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
