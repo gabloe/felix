@@ -224,7 +224,7 @@ publisher
 
 **Contents**:
 - `shard.rs` with `shard/table.rs` and `shard/router.rs`: The routing table the control plane's assignments are built into, and `ShardRouter`, which resolves a shard against it
-- `region.rs`: `RegionRouter`, the cross-region bridge allowlist
+- `region.rs`: `RegionRouter`, the directional region bridge allowlist, and `parse_bridges` for `FELIX_REGION_BRIDGES`
 
 #### felix-authz
 

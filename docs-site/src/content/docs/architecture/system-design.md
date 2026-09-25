@@ -262,11 +262,12 @@ rather than reopened empty, because a silently empty shard *is* the data loss.
 
 :::caution[Not yet implemented]
 Everything in this section describes a target design, not current
-behavior. No region policy is enforced today: `felix-router` defines an
-allowlist of permitted region pairs, but nothing in the broker or control
-plane consults it, and there is no encryption-boundary enforcement, audit
-logging, or metadata-level isolation either. No compliance claim should be
-inferred until this actually lands.
+behavior. What exists today is narrower: a stream created with a `region`
+is placed only on brokers in that region or in one the directional
+allowlist `FELIX_REGION_BRIDGES` bridges it to, and a broker forwards a
+request only to a leader in a region it has a bridge to. There is no bridge
+agent, encryption-boundary enforcement, audit logging, or metadata-level
+isolation. No compliance claim should be inferred until this actually lands.
 :::
 The target design has Felix enforce regional isolation with explicit bridges:
 

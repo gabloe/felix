@@ -13,7 +13,9 @@ Felix is **not** a Kafka clone. It deliberately optimizes for:
 
 Region and data sovereignty as a first-class concept, with explicit, auditable
 cross-region data movement, is a design goal for a later milestone — not
-current behavior. See [Status](#status) and
+current behavior. Today a stream created with a `region` is placed only in
+that region or one `FELIX_REGION_BRIDGES` bridges it to, and brokers forward
+only across bridged regions; nothing more. See [Status](#status) and
 [Multi-Region and Bridges](#multi-region-and-bridges) below; do not rely on
 region isolation for compliance purposes until it ships.
 

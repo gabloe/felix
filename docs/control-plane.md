@@ -106,6 +106,7 @@ put a node in the catalog that placement would then try to use.
 | `FELIX_NODE_ADVERTISE_ADDR` | with `FELIX_NODE_ID` | `host:port` peers reach this broker's **internal** listener on. Not the bind address: a broker bound to `0.0.0.0` has to advertise something routable. |
 | `FELIX_CONTROLPLANE_URL` | with `FELIX_NODE_ID` | Where to register. |
 | `FELIX_REGION_ID` | no | Defaults to `local`. |
+| `FELIX_REGION_BRIDGES` | no | Directional `source>dest` pairs, comma-separated, of regions this broker may forward to besides its own. Unset is none. Give the control plane the same value; see [Regions](#regions). |
 | `FELIX_INTERNAL_BIND` | no | Where the internal listener binds. Defaults to `0.0.0.0:5001`. Must not share a port with `FELIX_QUIC_BIND`. |
 | `FELIX_INTERNAL_TLS_CERT`, `FELIX_INTERNAL_TLS_KEY`, `FELIX_INTERNAL_TLS_CA` | recommended | Peer mTLS: this broker's certificate (its DNS name must be `FELIX_NODE_ID`), its key, and the CA every peer must chain to. All three or none; without them the peer link is encrypted but unauthenticated. See `docs/internal-protocol.md`. |
 
@@ -389,8 +390,39 @@ Two deliberate omissions:
   and floating point that must agree bit-for-bit across every instance is a bad
   foundation for a decision that has to be identical everywhere. `max_shards` is
   honoured, as a hard cap.
-- **No region or label affinity.** Streams carry no placement constraints to
-  filter on yet.
+- **No label affinity.** Region is the only placement constraint; see below.
+
+#### Regions
+
+A stream created with a `region` is placed only where its data may be: on a
+broker whose `FELIX_REGION_ID` is that region, or a region the control plane's
+`FELIX_REGION_BRIDGES` bridges it to. Bridges are directional `source>dest`
+pairs, so `eu>us` lets an `eu` stream have copies in `us` and not the reverse.
+The region is fixed when the stream is created. A stream without one is placed
+anywhere, exactly as before regions existed.
+
+The constraint applies to every copy and every way a copy is chosen: the first
+placement, rebalancing and drain moves, follower replacement, and failover,
+which promotes only a caught-up replica in an allowed region and otherwise
+leaves the shard unavailable rather than serving it elsewhere. A broker outside
+the allowed regions is, for that stream's shards, a draining broker: it is given
+none of them, and whatever it already holds (because its region changed or a
+bridge was removed) is moved into the allowed regions by the ordinary move
+steps. When no live broker is in an allowed region the shard is reported
+`NoNodeInRegion` instead of placed. An operator move to such a broker is refused
+with `region_not_allowed`.
+
+Brokers apply the same allowlist to forwarding. A broker forwards a request to a
+shard's leader only in its own region or one its `FELIX_REGION_BRIDGES` reaches,
+and refuses the rest with `shard_unavailable` and reason `region_not_routable`.
+A client that connects to the leader directly is not refused; the check is on
+broker-to-broker traffic.
+
+What is not enforced: caches have no region, the allowlist is configured per
+process (give every control-plane instance and broker the same value), brokers
+ship to the replica set placement assigned without checking its regions
+themselves, and a follower already outside the region stays until a broker
+inside it can take its place, since dropping it would cost a copy.
 
 Reconciliation is idempotent: a pass over a settled cluster writes nothing, so
 running it on a timer does not churn rows or flood the changefeed.
@@ -791,11 +823,11 @@ not the same event as the shard becoming servable.
 
 #### Resolving a shard to a node
 
-`felix-router` answers *where* a shard lives; the region allowlist is meant to
-answer *whether* traffic may cross to it, though nothing consults it yet
-(#616). Keeping those separate matters: folding them
-together makes a placement decision look like a policy decision, and they fail
-for different reasons and need different fixes.
+`felix-router` answers *where* a shard lives; the region allowlist answers
+*whether* this broker may forward to it (see [Regions](#regions)). Keeping
+those separate matters: folding them together makes a placement decision look
+like a policy decision, and they fail for different reasons and need different
+fixes.
 
 Routes are published as an immutable snapshot and swapped in whole. A lookup is
 an atomic load against a table nobody can mutate underneath it, so the publish
@@ -814,7 +846,7 @@ locally", because that is a broker writing a shard it does not own:
 | `Unavailable::NoAssignment` | placement has not assigned it |
 | `Unavailable::LeaderUnknown` | the assignment names a node with no known address |
 | `Unavailable::LeaderNotLive` | the leader is registered but not live |
-| `Unavailable::RegionNotRoutable` | region policy forbids reaching the leader |
+| `Unavailable::RegionNotRoutable` | the leader is in a region this broker has no bridge to. Refused to the client as `region_not_routable` |
 
 Two rules that look like edge cases and are not:
 
