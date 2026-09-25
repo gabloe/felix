@@ -10,6 +10,9 @@ services do the wiring, which is what lets these be tested without a network.
 - [`felix-storage`](felix-storage) is where records are kept: the segment
   format, the durable log with recovery and group commit, and the cache stores
   built on it.
+- [`felix-kafka`](felix-kafka) is the Kafka wire protocol, read-only: it
+  answers a Kafka consumer's requests from the broker's shard logs. The broker
+  service owns its socket and TLS and hands it each connection.
 - [`felix-router`](felix-router) answers which node serves a shard, from the
   assignments the control plane publishes.
 - [`felix-authz`](felix-authz) is tokens and permissions: the broker uses it
