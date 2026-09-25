@@ -111,6 +111,7 @@ pub(super) async fn run_writer_loop(
                         request_id,
                         error,
                         code,
+                        detail,
                         forwarded_to,
                     } => {
                         let sample = t_should_sample();
@@ -124,10 +125,12 @@ pub(super) async fn run_writer_loop(
                             .as_ref()
                             .filter(|_| error_codes.binary_ack())
                             .map(|(code, retry)| (code, *retry));
-                        let bytes = match felix_wire::binary::encode_publish_ack_bytes_coded(
+                        let detail = detail.as_ref().filter(|_| error_codes.binary_ack_detail());
+                        let bytes = match felix_wire::binary::encode_publish_ack_bytes_detailed(
                             request_id,
                             error,
                             code,
+                            detail,
                             forwarded_to.as_ref(),
                         ) {
                             Ok(bytes) => bytes,

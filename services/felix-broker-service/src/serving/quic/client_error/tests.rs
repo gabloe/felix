@@ -179,3 +179,17 @@ fn a_moving_shard_is_a_retry_with_a_pause() {
     assert_eq!(detail.reason.as_deref(), Some("moving"));
     assert_eq!(detail.retry_after_ms, Some(MOVING_RETRY_AFTER_MS));
 }
+
+/// The detail bit is negotiated on its own: a client that took only the code
+/// bit must not be sent a layout it cannot parse.
+#[test]
+fn ack_detail_reaches_only_a_client_that_offered_it() {
+    let code_only = ErrorCodeSupport::default();
+    code_only.negotiate(0, felix_wire::FLAG_BINARY_PUBLISH_ACK_CODE);
+    assert!(code_only.binary_ack());
+    assert!(!code_only.binary_ack_detail());
+
+    let both = ErrorCodeSupport::default();
+    both.negotiate(0, felix_wire::KNOWN_FLAGS);
+    assert!(both.binary_ack_detail());
+}

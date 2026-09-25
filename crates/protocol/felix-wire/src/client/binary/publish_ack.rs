@@ -15,6 +15,15 @@
 //! u8  retry         (RetryClass::to_u8)
 //! ```
 //!
+//! With FLAG_BINARY_PUBLISH_ACK_DETAIL as well, the error's detail follows the
+//! code:
+//!
+//! ```text
+//! u16 reason_len      (0 when there is no reason)
+//! u8[reason_len] reason
+//! u64 retry_after_ms  (0 when the broker suggests no wait)
+//! ```
+//!
 //! With FLAG_BINARY_PUBLISH_ACK_OWNER, the batch was forwarded and the owner
 //! follows:
 //!
@@ -29,9 +38,10 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::de::Error as SerdeError;
 
-use crate::client::error_code::{ErrorCode, RetryClass};
+use crate::client::error_code::{ErrorCode, ErrorDetail, RetryClass};
 use crate::client::flags::{
-    FLAG_BINARY_PUBLISH_ACK, FLAG_BINARY_PUBLISH_ACK_CODE, FLAG_BINARY_PUBLISH_ACK_OWNER,
+    FLAG_BINARY_PUBLISH_ACK, FLAG_BINARY_PUBLISH_ACK_CODE, FLAG_BINARY_PUBLISH_ACK_DETAIL,
+    FLAG_BINARY_PUBLISH_ACK_OWNER,
 };
 use crate::client::frame::{Frame, FrameHeader};
 use crate::error::{Error, Result};
@@ -48,6 +58,9 @@ pub struct PublishAck {
     /// The failure's code and retry class, when the broker sent them. Only a
     /// client that advertised `FLAG_BINARY_PUBLISH_ACK_CODE` gets them.
     pub code: Option<(ErrorCode, RetryClass)>,
+    /// Why the failure happened and how long to wait, when the broker said.
+    /// Only a client that advertised `FLAG_BINARY_PUBLISH_ACK_DETAIL` gets it.
+    pub detail: Option<ErrorDetail>,
     /// Set when this batch was forwarded, naming the shard's owner.
     ///
     /// `None` means the broker handled it itself -- or predates the hint, or
@@ -102,14 +115,39 @@ pub fn encode_publish_ack_bytes_coded(
     code: Option<(&ErrorCode, RetryClass)>,
     forwarded_to: Option<&PublishOwner>,
 ) -> Result<Bytes> {
+    encode_publish_ack_bytes_detailed(request_id, error, code, None, forwarded_to)
+}
+
+/// Encode a publish ack with a failure's code and detail.
+///
+/// `detail` sets `FLAG_BINARY_PUBLISH_ACK_DETAIL` and is ignored without a
+/// `code`, so the caller must only pass it for a client that advertised that
+/// bit.
+pub fn encode_publish_ack_bytes_detailed(
+    request_id: u64,
+    error: Option<&str>,
+    code: Option<(&ErrorCode, RetryClass)>,
+    detail: Option<&ErrorDetail>,
+    forwarded_to: Option<&PublishOwner>,
+) -> Result<Bytes> {
     let message = error.unwrap_or("");
     let message_bytes = message.as_bytes();
     let message_len = u16::try_from(message_bytes.len()).map_err(|_| Error::FrameTooLarge)?;
     let code = code.filter(|_| error.is_some());
+    let detail = detail.filter(|_| code.is_some());
     let mut payload_len = 1 + 8 + 2 + message_bytes.len();
     if code.is_some() {
         payload_len += 2 + 1;
     }
+    let detail = match detail {
+        Some(detail) => {
+            let reason = detail.reason.as_deref().unwrap_or("").as_bytes();
+            let reason_len = u16::try_from(reason.len()).map_err(|_| Error::FrameTooLarge)?;
+            payload_len += 2 + reason.len() + 8;
+            Some((reason, reason_len, detail.retry_after_ms.unwrap_or(0)))
+        }
+        None => None,
+    };
 
     let owner = match forwarded_to {
         Some(owner) => {
@@ -130,6 +168,9 @@ pub fn encode_publish_ack_bytes_coded(
     if code.is_some() {
         flags |= FLAG_BINARY_PUBLISH_ACK_CODE;
     }
+    if detail.is_some() {
+        flags |= FLAG_BINARY_PUBLISH_ACK_DETAIL;
+    }
 
     let mut buf = BytesMut::with_capacity(FrameHeader::LEN + payload_len);
     FrameHeader::new(flags, payload_len as u32).encode(&mut buf);
@@ -144,6 +185,11 @@ pub fn encode_publish_ack_bytes_coded(
     if let Some((code, retry)) = code {
         buf.put_u16(code.to_u16());
         buf.put_u8(retry.to_u8());
+    }
+    if let Some((reason, reason_len, retry_after_ms)) = detail {
+        buf.put_u16(reason_len);
+        buf.extend_from_slice(reason);
+        buf.put_u64(retry_after_ms);
     }
     if let Some((node_id, node_id_len, addr, addr_len, generation)) = owner {
         buf.put_u16(node_id_len);
@@ -186,6 +232,25 @@ pub fn decode_publish_ack(frame: &Frame) -> Result<PublishAck> {
     } else {
         None
     };
+    let detail = if frame.header.flags & FLAG_BINARY_PUBLISH_ACK_DETAIL != 0 {
+        if buf.remaining() < 2 {
+            return Err(Error::Incomplete);
+        }
+        let reason_len = buf.get_u16() as usize;
+        if buf.remaining() < reason_len + 8 {
+            return Err(Error::Incomplete);
+        }
+        let reason = String::from_utf8(buf.copy_to_bytes(reason_len).to_vec())
+            .map_err(|_| Error::Deserialize(SerdeError::custom("invalid error reason")))?;
+        let retry_after_ms = buf.get_u64();
+        // Zero on the wire is "not said", the same as an absent JSON field.
+        Some(ErrorDetail {
+            reason: (!reason.is_empty()).then_some(reason),
+            retry_after_ms: (retry_after_ms != 0).then_some(retry_after_ms),
+        })
+    } else {
+        None
+    };
     let forwarded_to = if frame.header.flags & FLAG_BINARY_PUBLISH_ACK_OWNER != 0 {
         if buf.remaining() < 2 {
             return Err(Error::Incomplete);
@@ -217,6 +282,7 @@ pub fn decode_publish_ack(frame: &Frame) -> Result<PublishAck> {
         request_id,
         error,
         code,
+        detail,
         forwarded_to,
     })
 }

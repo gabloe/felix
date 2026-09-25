@@ -408,6 +408,26 @@ for what the current release actually guarantees.
   or broker that overrides only one of the two should keep the keep-alive well
   under the idle timeout.
 
+- **A publish to a shard that cannot be served is no longer called "stream not
+  found".** The broker kept the right code but replaced the message with
+  `stream not found: ...` for every refused publish, so a shard that was
+  moving, fenced or still opening read as a missing stream to operators and to
+  clients without error codes. Only a stream that does not resolve says that
+  now; any other refusal keeps its own code and text, e.g. `publish to
+  t1/ns/orders refused: this broker is still opening the shard`. Clients that
+  matched on the old text for these cases will see the new one; retry
+  behaviour of coded clients is unchanged, since the code was always
+  `shard_unavailable`.
+
+- **Binary publish acks carry the error's detail.** A failed binary ack had the
+  code but dropped `detail`, so a binary publisher never learnt a
+  `shard_unavailable` reason or a `moving` shard's suggested wait. The new flag
+  bit `FLAG_BINARY_PUBLISH_ACK_DETAIL` (`0x0400`), negotiated like
+  `FLAG_BINARY_PUBLISH_ACK_CODE`, adds it after the code; `felix-client`
+  offers it and fills `BrokerError::detail` from it. The new
+  `encode_publish_ack_bytes_detailed` encodes it; `PublishAck` gains a
+  `detail` field.
+
 - **Forged upstream tokens can no longer make the control plane hammer an
   IdP.** A token with an allowlisted issuer and an unknown `kid` made
   `/token/exchange` re-fetch that issuer's JWKS before any signature check, one

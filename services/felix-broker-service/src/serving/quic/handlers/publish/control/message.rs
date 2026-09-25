@@ -12,7 +12,7 @@ use felix_broker::Broker;
 use felix_wire::Message;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
 
-use super::batch::{overloaded_after_enqueue, refused_as_not_found};
+use super::batch::{overloaded_after_enqueue, refusal_for_client};
 use crate::observability::timings;
 use crate::serving::quic::client_error::ClientError;
 use crate::serving::quic::errors::AckEnqueueError;
@@ -217,7 +217,7 @@ pub(crate) async fn handle_publish_message(
                     "felix_broker_out_ack_depth",
                     ack_throttle_tx,
                     Outgoing::Message(
-                        refused_as_not_found(refusal, &tenant_id, &namespace, &stream)
+                        refusal_for_client(refusal, &tenant_id, &namespace, &stream)
                             .into_publish_error(request_id),
                     ),
                 )

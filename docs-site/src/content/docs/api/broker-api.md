@@ -862,6 +862,9 @@ subscription per shard, and follows each shard's own redirect.
 
 `code`, `retry` and `detail` are sent only to a client that offered
 `FEATURE_ERROR_CODES` in `auth`; other clients get `type` and `message` alone.
+A publish is `not_found` only when its stream does not exist; one refused
+because its shard cannot be served right now is `shard_unavailable`, with the
+reason in `detail`, and is safe to retry.
 `publish_error` carries the same fields next to its `request_id`. The `retry`
 class says whether the request may have been applied (`outcome_unknown`) or
 certainly was not (`retry`, `retry_after`, `redirect`), and an unknown `code`

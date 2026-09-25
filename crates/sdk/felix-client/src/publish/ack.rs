@@ -218,7 +218,7 @@ pub(crate) async fn read_ack_message_with_timing(
                     message,
                     code,
                     retry,
-                    detail: None,
+                    detail: ack.detail,
                 }
             }
         }

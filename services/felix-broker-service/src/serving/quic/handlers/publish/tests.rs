@@ -38,6 +38,7 @@ use crate::serving::quic::errors::AckEnqueueError;
 use crate::serving::quic::{
     ACK_HI_WATER, ACK_TIMEOUT_THRESHOLD, ACK_TIMEOUT_WINDOW, GLOBAL_ACK_DEPTH,
 };
+use crate::shards::routing::IngressRouter;
 
 // These publish-path tests don't exercise subscription delivery; this just gives
 // `PublishContext::lane_manager` a real (if unused) instance to satisfy the type.
@@ -107,4 +108,86 @@ fn make_binary_publish_frame(tenant_id: &str, namespace: &str, stream: &str) -> 
     let payloads = vec![b"payload".to_vec()];
     felix_wire::binary::encode_publish_batch(tenant_id, namespace, stream, &payloads)
         .expect("encode publish batch")
+}
+
+/// A broker with the stream registered, so only the ownership gate can
+/// refuse anything below.
+async fn broker_with_stream() -> Broker {
+    let broker = Broker::new(EphemeralCache::new().into());
+    broker.register_tenant("t1").await.expect("tenant");
+    broker
+        .register_namespace("t1", "ns")
+        .await
+        .expect("namespace");
+    broker
+        .register_stream(
+            "t1",
+            "ns",
+            "stream",
+            felix_broker::StreamMetadata::default(),
+        )
+        .await
+        .expect("stream");
+    broker
+}
+
+fn watch_key() -> crate::shards::ShardKey {
+    crate::shards::ShardKey {
+        tenant_id: "t1".to_string(),
+        namespace: "ns".to_string(),
+        stream: "stream".to_string(),
+        shard: 0,
+        kind: crate::shards::ShardKind::Stream,
+    }
+}
+
+fn ingress_for(leader: &str, servable: bool) -> IngressRouter {
+    let router = Arc::new(felix_router::ShardRouter::new(
+        "broker-a",
+        "us-west-2",
+        felix_router::RegionRouter::new("us-west-2".to_string()),
+    ));
+    let assignment = crate::shards::watch::ShardAssignment {
+        key: watch_key(),
+        leader: leader.to_string(),
+        replicas: Vec::new(),
+        generation: 1,
+        state: "active".to_string(),
+        successor: None,
+    };
+    let assignments: HashMap<crate::shards::ShardKey, crate::shards::watch::ShardAssignment> =
+        [(watch_key(), assignment)].into_iter().collect();
+    // A catalog with both brokers in it, because a route is only usable when
+    // the owner's id has an address behind it. An empty catalog would make
+    // every remote shard look unavailable rather than forwardable, which is
+    // the wrong thing for these tests to be asserting against.
+    let nodes: HashMap<String, felix_router::NodeRef> = ["broker-a", "broker-b"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, node_id)| {
+            (
+                node_id.to_string(),
+                felix_router::NodeRef {
+                    node_id: node_id.to_string(),
+                    advertise_addr: std::net::SocketAddr::from((
+                        [127, 0, 0, 1],
+                        7000 + index as u16,
+                    )),
+                    region: "us-west-2".to_string(),
+                    live: true,
+                },
+            )
+        })
+        .collect();
+    router.publish(
+        crate::shards::routing::routing_table_from(&assignments, &nodes),
+        &nodes,
+    );
+
+    let ingress = IngressRouter::new(router, Arc::default());
+    if servable {
+        ingress.fence().open(&watch_key(), 1);
+        ingress.publish_servable([(watch_key(), 1)].into_iter().collect());
+    }
+    ingress
 }

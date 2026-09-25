@@ -40,6 +40,10 @@ pub(crate) enum Outgoing {
         /// The failure's code. The writer drops it for a client that did not
         /// advertise `FLAG_BINARY_PUBLISH_ACK_CODE`.
         code: Option<(felix_wire::ErrorCode, felix_wire::RetryClass)>,
+        /// The failure's detail, such as why a shard is unavailable. The
+        /// writer drops it for a client that did not advertise
+        /// `FLAG_BINARY_PUBLISH_ACK_DETAIL`.
+        detail: Option<felix_wire::ErrorDetail>,
         /// Set when the batch was forwarded, naming the shard's owner so the
         /// client can send the next one straight there.
         ///
@@ -94,6 +98,7 @@ impl AckEncoding {
                 request_id,
                 error: None,
                 code: None,
+                detail: None,
                 forwarded_to,
             },
         }
@@ -108,6 +113,7 @@ impl AckEncoding {
             AckEncoding::Binary => Outgoing::PublishAck {
                 request_id,
                 code: Some((error.code().clone(), error.retry())),
+                detail: error.detail().cloned(),
                 error: Some(error.message().to_string()),
                 // A failed publish has no owner worth caching: the batch did
                 // not land anywhere, so where it would have gone is not a

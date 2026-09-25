@@ -231,8 +231,8 @@ pub(crate) fn resolve_shard(
 ///
 /// `Err` means this broker cannot serve the publish: the stream did not
 /// resolve, the shard is not servable, or it belongs to a peer this broker has
-/// no transport to. The error carries the code; callers keep the wording they
-/// always used for an unresolvable stream.
+/// no transport to. The error carries the code, and only an unresolvable
+/// stream is `not_found`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn publish_target(
     route: PublishRoute,
