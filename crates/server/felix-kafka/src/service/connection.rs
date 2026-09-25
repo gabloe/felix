@@ -64,6 +64,7 @@ where
                 out.put_slice(&body);
                 stream.write_all(&out).await.context("write response")?;
             }
+            Answer::Silent => {}
             Answer::Close(reason) => bail!("closing the connection: {reason}"),
         }
         if session.closing() {

@@ -24,7 +24,7 @@ pub(super) fn handshake(
 ) -> Result<(Bytes, i16)> {
     let mut response =
         SaslHandshakeResponse::default().with_mechanisms(vec![StrBytes::from_static_str(PLAIN)]);
-    if request.mechanism.as_str() == PLAIN {
+    if request.mechanism.as_str() == PLAIN && version >= 1 {
         session.sasl = SaslState::Handshaken;
     } else {
         response.error_code = ResponseError::UnsupportedSaslMechanism.code();

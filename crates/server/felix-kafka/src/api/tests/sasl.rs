@@ -152,3 +152,16 @@ async fn an_unauthenticated_fetch_is_refused_per_partition() {
         .await;
     assert_eq!(response.responses[0].partitions[0].error_code, 29);
 }
+
+#[tokio::test]
+async fn a_v0_handshake_is_refused_because_its_exchange_is_unframed() {
+    let fixture = Fixture::secured(&[READ_ORDERS]).await;
+    let mut client = fixture.connect();
+    let handshake = client
+        .call(
+            &SaslHandshakeRequest::default().with_mechanism(StrBytes::from_static_str("PLAIN")),
+            0,
+        )
+        .await;
+    assert_eq!(handshake.error_code, 33);
+}

@@ -10,6 +10,7 @@ mod groups;
 mod list_offsets;
 mod metadata;
 mod partition;
+mod produce;
 mod sasl;
 mod versions;
 
@@ -24,13 +25,16 @@ use crate::service::Shared;
 
 /// `(api, lowest version, highest version)` answered.
 pub(crate) const SUPPORTED: &[(ApiKey, i16, i16)] = &[
+    // Refused, but it has to be offered; see `produce`.
+    (ApiKey::Produce, 3, 8),
     (ApiKey::Fetch, 4, 12),
     (ApiKey::ListOffsets, 1, 7),
     (ApiKey::Metadata, 0, 12),
     (ApiKey::ApiVersions, 0, 3),
-    // v0 carries the SASL exchange outside Kafka framing; only v1 is offered,
-    // which moves it into `SaslAuthenticate`.
-    (ApiKey::SaslHandshake, 1, 1),
+    // librdkafka will not use SASL unless v0 is listed, but v0 carries the
+    // exchange outside Kafka framing, so a v0 handshake is refused and v1
+    // (which moves it into `SaslAuthenticate`) is what works.
+    (ApiKey::SaslHandshake, 0, 1),
     (ApiKey::SaslAuthenticate, 0, 2),
     // Answered only to refuse: Felix has no Kafka consumer groups. See
     // `groups`.
@@ -55,6 +59,8 @@ pub(crate) enum Answer {
         header_version: i16,
         body: Bytes,
     },
+    /// Say nothing and read the next request: an `acks=0` produce.
+    Silent,
     /// Close the connection without answering. Kafka brokers do the same for
     /// a request they cannot parse or were never offered.
     Close(&'static str),
@@ -159,6 +165,13 @@ pub(crate) async fn handle(
             )
             .await?
         }
+        ApiKey::Produce => match produce::refuse(decode(&mut frame, version)?, version)? {
+            Some(answer) => answer,
+            None => {
+                crate::metrics::request(api, produce::REFUSED.code());
+                return Ok(Answer::Silent);
+            }
+        },
         ApiKey::Fetch => {
             fetch::answer(
                 shared,

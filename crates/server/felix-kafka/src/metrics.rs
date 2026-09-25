@@ -52,6 +52,7 @@ fn api_name(api: ApiKey) -> &'static str {
         ApiKey::Metadata => "Metadata",
         ApiKey::ListOffsets => "ListOffsets",
         ApiKey::Fetch => "Fetch",
+        ApiKey::Produce => "Produce",
         ApiKey::FindCoordinator => "FindCoordinator",
         ApiKey::JoinGroup => "JoinGroup",
         ApiKey::SyncGroup => "SyncGroup",
@@ -80,6 +81,7 @@ fn error_name(code: i16) -> &'static str {
         Some(E::KafkaStorageError) => "kafka_storage_error",
         Some(E::UnknownTopicId) => "unknown_topic_id",
         Some(E::InvalidRequest) => "invalid_request",
+        Some(E::PolicyViolation) => "policy_violation",
         Some(_) => "other",
     }
 }

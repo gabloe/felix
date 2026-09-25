@@ -21,7 +21,8 @@ async fn api_versions_advertises_the_read_path_and_find_coordinator() {
         assert_eq!(range(ApiKey::Metadata), Some((0, 12)));
         assert_eq!(range(ApiKey::ListOffsets), Some((1, 7)));
         assert_eq!(range(ApiKey::FindCoordinator), Some((0, 4)));
-        assert_eq!(range(ApiKey::Produce), None, "read-only");
+        // Offered only so librdkafka will fetch record batches; refused.
+        assert_eq!(range(ApiKey::Produce), Some((3, 8)));
         assert_eq!(range(ApiKey::JoinGroup), None);
     }
 }
