@@ -16,7 +16,7 @@ use crate::types::OwnedWatchItem;
 /// you, and re-watching from `resume_from` is gapless.
 #[pyclass(module = "felix")]
 pub struct CacheWatchHandle {
-    inner: Arc<Mutex<Option<felix_client::CacheWatch>>>,
+    inner: Arc<Mutex<Option<felix_client::ClusterCacheWatch>>>,
     #[pyo3(get)]
     resume_offset: u64,
     #[pyo3(get)]
@@ -26,7 +26,7 @@ pub struct CacheWatchHandle {
 }
 
 impl CacheWatchHandle {
-    pub(crate) fn new(watch: felix_client::CacheWatch) -> Self {
+    pub(crate) fn new(watch: felix_client::ClusterCacheWatch) -> Self {
         Self {
             resume_offset: watch.resume_offset(),
             resnapshot: watch.resnapshot(),

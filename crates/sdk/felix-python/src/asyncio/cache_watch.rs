@@ -11,7 +11,7 @@ use crate::types::OwnedWatchItem;
 /// A cache watch consumed with `async for`.
 #[pyclass(module = "felix", name = "AsyncCacheWatch")]
 pub struct AsyncCacheWatch {
-    inner: Arc<Mutex<Option<felix_client::CacheWatch>>>,
+    inner: Arc<Mutex<Option<felix_client::ClusterCacheWatch>>>,
     #[pyo3(get)]
     resume_offset: u64,
     #[pyo3(get)]
@@ -21,7 +21,7 @@ pub struct AsyncCacheWatch {
 }
 
 impl AsyncCacheWatch {
-    pub(crate) fn new(watch: felix_client::CacheWatch) -> Self {
+    pub(crate) fn new(watch: felix_client::ClusterCacheWatch) -> Self {
         Self {
             resume_offset: watch.resume_offset(),
             resnapshot: watch.resnapshot(),

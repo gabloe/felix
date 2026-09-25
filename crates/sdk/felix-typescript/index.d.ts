@@ -58,14 +58,16 @@ export interface CacheWatchItem {
    * `start = laggedResumeFrom` is gapless.
    */
   laggedResumeFrom: bigint | null;
-  /** Set when the watch's shard moved to another broker, which ended it. */
+  /**
+   * Set when the watch's shard moved to another broker. The watch follows it
+   * there on its own and carries on where it left off.
+   */
   shardMoved: ShardMoved | null;
 }
 
 /**
- * Where a shard went when it moved to another broker. A cache watch re-watches
- * from `resumeFrom` when it is set, and otherwise from the offset after the
- * last change seen; a sharded subscription follows the shard on its own.
+ * Where a shard went when it moved to another broker. Cache watches and
+ * sharded subscriptions follow it on their own; this is a notice.
  */
 export interface ShardMoved {
   resumeFrom: bigint | null;

@@ -76,9 +76,9 @@ class CacheWatchLagged:
     resume_from: int
 
 class CacheWatchShardMoved:
-    """The watch's shard moved to another broker, which ended the watch.
+    """The watch's shard moved to another broker.
 
-    Re-watch from ``resume_from`` when set, else after the last change seen.
+    A notice, not an end: the watch follows the shard and carries on.
     """
 
     resume_from: int | None

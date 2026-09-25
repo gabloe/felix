@@ -3,7 +3,8 @@
 //! A cache watch reads **one** shard, and keys sharing a prefix hash to
 //! different shards, so covering a prefix of a multi-shard cache means one watch
 //! per shard, each on its own shard's owner. This opens them and merges what
-//! comes back. See [`ShardedCacheWatch`] for what is and is not promised.
+//! comes back; each follows its shard when it moves. See [`ShardedCacheWatch`]
+//! for what is and is not promised.
 
 use std::sync::Arc;
 
@@ -12,8 +13,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use super::ShardOffsets;
-use crate::cache::{CacheChange, CacheWatch, CacheWatchFilter, CacheWatchItem};
+use crate::cache::{CacheChange, CacheWatchFilter, CacheWatchItem};
 use crate::cluster::ClusterClient;
+use crate::cluster::follow::{ClusterCacheWatch, WatchProgress, WatchTarget};
 use crate::subscribe::ShardMoved;
 
 /// A prefix watch over every shard of one cache, merged into a single handle.
@@ -27,11 +29,16 @@ use crate::subscribe::ShardMoved;
 /// offset per shard, never ahead of what has been handed out; pass it to
 /// [`ClusterClient::watch_cache_sharded`] to resume.
 ///
+/// **A shard that moves is followed.** Its watch reopens on the new owner
+/// where it left off, announced by [`ShardedCacheWatchItem::ShardMoved`].
+///
 /// Dropping this ends every shard's watch.
 #[derive(Debug)]
 pub struct ShardedCacheWatch {
-    items: mpsc::Receiver<(u32, Option<CacheWatchItem>)>,
-    progress: Vec<ShardProgress>,
+    items: mpsc::Receiver<ShardItem>,
+    /// Each shard's position as of the last item handed out from it.
+    progress: Vec<WatchProgress>,
+    retained_counts: Vec<u64>,
     retained: bool,
     /// Shards still delivering their current state.
     state_pending: usize,
@@ -53,8 +60,7 @@ impl ShardedCacheWatch {
     /// counting items does not tell when the state is complete:
     /// [`ShardedCacheWatchItem::StateComplete`] does.
     pub fn retained_count(&self) -> Option<u64> {
-        self.retained
-            .then(|| self.progress.iter().map(|shard| shard.retained_count).sum())
+        self.retained.then(|| self.retained_counts.iter().sum())
     }
 
     /// Where to resume each shard, as the `from_offset` a new watch should
@@ -81,23 +87,18 @@ impl ShardedCacheWatch {
             self.state_announced = true;
             return Some(ShardedCacheWatchItem::StateComplete);
         }
-        let (shard, item) = self.items.recv().await?;
+        let (shard, item, after) = self.items.recv().await?;
         let progress = &mut self.progress[shard as usize];
+        if progress.in_state_phase() && !after.in_state_phase() {
+            self.state_pending -= 1;
+        }
+        *progress = after;
         Some(match item {
-            Some(CacheWatchItem::Change(change)) => {
-                if progress.observe_change(change.offset) {
-                    self.state_pending -= 1;
-                }
-                ShardedCacheWatchItem::Change { shard, change }
-            }
+            Some(CacheWatchItem::Change(change)) => ShardedCacheWatchItem::Change { shard, change },
             Some(CacheWatchItem::Lagged { resume_from }) => {
-                progress.observe_lag(resume_from);
                 ShardedCacheWatchItem::Lagged { shard, resume_from }
             }
             Some(CacheWatchItem::ShardMoved(moved)) => {
-                if let Some(resume_from) = moved.resume_from {
-                    progress.observe_lag(resume_from);
-                }
                 ShardedCacheWatchItem::ShardMoved { shard, moved }
             }
             None => ShardedCacheWatchItem::ShardClosed { shard },
@@ -131,79 +132,18 @@ pub enum ShardedCacheWatchItem {
     /// are unaffected. [`ShardedCacheWatch::resume_offsets`] already accounts
     /// for it, so resuming from those is gapless.
     Lagged { shard: u32, resume_from: u64 },
-    /// This shard moved to another broker, which ended its watch. The other
-    /// shards are unaffected. [`ShardedCacheWatch::resume_offsets`] accounts
-    /// for the old owner's resume point when it gave one, so re-watching from
-    /// those picks the shard up on its new owner.
+    /// This shard moved to another broker, and its watch is following it
+    /// there. The changes that follow resume where the old owner left off; if
+    /// the new owner cannot be reached in time, a
+    /// [`ShardedCacheWatchItem::ShardClosed`] comes next.
     ShardMoved { shard: u32, moved: ShardMoved },
-    /// This shard's watch ended without a lag or move signal, usually because its
+    /// This shard's watch ended without a lag signal, usually because its
     /// owner went away. The other shards are unaffected.
     ShardClosed { shard: u32 },
 }
 
-/// One shard's position, advanced as items are handed out.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ShardProgress {
-    /// The `from_offset` that resumes this shard without a gap.
-    resume_from: u64,
-    /// Where this shard's live delivery began.
-    live_from: u64,
-    /// Whatever precedes live delivery arrives in log order, so each item can
-    /// advance the position. False for retained values and resnapshots, which
-    /// arrive in key order.
-    in_log_order: bool,
-    retained_count: u64,
-    retained_left: u64,
-}
-
-impl ShardProgress {
-    fn new(
-        live_from: u64,
-        from_offset: Option<u64>,
-        retained: Option<u64>,
-        resnapshot: bool,
-    ) -> Self {
-        let retained_count = retained.unwrap_or(0);
-        let resume_from = if retained_count > 0 {
-            0
-        } else {
-            from_offset.unwrap_or(live_from)
-        };
-        Self {
-            resume_from,
-            live_from,
-            in_log_order: retained.is_none() && !resnapshot,
-            retained_count,
-            retained_left: retained_count,
-        }
-    }
-
-    /// True when this change completed the shard's state phase.
-    fn observe_change(&mut self, offset: u64) -> bool {
-        if self.retained_left > 0 {
-            self.retained_left -= 1;
-            if self.retained_left == 0 {
-                self.resume_from = self.resume_from.max(self.live_from);
-                return true;
-            }
-            return false;
-        }
-        if offset >= self.live_from || self.in_log_order {
-            self.resume_from = self.resume_from.max(offset.saturating_add(1));
-        }
-        false
-    }
-
-    /// The broker names the offset that resumes this shard gaplessly, except
-    /// mid-state: retained values not yet delivered can sit below it, so such
-    /// a shard stays at 0. It is not counted down either, since its state
-    /// phase never completes.
-    fn observe_lag(&mut self, resume_from: u64) {
-        if self.retained_left == 0 {
-            self.resume_from = resume_from;
-        }
-    }
-}
+/// One shard's item, with that shard's position once it is handed out.
+type ShardItem = (u32, Option<CacheWatchItem>, WatchProgress);
 
 /// Open one prefix watch per shard and forward all of them into one channel.
 ///
@@ -233,29 +173,20 @@ pub(crate) async fn watch_sharded(
             cache.to_string(),
         );
         let filter = CacheWatchFilter::Prefix(prefix.to_string());
+        let target = WatchTarget::new(&tenant_id, &namespace, &cache, filter, Some(shard));
         let from_offset = resume.as_ref().and_then(|at| at.get(&shard).copied());
         opening.push(tokio::spawn(async move {
-            let opened = cluster
-                .watch_following_redirects(
-                    &tenant_id,
-                    &namespace,
-                    &cache,
-                    filter,
-                    Some(shard),
-                    from_offset,
-                    retained,
-                )
-                .await;
-            (shard, from_offset, opened)
+            let opened = cluster.open_watch(target, from_offset, retained).await;
+            (shard, opened)
         }));
     }
 
-    let mut opened: Vec<(u32, Option<u64>, CacheWatch)> = Vec::with_capacity(shards as usize);
+    let mut opened: Vec<(u32, ClusterCacheWatch)> = Vec::with_capacity(shards as usize);
     let mut failures: Vec<String> = Vec::new();
     for task in opening {
         match task.await {
-            Ok((shard, from_offset, Ok(watch))) => opened.push((shard, from_offset, watch)),
-            Ok((shard, _, Err(err))) => failures.push(format!("shard {shard}: {err:#}")),
+            Ok((shard, Ok(watch))) => opened.push((shard, watch)),
+            Ok((shard, Err(err))) => failures.push(format!("shard {shard}: {err:#}")),
             Err(err) => failures.push(format!("a shard's open task failed: {err}")),
         }
     }
@@ -270,24 +201,22 @@ pub(crate) async fn watch_sharded(
 
     let (tx, rx) = mpsc::channel(64 * shards as usize);
     let mut progress = Vec::with_capacity(opened.len());
+    let mut retained_counts = Vec::with_capacity(opened.len());
     let mut tasks = Vec::with_capacity(opened.len());
-    for (shard, from_offset, watch) in opened {
-        progress.push(ShardProgress::new(
-            watch.resume_offset(),
-            from_offset,
-            watch.retained_count(),
-            watch.resnapshot(),
-        ));
+    for (shard, watch) in opened {
+        progress.push(watch.progress());
+        retained_counts.push(watch.retained_count().unwrap_or(0));
         tasks.push(tokio::spawn(forward_shard(shard, watch, tx.clone())));
     }
     let state_pending = progress
         .iter()
-        .filter(|shard| shard.retained_left > 0)
+        .filter(|shard| shard.in_state_phase())
         .count();
 
     Ok(ShardedCacheWatch {
         items: rx,
         progress,
+        retained_counts,
         retained,
         state_pending,
         state_announced: false,
@@ -296,23 +225,18 @@ pub(crate) async fn watch_sharded(
 }
 
 /// Pump one shard's watch into the shared channel. `None` says it ended
-/// without a lag or move signal.
-async fn forward_shard(
-    shard: u32,
-    mut watch: CacheWatch,
-    tx: mpsc::Sender<(u32, Option<CacheWatchItem>)>,
-) {
+/// without a lag signal.
+async fn forward_shard(shard: u32, mut watch: ClusterCacheWatch, tx: mpsc::Sender<ShardItem>) {
     while let Some(item) = watch.recv().await {
-        let last = matches!(
-            item,
-            CacheWatchItem::Lagged { .. } | CacheWatchItem::ShardMoved(_)
-        );
-        if tx.send((shard, Some(item))).await.is_err() || last {
+        let lagged = matches!(item, CacheWatchItem::Lagged { .. });
+        if tx
+            .send((shard, Some(item), watch.progress()))
+            .await
+            .is_err()
+            || lagged
+        {
             return;
         }
     }
-    let _ = tx.send((shard, None)).await;
+    let _ = tx.send((shard, None, watch.progress())).await;
 }
-
-#[cfg(test)]
-mod tests;

@@ -14,12 +14,12 @@ pub struct CacheWatchHandle {
     resume_offset: u64,
     resnapshot: bool,
     retained_count: Option<u64>,
-    inner: Arc<Mutex<Option<felix_client::CacheWatch>>>,
+    inner: Arc<Mutex<Option<felix_client::ClusterCacheWatch>>>,
     closed: watch::Sender<bool>,
 }
 
 impl CacheWatchHandle {
-    pub(crate) fn new(watch: felix_client::CacheWatch) -> Self {
+    pub(crate) fn new(watch: felix_client::ClusterCacheWatch) -> Self {
         Self {
             resume_offset: watch.resume_offset(),
             resnapshot: watch.resnapshot(),
