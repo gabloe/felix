@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790313636833,
+  "lastUpdate": 1790313861615,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19866,6 +19866,72 @@ window.BENCHMARK_DATA = {
             "range": "584.69",
             "unit": "us",
             "extra": "trials: 5\nmedian: 1142.00\nmean: 1270.00\nstdev: 584.69\ncv: 46.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b78e41a5b1e1f4f9d9d188f8e46a4ca2cd4cb0c",
+          "message": "fix(replication): a Quorum follower holding every acked record can take over (#701)\n\n* fix(replication): report a Quorum follower caught up at the mark, not the tail\n\nA leader named a follower caught up only when it held the whole log. Under\ncontinuous publishing the pass's last report often lands just after the next\npublish, with every follower one record short, so it names nobody. A leader\nkilled then leaves the control plane no replica it may promote, and the shard\nstays down: nothing else will report on it again. Producers see the refusal\nas \"stream not found\" until they give up.\n\nUnder Quorum nothing past the mark has been acknowledged, and the mark moves\nonly after the report naming who holds it lands, so a follower holding\neverything up to the offset a majority holds has every promised record.\nMeasure against that (never below a mark already published). Leader streams,\nwhich acknowledge before shipping, and moves, which hand over an exact copy,\nkeep the tail.\n\n* docs: a Quorum follower is caught up at the mark; model the report bound\n\nFelixShard's report now measures followers against the offset a majority\nholds under Quorum, as the broker does. QuorumReportNamesASuccessor checks\nthat such a report names someone who may take over; FelixShardReportAtTail\n(the old tail rule) violates it, and FelixShardReportUnpaired (measured at the\nmajority's offset but claiming the whole log) violates AckedSurvive.\n\nsemantics.md, replication-design.md and the docs-site semantics page say\nwhat a promotable follower must hold under each level; CHANGELOG Fixed entry.",
+          "timestamp": "2026-09-24T22:19:06-07:00",
+          "tree_id": "4cbdc3a46d4b576f52d0defa95ed8fdae2fa9684",
+          "url": "https://github.com/gabloe/felix/commit/5b78e41a5b1e1f4f9d9d188f8e46a4ca2cd4cb0c"
+        },
+        "date": 1790313859387,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 89,
+            "range": "3.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 89.00\nmean: 87.60\nstdev: 3.91\ncv: 4.47%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 129,
+            "range": "7.35",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 129.00\nmean: 128.00\nstdev: 7.35\ncv: 5.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 153,
+            "range": "505.76",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 153.00\nmean: 371.40\nstdev: 505.76\ncv: 136.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 105,
+            "range": "5.17",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 105.00\nmean: 106.80\nstdev: 5.17\ncv: 4.84%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 226,
+            "range": "460.07",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 226.00\nmean: 431.00\nstdev: 460.07\ncv: 106.75%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 328,
+            "range": "2836.89",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 328.00\nmean: 1588.40\nstdev: 2836.89\ncv: 178.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
