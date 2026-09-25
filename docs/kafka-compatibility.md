@@ -74,6 +74,23 @@ destination.
 - OAUTHBEARER and re-authentication. A token is checked once, when the
   connection authenticates.
 - Topic ids (Fetch v13 and later).
+- Admin APIs. Only the APIs in the table under [What works](#what-works) are served, so
+  `CreateTopics`, `DeleteTopics`, `CreatePartitions`, `DescribeConfigs` and
+  topic auto-creation are not available. A topic is a durable stream created
+  through the control plane, and its partition count is its shard count.
+- Namespaces containing a dot. The topic name splits on the first dot, so such
+  a namespace cannot be addressed and its streams are not listed.
+- Log compaction and Kafka retention settings. A tombstone (null value) is
+  stored as an empty payload and deletes nothing.
+- SASL mechanisms other than PLAIN (no SCRAM), and a configured TLS
+  certificate: the listener uses the broker's generated self-signed one.
+- Tested clients: kcat 1.7.1 (librdkafka 1.8.2). The Java client is untested.
+
+Two things work but differ from Kafka: `acks=all` on a `Leader` stream waits
+for the leader only (see [acks](#acks)), and an idempotent re-send older than
+the last 64 records per producer and partition is answered
+`DUPLICATE_SEQUENCE_NUMBER` without an offset (see [Idempotent
+producers](#idempotent-producers)).
 
 ## The mapping
 

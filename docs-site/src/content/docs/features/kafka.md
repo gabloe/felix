@@ -578,22 +578,68 @@ connection limit, which shows up as
 
 ## Limits
 
-- Durable streams only.
-- No consumer groups, so no committed offsets and none of the tools built on
-  them.
-- No transactions.
-- Keys, headers and producer timestamps are not stored.
-- A produce is answered after it is written; a connection's produces are
-  answered one at a time, in order, as Kafka requires. A producer that needs
-  more throughput than one connection gives spreads across partitions, whose
-  leaders are often different brokers.
+Everything below is on purpose or not done yet. If your setup depends on one of
+them, this is not the tool for that part of it.
+
+**Refused, with an error that says why**
+
+- Consumer groups: `subscribe()` with a `group.id`, committed offsets, and
+  everything built on them (Kafka Connect, Kafka Streams, ksqlDB, Debezium,
+  MirrorMaker). Use `assign()` and keep offsets yourself, or use Felix's own
+  consumer groups through a Felix client.
+- Transactions: any producer with a `transactional.id`.
+- Old message formats (v0/v1 message sets). Every current client sends v2.
+
+**Accepted, but not kept**
+
+- Record keys. The key still picks the partition on the producer's side, but it
+  is not stored, so a consumer reads every record with a null key. Anything that
+  reads meaning from the key after that point will not see it.
+- Record headers, dropped the same way.
+- Producer timestamps. A record's timestamp is the broker's append time.
+- Tombstones. A null value is stored as an empty payload, and since Felix does
+  not compact, it deletes nothing.
+
+Dropped keys and headers are counted in `felix_kafka_produce_dropped_total`, so
+you can see whether a producer relies on them.
+
+**Not there at all**
+
+- Admin APIs. Topics cannot be created, deleted, reconfigured or given more
+  partitions from Kafka tools (`kafka-topics.sh`, `AdminClient`, auto-create).
+  A topic is a Felix durable stream: create it through the control plane, and
+  its partition count is its shard count.
+- In-memory streams. Only durable streams appear as topics.
+- Namespaces with a dot in their name. The topic name is split on the first
+  dot, so such a namespace cannot be reached and its streams are not listed.
+- Log compaction and Kafka retention settings. Retention is the stream's own.
+- Fetch sessions and leader epochs. Clients fall back to full fetch requests,
+  and leader epochs are reported as unknown. The ISR is the leader alone.
+- SASL mechanisms other than PLAIN: no OAUTHBEARER, no SCRAM, and no
+  re-authentication on a long-lived connection.
+- A certificate of your own for TLS. The listener uses the broker's generated
+  self-signed certificate.
+
+**Behaves differently from Kafka**
+
+- `acks=all` on a `Leader` stream waits for the leader only, because that is
+  all a `Leader` stream promises. Use a `Quorum` stream when a write has to
+  survive losing the leader. See [acks and what they wait
+  for](#acks-and-what-they-wait-for).
+- An idempotent re-send older than the last 64 records a producer sent to a
+  partition is answered `DUPLICATE_SEQUENCE_NUMBER` without an offset. It is not
+  written twice, but the client does not learn where it landed.
+- A connection's produces are answered one at a time. For more throughput,
+  spread across partitions, whose leaders are often different brokers.
+
+**Size and time caps**
+
 - A batch may decompress to at most 16 MiB.
-- No fetch sessions: clients send full fetch requests, which costs a little
-  bandwidth with many partitions.
-- No leader epochs (reported as unknown) and an ISR of the leader alone.
-- SASL/PLAIN only: no OAUTHBEARER, and no re-authentication on a long-lived
-  connection.
+- A request larger than 8 MiB closes the connection.
 - A fetch waits at most 30 seconds, whatever `fetch.wait.max.ms` asks for.
-- Requests larger than 8 MiB close the connection.
-- TLS uses the broker's generated self-signed certificate; there is no way to
-  give it your own yet.
+
+**Tested clients**
+
+kcat 1.7.1 (librdkafka 1.8.2) is tested for everything on this page. Other
+librdkafka-based clients use the same code. The Java client speaks the same
+protocol but has not been tested against Felix.
