@@ -16,7 +16,12 @@ use felix_wire::BrokerEndpoint;
 
 #[derive(Debug, Default)]
 pub struct ClientEndpoints {
+    /// What a client is told it may connect to: eligible brokers only.
     endpoints: ArcSwap<Vec<BrokerEndpoint>>,
+    /// Where a redirect may point: every routable broker, draining ones
+    /// included, since a draining broker still leads what it has not handed
+    /// off.
+    redirects: ArcSwap<Vec<BrokerEndpoint>>,
 }
 
 impl ClientEndpoints {
@@ -24,14 +29,27 @@ impl ClientEndpoints {
         Self::default()
     }
 
-    /// Replace the list wholesale.
+    /// Replace both lists with this refresh of the node catalog.
     ///
     /// Whole-list rather than merged: a broker that has stopped advertising a
     /// client address, or stopped being eligible, has to leave the answer, and
     /// merging would keep handing clients an address the cluster no longer
     /// stands behind.
-    pub fn publish(&self, endpoints: Vec<BrokerEndpoint>) {
-        self.endpoints.store(Arc::new(endpoints));
+    pub fn refresh(&self, catalog: &crate::cluster::node_catalog::NodeCatalog) {
+        self.endpoints
+            .store(Arc::new(catalog.client_endpoints.clone()));
+        self.redirects
+            .store(Arc::new(catalog.redirect_endpoints.clone()));
+    }
+
+    /// The client address to name in a redirect to `node_id`, if the cluster
+    /// has published one for a broker still routable.
+    pub fn redirect_addr(&self, node_id: &str) -> Option<String> {
+        self.redirects
+            .load()
+            .iter()
+            .find(|endpoint| endpoint.node_id == node_id)
+            .map(|endpoint| endpoint.addr.clone())
     }
 
     pub fn snapshot(&self) -> Arc<Vec<BrokerEndpoint>> {
