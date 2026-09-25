@@ -88,10 +88,10 @@ fn ingress(assignments: &[ShardAssignment]) -> IngressRouter {
 
 /// The property that must not regress: a broker with no cluster identity keeps
 /// serving every key itself, exactly as an unsharded cache always did.
-#[test]
-fn a_single_node_broker_serves_every_key_locally() {
+#[tokio::test]
+async fn a_single_node_broker_serves_every_key_locally() {
     for key in ["a", "b", "anything at all"] {
-        match resolve_cache_route(None, TENANT, NAMESPACE, CACHE, key) {
+        match resolve_cache_route(None, TENANT, NAMESPACE, CACHE, key).await {
             CacheRoute::Local { shard: 0, .. } => {}
             other => panic!("expected shard 0 locally, got {other:?}"),
         }
@@ -100,8 +100,8 @@ fn a_single_node_broker_serves_every_key_locally() {
 
 /// The whole point. Two brokers resolving the same key must agree on who owns
 /// it, or both will serve it and their answers will diverge.
-#[test]
-fn every_key_resolves_to_exactly_one_owner() {
+#[tokio::test]
+async fn every_key_resolves_to_exactly_one_owner() {
     let assignments: Vec<ShardAssignment> = (0..4)
         .map(|shard| {
             let leader = if shard % 2 == 0 {
@@ -118,7 +118,7 @@ fn every_key_resolves_to_exactly_one_owner() {
     let mut forwarded = 0;
     for n in 0..200 {
         let key = format!("session:{n}");
-        match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key) {
+        match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key).await {
             CacheRoute::Local { shard, .. } => {
                 assert!(shard < 4);
                 // A key served here must belong to a shard this broker leads.
@@ -149,14 +149,14 @@ fn every_key_resolves_to_exactly_one_owner() {
 /// pass whenever the surviving entry happened to be the cache's — an accident
 /// of insertion order, not a working table. With both, a collapse fails
 /// whichever of the two it kept.
-#[test]
-fn a_cache_and_a_stream_of_the_same_name_resolve_to_their_own_owners() {
+#[tokio::test]
+async fn a_cache_and_a_stream_of_the_same_name_resolve_to_their_own_owners() {
     let ours = ingress(&[
         assignment(stream_key(0), "broker-a", 1),
         assignment(cache_key(0), "broker-b", 1),
     ]);
 
-    match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, "any-key") {
+    match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, "any-key").await {
         CacheRoute::Forward { target, .. } => assert_eq!(target.node_id, "broker-b"),
         other => panic!("the cache should forward to broker-b, got {other:?}"),
     }
@@ -170,20 +170,21 @@ fn a_cache_and_a_stream_of_the_same_name_resolve_to_their_own_owners() {
 
 /// Widths are per-kind too. The cache has four shards and the stream one, so a
 /// cache key resolved against the stream's width would collapse to shard 0.
-#[test]
-fn a_cache_uses_its_own_shard_count() {
+#[tokio::test]
+async fn a_cache_uses_its_own_shard_count() {
     let mut assignments = vec![assignment(stream_key(0), "broker-a", 1)];
     assignments.extend((0..4).map(|shard| assignment(cache_key(shard), "broker-a", 1)));
     let ours = ingress(&assignments);
 
-    let shards: std::collections::BTreeSet<u32> = (0..200)
-        .filter_map(|n| {
-            match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &format!("k{n}")) {
-                CacheRoute::Local { shard, .. } => Some(shard),
-                _ => None,
-            }
-        })
-        .collect();
+    let mut shards = std::collections::BTreeSet::new();
+    for n in 0..200 {
+        let key = format!("k{n}");
+        if let CacheRoute::Local { shard, .. } =
+            resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key).await
+        {
+            shards.insert(shard);
+        }
+    }
 
     assert!(
         shards.len() > 1,
@@ -193,20 +194,30 @@ fn a_cache_uses_its_own_shard_count() {
 
 /// An unplaced cache is refused rather than served. Serving it would be the
 /// old behaviour: a local write nothing else can see and nothing reconciles.
-#[test]
-fn an_unassigned_cache_shard_is_refused() {
+#[tokio::test]
+async fn an_unassigned_cache_shard_is_refused() {
     let ours = ingress(&[assignment(stream_key(0), "broker-a", 1)]);
 
-    match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, "any-key") {
+    match resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, "any-key").await {
         CacheRoute::Refused(_) => {}
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
 
+/// Where a route sends an operation, without the fence place a local one holds.
+fn where_to(route: CacheRoute) -> String {
+    match route {
+        CacheRoute::Local {
+            shard, generation, ..
+        } => format!("local shard {shard} at {generation}"),
+        other => format!("{other:?}"),
+    }
+}
+
 /// Resolution is a pure function of the key and the view, so two brokers with
 /// the same view send the same key to the same place.
-#[test]
-fn resolution_is_deterministic() {
+#[tokio::test]
+async fn resolution_is_deterministic() {
     let assignments: Vec<ShardAssignment> = (0..4)
         .map(|shard| assignment(cache_key(shard), "broker-a", 1))
         .collect();
@@ -214,10 +225,12 @@ fn resolution_is_deterministic() {
 
     for n in 0..50 {
         let key = format!("session:{n}");
-        let first = resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key);
+        let first =
+            where_to(resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key).await);
         for _ in 0..5 {
-            let again = resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key);
-            assert_eq!(format!("{first:?}"), format!("{again:?}"));
+            let again =
+                where_to(resolve_cache_route(Some(&ours), TENANT, NAMESPACE, CACHE, &key).await);
+            assert_eq!(first, again);
         }
     }
 }
@@ -337,6 +350,43 @@ mod fence {
         assert_eq!(
             counter_op(&leader, CacheRequest::CounterGet).await,
             Ok(Some(5))
+        );
+    }
+
+    /// A cache write to the old owner between the fence and the cut-over is
+    /// held, then sent to the new owner rather than refused.
+    #[tokio::test]
+    async fn a_cache_write_during_a_move_follows_the_cut_over() {
+        let hold =
+            crate::shards::routing::hold::MoveHold::new(std::time::Duration::from_secs(5), 16);
+        let mut leader = Leader::start_holding(hold).await;
+        leader.fence_move(&leader::cache_key());
+
+        let ingress = Arc::clone(&leader.ingress);
+        let route = tokio::spawn(async move {
+            match resolve_cache_route(
+                Some(&ingress),
+                leader::TENANT,
+                leader::NAMESPACE,
+                leader::CACHE,
+                "session:abc",
+            )
+            .await
+            {
+                CacheRoute::Forward { target, .. } => (target.node_id, target.generation),
+                other => panic!("expected a forward, got {other:?}"),
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !route.is_finished(),
+            "the write is held while the shard moves"
+        );
+
+        leader.cut_over(&leader::cache_key());
+        assert_eq!(
+            route.await.expect("route"),
+            (leader::SUCCESSOR.to_string(), leader::GENERATION + 1)
         );
     }
 }

@@ -192,6 +192,7 @@ async fn cluster_node_view_lists_every_broker() {
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["node"]["node_id"], "broker-a");
     assert_eq!(items[0]["placement"]["eligible"], true);
+    assert_eq!(items[0]["placement"]["routable"], true);
     // The advertised address is what an operator needs to check reachability.
     assert_eq!(items[0]["node"]["spec"]["advertise_addr"], "10.0.0.4:7001");
 }
@@ -281,6 +282,7 @@ async fn placement_explains_each_exclusion() {
         .expect("request");
     let body: serde_json::Value = read_json(response).await;
     assert_eq!(body["placement"]["eligible"], false);
+    assert_eq!(body["placement"]["routable"], false);
     let reasons = body["placement"]["reasons"].as_array().expect("reasons");
     assert!(
         reasons
@@ -288,6 +290,30 @@ async fn placement_explains_each_exclusion() {
             .any(|r| r.as_str().unwrap_or_default().contains("heartbeat window")),
         "{reasons:?}",
     );
+}
+
+/// A draining broker takes no new placement but still serves the shards it
+/// has not handed off, so other brokers may still send it their requests.
+#[tokio::test]
+async fn a_draining_node_is_not_eligible_but_is_routable() {
+    let (app, store, keys) = setup().await;
+    store
+        .register_node(node("broker-a", 7001, "us-west-2", "a1"))
+        .await
+        .expect("register");
+    store
+        .set_node_lifecycle("broker-a", NodeLifecycle::Draining)
+        .await
+        .expect("drain");
+    let bearer = token(&keys, vec!["node.view:cluster:*"]);
+
+    let response = app
+        .oneshot(get("/v1/nodes/broker-a", Some(&bearer)))
+        .await
+        .expect("request");
+    let body: serde_json::Value = read_json(response).await;
+    assert_eq!(body["placement"]["eligible"], false);
+    assert_eq!(body["placement"]["routable"], true);
 }
 
 /// The window between a heartbeat lapsing and the sweep noticing: the node
@@ -312,6 +338,7 @@ async fn a_stale_heartbeat_is_reported_before_expiry_runs() {
         "expiry has not run"
     );
     assert_eq!(body["placement"]["eligible"], false);
+    assert_eq!(body["placement"]["routable"], false, "its heartbeat lapsed");
     let reasons = body["placement"]["reasons"].as_array().expect("reasons");
     assert!(
         reasons

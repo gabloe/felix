@@ -32,15 +32,32 @@ fn a_registered_node_becomes_a_routable_entry() {
     assert!(entry.live);
 }
 
-/// The control plane's `eligible` is taken as-is. Re-deriving liveness from the
-/// lifecycle alone would keep forwarding to a node whose heartbeat has lapsed
-/// but whose expiry sweep has not run yet.
+/// With no `routable`, from a control plane that predates it, `eligible` is
+/// taken as-is. Re-deriving liveness from the lifecycle alone would keep
+/// forwarding to a node whose heartbeat has lapsed but whose expiry sweep has
+/// not run yet.
 #[test]
 fn placement_eligibility_decides_liveness() {
     let catalog = into_catalog(response(serde_json::json!({
         "items": [node("broker-a", "10.0.0.4:7000", false)],
     })));
     assert!(!catalog.nodes.get("broker-a").expect("broker-a").live);
+}
+
+/// A draining broker is not eligible for placement but still serves the shards
+/// it has not handed off; the control plane says so with `routable`, and that
+/// decides liveness when present.
+#[test]
+fn a_routable_draining_node_is_live() {
+    let mut draining = node("broker-a", "10.0.0.4:7000", false);
+    draining["placement"]["routable"] = serde_json::json!(true);
+    let mut lapsed = node("broker-b", "10.0.0.5:7000", false);
+    lapsed["placement"]["routable"] = serde_json::json!(false);
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [draining, lapsed],
+    })));
+    assert!(catalog.nodes.get("broker-a").expect("broker-a").live);
+    assert!(!catalog.nodes.get("broker-b").expect("broker-b").live);
 }
 
 /// One unparseable address costs that node and nothing else.

@@ -671,8 +671,9 @@ and clients see less of it than of one:
   nobody serves the shard; a publish arriving then waits and is forwarded to
   the new owner. Only a switch-over longer than `FELIX_SHARD_MOVE_HOLD_MS`
   (2 s) refuses one, as `shard_unavailable` with reason `moving`, unwritten.
-- **Cache writes, counter adds and consumer-group writes are refused** for the
-  length of the switch-over, retryably.
+- **Cache and counter operations are held and forwarded** the same way.
+  Consumer-group operations are held and then redirected to the new owner,
+  which `ClusterClient::group_sharded` follows.
 - **Subscriptions follow.** The old leader delivers what it committed, then
   ends each subscription with `shard_moved`. A `ClusterClient` subscription
   resumes on the new owner with nothing repeated or skipped. A cache watch

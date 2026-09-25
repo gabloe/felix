@@ -230,8 +230,10 @@ than an error: the switch-over is tens of milliseconds on a local cluster. A
 publish is refused, as `shard_unavailable` with reason `moving`, only if the
 move has not cut over within `FELIX_SHARD_MOVE_HOLD_MS` (2 s) or more than
 `FELIX_SHARD_MOVE_HOLD_MAX` publishes are already waiting; it was not written,
-and the client retries. Cache writes, counter adds and consumer-group writes
-are not held and are refused for the length of the switch-over.
+and the client retries. Cache writes and counter adds are held and forwarded
+the same way. A consumer-group operation is held too and then redirected to
+the new owner; `ClusterClient::group_sharded` follows the redirect, while a
+single-connection client gets it as a `not_leader` error.
 
 While the destination is still copying the log, it does not count toward the
 shard's quorum, so a `Quorum` publish waits for a majority of the replicas the

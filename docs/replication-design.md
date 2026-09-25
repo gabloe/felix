@@ -774,8 +774,11 @@ they settle, and is then applied or redirected. Nothing held has been
 acknowledged, so a hold that runs out (`FELIX_SHARD_MOVE_HOLD_MS`, 2 s) or
 finds too many already waiting (`FELIX_SHARD_MOVE_HOLD_MAX`) is a plain refusal,
 `shard_unavailable` with reason `moving`, and the client retries. Holding lives
-in `shards/routing/hold.rs`. Only publishes are held; cache writes, counter adds
-and group writes are refused through the window.
+in `shards/routing/hold.rs`. Cache and counter operations are held and
+forwarded the same way. Group operations are held at the broker they reached
+and then redirected to the new owner with `NotLeader`: they are not forwarded,
+and the new owner has the group's cursors and dead letters before it leads,
+because the drained report waits for them.
 
 Readers leave at the fence too. The old leader ends each subscription and
 cache watch on the shard once the writes inside its fence have fanned out, and

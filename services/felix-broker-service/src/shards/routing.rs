@@ -291,9 +291,8 @@ impl IngressRouter {
                     None => true,
                 },
                 Dispatch::Unavailable(Reason::Moving) => true,
-                // The leader named here is fenced and will not take it. A
-                // drain also takes that leader out of the live set, so the
-                // route reads as unavailable rather than as a forward.
+                // The leader named here is fenced and will not take it,
+                // whether this broker would forward to it or cannot reach it.
                 _ => draining(&view, key),
             };
             if !moving {
@@ -437,6 +436,18 @@ pub fn dispatch(ingress: Option<&IngressRouter>, key: &ShardKey) -> Dispatch {
     match ingress {
         None => Dispatch::Local { generation: 0 },
         Some(ingress) => ingress.dispatch(key),
+    }
+}
+
+/// [`dispatch`] for a write, held through a planned move; see
+/// [`IngressRouter::dispatch_write`].
+pub(crate) async fn dispatch_write(
+    ingress: Option<&IngressRouter>,
+    key: &ShardKey,
+) -> (Dispatch, Option<FenceGuard>) {
+    match ingress {
+        None => (Dispatch::Local { generation: 0 }, None),
+        Some(ingress) => ingress.dispatch_write(key).await,
     }
 }
 

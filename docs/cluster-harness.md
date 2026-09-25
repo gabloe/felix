@@ -342,7 +342,8 @@ A **planned** change — the leader is alive and the shard is moved — is fence
 by the assignment. The old owner is told to stop (`state: draining`) at a new
 generation, stops serving the shard the moment its watch delivers that, and
 reports once its log has stopped growing; the successor is named only after
-that report. In between, publishes to the shard are refused. `move_shard`
+that report. In between, writes to the shard are held until the cut-over and
+then sent to the new owner. `move_shard`
 drives exactly this, and `a_moved_shard_converges_on_the_new_owner` asserts the
 old owner ends up forwarding to the new one; `tests/routing/rebalance.rs` asserts that
 nothing acknowledged across the move is lost.

@@ -139,8 +139,8 @@ Progress:
   write fence when it is routed rather than when it is claimed, so one routed
   just before the fence lands and the move waits for it, instead of being
   refused at its claim. Bounded by `FELIX_SHARD_MOVE_HOLD_MS` (2 s) and
-  `FELIX_SHARD_MOVE_HOLD_MAX` (1024 waiting). Only publishes are held; cache,
-  counter and group writes are refused through the switch-over as before.
+  `FELIX_SHARD_MOVE_HOLD_MAX` (1024 waiting). Cache, counter and group
+  operations were held the same way afterwards; see the last phase below.
 - **A typed refusal.** Past either bound the publish is refused with
   `shard_unavailable`, reason `moving`, retry class `retry` and a
   `retry_after_ms` hint. There is no separate feature bit: `moving` is a new
@@ -383,11 +383,57 @@ record once and in order, and the broker exits cleanly. Before the change the
 same test saw a failover and refused publishes. It also restarts a broker that
 handed off and sees it lead again, and stops a lone broker without waiting.
 
+### Holding cache, counter and group operations
+
+Every cache and counter operation now goes through the same hold as a
+publish (`resolve_cache_route` calls `dispatch_write`), and takes its place in
+the write fence there, so one routed just before the fence lands and the move
+waits for it. The owner of a forwarded one waits the same way
+(`ForwardingHandler::apply_cache_op` settles before its ownership check, and
+again after a fence refusal), then applies it or answers `NotLeader`, which
+the requester follows. The hold cannot count an add twice: it waits before
+anything is applied, and a forwarded add whose answer is lost is reported as
+indeterminate rather than re-sent, as before.
+
+Group operations are not forwarded; a poll's claims and the acks for them
+belong on the broker that leads the shard. So a group operation is held at
+the broker it reached and, once the move cuts over, answered with `NotLeader`
+naming the new owner, which `ClusterClient::group_sharded` follows. The
+new owner leads only after the drained report, and that waits for the group
+cursors and dead letters to be on it, so a held ack applies on top of the
+copied state and is never applied on the old leader as well: the fence
+refused it there. A poll that is waiting for work when its shard leaves
+answers empty rather than with an error. `handoff::writes_of_every_kind_through_a_move_are_never_refused`
+runs cache puts and deletes, counter adds, publishes and a group's polls and
+acks through a move: nothing is refused, every acknowledged cache write reads
+back, the counter equals the acknowledged adds, and the group finishes every
+record once. Without the change it sees hundreds of refused cache writes and
+counter adds and a few refused group operations.
+
+The test also found writes refused before any fence. A drain made the
+draining broker ineligible, and brokers read "eligible" as "may forward to",
+so every write through another broker to a shard still waiting its turn to
+move was refused as `owner_unavailable`. The node listing now says
+`routable` separately (live or draining, heartbeat inside the window), and
+brokers forward on that.
+
+The model needed nothing new: a held operation has not been admitted, which
+`FelixShard.tla` already allows for any write, and the logs that ride the
+shard are modelled as writes to the one log.
+
 ## What is left
 
-- **Cache, counter and group writes are not held.** They are refused,
-  retryably, for the length of the switch-over. Holding them needs the same
-  treatment publishes got on each of their paths.
+- **A plain client does not follow a group redirect.** Group operations over
+  a single `Client`, including the Python and TypeScript bindings, get the
+  `NotLeader` after a move as an error, as they do for any shard led
+  elsewhere. `ClusterClient::group_sharded` follows it.
+- **A redirect to a draining broker has no address.** Client endpoints list
+  only eligible brokers, so a group operation that reaches another broker for
+  a shard a draining broker still leads is redirected without an address, and
+  `group_sharded` cannot follow it until that shard has moved.
+- **A group's in-flight tracker outlives a move away and back.** It is kept
+  in the leader's memory and not cleared when the shard leaves, so after
+  A -> B -> A the first leader can hand out a record acked on B again (#685).
 - **A dead lease holder pauses the timed passes** until its lease expires,
   three reconcile intervals (15 s by default). Moves in flight carry on and
   woken passes still run, but a failover waiting on the timer waits that

@@ -32,7 +32,7 @@ pub(crate) fn redirect_for(
     kind: crate::shards::ShardKind,
     peer_features: u32,
 ) -> Option<Message> {
-    use crate::shards::routing::{Dispatch, dispatch};
+    use crate::shards::routing::dispatch;
 
     let key = crate::shards::ShardKey {
         tenant_id: tenant_id.to_string(),
@@ -42,7 +42,24 @@ pub(crate) fn redirect_for(
         kind,
     };
 
-    match dispatch(ingress, &key) {
+    redirect_from(
+        dispatch(ingress, &key),
+        client_endpoints,
+        stream,
+        peer_features,
+    )
+}
+
+/// [`redirect_for`], for a request already dispatched.
+pub(crate) fn redirect_from(
+    dispatched: crate::shards::routing::Dispatch,
+    client_endpoints: Option<&crate::cluster::client_endpoints::ClientEndpoints>,
+    stream: &str,
+    peer_features: u32,
+) -> Option<Message> {
+    use crate::shards::routing::Dispatch;
+
+    match dispatched {
         Dispatch::Local { .. } => None,
         Dispatch::Forward {
             node_id,

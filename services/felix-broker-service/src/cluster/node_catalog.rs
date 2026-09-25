@@ -58,6 +58,10 @@ struct NodeSpec {
 #[derive(Debug, Deserialize)]
 struct Placement {
     eligible: bool,
+    /// Absent from a control plane that predates it, which counts only
+    /// eligible nodes as live.
+    #[serde(default)]
+    routable: Option<bool>,
 }
 
 /// Fetch the catalog.
@@ -123,7 +127,10 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
                 // heartbeat age together. A broker re-deriving that from the
                 // lifecycle alone would keep forwarding to a node whose
                 // heartbeat has lapsed but whose sweep has not yet run.
-                live: item.placement.eligible,
+                // Routable rather than eligible: a draining broker still serves
+                // the shards it has not handed off yet, and refusing writes
+                // for them would make every drain refuse writes.
+                live: item.placement.routable.unwrap_or(item.placement.eligible),
             },
         );
     }

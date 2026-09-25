@@ -17,6 +17,7 @@ use felix_storage::log::{FsyncMode, LogConfig};
 use tempfile::TempDir;
 
 use crate::shards::lifecycle::{Action, ShardLifecycle};
+use crate::shards::routing::hold::MoveHold;
 use crate::shards::routing::{IngressRouter, routing_table_from};
 use crate::shards::watch::ShardAssignment;
 use crate::shards::{ShardKey, ShardKind};
@@ -30,17 +31,26 @@ pub(crate) const EPHEMERAL: &str = "events";
 pub(crate) const CACHE: &str = "sessions";
 pub(crate) const GENERATION: u64 = 1;
 const NODE: &str = "broker-a";
+/// Where [`Leader::cut_over`] moves a shard.
+pub(crate) const SUCCESSOR: &str = "broker-b";
 
 pub(crate) struct Leader {
     pub(crate) broker: Arc<Broker>,
     pub(crate) ingress: Arc<IngressRouter>,
     pub(crate) router: Arc<ShardRouter>,
     pub(crate) lifecycle: ShardLifecycle,
+    assignments: HashMap<ShardKey, ShardAssignment>,
+    nodes: HashMap<String, NodeRef>,
     _dir: TempDir,
 }
 
 impl Leader {
     pub(crate) async fn start() -> Self {
+        Self::start_holding(MoveHold::disabled()).await
+    }
+
+    /// [`Self::start`], holding writes to a moving shard under `hold`.
+    pub(crate) async fn start_holding(hold: MoveHold) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = LogConfig {
             fsync_mode: FsyncMode::None,
@@ -99,17 +109,20 @@ impl Leader {
             .iter()
             .map(|key| (key.clone(), assignment(key, "active")))
             .collect();
-        let nodes: HashMap<String, NodeRef> = [(
-            NODE.to_string(),
-            NodeRef {
-                node_id: NODE.to_string(),
-                advertise_addr: std::net::SocketAddr::from(([127, 0, 0, 1], 7001)),
-                region: "us-west-2".to_string(),
-                live: true,
-            },
-        )]
-        .into_iter()
-        .collect();
+        let nodes: HashMap<String, NodeRef> = [(NODE, 7001), (SUCCESSOR, 7002)]
+            .into_iter()
+            .map(|(node_id, port)| {
+                (
+                    node_id.to_string(),
+                    NodeRef {
+                        node_id: node_id.to_string(),
+                        advertise_addr: std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                        region: "us-west-2".to_string(),
+                        live: true,
+                    },
+                )
+            })
+            .collect();
         let router = Arc::new(ShardRouter::new(
             NODE,
             "us-west-2",
@@ -122,10 +135,10 @@ impl Leader {
             lifecycle.observe(key, Some(assignment));
             lifecycle.opened(key, GENERATION);
         }
-        let ingress = Arc::new(IngressRouter::new(
-            Arc::clone(&router),
-            Arc::clone(lifecycle.fence()),
-        ));
+        let ingress = Arc::new(
+            IngressRouter::new(Arc::clone(&router), Arc::clone(lifecycle.fence()))
+                .with_move_hold(hold),
+        );
         ingress.publish_servable(lifecycle.servable());
 
         Self {
@@ -133,6 +146,8 @@ impl Leader {
             ingress,
             router,
             lifecycle,
+            assignments,
+            nodes,
             _dir: dir,
         }
     }
@@ -154,6 +169,23 @@ impl Leader {
         assert!(
             matches!(action, Action::Release { .. }),
             "expected a release, got {action:?}"
+        );
+    }
+
+    /// What the rest of a move does here: the view catches up with the
+    /// fence, then names [`SUCCESSOR`] the leader at the next generation.
+    pub(crate) fn cut_over(&mut self, key: &ShardKey) {
+        let moved = ShardAssignment {
+            leader: SUCCESSOR.to_string(),
+            generation: GENERATION + 1,
+            ..assignment(key, "active")
+        };
+        self.lifecycle.observe(key, Some(&moved));
+        self.assignments.insert(key.clone(), moved);
+        self.ingress.publish(
+            routing_table_from(&self.assignments, &self.nodes),
+            &self.nodes,
+            self.lifecycle.servable(),
         );
     }
 }
