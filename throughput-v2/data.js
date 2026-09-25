@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790363675191,
+  "lastUpdate": 1790367204332,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16276,6 +16276,58 @@ window.BENCHMARK_DATA = {
             "range": "5482.69",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 934106.50\nmean: 934287.11\nstdev: 5482.69\ncv: 0.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e02638caa0a58efe25100e7bafdb6522e469d53",
+          "message": "perf(azure): swap felix-loadgen on a live session; control-plane VM size; 24 MiB UDP buffers (#714)\n\n* perf(azure): swap felix-loadgen on a live session; 24 MiB UDP buffers\n\ndeploy-loadgen.sh rebuilds felix-loadgen from any ref on every generator,\nfor client-side changes the broker swap does not reach. Each cell records\nwhich loadgen build ran it. The first session A smoke run dropped 8.5k\ndatagrams on the 8 MiB default receive buffer.\n\n* perf(azure): CONTROLPLANE_VM_SIZE, so five Dasv5 VMs fit a 20-vCPU family quota",
+          "timestamp": "2026-09-25T13:10:03-07:00",
+          "tree_id": "4dd84fc3f2af548e8c983a1225b7dd70644aa239",
+          "url": "https://github.com/gabloe/felix/commit/9e02638caa0a58efe25100e7bafdb6522e469d53"
+        },
+        "date": 1790367203702,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 400244.97,
+            "range": "6572.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 400244.97\nmean: 398043.71\nstdev: 6572.65\ncv: 1.65%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 400244.97,
+            "range": "6572.65",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 400244.97\nmean: 398043.71\nstdev: 6572.65\ncv: 1.65%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 94788.21,
+            "range": "858.01",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 94788.21\nmean: 95032.37\nstdev: 858.01\ncv: 0.90%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 947882.09,
+            "range": "8580.09",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 947882.09\nmean: 950323.71\nstdev: 8580.09\ncv: 0.90%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
