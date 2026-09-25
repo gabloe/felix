@@ -118,6 +118,14 @@ impl ProducerState {
         }
     }
 
+    /// The sequence `producer_id` owes next, or `None` for a producer the log
+    /// holds no batch from.
+    pub(crate) fn next_sequence(&self, producer_id: u64) -> Option<u64> {
+        self.producers
+            .get(&producer_id)
+            .map(|producer| producer.last_sequence + 1)
+    }
+
     /// Whether a batch is waiting for more of its records. While one is, an
     /// unmarked append has to be observed too, since it ends the batch.
     pub(crate) fn is_open(&self) -> bool {

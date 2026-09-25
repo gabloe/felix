@@ -5,6 +5,10 @@
 //! a batch holds its place from the moment it has one, and fanout comes only
 //! after the batch is durable.
 
+mod per_record;
+
+pub use per_record::RECORD_SEQUENCE_WRAP;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 

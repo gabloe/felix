@@ -52,7 +52,7 @@ pub mod timings;
 
 pub use broker::{
     Broker, CacheMetadata, ClaimedPublish, ConsistencyLevel, IdempotentOutcome, LogKind,
-    PublishOutcome, StreamHandle, StreamMetadata,
+    PublishOutcome, RECORD_SEQUENCE_WRAP, StreamHandle, StreamMetadata,
 };
 pub use error::{BrokerError, Result};
 pub use handoff::{ShardHandoff, ShardMoved};
