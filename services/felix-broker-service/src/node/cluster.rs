@@ -163,8 +163,13 @@ pub(super) fn bind_peer_listener(
     )
 }
 
-/// The shard watch and the routing feed.
-pub(super) type ShardTasks = (JoinHandle<()>, JoinHandle<()>);
+/// The shard watch, the routing feed, and shipping to followers.
+pub(super) struct ShardTasks {
+    pub(super) watch: JoinHandle<()>,
+    pub(super) feed: JoinHandle<()>,
+    /// Absent without a peer transport to ship over.
+    pub(super) replication: Option<replication::driver::Replication>,
+}
 
 /// What the shard tasks read and publish to.
 pub(super) struct ShardTaskDeps<'a> {
@@ -248,7 +253,7 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
             // Shipping to followers, for the shards this broker leads. Only
             // when there is a peer transport to ship over: without one the
             // replica set is a plan nobody can act on.
-            if let Some(pool) = peers {
+            let replication = peers.as_ref().map(|pool| {
                 replication::driver::spawn(
                     Arc::clone(pool),
                     Arc::clone(broker),
@@ -285,9 +290,13 @@ pub(super) fn spawn_shard_tasks(deps: ShardTaskDeps<'_>) -> Option<ShardTasks> {
                     },
                     replication::MoveThrottle::new(config.shard_move_bytes_per_sec),
                     sync_shutdown.clone(),
-                );
-            }
-            Some((watch, feed))
+                )
+            });
+            Some(ShardTasks {
+                watch,
+                feed,
+                replication,
+            })
         }
         _ => None,
     }

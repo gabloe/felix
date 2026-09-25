@@ -425,6 +425,14 @@ exactly one thing: the time it takes to notice the leader is gone.
 A halted follower is never reported, however close its last position was. It has
 stopped rather than fallen behind.
 
+The last report is the one promotion reads, so a leader that stops on purpose
+has to make it a good one. A stopping broker stops taking forwarded writes,
+ships until each shard it leads has a follower level with it, and only then
+stops replicating and closes its peer connections
+(`node/shutdown.rs`, `Replication::caught_up`). The other way round, a record
+written after the connections closed, or not yet shipped when they did, left a
+last report naming no follower, and the shard never failed over.
+
 **The report cannot be allowed to trail the acknowledgement.** On its own this
 rule is not enough, and a model check shows why: if the report travels after the
 acknowledgements it describes, a leader that reports two followers level, then

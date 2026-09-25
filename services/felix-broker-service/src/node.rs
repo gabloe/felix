@@ -221,6 +221,9 @@ where
         Some(joined) => (Some(joined.membership), joined.credential_refresh),
         None => (None, None),
     };
+    // Its own token, so a stopping broker can stop taking forwarded writes
+    // while it still ships to followers over the pool.
+    let peer_listener_shutdown = peer_shutdown.child_token();
     let peer_task = cluster::bind_peer_listener(
         &config,
         &cluster,
@@ -228,7 +231,7 @@ where
         &quorum_marks,
         &auth,
         &peer_tls,
-        &peer_shutdown,
+        &peer_listener_shutdown,
     )?;
     let shard_tasks = cluster::spawn_shard_tasks(cluster::ShardTaskDeps {
         config: &config,
@@ -260,6 +263,7 @@ where
         peers,
         peer_task,
         peer_shutdown,
+        peer_listener_shutdown,
         accept_tasks,
         membership_client,
         credential,

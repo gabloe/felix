@@ -410,6 +410,18 @@ client required publish acks in request order, while the broker answers each
 as it completes; a `Quorum` publish answered after the one behind it failed
 every publish on that stream (`acks_answered_out_of_order_reach_their_own_requests`).
 
+It also failed now and then with a shard that never failed over after the
+broker exited. The broker closed its outbound peer connections, which
+replication ships over, while its peer listener could still append forwarded
+publishes, and it kept reporting afterwards. A record that reached only the
+leader then left a last report naming no caught-up follower, and the control
+plane, which promotes only such a follower, left the shard unplaced for good.
+The broker now stops its peer listener first, waits (for at most half of the
+remaining drain deadline) until each shard it leads has a follower level with
+it, stops replicating, and only then closes the pool
+(`a_stopping_leader_ships_its_tail_before_it_stops_replicating`, which cuts the
+followers off for the last write and heals them during the drain).
+
 ### Holding cache, counter and group operations
 
 Every cache and counter operation now goes through the same hold as a
