@@ -635,3 +635,71 @@ async fn a_lone_broker_that_stops_keeps_what_it_acknowledged() {
     assert_exactly_once(&owed, &read);
     cluster.shutdown().await;
 }
+
+/// **A stopping leader leaves a follower that can take over.** The shard's
+/// last record reached only the leader: its followers were cut off when it
+/// was written. The leader is stopped with no handoff, and the partition heals
+/// while it drains. It has to ship that record before it stops replicating,
+/// because the control plane promotes only a follower its leader last named
+/// as holding everything, and a leader that stops shipping first leaves a last
+/// report naming nobody: the shard then never fails over.
+#[serial]
+#[tokio::test]
+async fn a_stopping_leader_ships_its_tail_before_it_stops_replicating() {
+    let mut cluster = Cluster::start(ClusterConfig {
+        nodes: 3,
+        streams: vec![StreamSpec::quorum(STREAM, 1, 3)],
+        broker_env: vec![
+            (
+                "FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS".to_string(),
+                "0".to_string(),
+            ),
+            (
+                "FELIX_SHUTDOWN_DRAIN_TIMEOUT_MS".to_string(),
+                "10000".to_string(),
+            ),
+        ],
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let leader = cluster.owner(STREAM).await.expect("owner");
+    cluster
+        .publish_via(&leader, STREAM, b"shipped".to_vec())
+        .await
+        .expect("publish while the cluster is whole");
+
+    // Written on the leader, refused for want of a quorum.
+    cluster.partition_node(&leader).expect("partition");
+    assert!(
+        cluster
+            .publish_via(&leader, STREAM, b"leader-only".to_vec())
+            .await
+            .is_err(),
+        "the partition did not take effect"
+    );
+
+    cluster.terminate_node(&leader).expect("SIGTERM");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    cluster.heal_partitions().expect("heal");
+    let status = cluster
+        .wait_for_exit(&leader, Duration::from_secs(20))
+        .await
+        .expect("the leader exits");
+    assert!(status.success(), "clean exit: {status}");
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        cluster.place_shards().await;
+        let owner = cluster.owner(STREAM).await.expect("owner");
+        if owner != leader {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the shard never failed over from {leader}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    cluster.shutdown().await;
+}
