@@ -24,6 +24,13 @@ fn payload(value: &str) -> Bytes {
 /// A broker holding a durable stream whose records were written the way
 /// replication writes them: straight to the shard log, never through publish.
 async fn promoted_broker(records: &[&str]) -> (Arc<Broker>, TempDir) {
+    promoted_broker_in_batches(&[&[], records]).await
+}
+
+/// As [`promoted_broker`], with the stream told of each batch as it lands,
+/// the way a follower hears of every replicated batch in turn. The stream is
+/// opened once the first batch is on disk, as a follower's is.
+async fn promoted_broker_in_batches(batches: &[&[&str]]) -> (Arc<Broker>, TempDir) {
     let dir = tempdir().expect("dir");
     let storage = DurableStorage::open(
         dir.path(),
@@ -43,33 +50,36 @@ async fn promoted_broker(records: &[&str]) -> (Arc<Broker>, TempDir) {
         .register_namespace(TENANT, NAMESPACE)
         .await
         .expect("namespace");
-    broker
-        .register_stream(
-            TENANT,
-            NAMESPACE,
-            STREAM,
-            StreamMetadata {
-                durable: true,
-                shards: 1,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("stream");
-
     // The replication path: the shard's log, directly — then telling the stream
     // its tail moved, exactly as the replica handler does.
     let log = storage
         .open_stream(TENANT, NAMESPACE, STREAM, 0)
         .expect("open the shard log");
-    for record in records {
-        log.append(&[payload(record)]).await.expect("append");
+    for (index, records) in batches.iter().enumerate() {
+        for record in *records {
+            log.append(&[payload(record)]).await.expect("append");
+        }
+        if index == 0 {
+            broker
+                .register_stream(
+                    TENANT,
+                    NAMESPACE,
+                    STREAM,
+                    StreamMetadata {
+                        durable: true,
+                        shards: 1,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("stream");
+        }
+        let tail = log.tail_offset().await.expect("tail");
+        broker
+            .adopt_replicated(TENANT, NAMESPACE, STREAM, 0, tail)
+            .await
+            .expect("adopt the replicated records");
     }
-    let tail = log.tail_offset().await.expect("tail");
-    broker
-        .adopt_replicated(TENANT, NAMESPACE, STREAM, 0, tail)
-        .await
-        .expect("adopt the replicated records");
 
     (Arc::new(broker), dir)
 }
@@ -125,6 +135,56 @@ async fn a_replicated_stream_replays_from_the_start() {
         everything,
         vec!["a", "b", "c"],
         "a promoted broker served nothing for records it holds on disk",
+    );
+}
+
+/// Everything from the start, from disk and then the ring, as a reader
+/// subscribing from `Earliest` is served.
+async fn replay_everything(broker: &Broker) -> Vec<(u64, String)> {
+    let resumed = broker
+        .subscribe_from(TENANT, NAMESPACE, STREAM, 0, StartPosition::Earliest)
+        .await
+        .expect("subscribe from the start");
+    let mut everything = Vec::new();
+    if let Some(range) = resumed.history {
+        let records = broker
+            .read_durable(TENANT, NAMESPACE, STREAM, 0, range.from_offset, 1024 * 1024)
+            .await
+            .expect("read history");
+        for record in records {
+            if record.offset >= range.until_offset {
+                break;
+            }
+            everything.push((
+                record.offset,
+                String::from_utf8(record.payload.to_vec()).expect("utf8"),
+            ));
+        }
+    }
+    everything.extend(
+        resumed
+            .backlog
+            .iter()
+            .map(|(offset, p)| (*offset, String::from_utf8(p.to_vec()).expect("utf8"))),
+    );
+    everything
+}
+
+/// **Records replicated after the first batch are served too.** The first
+/// batch opens the stream, which fills its ring from what is on disk then;
+/// later batches only move the tail. A reader from the start must still get
+/// every record, not the first batch and then the live edge.
+#[tokio::test]
+async fn records_replicated_after_the_first_batch_replay_from_the_start() {
+    let (broker, _dir) = promoted_broker_in_batches(&[&["a"], &["b", "c"], &["d"]]).await;
+    assert_eq!(
+        replay_everything(&broker).await,
+        vec![
+            (0, "a".to_string()),
+            (1, "b".to_string()),
+            (2, "c".to_string()),
+            (3, "d".to_string()),
+        ],
     );
 }
 

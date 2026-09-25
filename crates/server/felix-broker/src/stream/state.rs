@@ -194,15 +194,18 @@ impl StreamState {
     /// would hang forever. Same reasoning as recovery after a restart, which is
     /// why `hydrate` does this too.
     ///
-    /// The ring is deliberately left alone. Refilling it from disk on every
-    /// replicated batch would read the whole window each time, and a reader is
-    /// served from the log when the ring has nothing — see
-    /// `Broker::subscribe_from`.
+    /// The ring is emptied rather than refilled. Refilling it from disk on
+    /// every replicated batch would read the whole window each time, and a
+    /// reader is served from the log when the ring has nothing — see
+    /// `Broker::subscribe_from`. Kept, it would end below the records just
+    /// written, and a reader from before them would get the ring and then the
+    /// live edge, skipping everything in between.
     pub(crate) fn advance_to(&self, next_seq: u64) {
         let mut state = self.log_state.lock();
         if next_seq <= state.next_seq {
             return;
         }
+        state.log.clear();
         state.next_seq = next_seq;
         drop(state);
         self.commit_sequencer.reset(next_seq);
