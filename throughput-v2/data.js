@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790296886860,
+  "lastUpdate": 1790298914951,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15340,6 +15340,58 @@ window.BENCHMARK_DATA = {
             "range": "13404.51",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 896463.36\nmean: 891777.53\nstdev: 13404.51\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7703ea5f93c9c4690c2b6360767d300f1c144213",
+          "message": "A group's in-flight state starts over when a shard comes back (#688)\n\n* fix(broker): a group's in-flight state starts over when a shard comes back\n\nA consumer group's tracker lived in the leader's memory for as long as the\nbroker ran. After a shard moved A -> B -> A, A reopened with the tracker from\nits first term and handed out records the group had acknowledged on B.\n\nThe lifecycle now marks an open as a new term when the broker was not serving\nthe shard just before it, and the shard's trackers are dropped before that\nopen, so they are rebuilt from the cursor log that came back with the shard.\nReopening a shard it is still serving (a staged replica, the fence of a move)\nkeeps them.\n\nCloses #685.\n\nSpec-Unaffected: group in-flight state is broker memory the model does not describe; open/serve ordering is unchanged\n\n* docs: a group's in-flight state across a move away and back",
+          "timestamp": "2026-09-24T18:11:32-07:00",
+          "tree_id": "17237a0f4908af285b13716ccfb469f2fe5bd4b0",
+          "url": "https://github.com/gabloe/felix/commit/7703ea5f93c9c4690c2b6360767d300f1c144213"
+        },
+        "date": 1790298913819,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 600589.33,
+            "range": "27255.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 600589.33\nmean: 609168.68\nstdev: 27255.24\ncv: 4.47%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 600589.33,
+            "range": "27255.24",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 600589.33\nmean: 609168.68\nstdev: 27255.24\ncv: 4.47%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 151578.93,
+            "range": "1571.42",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 151578.93\nmean: 151025.96\nstdev: 1571.42\ncv: 1.04%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1515789.31,
+            "range": "15714.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1515789.31\nmean: 1510259.64\nstdev: 15714.16\ncv: 1.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
