@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790308416436,
+  "lastUpdate": 1790313636833,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19800,6 +19800,72 @@ window.BENCHMARK_DATA = {
             "range": "269.78",
             "unit": "us",
             "extra": "trials: 5\nmedian: 381.00\nmean: 528.20\nstdev: 269.78\ncv: 51.08%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6dc37e50ee13983ed62c3e7d1aa01b292485352",
+          "message": "fix(controlplane): the Postgres store keeps a stream's replication factor (#697)\n\nstream_from_db hard-coded replication_factor 1, so get_stream and\nlist_streams reported every stream as unreplicated and placement gave a\nreplicated stream no followers. patch_stream rewrites the row from what it\nread, so any patch also stored the 1 for good.\n\nThe store's Postgres tests never caught it. task test did not enable\npg-tests, and with it enabled every test skipped: the schema reset failed on\na foreign key, then the tests sharing one schema deadlocked, and a failed\nsetup was reported as a skip. Reset with CASCADE, run them serially, fail\non a setup error once a database URL is given, and enable the feature\nwhenever task test has a database.\n\nSpec-Unaffected: store decoding and test setup only.",
+          "timestamp": "2026-09-24T22:15:36-07:00",
+          "tree_id": "6fb6a0c80554b4d24128fd68c9c1bdbd19c92a3a",
+          "url": "https://github.com/gabloe/felix/commit/f6dc37e50ee13983ed62c3e7d1aa01b292485352"
+        },
+        "date": 1790313634635,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 170,
+            "range": "1.14",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 170.00\nmean: 170.40\nstdev: 1.14\ncv: 0.67%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 218,
+            "range": "4.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 218.00\nmean: 218.60\nstdev: 4.98\ncv: 2.28%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 401,
+            "range": "109.25",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 401.00\nmean: 404.20\nstdev: 109.25\ncv: 27.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 205,
+            "range": "7.70",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 208.40\nstdev: 7.70\ncv: 3.70%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 414,
+            "range": "152.82",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 414.00\nmean: 479.60\nstdev: 152.82\ncv: 31.86%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 1142,
+            "range": "584.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 1142.00\nmean: 1270.00\nstdev: 584.69\ncv: 46.04%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
