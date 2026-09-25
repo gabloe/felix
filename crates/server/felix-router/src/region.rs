@@ -40,6 +40,15 @@ impl<R: Eq + Hash + Clone> RegionRouter<R> {
         }
     }
 
+    /// A router that allows traffic within `local_region` and along each
+    /// `(source, dest)` bridge.
+    pub fn with_bridges(local_region: R, bridges: impl IntoIterator<Item = (R, R)>) -> Self {
+        Self {
+            local_region,
+            allowed_bridges: bridges.into_iter().collect(),
+        }
+    }
+
     pub fn local_region(&self) -> &R {
         &self.local_region
     }
@@ -58,6 +67,54 @@ impl<R: Eq + Hash + Clone> RegionRouter<R> {
             .contains(&(source.clone(), dest.clone()))
     }
 }
+
+impl<R: Eq + Hash> PartialEq for RegionRouter<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.local_region == other.local_region && self.allowed_bridges == other.allowed_bridges
+    }
+}
+
+impl<R: Eq + Hash> Eq for RegionRouter<R> {}
+
+/// Read a bridge allowlist written as comma-separated `source>dest` pairs,
+/// such as `eu-west-1>us-east-1,us-east-1>eu-west-1`.
+///
+/// Each pair allows one direction only; a two-way bridge is two pairs. Blank
+/// input is no bridges. Anything malformed is an error rather than skipped: a
+/// dropped pair is a region cut off, and a misspelled one is a region opened
+/// that nobody meant to open.
+pub fn parse_bridges(spec: &str) -> Result<Vec<(String, String)>, BridgeSpecError> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (source, dest) = pair
+                .split_once('>')
+                .ok_or_else(|| BridgeSpecError(pair.to_string()))?;
+            let (source, dest) = (source.trim(), dest.trim());
+            if source.is_empty() || dest.is_empty() || dest.contains('>') {
+                return Err(BridgeSpecError(pair.to_string()));
+            }
+            Ok((source.to_string(), dest.to_string()))
+        })
+        .collect()
+}
+
+/// A bridge that is not a `source>dest` pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BridgeSpecError(String);
+
+impl std::fmt::Display for BridgeSpecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "region bridge {:?} is not a `source>dest` pair of region names",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for BridgeSpecError {}
 
 #[cfg(test)]
 mod tests;
