@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790336138189,
+  "lastUpdate": 1790342341724,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15912,6 +15912,58 @@ window.BENCHMARK_DATA = {
             "range": "7436.16",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 958944.77\nmean: 957793.33\nstdev: 7436.16\ncv: 0.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "83a2846550302bbc7697ad605fd21a7f50c9b06b",
+          "message": "fix(broker): a refused publish keeps its own code and reason (#706)\n\n* feat(wire): a failed binary publish ack can carry its error detail\n\nFLAG_BINARY_PUBLISH_ACK_DETAIL (0x0400) follows the code with the reason and\nsuggested wait, the binary counterpart of publish_error.detail. Negotiated\nlike FLAG_BINARY_PUBLISH_ACK_CODE, since it changes the payload layout.\n\n* fix(broker): a refused publish keeps its own code and reason\n\nEvery publish refused before it had a target was reworded as \"stream not\nfound\", so a shard that was moving, fenced or still opening read as a\nmissing stream. Only an unresolvable stream says that now. Binary acks carry\nthe refusal's detail to clients that offered FLAG_BINARY_PUBLISH_ACK_DETAIL,\nand felix-client fills BrokerError::detail from it.",
+          "timestamp": "2026-09-25T06:16:10-07:00",
+          "tree_id": "5586c18537b8b40af7cd70e669f76aaf83bcf4ce",
+          "url": "https://github.com/gabloe/felix/commit/83a2846550302bbc7697ad605fd21a7f50c9b06b"
+        },
+        "date": 1790342341146,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 533846.29,
+            "range": "43017.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 533846.29\nmean: 522959.97\nstdev: 43017.84\ncv: 8.23%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 533846.29,
+            "range": "43017.84",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 533846.29\nmean: 522959.97\nstdev: 43017.84\ncv: 8.23%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 111727.92,
+            "range": "1658.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 111727.92\nmean: 111109.86\nstdev: 1658.29\ncv: 1.49%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1117279.24,
+            "range": "16582.89",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1117279.24\nmean: 1111098.59\nstdev: 16582.89\ncv: 1.49%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
