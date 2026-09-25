@@ -9,6 +9,7 @@ use super::*;
 fn temp_file(dir: &std::path::Path, name: &str) -> Arc<File> {
     let mut file = File::options()
         .create(true)
+        .truncate(true)
         .read(true)
         .write(true)
         .open(dir.join(name))

@@ -16,6 +16,11 @@
 //! a broker with fifty shards can have fifty flushes outstanding, and on the
 //! blocking pool that is fifty threads. Here it is one ring and one thread.
 //!
+//! That thread spends its life blocked in `submit_and_wait`, so a request that
+//! arrives while other flushes are in flight has to wake it, or it sits in the
+//! channel until one of them completes and one log's slow sync delays every
+//! other log's. Callers ring an eventfd the thread keeps a poll armed on.
+//!
 //! **Measured expectations, so nobody is surprised.** On a 4-way NVMe RAID0 the
 //! hand-off is about 9% of a flush (583µs with it, 530µs without), and the
 //! device itself sustains ~1,346 MB/s against Felix's ~940 MB/s. This is not a
@@ -25,8 +30,9 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 use std::sync::{Arc, OnceLock};
 
 use io_uring::{IoUring, opcode, types};
@@ -39,11 +45,71 @@ use tokio::sync::oneshot;
 const RING_ENTRIES: u32 = 256;
 
 static RING: OnceLock<Option<Ring>> = OnceLock::new();
+/// Flush ids start at 1; this one marks the wake poll's completion.
+const WAKE_ID: u64 = 0;
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The process-wide ring's submission side; the service thread owns the rest.
 struct Ring {
     tx: std::sync::mpsc::Sender<Submission>,
+    wake: Arc<Wake>,
+}
+
+/// Interrupts the service thread's wait when a request is queued.
+struct Wake {
+    fd: OwnedFd,
+    /// Set by the first caller to signal since the thread last drained the
+    /// channel, so a burst of requests costs one eventfd write, not one each.
+    pending: AtomicBool,
+}
+
+impl Wake {
+    fn new() -> io::Result<Self> {
+        // Non-blocking, so resetting an already-zero counter returns instead
+        // of parking the service thread.
+        // Safety: plain syscall; the result is checked before use.
+        let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
+        if raw < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Safety: `raw` is a fresh descriptor nothing else owns.
+        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        Ok(Self {
+            fd,
+            pending: AtomicBool::new(false),
+        })
+    }
+
+    /// Call after queueing. Pairs with the fence in the service loop: either
+    /// the thread's drain sees the request, or this sees `pending` cleared and
+    /// writes.
+    fn signal(&self) {
+        fence(Ordering::SeqCst);
+        if self.pending.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let one: u64 = 1;
+        // Safety: writes 8 bytes from a live local. Can only fail if the
+        // counter would overflow, and then the thread is already woken.
+        unsafe { libc::write(self.fd.as_raw_fd(), (&raw const one).cast(), 8) };
+    }
+
+    /// Reset the counter, so the next poll waits for a new signal.
+    fn consume(&self) {
+        let mut count: u64 = 0;
+        // Safety: reads 8 bytes into a live local.
+        unsafe { libc::read(self.fd.as_raw_fd(), (&raw mut count).cast(), 8) };
+    }
+
+    /// Arm a one-shot poll that completes once the eventfd is signalled.
+    fn arm(&self, uring: &mut IoUring) {
+        let entry = opcode::PollAdd::new(types::Fd(self.fd.as_raw_fd()), libc::POLLIN as u32)
+            .build()
+            .user_data(WAKE_ID);
+        // Safety: the eventfd lives as long as the ring's thread. The queue
+        // was just submitted, so it has room.
+        let _ = unsafe { uring.submission().push(&entry) };
+    }
 }
 
 /// One flush waiting to be pushed into the ring, and where to send its result.
@@ -104,6 +170,7 @@ async fn submit(file: Arc<File>, op: Op) -> Option<io::Result<()>> {
     if ring.tx.send(Submission { file, op, reply }).is_err() {
         return None;
     }
+    ring.wake.signal();
     match wait.await {
         Ok(outcome) => Some(outcome),
         Err(_) => Some(Err(io::Error::other("io_uring service thread stopped"))),
@@ -128,46 +195,60 @@ fn ring() -> Option<&'static Ring> {
                 return None;
             }
         };
+        let wake = match Wake::new() {
+            Ok(wake) => Arc::new(wake),
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "eventfd unavailable; device flushes stay on the blocking pool"
+                );
+                return None;
+            }
+        };
         let (tx, rx) = std::sync::mpsc::channel::<Submission>();
+        let thread_wake = Arc::clone(&wake);
         std::thread::Builder::new()
             .name("felix-uring-fsync".into())
             .spawn(move || {
                 // Owned exclusively by this thread: the submission and
                 // completion queues are not safe to touch from several.
+                let wake = thread_wake;
                 let mut waiting = Waiting::new();
+                // The wake poll is always armed, so the wait below returns on
+                // either a completion or a newly queued request.
+                wake.arm(&mut uring);
                 loop {
-                    // With nothing outstanding there is nothing to drain, so
-                    // block for work. With requests in flight, never block on
-                    // the channel: their completions must be collected even if
-                    // no further flush is ever submitted. Getting this wrong
-                    // strands a publish forever.
-                    if waiting.is_empty() {
-                        match rx.recv() {
-                            Ok(first) => {
-                                if !push(&mut uring, &mut waiting, first) {
-                                    continue;
-                                }
-                            }
-                            Err(_) => return,
-                        }
-                    }
-                    // Whatever else is already queued joins this submit.
+                    // Cleared before draining: a request queued after the
+                    // drain signals again and ends the next wait.
+                    wake.pending.store(false, Ordering::SeqCst);
+                    fence(Ordering::SeqCst);
                     for submission in rx.try_iter() {
                         push(&mut uring, &mut waiting, submission);
                     }
 
-                    if let Err(err) = uring.submit_and_wait(1) {
-                        // Nothing outstanding can be called durable.
-                        for (_, (_file, reply)) in waiting.drain() {
-                            let _ = reply.send(Err(io::Error::new(err.kind(), err.to_string())));
+                    match uring.submit_and_wait(1) {
+                        Ok(_) => {}
+                        // Submitted entries stay in flight; collect as usual.
+                        Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                        Err(err) => {
+                            // Nothing outstanding can be called durable.
+                            for (_, (_file, reply)) in waiting.drain() {
+                                let _ =
+                                    reply.send(Err(io::Error::new(err.kind(), err.to_string())));
+                            }
+                            continue;
                         }
-                        continue;
                     }
                     let completions: Vec<(u64, i32)> = uring
                         .completion()
                         .map(|cqe| (cqe.user_data(), cqe.result()))
                         .collect();
                     for (id, result) in completions {
+                        if id == WAKE_ID {
+                            wake.consume();
+                            wake.arm(&mut uring);
+                            continue;
+                        }
                         if let Some((_file, reply)) = waiting.remove(&id) {
                             let outcome = if result < 0 {
                                 Err(io::Error::from_raw_os_error(-result))
@@ -180,14 +261,14 @@ fn ring() -> Option<&'static Ring> {
                 }
             })
             .ok()?;
-        Some(Ring { tx })
+        Some(Ring { tx, wake })
     })
     .as_ref()
 }
 
 /// Queue one fsync. Answers the caller directly if the ring has no room, so a
 /// full queue is a reported error rather than a lost request.
-fn push(uring: &mut IoUring, waiting: &mut Waiting, submission: Submission) -> bool {
+fn push(uring: &mut IoUring, waiting: &mut Waiting, submission: Submission) {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     // `DATASYNC`, matching `io::sync_data` on the blocking path: an append
     // changes data and size, not the metadata a full fsync also writes.
@@ -210,7 +291,6 @@ fn push(uring: &mut IoUring, waiting: &mut Waiting, submission: Submission) -> b
             .reply
             .send(Err(io::Error::other("io_uring submission queue full")));
     }
-    pushed
 }
 
 #[cfg(test)]

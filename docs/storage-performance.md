@@ -143,7 +143,10 @@ contention was larger than the sync it protected.
 `FELIX_STORAGE_IO_URING=1` submits flushes to one process-wide ring instead.
 The kernel still runs each `fsync` on a worker thread of its own, and in the
 same VM a single log's real `fdatasync` round trip measured ~47 µs through the
-ring against ~24 µs on a flush thread, so it stays opt-in.
+ring against ~24 µs on a flush thread, so it stays opt-in. The ring's thread
+waits on completions and on an eventfd that callers signal, so a flush queued
+while other logs' syncs are in flight reaches the kernel at once instead of
+waiting for one of them to finish.
 
 ## Where the time goes
 
