@@ -467,9 +467,66 @@ async fn a_fenced_shard_retries_its_remainder_without_waiting_for_the_tick() {
     })
     .await;
     shutdown.cancel();
-    let _ = driver.await;
+    driver.stop().await;
     assert!(
         shipped.is_ok(),
         "the remainder was not retried within 2s against a 300s tick"
     );
+}
+
+/// Replication over three records, to a follower that refuses `refusals`
+/// batches first.
+async fn behind_driver(refusals: usize) -> (Arc<BehindFollower>, Replication, TempDir) {
+    let (broker, dir) = leader_with(3).await;
+    let follower = Arc::new(BehindFollower {
+        refusals: std::sync::atomic::AtomicUsize::new(refusals),
+        inner: AcceptingFollower::default(),
+    });
+    let driver = spawn(
+        Arc::clone(&follower),
+        broker,
+        router(LOCAL, &["broker-b"], 4),
+        Arc::default(),
+        Published {
+            marks: Arc::new(QuorumMarks::new()),
+            halted: Arc::new(crate::replication::halted::HaltedReplicas::new()),
+        },
+        None,
+        // Reaching the tick would mean the wait did not ask for passes.
+        Duration::from_secs(300),
+        Arc::default(),
+        RebuildPolicy::default(),
+        MoveThrottle::unlimited(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    (follower, driver, dir)
+}
+
+/// **A stopping broker waits until a follower holds the whole log.** The
+/// follower refuses the first few batches, as one briefly out of reach would;
+/// the wait keeps asking for passes until it has all three records, and only
+/// then returns.
+#[tokio::test]
+async fn the_catch_up_wait_ends_once_a_follower_holds_everything() {
+    let (follower, driver, _dir) = behind_driver(3).await;
+    tokio::time::timeout(Duration::from_secs(5), driver.caught_up())
+        .await
+        .expect("the follower caught up but the wait did not end");
+    let held: usize = follower.inner.batches().iter().map(|(_, _, n)| n).sum();
+    assert_eq!(held, 3, "the wait ended before the follower held the log");
+    driver.stop().await;
+}
+
+/// **Nor does it end while no follower has the log.** A follower that never
+/// accepts leaves the shard with nobody the control plane could promote.
+#[tokio::test]
+async fn the_catch_up_wait_does_not_end_while_every_follower_is_behind() {
+    let (_follower, driver, _dir) = behind_driver(usize::MAX).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), driver.caught_up())
+            .await
+            .is_err(),
+        "the wait ended with the follower holding nothing"
+    );
+    driver.stop().await;
 }

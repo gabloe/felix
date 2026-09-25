@@ -323,7 +323,7 @@ async fn an_append_ships_without_waiting_for_the_tick() {
     .await;
 
     shutdown.cancel();
-    let _ = driver.await;
+    driver.stop().await;
 
     assert!(
         shipped.is_ok(),
@@ -377,7 +377,7 @@ async fn a_route_change_ships_without_waiting_for_the_tick() {
     .await;
 
     shutdown.cancel();
-    let _ = driver.await;
+    driver.stop().await;
     assert!(
         shipped.is_ok(),
         "nothing shipped within 5s of the routes changing, against a 300s tick",

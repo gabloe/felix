@@ -82,6 +82,7 @@ pub(crate) fn spawn_broker(
             "RUST_LOG",
             std::env::var("RUST_LOG").as_deref().unwrap_or("info"),
         );
+    command.envs(config.broker_env.iter().map(|(key, value)| (key, value)));
 
     if config.inherit_output {
         command.stdout(Stdio::inherit()).stderr(Stdio::inherit());

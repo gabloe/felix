@@ -26,6 +26,9 @@ pub struct ClusterConfig {
     /// the list is in `local`, so a test that says nothing about regions
     /// gets one region.
     pub regions: Vec<String>,
+    /// Extra environment for every broker, set after the harness's own so a
+    /// test can override any of them. Empty by default.
+    pub broker_env: Vec<(String, String)>,
 }
 
 impl Default for ClusterConfig {
@@ -40,6 +43,7 @@ impl Default for ClusterConfig {
             quic_listeners: 1,
             sync_interval_ms: 200,
             regions: Vec::new(),
+            broker_env: Vec::new(),
         }
     }
 }

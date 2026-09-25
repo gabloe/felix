@@ -15,6 +15,7 @@ use std::time::Duration;
 use felix_broker::Broker;
 use felix_router::{ShardKey, ShardRouter};
 use futures::StreamExt;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::halted::{HaltedReplica, HaltedReplicas};
@@ -50,7 +51,64 @@ pub struct Published {
     pub halted: Arc<HaltedReplicas>,
 }
 
-/// Run replication until cancelled.
+/// How soon a stopping broker asks for another pass when the last one left a
+/// shard's followers behind. Not at once: a follower that is unreachable would
+/// be redialled in a tight loop for the rest of the drain.
+const CATCH_UP_RETRY: Duration = Duration::from_millis(50);
+
+/// The running driver, as a stopping broker needs it.
+pub struct Replication {
+    task: tokio::task::JoinHandle<()>,
+    passes: watch::Receiver<PassesSeen>,
+    wake: Arc<tokio::sync::Notify>,
+    stop: CancellationToken,
+}
+
+/// What the passes so far have established.
+#[derive(Debug, Clone, Copy, Default)]
+struct PassesSeen {
+    /// Passes finished.
+    finished: u64,
+    /// The last one left some shard with no follower holding all of its log.
+    behind: bool,
+}
+
+impl Replication {
+    /// Wait until a pass that started after this call ends with every shard
+    /// led here held whole by at least one follower.
+    ///
+    /// For a broker that has stopped taking writes and is about to stop
+    /// shipping. The control plane promotes only a follower the leader last
+    /// named as holding everything, so a leader that stops with a record none
+    /// of its followers has leaves a shard that never fails over. Returns only
+    /// once that is not so; the caller bounds the wait.
+    pub async fn caught_up(&self) {
+        let mut passes = self.passes.clone();
+        // The pass under way may have started before the last write landed.
+        let started_after = passes.borrow_and_update().finished + 1;
+        loop {
+            self.wake.notify_one();
+            if passes.changed().await.is_err() {
+                return;
+            }
+            let seen = *passes.borrow_and_update();
+            if seen.finished > started_after {
+                if !seen.behind {
+                    return;
+                }
+                tokio::time::sleep(CATCH_UP_RETRY).await;
+            }
+        }
+    }
+
+    /// Stop shipping and reporting, and wait for the pass under way to end.
+    pub async fn stop(self) {
+        self.stop.cancel();
+        let _ = self.task.await;
+    }
+}
+
+/// Run replication until `shutdown` or [`Replication::stop`].
 ///
 /// A pass runs on each tick, after each durable append, and whenever
 /// `routes_changed` is notified.
@@ -67,8 +125,12 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
     rebuild_policy: RebuildPolicy,
     move_throttle: MoveThrottle,
     shutdown: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+) -> Replication {
+    let stop = shutdown.child_token();
+    let shutdown = stop.clone();
+    let wake = Arc::clone(&routes_changed);
+    let (seen, passes) = watch::channel(PassesSeen::default());
+    let task = tokio::spawn(async move {
         let rebuilds = Rebuilds::new(rebuild_policy);
         let mut ticker = tokio::time::interval(interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -137,8 +199,18 @@ pub fn spawn<R: PeerRequester + Send + Sync + 'static>(
             published.halted.publish(pass.halted);
             copying = pass.copying;
             drain_pending = pass.drain_pending;
+            seen.send_modify(|seen| {
+                seen.finished += 1;
+                seen.behind = pass.behind;
+            });
         }
-    })
+    });
+    Replication {
+        task,
+        passes,
+        wake,
+        stop,
+    }
 }
 
 /// Ship for every shard this broker leads, once.
@@ -215,6 +287,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
     let mut worst_lag: Option<u64> = None;
     let mut copying = false;
     let mut drain_pending = false;
+    let mut behind = false;
     let mut halted: Vec<HaltedReplica> = Vec::new();
     let mut live_shards = Vec::new();
     let mut reports = Vec::new();
@@ -286,6 +359,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
         halted.extend(pass.halted);
         copying |= pass.copying;
         drain_pending |= pass.drain_pending;
+        behind |= pass.behind;
         if let Some(lag) = pass.lag {
             worst_lag = Some(worst_lag.map_or(lag, |worst: u64| worst.max(lag)));
         }
@@ -315,6 +389,7 @@ pub async fn replicate_once_with<R: PeerRequester>(
         halted,
         copying,
         drain_pending,
+        behind,
     }
 }
 
@@ -338,6 +413,9 @@ pub struct Pass {
     /// seen the new generation, holds the switch-over, and the shard is not
     /// served meanwhile.
     pub drain_pending: bool,
+    /// Some shard led here ended the pass with no follower holding all of its
+    /// log, not counting halted followers, which waiting does not bring back.
+    pub behind: bool,
 }
 
 fn rebuilding_count(maps: &[&HashMap<ShardKey, ShardCursors>]) -> usize {

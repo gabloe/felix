@@ -99,6 +99,17 @@ answer within 5 s. A second SIGTERM stops the wait. A shard still led here when
 the wait ends fails over, exactly as it did without a handoff. `0` turns the
 handoff off.
 
+For that failover to happen, the stopping broker has to leave each shard it
+still leads on a follower in full. The control plane promotes only a follower
+the leader last reported as holding every record it had, so a leader that stops
+shipping with a record none of its followers has leaves a shard nobody can
+take over until that broker returns. Once its client connections have drained,
+the broker therefore stops taking forwarded writes from its peers, keeps
+shipping until every shard it leads has a follower level with it (for at most
+half of what is left of the drain deadline), and only then stops replicating
+and closes its peer connections. If a shard's followers stay out of reach, it
+logs `stopping while a shard led here is on no follower in full` at WARN.
+
 Moves run under the same limits as any other
 (see [Tuning](/felix/deployment/scaling/#tuning)). With the default
 `FELIX_SHARD_MOVES_MAX_CONCURRENT=1` they go one at a time. A move whose
@@ -238,8 +249,11 @@ Tracked under [#139](https://github.com/gabloe/felix/issues/139):
   (`crates/testing/felix-cluster/tests/routing/shutdown_handoff.rs`) sends the
   real broker binary SIGTERM under publish and subscribe traffic and asserts a
   clean, bounded exit, no publish refused, and every acknowledged record
-  delivered once and in order. A lone broker, or one whose handoff times out, is
-  not covered by a test.
+  delivered once and in order. For `Quorum` streams the same file also covers a
+  handoff that times out (`a_handoff_that_times_out_loses_no_acknowledged_record`),
+  a lone broker (`a_lone_broker_that_stops_keeps_what_it_acknowledged`), and a
+  leader that must ship its last record before it stops replicating
+  (`a_stopping_leader_ships_its_tail_before_it_stops_replicating`).
 - Otherwise broker coverage is at the accept-loop and readiness level
   (`services/felix-broker-service/tests/graceful_shutdown.rs`). The control plane
   has both halves: `services/felix-controlplane-service/tests/main_runtime.rs` sends the real

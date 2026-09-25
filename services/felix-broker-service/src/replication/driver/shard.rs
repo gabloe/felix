@@ -74,6 +74,8 @@ pub(super) struct ShardPass {
     pub(super) copying: bool,
     /// Fenced here and not yet drained: the move is waiting on this broker.
     pub(super) drain_pending: bool,
+    /// No follower that could still catch up holds all of the log.
+    pub(super) behind: bool,
 }
 
 impl ShardPass {
@@ -90,6 +92,7 @@ impl ShardPass {
             lag: None,
             copying: false,
             drain_pending: false,
+            behind: false,
         }
     }
 }
@@ -433,6 +436,11 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     settled
         .caught_up
         .retain(|node| !aux_behind.iter().any(|(_, behind)| behind == node));
+    let behind = settled.caught_up.is_empty()
+        && entry
+            .followers
+            .iter()
+            .any(|follower| follower.halted.is_none());
     if report_out.as_ref() != Some(&settled) {
         // And the mark with it. Usually a no-op — the mark is monotonic and the
         // majority already moved it — but with five replicas a second follower
@@ -492,6 +500,7 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         lag,
         copying,
         drain_pending: route.draining && !drained,
+        behind,
     }
 }
 

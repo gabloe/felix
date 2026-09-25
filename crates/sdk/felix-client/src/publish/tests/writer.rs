@@ -115,6 +115,95 @@ async fn acked_publishes_pipeline_without_waiting_per_ack() -> Result<()> {
     Ok(())
 }
 
+/// The broker answers a stream's acked publishes as each completes, so a
+/// `Quorum` or forwarded publish can be answered after one sent behind it.
+/// Each answer goes to the request it names.
+#[tokio::test]
+async fn acks_answered_out_of_order_reach_their_own_requests() -> Result<()> {
+    let (server_config, cert) = build_server_config()?;
+    let transport = TransportConfig::default();
+    let server = QuicServer::bind("127.0.0.1:0".parse()?, server_config, transport.clone())?;
+    let addr = server.local_addr()?;
+
+    let server_task = tokio::spawn(async move {
+        let connection = server.accept().await?;
+        let (mut send, mut recv) = connection.accept_bi().await?;
+        let mut scratch = BytesMut::with_capacity(4096);
+        for _ in 0..3 {
+            crate::frame_io::read_frame_into_with_limit(&mut recv, &mut scratch, false, 1 << 20)
+                .await?
+                .context("publish stream closed before all frames arrived")?;
+        }
+        for answer in [
+            Message::PublishOk { request_id: 3 },
+            Message::publish_error(1, "refused"),
+            Message::PublishOk { request_id: 2 },
+        ] {
+            send.write_all(&answer.encode()?.encode())
+                .await
+                .context("write ack")?;
+        }
+        send.finish()?;
+        let _ = recv.read_to_end(1024).await;
+        let _ = send.stopped().await;
+        Result::<()>::Ok(())
+    });
+
+    let client = QuicClient::bind("0.0.0.0:0".parse()?, quinn_client_config(cert)?, transport)?;
+    let connection = client.connect(addr, "localhost").await?;
+    let (send, recv) = connection.open_bi().await?;
+    let (tx, rx) = mpsc::channel(8);
+    let worker = tokio::spawn(run_publisher_writer(send, recv, rx, 16 * 1024));
+
+    let mut responses = Vec::new();
+    for request_id in 1..=3u64 {
+        let (response_tx, response_rx) = oneshot::channel();
+        tx.send(PublishRequest::Message {
+            message: Message::PublishBatch {
+                tenant_id: "t".into(),
+                namespace: "ns".into(),
+                stream: "s".into(),
+                payloads: vec![b"x".to_vec()],
+                key: None,
+                request_id: Some(request_id),
+                ack: Some(AckMode::PerBatch),
+            },
+            ack: AckMode::PerBatch,
+            request_id: Some(request_id),
+            _permit: super::test_publish_permit(),
+            response: response_tx,
+        })
+        .await
+        .context("queue publish")?;
+        responses.push(response_rx);
+    }
+
+    let mut answers = Vec::new();
+    for response in responses {
+        answers.push(
+            tokio::time::timeout(std::time::Duration::from_secs(10), response)
+                .await
+                .context("no answer")?
+                .context("worker dropped response")?,
+        );
+    }
+    let refusal = answers[0].as_ref().expect_err("request 1 was refused");
+    assert!(format!("{refusal:#}").contains("refused"), "{refusal:#}");
+    assert!(answers[1].is_ok(), "request 2: {:?}", answers[1]);
+    assert!(answers[2].is_ok(), "request 3: {:?}", answers[2]);
+
+    let (finish_tx, finish_rx) = oneshot::channel();
+    tx.send(PublishRequest::Finish {
+        response: finish_tx,
+    })
+    .await
+    .context("queue finish")?;
+    finish_rx.await.context("finish dropped")??;
+    worker.await.context("join worker")??;
+    server_task.await.context("join server")??;
+    Ok(())
+}
+
 #[tokio::test]
 async fn finish_publisher_stream_drains_recv() -> Result<()> {
     let (server_config, cert) = build_server_config()?;

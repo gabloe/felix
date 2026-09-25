@@ -37,6 +37,7 @@ pub(super) struct Running {
     pub(super) peers: Option<Arc<PeerPool>>,
     pub(super) peer_task: Option<JoinHandle<()>>,
     pub(super) peer_shutdown: CancellationToken,
+    pub(super) peer_listener_shutdown: CancellationToken,
     pub(super) accept_tasks: Vec<JoinHandle<()>>,
     pub(super) membership_client: reqwest::Client,
     pub(super) credential: Option<NodeCredential>,
@@ -87,6 +88,7 @@ impl Running {
             peers,
             peer_task,
             peer_shutdown,
+            peer_listener_shutdown,
             accept_tasks,
             membership_client,
             credential,
@@ -166,11 +168,8 @@ impl Running {
         // publish this broker is still applying is not cut off by its own shutdown.
         // Cancelling closes the connections, which tells every peer immediately
         // rather than leaving each to wait out its request timeout.
-        if let Some(pool) = &peers {
-            pool.shutdown().await;
-        }
         if let Some(peer_task) = peer_task {
-            peer_shutdown.cancel();
+            peer_listener_shutdown.cancel();
             let mut peer_task = peer_task;
             if !budget
                 .drain("peer_listener", async {
@@ -181,6 +180,35 @@ impl Running {
                 peer_task.abort();
             }
         }
+
+        // Nothing is written here any more. Every shard led here goes onto a
+        // follower before shipping stops, and shipping stops before the pool
+        // closes: a record only this broker holds, or a report made after it
+        // can no longer ship, leaves the control plane no follower it may
+        // promote, and the shard never fails over. See docs/replication-design.md.
+        let mut shard_tasks = shard_tasks;
+        if let Some(replication) = shard_tasks
+            .as_mut()
+            .and_then(|tasks| tasks.replication.take())
+        {
+            // Half of what is left at most: a follower that is down may not
+            // come back in time, and deregistering still needs some.
+            let bound = budget.remaining() / 2;
+            if tokio::time::timeout(bound, replication.caught_up())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "stopping while a shard led here is on no follower in full; \
+                     the control plane cannot promote one until this broker returns",
+                );
+            }
+            budget.drain("replication", replication.stop()).await;
+        }
+        if let Some(pool) = &peers {
+            pool.shutdown().await;
+        }
+        peer_shutdown.cancel();
 
         let mut accept_tasks = accept_tasks;
         if !budget
@@ -222,7 +250,7 @@ impl Running {
                 .await;
         }
 
-        if let Some((watch, feed)) = shard_tasks {
+        if let Some(super::cluster::ShardTasks { watch, feed, .. }) = shard_tasks {
             sync_shutdown.cancel();
             let mut watch = watch;
             let mut feed = feed;

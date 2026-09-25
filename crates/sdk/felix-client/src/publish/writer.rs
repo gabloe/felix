@@ -17,7 +17,7 @@ use quinn::{RecvStream, SendStream};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
 use super::AckOutcome;
-use super::ack::wait_for_ack;
+use super::ack::read_ack;
 use crate::frame_io::write_frame_parts;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::frame_counters;
@@ -81,7 +81,7 @@ pub(crate) async fn run_publisher_writer_with_limit(
 ) -> Result<()> {
     // Single writer: serialize publish requests over one bi-directional
     // stream. Acked publishes pipeline — written back to back, their acks
-    // resolved in order once the write queue drains — so concurrent
+    // resolved once the write queue drains — so concurrent
     // publishers on a stream are not capped at one request per round trip.
     //
     // Pending acks are held here rather than handed to a reader task: a
@@ -98,21 +98,47 @@ pub(crate) async fn run_publisher_writer_with_limit(
     let mut json_scratch = BytesMut::with_capacity(64 * 1024);
     let mut pending: VecDeque<PendingAck> = VecDeque::new();
 
-    // Resolve every outstanding ack, in the order the requests were written.
-    // A broken or out-of-order ack stream is fatal for this worker: the caller
-    // sees it, so does everything queued behind it.
+    // On a broken stream: fail everything already written and everything
+    // still queued, with the same message.
+    macro_rules! fail_worker {
+        ($message:expr) => {{
+            let message: String = $message;
+            for stale in pending.drain(..) {
+                #[cfg(feature = "telemetry")]
+                {
+                    let counters = frame_counters();
+                    counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
+                    counters
+                        .pub_batches_out_err
+                        .fetch_add(stale.batch_count, Ordering::Relaxed);
+                    counters
+                        .pub_items_out_err
+                        .fetch_add(stale.item_count, Ordering::Relaxed);
+                }
+                let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
+            }
+            drain_publish_queue(&mut rx, &message).await;
+            return Err(anyhow::anyhow!(message));
+        }};
+    }
+    // Resolve every outstanding ack. The broker answers each publish as it
+    // completes, not in the order they were written, so an answer goes to the
+    // request it names. One naming no outstanding request means the stream
+    // cannot be trusted, and neither can anything waiting on it.
     macro_rules! resolve_pending {
         () => {{
-            while let Some(entry) = pending.pop_front() {
-                match wait_for_ack(
-                    &mut recv,
-                    entry.request_id,
-                    &mut ack_scratch,
-                    max_frame_bytes,
-                )
-                .await
-                {
-                    Ok(answer) => {
+            while !pending.is_empty() {
+                match read_ack(&mut recv, &mut ack_scratch, max_frame_bytes).await {
+                    Ok((answered, answer)) => {
+                        let Some(entry) = pending
+                            .iter()
+                            .position(|entry| entry.request_id == answered)
+                            .and_then(|index| pending.remove(index))
+                        else {
+                            fail_worker!(format!(
+                                "publish failed: ack for request {answered}, which is not outstanding"
+                            ));
+                        };
                         #[cfg(feature = "telemetry")]
                         {
                             let counters = frame_counters();
@@ -134,44 +160,13 @@ pub(crate) async fn run_publisher_writer_with_limit(
                             items.fetch_add(entry.item_count, Ordering::Relaxed);
                         }
                         // A refusal answers this request only; the broker keeps
-                        // serving the stream, so the requests behind it still
-                        // get their own answers.
+                        // serving the stream, so the others still get their own
+                        // answers.
                         let _ = entry.response.send(answer);
                     }
-                    Err(err) => {
-                        #[cfg(feature = "telemetry")]
-                        {
-                            let counters = frame_counters();
-                            counters.pub_frames_out_err.fetch_add(1, Ordering::Relaxed);
-                            counters
-                                .pub_batches_out_err
-                                .fetch_add(entry.batch_count, Ordering::Relaxed);
-                            counters
-                                .pub_items_out_err
-                                .fetch_add(entry.item_count, Ordering::Relaxed);
-                        }
-                        let message = err.to_string();
-                        let _ = entry.response.send(Err(err));
-                        for stale in pending.drain(..) {
-                            let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
-                        }
-                        drain_publish_queue(&mut rx, &message).await;
-                        return Err(anyhow::anyhow!(message));
-                    }
+                    Err(err) => fail_worker!(err.to_string()),
                 }
             }
-        }};
-    }
-    // On a write failure: fail the caller, then everything already written
-    // and everything still queued, with the same message.
-    macro_rules! fail_worker {
-        ($message:expr) => {{
-            let message: String = $message;
-            for stale in pending.drain(..) {
-                let _ = stale.response.send(Err(anyhow::anyhow!(message.clone())));
-            }
-            drain_publish_queue(&mut rx, &message).await;
-            return Err(anyhow::anyhow!(message));
         }};
     }
     macro_rules! submit_pending {
