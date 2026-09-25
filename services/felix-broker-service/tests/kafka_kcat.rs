@@ -124,8 +124,8 @@ async fn kcat(args: &[&str], certs: Option<&Path>) -> Output {
     command.arg(KCAT_IMAGE).args(args).kill_on_drop(true);
     tokio::time::timeout(KCAT_BOUND, command.output())
         .await
-        // Not the arguments: they carry the SASL password.
-        .unwrap_or_else(|_| panic!("kcat {} did not finish within {KCAT_BOUND:?}", args[0]))
+        // No arguments in the message: they carry the SASL password.
+        .unwrap_or_else(|_| panic!("kcat did not finish within {KCAT_BOUND:?}"))
         .expect("run docker")
 }
 
