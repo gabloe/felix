@@ -29,6 +29,26 @@ source "${here}/lib.sh"
 TENANT="perf"
 NAMESPACE="default"
 
+# --- 0. install source builds (only when the session builds its own refs) ---
+# Generator 0 built them during provisioning and serves them on :8088. The
+# control plane runs one build, ACTIVE_REF unless CONTROLPLANE_REF says
+# otherwise; it has to be up before the bootstrap below.
+if [ -n "${ARTIFACT_BASE:-}" ]; then
+  cp_ref="${CONTROLPLANE_REF:-${ACTIVE_REF}}"
+  echo ">> control plane: installing ${cp_ref} from ${ARTIFACT_BASE}"
+  agent_on "$(cp_vm)" "felix-agent install-ref '${ARTIFACT_BASE}' '${cp_ref}'
+felix-agent activate controlplane '${cp_ref}'
+/usr/local/sbin/felix-controlplane-env.sh
+systemctl daemon-reload
+systemctl enable felix-controlplane
+systemctl restart felix-controlplane
+i=0
+until curl -s -o /dev/null http://${CONTROLPLANE_IP}:8080/; do
+  i=\$((i + 1)); [ \$i -lt 60 ] || { journalctl -u felix-controlplane --no-pager | tail -20; exit 1; }
+  sleep 2
+done" | grep -E '^(installed|active)\.|!!' || { echo "!! control plane install failed" >&2; exit 1; }
+fi
+
 # --- 1. bootstrap + exchange + scopes, on the loadgen -----------------------
 # A dash header assigns the values seed-remote.sh reads; the tokens are hex/
 # base64url with no single quotes, so single-quoting them is safe. Everything
@@ -70,15 +90,29 @@ for i in $(seq 0 $((BROKER_COUNT - 1))); do
   # a re-seed drops a *fresh* token, and the broker reads its token once at
   # startup with no refresh, so an already-running broker must be restarted to
   # pick it up — enable --now is a no-op on an active unit.
-  broker_out="$(run_on_str "$(broker_vm "${i}")" "set -eu
-mkdir -p /etc/felix
+  # Source builds are installed side by side and ACTIVE_REF is linked in, so a
+  # later switch is a relink and a restart. The calibrated knobs go into
+  # overrides.env before the first start, so no broker ever runs uncalibrated.
+  install_cmds=""
+  if [ -n "${ARTIFACT_BASE:-}" ]; then
+    for label in ${BROKER_LABELS}; do
+      install_cmds="${install_cmds}felix-agent install-ref '${ARTIFACT_BASE}' '${label}'
+"
+    done
+    install_cmds="${install_cmds}felix-agent activate broker '${ACTIVE_REF}'
+"
+  fi
+  broker_out="$(agent_on "$(broker_vm "${i}")" "mkdir -p /etc/felix
 printf '%s' '${token}' > /etc/felix/node.token
 chmod 600 /etc/felix/node.token
+${install_cmds}felix-agent env-replace <<'OVR'
+$(base_overrides)
+OVR
+felix-agent counters-install
 /usr/local/sbin/felix-broker-env.sh
 systemctl reset-failed felix-broker 2>/dev/null || true
 systemctl enable felix-broker
-systemctl restart felix-broker
-echo __RUNOK__")" || {
+systemctl restart felix-broker")" || {
     printf '%s\n' "${broker_out}" >&2
     echo "!! broker-${i} did not start (see message above)" >&2
     exit 1
@@ -142,7 +176,6 @@ HDR2
 set +e
 stream_out="$(run_on_str "$(loadgen_vm)" "${stream_header}
 $(cat "${here}/seed-remote.sh")")"
-stream_rc=$?
 set -e
 printf '%s\n' "${stream_out}" | grep -vE '^__FTOKEN|^eyJ' || true
 case "${stream_out}" in
@@ -164,6 +197,7 @@ for it in items:
     else: cur.pop(kk,None)
 c=collections.Counter(cur.values())
 print(\"   per broker:\", dict(c))'
-echo __RUNOK__" 2>/dev/null | grep -E "per broker" || echo "   (could not read assignments)"
+echo __RUNOK__" 2>/dev/null | grep -E "per broker" | tee -a "${ASSIGNMENTS_OUT:-/dev/null}" \
+  || echo "   (could not read assignments)"
 
 echo ">> seeded: tenant ${TENANT}, token on the loadgen at ~/felix-session/token"

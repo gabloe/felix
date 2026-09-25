@@ -63,3 +63,106 @@ extract_between() {
 broker_vm() { echo "felixperf-broker-$1"; }
 cp_vm() { echo "felixperf-controlplane"; }
 loadgen_vm() { echo "felixperf-loadgen"; }
+
+# ---------------------------------------------------------------- the agent
+# felix-agent (remote/felix-agent.sh) does the VM-side work of the session
+# drivers. Every call re-installs the operator's copy first, so a fix to the
+# agent reaches a live session without a reprovision.
+_agent_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/remote"
+
+# agent_on <vm> <commands>: run POSIX commands on the VM with felix-agent
+# installed; fails unless every command succeeded.
+agent_on() {
+  run_on_str "$1" "set -e
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+cat > /usr/local/sbin/felix-agent <<'FELIX_AGENT_EOF'
+$(cat "${_agent_dir}/felix-agent.sh")
+FELIX_AGENT_EOF
+chmod 0755 /usr/local/sbin/felix-agent
+$2
+echo __RUNOK__"
+}
+
+# par_on <dir> <suffix> <commands> <vm>...: agent_on each VM concurrently,
+# each VM's output in <dir>/<vm>.<suffix>.txt. Fails if any VM failed.
+par_on() {
+  local dir="$1" suffix="$2" cmds="$3" vm p rc=0
+  shift 3
+  local pids=()
+  mkdir -p "${dir}"
+  for vm in "$@"; do
+    ( agent_on "${vm}" "${cmds}" > "${dir}/${vm}.${suffix}.txt" 2>&1 ) &
+    pids+=("$!")
+  done
+  for p in ${pids[@]+"${pids[@]}"}; do wait "${p}" || rc=1; done
+  return "${rc}"
+}
+
+# resolve_ref <ref>: print `name@sha` for a branch, tag or SHA. Brokers are
+# built by full SHA so a moving branch cannot change under a session, and so a
+# short SHA (which `git fetch` cannot take) still works. Short SHAs resolve
+# against the local clone; branches and tags against GitHub.
+resolve_ref() {
+  local ref="$1" sha="" name
+  name="$(printf '%s' "${ref}" | tr -c 'A-Za-z0-9._-' '-')"
+  if [[ "${ref}" =~ ^[0-9a-f]{40}$ ]]; then
+    sha="${ref}"
+  else
+    # A peeled tag (^{}) names the commit; the bare tag line names the tag
+    # object, which is not what a build should record.
+    sha="$(git ls-remote https://github.com/gabloe/felix "${ref}" "${ref}^{}" 2>/dev/null | awk -v r="${ref}" '
+      $2 == "refs/tags/" r "^{}" { p = $1 } $2 == "refs/tags/" r { t = $1 } $2 == "refs/heads/" r { h = $1 }
+      END { print (p != "" ? p : (h != "" ? h : t)) }')"
+    if [ -z "${sha}" ] && [[ "${ref}" =~ ^[0-9a-f]{7,39}$ ]]; then
+      sha="$(git -C "${_agent_dir}" rev-parse --verify --quiet "${ref}^{commit}" || true)"
+    fi
+  fi
+  [ -n "${sha}" ] || { echo "!! cannot resolve ${ref} (not a branch/tag on GitHub, nor a commit in the local clone)" >&2; return 1; }
+  printf '%s@%s\n' "${name}" "${sha}"
+}
+
+# fetch_file <vm> <remote-path> <local-path>: pull a small file home through
+# run-command's ~4 KB output cap, 3000 bytes a call. Meant for folded stacks
+# (gzip+base64), not bulk data.
+fetch_file() {
+  local vm="$1" src="$2" dst="$3" size off=0 part
+  size="$(agent_on "${vm}" "printf '__SIZE_BEGIN__%s__SIZE_END__\n' \"\$(wc -c < '${src}')\"" | extract_between SIZE)"
+  [ -n "${size}" ] || { echo "!! ${src} not readable on ${vm}" >&2; return 1; }
+  : > "${dst}"
+  while [ "${off}" -lt "${size}" ]; do
+    part="$(agent_on "${vm}" "felix-agent chunk '${src}' ${off} 3000" | extract_between CHUNK)"
+    [ -n "${part}" ] || { echo "!! chunk at ${off} of ${src} came back empty" >&2; return 1; }
+    printf '%s' "${part}" >> "${dst}"
+    off=$((off + 3000))
+  done
+}
+
+# The calibrated broker knobs every session starts from (plan section 4).
+# Anything a cell changes goes on top of these, in /etc/felix/overrides.env.
+#   - ACK_ON_COMMIT: without it a Leader publish is acked on enqueue, and a
+#     "durable latency" cell reports enqueue latency.
+#   - IO_URING: on by default for the campaign; the flush-dispatch arms set it
+#     explicitly either way.
+#   - IO_RUNTIME_THREADS=0 is the Linux default, written down so it is recorded.
+base_overrides() {
+  cat <<ENV
+FELIX_QUIC_LISTENERS=${BROKER_LISTENERS:-1}
+FELIX_IO_RUNTIME_THREADS=0
+FELIX_DURABLE_FSYNC_MODE=periodic
+FELIX_ACK_ON_COMMIT=1
+FELIX_STORAGE_IO_URING=1
+ENV
+}
+
+# merge_env <base-lines> <KEY=VALUE>...: later assignments win.
+merge_env() {
+  local base="$1" kv k
+  shift
+  for kv in "$@"; do
+    [ -n "${kv}" ] || continue
+    k="${kv%%=*}"
+    base="$(printf '%s\n' "${base}" | grep -v "^${k}=" || true)"
+    base="$(printf '%s\n%s' "${base}" "${kv}")"
+  done
+  printf '%s\n' "${base}" | sed '/^$/d'
+}

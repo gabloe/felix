@@ -16,11 +16,17 @@ param location string = resourceGroup().location
 @allowed(['t1', 't2'])
 param tier string = 't1'
 
-@description('URL of the release tarball the brokers and control plane run. The suite measures release artifacts, never source builds.')
-param releaseUrl string
+@description('URL of a release-layout tarball the brokers and control plane run. Empty when brokerRefs is set: then generator 0 builds the refs and seed.sh installs them.')
+param releaseUrl string = ''
 
-@description('Git ref the load generator builds felix-loadgen from. This is the *instrument*, not the measured system, so it is deliberately NOT the release tag: felix-loadgen may not exist at the tag whose broker artifacts are under test (it does not at v0.3.0). Use a branch or tag that contains the crate — main, once it has merged. Built once during provisioning, before any run.')
-param loadgenRef string = 'main'
+@description('name@sha the load generator builds felix-loadgen from (session.sh resolves the ref). This is the *instrument*, not the measured system, so it is deliberately separate from the broker build under test. Built once during provisioning, before any run.')
+param loadgenRef string
+
+@description('Space-separated name@sha specs generator 0 builds the broker and control plane from, served to the VNet on :8088 for seed.sh to install. Empty to run releaseUrl instead.')
+param brokerRefs string = ''
+
+@description('Subset of brokerRefs to build again with frame pointers (served as <name>-fp) for perf profiling.')
+param fpRefs string = ''
 
 param adminUsername string = 'felix'
 
@@ -43,6 +49,9 @@ param brokerCount int = 3
 param brokerVmSize string = 'Standard_D4as_v5'
 param controlPlaneVmSize string = 'Standard_D2as_v5'
 param loadgenVmSize string = 'Standard_D4as_v5'
+
+@description('Generator 0 SKU. It builds the broker refs during provisioning, so a larger size shortens the wait; empty means loadgenVmSize. Its CPU is sampled like every generator\'s.')
+param loadgen0VmSize string = ''
 
 @description('How many load generators. One D4 generator is crypto-bound near ~1.15 GB/s, well under what a broker can absorb, so measuring a broker\'s ceiling needs several driving it at once. Only generator 0 gets a public address; the rest are reachable through run-command like every other VM.')
 @minValue(1)
@@ -132,7 +141,13 @@ var controlPlaneInit = base64(format(
   releaseUrl,
   bootstrapToken
 ))
-var loadgenInit = base64(format(loadTextContent('cloudinit/loadgen.yaml'), loadgenRef))
+var loadgenInit = base64(format(
+  loadTextContent('cloudinit/loadgen.yaml'),
+  loadgenRef,
+  brokerRefs,
+  fpRefs,
+  base64(loadTextContent('cloudinit/provision-loadgen.sh'))
+))
 
 // ---------------------------------------------------------------- machines
 func nicName(role string, index int) string => '${prefix}-${role}-${index}-nic'
@@ -253,9 +268,12 @@ resource brokers 'Microsoft.Compute/virtualMachines@2024-07-01' = [
   }
 ]
 
+// On t2 the control plane and generators sit in zone 1, so each broker's RTT
+// is a known zone pair rather than wherever the scheduler put the client.
 resource controlPlane 'Microsoft.Compute/virtualMachines@2024-07-01' = {
   name: '${prefix}-controlplane'
   location: location
+  zones: tier == 't2' ? ['1'] : null
   properties: {
     hardwareProfile: { vmSize: controlPlaneVmSize }
     proximityPlacementGroup: tier == 't1' ? { id: ppg.id } : null
@@ -280,12 +298,19 @@ resource loadgens 'Microsoft.Compute/virtualMachines@2024-07-01' = [
   for i in range(0, loadgenCount): {
     name: i == 0 ? '${prefix}-loadgen' : '${prefix}-loadgen-${i + 1}'
     location: location
+    zones: tier == 't2' ? ['1'] : null
     properties: {
-      hardwareProfile: { vmSize: loadgenVmSize }
+      hardwareProfile: { vmSize: i == 0 && !empty(loadgen0VmSize) ? loadgen0VmSize : loadgenVmSize }
       proximityPlacementGroup: tier == 't1' ? { id: ppg.id } : null
       storageProfile: {
         imageReference: image
-        osDisk: { createOption: 'FromImage', managedDisk: { storageAccountType: 'Premium_LRS' } }
+        // Room for two release target dirs (plain and frame-pointer) on the
+        // builder; the stock 30 GiB image disk fills up.
+        osDisk: {
+          createOption: 'FromImage'
+          diskSizeGB: 128
+          managedDisk: { storageAccountType: 'Premium_LRS' }
+        }
       }
       osProfile: {
         computerName: i == 0 ? '${prefix}-loadgen' : '${prefix}-loadgen-${i + 1}'
@@ -299,6 +324,7 @@ resource loadgens 'Microsoft.Compute/virtualMachines@2024-07-01' = [
 ]
 
 output loadgenPublicIp string = loadgenIp.properties.ipAddress
+output loadgenPrivateIp string = loadgenNics[0].properties.ipConfigurations[0].properties.privateIPAddress
 output controlPlaneIp string = controlPlaneNic.properties.ipConfigurations[0].properties.privateIPAddress
 output brokerIps array = [for i in range(0, brokerCount): brokerNics[i].properties.ipConfigurations[0].properties.privateIPAddress]
 output loadgenNames array = [for i in range(0, loadgenCount): i == 0 ? '${prefix}-loadgen' : '${prefix}-loadgen-${i + 1}']
