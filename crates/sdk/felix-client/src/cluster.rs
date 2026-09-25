@@ -35,6 +35,7 @@
 
 mod cache_watch;
 mod follow;
+mod groups;
 mod publish;
 mod retry;
 mod routing;
@@ -151,6 +152,11 @@ pub struct ClusterClient {
     /// differently. What the width buys is a cache bounded by shard count
     /// instead of by the number of distinct routing keys.
     shards: RwLock<HashMap<StreamKey, u32>>,
+    /// The broker that last served each shard's consumer groups, found by
+    /// following `NotLeader`. Apart from `owners` because it is learned from a
+    /// different answer, and a group redirect carries no fresher generation
+    /// to arbitrate between the two.
+    group_routes: RwLock<HashMap<ShardKey, Arc<Client>>>,
 }
 
 impl ClusterClient {
@@ -180,6 +186,7 @@ impl ClusterClient {
             client: RwLock::new(Arc::new(client)),
             owners: RwLock::new(HashMap::new()),
             shards: RwLock::new(HashMap::new()),
+            group_routes: RwLock::new(HashMap::new()),
         };
         cluster.discover().await;
         Ok(cluster)

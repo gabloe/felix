@@ -26,6 +26,10 @@ pub struct NodeCatalog {
     /// Sorted by node id, so the answer a client gets does not reshuffle
     /// between refreshes that changed nothing.
     pub client_endpoints: Vec<BrokerEndpoint>,
+    /// Client addresses of every routable broker, draining ones included.
+    /// Not offered to new clients, but a redirect to a draining broker that
+    /// still leads the shard needs its address.
+    pub redirect_endpoints: Vec<BrokerEndpoint>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,19 +99,32 @@ pub async fn fetch(
 fn into_catalog(response: NodeListResponse) -> NodeCatalog {
     let mut catalog = HashMap::with_capacity(response.items.len());
     let mut client_endpoints = Vec::new();
+    let mut redirect_endpoints = Vec::new();
     for item in response.items {
+        // The control plane's own verdict, which folds in lifecycle and
+        // heartbeat age together. A broker re-deriving that from the lifecycle
+        // alone would keep forwarding to a node whose heartbeat has lapsed but
+        // whose sweep has not yet run. Routable rather than eligible: a
+        // draining broker still serves the shards it has not handed off yet,
+        // and refusing writes for them would make every drain refuse writes.
+        let routable = item.placement.routable.unwrap_or(item.placement.eligible);
         // Offered to clients only while the cluster considers this broker able
         // to serve, and only when it said where clients reach it. Sending a
         // client to a broker that is down, or to the internal listener that
         // would refuse it, is worse than sending it nowhere.
-        if item.placement.eligible
-            && let Some(client_addr) = &item.node.spec.client_addr
+        if let Some(client_addr) = &item.node.spec.client_addr
             && client_addr.parse::<std::net::SocketAddr>().is_ok()
         {
-            client_endpoints.push(BrokerEndpoint {
+            let endpoint = BrokerEndpoint {
                 node_id: item.node.node_id.clone(),
                 addr: client_addr.clone(),
-            });
+            };
+            if item.placement.eligible {
+                client_endpoints.push(endpoint.clone());
+            }
+            if routable {
+                redirect_endpoints.push(endpoint);
+            }
         }
         let Ok(advertise_addr) = item.node.spec.advertise_addr.parse() else {
             tracing::warn!(
@@ -123,14 +140,7 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
                 node_id: item.node.node_id,
                 advertise_addr,
                 region: item.node.spec.region,
-                // The control plane's own verdict, which folds in lifecycle and
-                // heartbeat age together. A broker re-deriving that from the
-                // lifecycle alone would keep forwarding to a node whose
-                // heartbeat has lapsed but whose sweep has not yet run.
-                // Routable rather than eligible: a draining broker still serves
-                // the shards it has not handed off yet, and refusing writes
-                // for them would make every drain refuse writes.
-                live: item.placement.routable.unwrap_or(item.placement.eligible),
+                live: routable,
             },
         );
     }
@@ -138,6 +148,7 @@ fn into_catalog(response: NodeListResponse) -> NodeCatalog {
     NodeCatalog {
         nodes: catalog,
         client_endpoints,
+        redirect_endpoints,
     }
 }
 

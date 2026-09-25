@@ -2,6 +2,11 @@
 //!
 //! Every request here is a single exchange on a stream of its own; see
 //! [`Client::group_round_trip`].
+//!
+//! Only the shard's leader serves its groups. Any other broker, including the
+//! old leader once a shard move cuts over, answers with [`NotLeaderError`],
+//! which these calls return rather than follow: a `Client` is one broker's
+//! connections. The same calls on [`crate::ClusterClient`] follow it.
 
 use std::sync::atomic::Ordering;
 

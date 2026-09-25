@@ -576,7 +576,7 @@ pub fn spawn_feed(
                 {
                     Ok(fetched) => {
                         if let Some(endpoints) = &client_endpoints {
-                            endpoints.publish(fetched.client_endpoints);
+                            endpoints.refresh(&fetched);
                         }
                         catalog = fetched.nodes;
                     }

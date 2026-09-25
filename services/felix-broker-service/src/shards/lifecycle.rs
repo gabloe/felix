@@ -593,11 +593,7 @@ impl ShardReaders {
             if to.addr.is_none()
                 && let (Some(node_id), Some(endpoints)) = (&to.node_id, &self.endpoints)
             {
-                to.addr = endpoints
-                    .snapshot()
-                    .iter()
-                    .find(|endpoint| &endpoint.node_id == node_id)
-                    .map(|endpoint| endpoint.addr.clone());
+                to.addr = endpoints.redirect_addr(node_id);
             }
             to
         });

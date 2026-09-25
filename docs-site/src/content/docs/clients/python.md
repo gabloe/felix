@@ -282,7 +282,9 @@ else:
 ```
 
 **A group is bound to one shard.** Consuming a multi-shard stream means polling
-each shard's group — `stream_shards` says how many there are.
+each shard's group — `stream_shards` says how many there are. Only the shard's leader
+serves its group; the client follows the broker's redirect there, including
+after a rebalance moves the shard, so any broker address works.
 
 ### Dead letters
 

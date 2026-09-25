@@ -291,13 +291,20 @@ a redirect, which is any broker from this release on.
 ## Redirects
 
 A subscribe or a consumer-group request sent to a broker that does not own the
-shard is answered with a redirect naming the one that does. `ClusterClient::subscribe` follows it — up to
-three hops, never revisiting a broker within one attempt, because a cluster
-mid-rebalance can otherwise bounce a client between two brokers that disagree.
+shard is answered with a redirect naming the one that does. `ClusterClient::subscribe`
+and the single-shard group calls (`ClusterClient::group_poll`, `group_poll_wait`,
+`group_ack`, `group_nack`, `group_dead_letters`, `group_discard`,
+`group_redrive`) follow it — up to three hops, never revisiting a broker within
+one attempt, because a cluster mid-rebalance can otherwise bounce a client
+between two brokers that disagree. The group calls remember which broker served
+each shard and go straight there next time, until a call against it fails. This
+is what keeps a consumer working after its shard moves: once the move cuts
+over, the old leader answers group requests with a redirect to the new one.
 
 If you use `Client` directly, the redirect surfaces as a typed
 `NotLeaderError` carrying the owner's node id and address. It is an
-instruction, not a failure.
+instruction, not a failure. `Client` is one broker's connections and does not
+follow it; connecting to the owner is `ClusterClient`'s job.
 
 A **publish** to the wrong broker is *forwarded* rather than redirected, so it
 needs nothing from you.

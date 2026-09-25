@@ -50,6 +50,54 @@ async fn only_the_shard_owner_serves_a_group() {
     assert!(!served.is_empty(), "the owner returned nothing to consume");
 }
 
+/// **A cluster client's group calls reach the leader from any broker.**
+/// Connected only to a broker that does not lead the shard, it follows the
+/// `NotLeader` there, for a poll and for the ack after it. The Python and
+/// TypeScript clients' group calls go through this.
+#[tokio::test]
+#[serial]
+async fn a_cluster_client_follows_a_group_redirect_to_the_leader() {
+    let cluster = Cluster::start(cluster()).await.expect("start cluster");
+    let (owner, other) = cluster
+        .owner_and_non_owner(STREAM)
+        .await
+        .expect("owner and non-owner");
+    cluster
+        .publish_via(&owner, STREAM, b"work".to_vec())
+        .await
+        .expect("publish");
+
+    let client = felix_cluster::client::connect_cluster(
+        &[cluster.node(&other).expect("the non-owner").client_addr],
+        &cluster.tenant_id,
+        &cluster.client_token,
+    )
+    .await
+    .expect("connect a cluster client to the non-owner");
+    let records = client
+        .group_poll(&cluster.tenant_id, &cluster.namespace, STREAM, 0, GROUP, 10)
+        .await
+        .expect("a poll through a non-owner should follow the redirect");
+    assert!(
+        !records.is_empty(),
+        "the leader returned nothing to consume"
+    );
+    for record in &records {
+        client
+            .group_ack(
+                &cluster.tenant_id,
+                &cluster.namespace,
+                STREAM,
+                0,
+                GROUP,
+                record.offset,
+            )
+            .await
+            .expect("ack on the leader");
+    }
+    cluster.shutdown().await;
+}
+
 /// A record claimed through the owner is not handed out again while the claim
 /// stands, no matter which broker is asked.
 #[tokio::test]

@@ -1,4 +1,14 @@
 use super::*;
+use crate::cluster::node_catalog::NodeCatalog;
+
+/// A catalog in which every broker is both offered and routable.
+fn catalog(endpoints: Vec<BrokerEndpoint>) -> NodeCatalog {
+    NodeCatalog {
+        nodes: Default::default(),
+        client_endpoints: endpoints.clone(),
+        redirect_endpoints: endpoints,
+    }
+}
 
 fn endpoint(node_id: &str, addr: &str) -> BrokerEndpoint {
     BrokerEndpoint {
@@ -21,11 +31,11 @@ fn a_broker_that_has_not_refreshed_reports_nothing() {
 #[test]
 fn a_refresh_drops_what_it_no_longer_reports() {
     let endpoints = ClientEndpoints::new();
-    endpoints.publish(vec![
+    endpoints.refresh(&catalog(vec![
         endpoint("broker-a", "10.0.0.4:5000"),
         endpoint("broker-b", "10.0.0.5:5000"),
-    ]);
-    endpoints.publish(vec![endpoint("broker-a", "10.0.0.4:5000")]);
+    ]));
+    endpoints.refresh(&catalog(vec![endpoint("broker-a", "10.0.0.4:5000")]));
 
     let snapshot = endpoints.snapshot();
     assert_eq!(snapshot.len(), 1);
@@ -37,11 +47,25 @@ fn a_refresh_drops_what_it_no_longer_reports() {
 #[test]
 fn a_snapshot_is_not_disturbed_by_a_later_refresh() {
     let endpoints = ClientEndpoints::new();
-    endpoints.publish(vec![endpoint("broker-a", "10.0.0.4:5000")]);
+    endpoints.refresh(&catalog(vec![endpoint("broker-a", "10.0.0.4:5000")]));
     let held = endpoints.snapshot();
 
-    endpoints.publish(Vec::new());
+    endpoints.refresh(&catalog(Vec::new()));
 
     assert_eq!(held.len(), 1, "a held snapshot changed under a refresh");
     assert!(endpoints.snapshot().is_empty());
+}
+
+/// A broker that stops being routable leaves the redirect list with the rest.
+#[test]
+fn a_refresh_drops_a_redirect_it_no_longer_reports() {
+    let endpoints = ClientEndpoints::new();
+    endpoints.refresh(&catalog(vec![endpoint("broker-a", "10.0.0.4:5000")]));
+    assert_eq!(
+        endpoints.redirect_addr("broker-a").as_deref(),
+        Some("10.0.0.4:5000")
+    );
+
+    endpoints.refresh(&catalog(Vec::new()));
+    assert_eq!(endpoints.redirect_addr("broker-a"), None);
 }
