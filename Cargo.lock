@@ -1190,6 +1190,7 @@ dependencies = [
  "felix-conformance",
  "felix-controlplane-service",
  "felix-wire",
+ "kafka-protocol",
  "libc",
  "quinn",
  "rcgen",
