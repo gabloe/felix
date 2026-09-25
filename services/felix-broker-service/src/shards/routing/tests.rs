@@ -293,17 +293,27 @@ mod feed {
     use crate::shards::watch::ShardOwnership;
     use axum::Router;
     use axum::routing::get;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
 
     /// A `/v1/nodes` endpoint that can be told to start failing, so the
     /// refresh-failure path is exercised without stopping a server.
     async fn nodes_endpoint(failing: Arc<AtomicBool>) -> (String, tokio::task::JoinHandle<()>) {
+        nodes_endpoint_at(failing, Arc::new(AtomicU16::new(7002))).await
+    }
+
+    /// As [`nodes_endpoint`], with broker-b's port settable, as a restart that
+    /// re-registers on new ports would change it.
+    async fn nodes_endpoint_at(
+        failing: Arc<AtomicBool>,
+        port: Arc<AtomicU16>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let app = Router::new().route(
             "/v1/nodes",
             get(move || {
                 let failing = Arc::clone(&failing);
+                let port = port.load(Ordering::Acquire);
                 async move {
                     if failing.load(Ordering::Acquire) {
                         return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
@@ -313,7 +323,7 @@ mod feed {
                             "node": {
                                 "node_id": "broker-b",
                                 "spec": {
-                                    "advertise_addr": "10.0.0.4:7002",
+                                    "advertise_addr": format!("10.0.0.4:{port}"),
                                     "region": "us-west-2",
                                 },
                             },
@@ -509,6 +519,61 @@ mod feed {
 
         shutdown.cancel();
         let _ = feed.await;
+    }
+
+    /// **A wake picks up a known node's new address.** broker-b restarts and
+    /// re-registers under the same id on a new port. It is not an unknown node,
+    /// so only refreshing on the wake itself gets the new address in before the
+    /// next tick, a minute away here.
+    #[tokio::test]
+    async fn a_wake_refreshes_the_address_of_a_node_that_moved() {
+        let port = Arc::new(AtomicU16::new(7002));
+        let (base_url, server) =
+            nodes_endpoint_at(Arc::new(AtomicBool::new(false)), Arc::clone(&port)).await;
+        let (state, _router) = state(&[assignment(0, "broker-b", 1)]);
+        let ingress = Arc::clone(&state.ingress);
+        let ownership = Arc::clone(&state.ownership);
+        let assignments_changed = Arc::clone(&state.assignments_changed);
+        let shutdown = CancellationToken::new();
+        let feed = spawn_feed(
+            state,
+            Some(CatalogSource {
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .build()
+                    .expect("client"),
+                base_url,
+                token: None,
+            }),
+            Duration::from_secs(60),
+            shutdown.clone(),
+        );
+        let forwards_to = |port: u16| {
+            matches!(
+                ingress.dispatch(&key(0)),
+                Dispatch::Forward { advertise_addr, .. } if advertise_addr.port() == port
+            )
+        };
+        until("the first tick to learn broker-b's address", || {
+            forwards_to(7002)
+        })
+        .await;
+
+        port.store(7102, Ordering::Release);
+        ownership
+            .write()
+            .await
+            .apply(&key(0), Some(assignment(0, "broker-b", 2)));
+        assignments_changed.notify_one();
+
+        until("the wake to forward to broker-b's new address", || {
+            forwards_to(7102)
+        })
+        .await;
+
+        shutdown.cancel();
+        let _ = feed.await;
+        server.abort();
     }
 
     /// Cancellation ends the task rather than leaving it ticking.

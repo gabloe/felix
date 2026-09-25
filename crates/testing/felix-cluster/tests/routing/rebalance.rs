@@ -1058,3 +1058,92 @@ async fn a_move_that_cannot_copy_is_abandoned_after_its_timeout() {
     );
     cluster.shutdown().await;
 }
+
+/// **A move onto a broker that just restarted does not wait for a catalog
+/// refresh.** The broker comes back under the same id on new ports, so the
+/// leader already knows the id and only a refresh tells it the new address.
+/// The interval is ten seconds here and the leader has just refreshed, so the
+/// move is quick only if the leader refreshes when the move wakes it.
+#[serial]
+#[tokio::test]
+async fn a_move_onto_a_restarted_broker_does_not_wait_for_the_catalog_tick() {
+    const SYNC_INTERVAL: Duration = Duration::from_secs(10);
+    let mut cluster = Cluster::start(ClusterConfig {
+        nodes: 2,
+        streams: vec![StreamSpec::new(STREAM, 1)],
+        sync_interval_ms: SYNC_INTERVAL.as_millis() as u64,
+        ..Default::default()
+    })
+    .await
+    .expect("start cluster");
+    let owner = cluster.owner(STREAM).await.expect("owner");
+    let destination = cluster
+        .node_ids()
+        .into_iter()
+        .find(|id| id != &owner)
+        .expect("two brokers");
+
+    // Restart once and wait for the owner's tick to pick up the new address,
+    // so the second restart lands just after a refresh with most of an
+    // interval before the next one.
+    cluster.kill_node(&destination).expect("kill");
+    cluster.restart_node(&destination).await.expect("restart");
+    let first = cluster.node(&destination).expect("node").client_addr;
+    felix_cluster::wait::until(
+        SYNC_INTERVAL * 3,
+        "the owner to learn the restarted broker's address",
+        || advertises(&cluster, &owner, first),
+    )
+    .await
+    .expect("the owner's tick refreshes its catalog");
+    cluster.kill_node(&destination).expect("kill");
+    cluster.restart_node(&destination).await.expect("restart");
+    let second = cluster.node(&destination).expect("node").client_addr;
+    assert!(
+        !advertises(&cluster, &owner, second).await,
+        "the owner refreshed during the restart, so this run proves nothing"
+    );
+
+    cluster.run_placement(Duration::from_secs(60));
+    let started = std::time::Instant::now();
+    cluster
+        .start_move(STREAM, 0, &destination)
+        .await
+        .expect("start move");
+    let deadline = started + felix_cluster::wait::budget(Duration::from_secs(30));
+    while !cluster
+        .owner(STREAM)
+        .await
+        .is_ok_and(|now| now == destination)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{destination} never took the shard"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let took = started.elapsed();
+    println!("move onto the restarted broker: {} ms", took.as_millis());
+    assert!(
+        took < felix_cluster::wait::budget(Duration::from_secs(3)),
+        "the move took {} ms, as if it waited for the owner's catalog tick",
+        took.as_millis()
+    );
+    cluster.shutdown().await;
+}
+
+/// Whether `via` tells clients where to reach `addr`: that list comes from
+/// the same catalog fetch the broker forwards and ships with.
+async fn advertises(cluster: &Cluster, via: &str, addr: std::net::SocketAddr) -> bool {
+    let node = cluster.node(via).expect("node");
+    let Ok(client) =
+        felix_cluster::client::connect(node.client_addr, &cluster.tenant_id, &cluster.client_token)
+            .await
+    else {
+        return false;
+    };
+    client
+        .topology()
+        .await
+        .is_ok_and(|brokers| brokers.iter().any(|broker| broker.addr.parse() == Ok(addr)))
+}

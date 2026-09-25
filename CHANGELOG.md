@@ -455,6 +455,16 @@ for what the current release actually guarantees.
   most once per 30 seconds, concurrent misses share the fetch in progress, and
   JWKS and discovery requests time out after 10 seconds. A key the IdP rotates
   in is accepted within 30 seconds of its first use.
+- **An assignment change refreshes the node catalog.** A broker read
+  `/v1/nodes` on a wake only when an assignment named a node it did not
+  know. A broker that restarted comes back under the same id on new ports,
+  so it was known and its old address kept: the first ship or forward to it
+  after a move waited for the next catalog tick
+  (`FELIX_CONTROLPLANE_SYNC_INTERVAL_MS`). Every wake now reads the
+  catalog, alongside reconcile rather than before it, and each read is
+  bounded at 5 s so a control plane that never answers cannot hold the feed
+  (`a_wake_refreshes_the_address_of_a_node_that_moved`, and in
+  `felix-cluster`, `a_move_onto_a_restarted_broker_does_not_wait_for_the_catalog_tick`).
 - **A leader ships to a restarted follower at its new address.** A
   follower's cursor kept the address it was created with for the whole
   generation, so a broker that restarted on new ports, still in the

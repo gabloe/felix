@@ -31,6 +31,11 @@ use crate::shards::lifecycle::fence::{FenceGuard, ShardFence};
 use crate::shards::routing::hold::MoveHold;
 use crate::shards::{ShardKey, ShardKind};
 
+/// Bound on one node catalog read. The feed publishes routes only after the
+/// read settles, so a control plane that accepts the request and never answers
+/// would otherwise hold every later ownership change here with it.
+const CATALOG_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// What ingress should do with a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dispatch {
@@ -549,12 +554,13 @@ pub struct CatalogSource {
 /// One task owns the sequence, so the two never disagree: reconcile local state
 /// first, then publish what is servable and the routes together.
 ///
-/// Runs on a tick and whenever the watch reports a change. The tick refreshes
-/// the node catalog, because a route is only usable when both halves are
-/// known: an assignment names an owner by id, and only the catalog turns that
-/// into an address to forward to. A wake skips the refresh unless an
-/// assignment names a node the catalog lacks, so a move is not held up by a
-/// round trip for addresses this broker already has.
+/// Runs on a tick and whenever the watch reports a change, and both refresh the
+/// node catalog: an assignment names an owner by id, and only the catalog turns
+/// that into an address to forward to. A wake refreshes too because a broker
+/// that restarted re-registers under the same id on new ports, and nothing in
+/// the assignments says so. Wakes follow the watch's change batches, so this
+/// is at most one catalog read per batch, and it runs alongside reconcile
+/// rather than in front of it.
 pub fn spawn_feed(
     state: FeedState,
     catalog_source: Option<CatalogSource>,
@@ -583,37 +589,42 @@ pub fn spawn_feed(
 
             let assignments = ownership.read().await.assignments().clone();
 
-            if let Some(source) = &catalog_source
-                && (!woken || names_unknown_node(&assignments, &catalog))
-            {
-                // Read on every refresh rather than once, so a refreshed token
-                // is in use from the next poll.
+            // Read on every refresh rather than once, so a refreshed token is
+            // in use from the next poll.
+            let refresh = async {
+                let source = catalog_source.as_ref()?;
                 let bearer = source.token.as_ref().map(|token| token.bearer());
-                match crate::cluster::node_catalog::fetch(
+                let fetch = crate::cluster::node_catalog::fetch(
                     &source.client,
                     &source.base_url,
                     bearer.as_deref().map(String::as_str),
+                );
+                Some(
+                    tokio::time::timeout(CATALOG_FETCH_TIMEOUT, fetch)
+                        .await
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out"))),
                 )
-                .await
-                {
-                    Ok(fetched) => {
-                        if let Some(endpoints) = &client_endpoints {
-                            endpoints.refresh(&fetched);
-                        }
-                        catalog = fetched.nodes;
+            };
+            let ((), fetched) = tokio::join!(
+                crate::shards::lifecycle::reconcile(&lifecycle, store.as_ref(), &assignments),
+                refresh,
+            );
+            match fetched {
+                Some(Ok(fetched)) => {
+                    if let Some(endpoints) = &client_endpoints {
+                        endpoints.refresh(&fetched);
                     }
-                    // The previous catalog is kept: a control-plane blip must
-                    // not erase every address this broker can forward to and
-                    // turn a healthy cluster into one that refuses every remote
-                    // publish.
-                    Err(err) => {
-                        tracing::warn!(error = %err, "node catalog refresh failed; keeping the last one");
-                        crate::shards::watch::metrics::record_catalog_refresh_failure();
-                    }
+                    catalog = fetched.nodes;
                 }
+                // The previous catalog is kept: a control-plane blip must not
+                // erase every address this broker can forward to and turn a
+                // healthy cluster into one that refuses every remote publish.
+                Some(Err(err)) => {
+                    tracing::warn!(error = %err, "node catalog refresh failed; keeping the last one");
+                    crate::shards::watch::metrics::record_catalog_refresh_failure();
+                }
+                None => {}
             }
-
-            crate::shards::lifecycle::reconcile(&lifecycle, store.as_ref(), &assignments).await;
 
             // Read after reconcile, so an open that just finished is included:
             // publishing the routes first would advertise this node as the
@@ -629,19 +640,6 @@ pub fn spawn_feed(
                 routes_changed.notify_one();
             }
         }
-    })
-}
-
-/// Whether an assignment names a node the catalog has no entry for.
-fn names_unknown_node(
-    assignments: &HashMap<ShardKey, crate::shards::watch::ShardAssignment>,
-    catalog: &HashMap<String, felix_router::NodeRef>,
-) -> bool {
-    assignments.values().any(|assignment| {
-        std::iter::once(&assignment.leader)
-            .chain(&assignment.replicas)
-            .chain(&assignment.successor)
-            .any(|node| !catalog.contains_key(node))
     })
 }
 
