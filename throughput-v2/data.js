@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790294256315,
+  "lastUpdate": 1790296886860,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15288,6 +15288,58 @@ window.BENCHMARK_DATA = {
             "range": "5448.97",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 944731.79\nmean: 943108.50\nstdev: 5448.97\ncv: 0.58%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "28f84cb527e3bdcfe8749af1c17ec1b5967a1da4",
+          "message": "Hold the move limits across control-plane instances (#686)\n\n* fix(controlplane): hold the move limits across control-plane instances\n\nEach placement write was conditional only on its own shard's generation, so\ntwo Postgres-backed instances, or a pass and an operator's request on another\ninstance, could each read the last free move slot and start moves on two\ndifferent shards.\n\nEvery placement write now also carries a placement token read before the\npass or request decided, and lands only if the token is unchanged; landing\nadvances it. The token lives beside a placement lease: the holder runs the\ntimed passes, renews every pass, releases on shutdown, and a new holder\nadvances the token so an instance that paused past its lease writes nothing\nafter a takeover. Under Raft the confirmed leader takes the lease at once.\nWoken passes still run where they are woken, which is safe for the same\nreason.\n\nPostgres gains the placement_lease table; Raft gains fenced-write and\ntake-lease commands, and the token rides in the snapshot so replicas decide\nfenced writes alike.\n\n* spec(placement): model several planners and the placement token\n\nFelixPlacementPacing now starts copies from each planner's own read: the\nlease holder, an instance that lost the lease with a read in hand, and an\noperator's request that reads without it. FelixPlacementPacingTwoPlanners\npasses with every start fenced by the token (56K distinct states);\nFelixPlacementPacingUnfenced drops the token and TLC finds two planners\neach starting a copy from one free slot. The single-planner configurations\nare unchanged in outcome.\n\n* docs: placement runs under a lease and the move limits hold across instances\n\ncontrol-plane.md says who places and how writes are fenced, with the new\nmetrics; the rebalancing plan and the status row drop the per-planner gap\nand name what the lease costs when its holder dies; the HA page says the\nsame for operators.",
+          "timestamp": "2026-09-24T17:38:05-07:00",
+          "tree_id": "22e85a8fa272d6d19341be077ac28020ea7930d5",
+          "url": "https://github.com/gabloe/felix/commit/28f84cb527e3bdcfe8749af1c17ec1b5967a1da4"
+        },
+        "date": 1790296885928,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 377954.95,
+            "range": "15995.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 377954.95\nmean: 373575.89\nstdev: 15995.28\ncv: 4.28%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 377954.95,
+            "range": "15995.28",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 377954.95\nmean: 373575.89\nstdev: 15995.28\ncv: 4.28%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 89646.34,
+            "range": "1340.45",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 89646.34\nmean: 89177.75\nstdev: 1340.45\ncv: 1.50%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 896463.36,
+            "range": "13404.51",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 896463.36\nmean: 891777.53\nstdev: 13404.51\ncv: 1.50%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
