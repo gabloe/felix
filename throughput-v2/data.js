@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790367978192,
+  "lastUpdate": 1790372369317,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16432,6 +16432,58 @@ window.BENCHMARK_DATA = {
             "range": "55011.18",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1176942.20\nmean: 1161475.02\nstdev: 55011.18\ncv: 4.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3caa460fa3a7bbfcfc22b9190a8bf79b0ba96529",
+          "message": "fix(broker): tracing span guards across awaits panic publish handlers; OTLP off by default (#718)\n\n* fix(broker): never hold a span guard across an await in stream handlers\n\nThe binary batch, JSON publish, JSON batch and subscribe handlers entered a\nspan and awaited with the guard alive. A task resumed on another worker\nexits the span there, leaving a stale id on the first worker's span stack;\na span created there next can clone the closed span, and the registry\npanics with \"tried to clone a span that already closed\", killing the\nstream handler. Use .instrument(span) instead, and make clippy reject\nEntered/EnteredSpan held across an await.\n\n* fix(observability): export OTLP traces only when an endpoint is set\n\nWithout an endpoint the exporter defaulted to localhost:4317 and failed\nevery batch where no collector runs. Broker and control plane now install\nthe OpenTelemetry layer only when OTEL_EXPORTER_OTLP_ENDPOINT or\nOTEL_EXPORTER_OTLP_TRACES_ENDPOINT is set.",
+          "timestamp": "2026-09-25T14:35:49-07:00",
+          "tree_id": "d38b10d767c9f67b1c4077e15ebf18f97c9fd42d",
+          "url": "https://github.com/gabloe/felix/commit/3caa460fa3a7bbfcfc22b9190a8bf79b0ba96529"
+        },
+        "date": 1790372368435,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 394750.95,
+            "range": "19462.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 394750.95\nmean: 389474.65\nstdev: 19462.19\ncv: 5.00%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 394750.95,
+            "range": "19462.19",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 394750.95\nmean: 389474.65\nstdev: 19462.19\ncv: 5.00%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93622.98,
+            "range": "743.70",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93622.98\nmean: 93439.04\nstdev: 743.70\ncv: 0.80%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 936229.83,
+            "range": "7436.93",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 936229.83\nmean: 934390.37\nstdev: 7436.93\ncv: 0.80%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
