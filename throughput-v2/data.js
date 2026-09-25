@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790344921202,
+  "lastUpdate": 1790347730017,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16120,6 +16120,58 @@ window.BENCHMARK_DATA = {
             "range": "51760.82",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1159749.34\nmean: 1137481.77\nstdev: 51760.82\ncv: 4.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b55864c70396e281fe27fffa0e4413d99ab331ad",
+          "message": "feat(kafka): Kafka producers write to Felix streams (#710)\n\n* feat(broker): idempotent publishes whose producer numbers records\n\nA Kafka producer numbers each record of a partition, so a batch's base\nsequence advances by its record count; Felix's log expects the next batch\nat the last sequence plus one. publish_records_idempotent stores each\nrecord as a one-record producer batch, so the log's rule is Kafka's and the\ndedup state stays in the log: a restarted leader, a promoted replica and a\nmove's destination answer a re-sent batch as a duplicate, and finish one\nthey hold only the start of. Sequences wrap at 2^31 as Kafka's do and are\nlifted to the 64-bit count nearest what the producer owes.\n\nThe Felix client's batch sequences are unchanged.\n\n* feat(kafka): accept Kafka producers on the shard leader\n\nProduce (v3-9) decodes v2 record batches, compressed with gzip, snappy,\nlz4 or zstd (decompression bounded at 16 MiB a batch), and publishes them\nthrough the broker's publish path on the shard's leader, admitted like a\nQUIC publish: stream.publish on the stream, a valid lease, and a place in\nthe shard's write fence. Elsewhere the answer is NOT_LEADER_OR_FOLLOWER.\n\nacks=1 answers once the batch is written; acks=all also waits for the\nstream's consistency (a majority on a Quorum stream); acks=0 writes and\nanswers nothing.\n\nInitProducerId hands an idempotent producer a Felix producer id at epoch\n0, and its batches go through the log's per-record sequences, so a re-send\nis answered with its original offset on any leader. Sequence refusals map\nto OUT_OF_ORDER_SEQUENCE_NUMBER, UNKNOWN_PRODUCER_ID and\nDUPLICATE_SEQUENCE_NUMBER. Transactions are refused with\nTRANSACTIONAL_ID_AUTHORIZATION_FAILED and a message, at FindCoordinator,\nInitProducerId and the transaction APIs; kcat fails fast with it.\n\nKeys, headers and producer timestamps are dropped and counted: a Felix\nrecord is a payload and the broker's append time. Legacy v0/v1 message\nsets are refused with UNSUPPORTED_FOR_MESSAGE_FORMAT.\n\n* test(cluster): an idempotent Kafka producer through a failover and a move\n\nThe producer speaks the protocol itself so it can re-send on purpose:\nfive acks=all records to a Quorum stream, the leader killed, the last\nbatch re-sent to the promoted leader, which answers with its original\noffset and writes nothing; then a move, and the same at the destination.\nA reader sees every record once, in order, with no gaps.\n\nWith the sequences kept in the leader's memory instead of the log, the\npromoted leader answers the re-send UNKNOWN_PRODUCER_ID and the test\nfails.\n\n* docs(kafka): document producing through the Kafka listener\n\ndocs/kafka-compatibility.md gains the produce path, the per-record\nsequence mapping and why it survives a leader change, acks per\nconsistency mode, the transaction refusal as kcat prints it, and the new\nerror codes and metrics. The docs-site page becomes \"Kafka Clients\", with\nuse cases for feeding Felix from existing producers, migrating them one at\na time, what idempotence means here, and troubleshooting. The Kafka\nProduce status row moves to shipped; why-felix, observability, the\nenvironment reference and the crate docs stop calling the listener\nread-only.\n\n* chore(demos): lock the Kafka producer codecs for the out-of-workspace demos\n\nfelix-kafka now depends on flate2, snap, lz4 and zstd directly, so the\ndemos that build the broker service lock them too.\n\n* docs: show Kafka compatibility on the front-door pages\n\nThe landing page gets a Kafka card, a feature row and a status line; the\nREADME lists it under what works. why-felix now counts speaking Kafka as a\nreason Felix fits (existing producers and partition-assigning consumers,\nmoved over one at a time) and keeps the ecosystem limit under when not to\nuse it. The FAQ gains \"Can I use my Kafka clients with Felix?\". Overview,\npub/sub, system design and what-felix-is-for mention the listener where\nit matters. The feature page is retitled \"Kafka Compatibility\" and every\nlink to it follows.\n\n* docs(kafka): only claim the clients that are tested\n\n* docs(kafka): list every limit where people look for them\n\nThe Limits section now says what each limit does to a client: refused\nwith an error, accepted but not kept (keys, headers, timestamps,\ntombstones), not there at all (admin APIs, compaction, dotted\nnamespaces), or different from Kafka (acks=all on Leader streams, the\n64-record dedup window), plus the size caps and which clients are\ntested.",
+          "timestamp": "2026-09-25T07:45:23-07:00",
+          "tree_id": "e2d197bcf9718de5dc49c85c71a5bc7e43129c5f",
+          "url": "https://github.com/gabloe/felix/commit/b55864c70396e281fe27fffa0e4413d99ab331ad"
+        },
+        "date": 1790347728594,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 379216.01,
+            "range": "7637.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 379216.01\nmean: 379089.71\nstdev: 7637.76\ncv: 2.01%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 379216.01,
+            "range": "7637.76",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 379216.01\nmean: 379089.71\nstdev: 7637.76\ncv: 2.01%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93101.14,
+            "range": "4163.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93101.14\nmean: 91592.74\nstdev: 4163.90\ncv: 4.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 931011.37,
+            "range": "41639.03",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 931011.37\nmean: 915927.35\nstdev: 41639.03\ncv: 4.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
