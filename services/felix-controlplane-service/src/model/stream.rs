@@ -30,6 +30,12 @@ pub struct Stream {
     pub consistency: ConsistencyLevel,
     pub delivery: DeliveryGuarantee,
     pub durable: bool,
+    /// The region this stream's data belongs to. When set, placement puts its
+    /// leader and every replica only in this region or in one it has a bridge
+    /// to (`FELIX_REGION_BRIDGES`). `None` places it anywhere, as streams
+    /// always were. Fixed at creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
 }
 
 /// Leader-only. The value a stream has unless it asks for more, and the value

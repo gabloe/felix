@@ -25,6 +25,7 @@ pub(super) struct DbStream {
     pub(super) consistency: String,
     pub(super) delivery: String,
     pub(super) durable: bool,
+    pub(super) region: Option<String>,
 }
 
 /// Row shape for `namespaces` table.
@@ -62,6 +63,7 @@ pub(super) fn stream_from_db(row: DbStream) -> StoreResult<Stream> {
         consistency: parse_consistency(&row.consistency)?,
         delivery: parse_delivery(&row.delivery)?,
         durable: row.durable,
+        region: row.region,
     })
 }
 

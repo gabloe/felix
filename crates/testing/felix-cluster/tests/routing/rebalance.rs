@@ -1014,7 +1014,7 @@ async fn a_move_that_cannot_copy_is_abandoned_after_its_timeout() {
             .control_plane
             .as_ref()
             .expect("control plane")
-            .place_shards_with(policy)
+            .place_shards_with(policy.clone())
             .await;
         let now = assignment().await;
         if now.successor.is_some() {

@@ -539,6 +539,7 @@ async fn create_stream(
         consistency: ConsistencyLevel::Leader,
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: false,
+        region: None,
     };
     let response = http
         .post(url)

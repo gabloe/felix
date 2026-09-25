@@ -43,7 +43,7 @@ async fn a_pass_planned_before_an_operators_move_starts_nothing_beside_it() {
     let policy = MovePolicy::default();
     assert_eq!(policy.max_concurrent, 1);
 
-    let pass = super::super::reconciler::plan_pass(&store, &liveness, policy)
+    let pass = super::super::reconciler::plan_pass(&store, &liveness, policy.clone())
         .await
         .expect("plan");
     let planned: Vec<ShardKey> = pass.plan().moves().map(|(key, _, _)| key.clone()).collect();

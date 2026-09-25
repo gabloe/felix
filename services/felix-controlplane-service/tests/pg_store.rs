@@ -192,6 +192,7 @@ async fn pg_stream_sequences_monotonic() {
         consistency: ConsistencyLevel::Leader,
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: false,
+        region: None,
     };
     store
         .create_stream(stream.clone())
@@ -271,6 +272,7 @@ async fn pg_delete_namespace_emits_cascades() {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: false,
+            region: None,
         })
         .await
         .expect("stream");
@@ -540,6 +542,7 @@ async fn pg_store_stream_conflict_and_not_found() {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: false,
+            region: None,
         })
         .await
         .expect_err("missing namespace");
@@ -559,6 +562,7 @@ async fn pg_store_stream_conflict_and_not_found() {
         consistency: ConsistencyLevel::Leader,
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: false,
+        region: None,
     };
     store.create_stream(stream.clone()).await.expect("stream");
     let err = store.create_stream(stream).await.expect_err("conflict");
@@ -742,6 +746,7 @@ async fn pg_store_list_get_and_exists_roundtrip() {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: false,
+            region: None,
         })
         .await
         .expect("stream");
@@ -873,6 +878,7 @@ async fn pg_delete_tenant_emits_stream_retention_max_size() {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: true,
+            region: None,
         })
         .await
         .expect("stream");

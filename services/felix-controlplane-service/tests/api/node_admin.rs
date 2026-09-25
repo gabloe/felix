@@ -406,6 +406,7 @@ async fn seed_shards(store: &InMemoryStore) {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtMostOnce,
             durable: true,
+            region: None,
         })
         .await
         .expect("stream");

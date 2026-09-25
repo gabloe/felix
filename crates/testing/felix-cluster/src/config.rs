@@ -22,6 +22,10 @@ pub struct ClusterConfig {
     /// ownership converges while a person watches; a test that measures what
     /// the broker's wakes buy sets the production default instead.
     pub sync_interval_ms: u64,
+    /// Each broker's `FELIX_REGION_ID`, by index. A broker past the end of
+    /// the list is in `local`, so a test that says nothing about regions
+    /// gets one region.
+    pub regions: Vec<String>,
 }
 
 impl Default for ClusterConfig {
@@ -35,6 +39,7 @@ impl Default for ClusterConfig {
             inherit_output: false,
             quic_listeners: 1,
             sync_interval_ms: 200,
+            regions: Vec::new(),
         }
     }
 }
@@ -53,9 +58,19 @@ pub struct StreamSpec {
     pub replication_factor: u32,
     /// `"Leader"` or `"Quorum"`, as the control plane spells them.
     pub consistency: String,
+    /// The region the stream's data belongs to. `None` places it anywhere.
+    pub region: Option<String>,
 }
 
 impl StreamSpec {
+    /// The same stream, homed in `region`.
+    pub fn in_region(self, region: impl Into<String>) -> Self {
+        Self {
+            region: Some(region.into()),
+            ..self
+        }
+    }
+
     /// An unreplicated, leader-acknowledged stream — the default a cluster gets
     /// when a test says nothing about replication.
     pub fn new(name: impl Into<String>, shards: u32) -> Self {
@@ -64,6 +79,7 @@ impl StreamSpec {
             shards,
             replication_factor: 1,
             consistency: "Leader".to_string(),
+            region: None,
         }
     }
 
@@ -76,6 +92,7 @@ impl StreamSpec {
             shards,
             replication_factor,
             consistency: "Quorum".to_string(),
+            region: None,
         }
     }
 
@@ -86,6 +103,7 @@ impl StreamSpec {
             shards,
             replication_factor,
             consistency: "Leader".to_string(),
+            region: None,
         }
     }
 }

@@ -317,7 +317,7 @@ fn an_operator_move_is_held_to_the_limits_but_not_to_a_pause() {
         ..MovePolicy::default()
     };
     start_move(
-        &catalog(&streams, &nodes, &existing, &caught_up, one),
+        &catalog(&streams, &nodes, &existing, &caught_up, one.clone()),
         &key("s1"),
         "broker-b",
     )

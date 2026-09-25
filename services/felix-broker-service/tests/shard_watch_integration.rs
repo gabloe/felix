@@ -152,6 +152,7 @@ impl Cluster {
                 consistency: ConsistencyLevel::Leader,
                 delivery: DeliveryGuarantee::AtMostOnce,
                 durable: true,
+                region: None,
             })
             .await
             .expect("stream");

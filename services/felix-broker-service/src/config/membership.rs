@@ -26,6 +26,10 @@ pub struct MembershipConfig {
     /// has not said where clients reach it.
     pub client_advertise_addr: Option<String>,
     pub region: String,
+    /// `(source, dest)` region pairs traffic may cross, from
+    /// `FELIX_REGION_BRIDGES`. This broker forwards to a shard's leader only
+    /// in its own region or one it has a bridge to.
+    pub region_bridges: Vec<(String, String)>,
     /// Where this broker's refresh token lives, when it has one.
     ///
     /// A path rather than a value, and that is forced by rotation: refreshing
@@ -130,8 +134,19 @@ pub(super) fn membership_from_env(
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from);
 
+    let region_bridges = match std::env::var("FELIX_REGION_BRIDGES") {
+        Ok(spec) => felix_router::parse_bridges(&spec).map_err(|err| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("FELIX_REGION_BRIDGES: {err}"),
+            )
+        })?,
+        Err(_) => Vec::new(),
+    };
+
     Ok(Some(MembershipConfig {
         node_id,
+        region_bridges,
         refresh_token_file,
         node_token_file,
         advertise_addr,

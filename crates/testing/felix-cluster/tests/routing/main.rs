@@ -11,6 +11,7 @@ mod operator_moves;
 mod publish_routing;
 mod rebalance;
 mod redirect;
+mod regions;
 mod sharded_subscribe;
 mod sharding;
 mod shutdown_handoff;

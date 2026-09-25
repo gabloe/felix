@@ -1661,3 +1661,52 @@ async fn bootstrap_initialize_reports_internal_error_when_signing_key_ensure_fai
     let response = app.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+/// A stream keeps the region it was created with, through a patch; an empty
+/// one is refused rather than read as "anywhere".
+#[tokio::test]
+async fn a_stream_keeps_its_home_region() {
+    let h = harness("local").await;
+    let app = h.app.clone();
+    let admin = h.admin("t1");
+    h.create_tenant("t1").await;
+    let create_namespace = json_request_as(
+        "POST",
+        "/v1/tenants/t1/namespaces",
+        &admin,
+        serde_json::json!({ "namespace": "default", "display_name": "Default" }),
+    );
+    let response = app.clone().oneshot(create_namespace).await.expect("ns");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let body = |name: &str, region: &str| {
+        serde_json::json!({
+            "stream": name,
+            "kind": "Stream",
+            "shards": 1,
+            "retention": { "max_age_seconds": null, "max_size_bytes": null },
+            "consistency": "Leader",
+            "delivery": "AtLeastOnce",
+            "durable": true,
+            "region": region,
+        })
+    };
+    let streams = "/v1/tenants/t1/namespaces/default/streams";
+    let blank = json_request_as("POST", streams, &admin, body("blank", " "));
+    let response = app.clone().oneshot(blank).await.expect("blank");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let create = json_request_as("POST", streams, &admin, body("orders", "eu"));
+    let response = app.clone().oneshot(create).await.expect("create");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let patch = json_request_as(
+        "PATCH",
+        &format!("{streams}/orders"),
+        &admin,
+        serde_json::json!({ "durable": false }),
+    );
+    let response = app.clone().oneshot(patch).await.expect("patch");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(read_json(response).await["region"], "eu");
+}

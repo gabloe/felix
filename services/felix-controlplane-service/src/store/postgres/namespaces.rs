@@ -109,7 +109,7 @@ pub(super) async fn delete_namespace(store: &PostgresStore, key: &NamespaceKey) 
     });
 
     let streams = sqlx::query_as::<_, DbStream>(
-        r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable
+        r#"SELECT tenant_id, namespace, stream, kind, shards, replication_factor, retention_max_age_seconds, retention_max_size_bytes, consistency, delivery, durable, region
                FROM streams WHERE tenant_id = $1 AND namespace = $2"#,
     )
     .bind(&key.tenant_id)
@@ -181,6 +181,7 @@ pub(super) async fn delete_namespace(store: &PostgresStore, key: &NamespaceKey) 
             consistency: parse_consistency(&stream.consistency)?,
             delivery: parse_delivery(&stream.delivery)?,
             durable: stream.durable,
+            region: stream.region,
         };
         sqlx::query(
             r#"INSERT INTO stream_changes (op, tenant_id, namespace, stream, payload) VALUES ($1, $2, $3, $4, $5)"#,

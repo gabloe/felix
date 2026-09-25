@@ -13,6 +13,20 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Streams can be kept in a region.** A stream created with `"region"` has its
+  leader and every replica only on brokers in that region, or in one the new
+  directional allowlist `FELIX_REGION_BRIDGES` (`source>dest` pairs) bridges it
+  to: on first placement, rebalancing and drain moves, follower replacement and
+  failover. A copy found outside, after a broker's region changes or a bridge is
+  removed, is moved back in; with no broker in an allowed region the shard is
+  left unplaced rather than placed elsewhere. An operator move out of the
+  region is refused with `region_not_allowed`. Brokers read the same
+  `FELIX_REGION_BRIDGES` and forward only to leaders in bridged regions,
+  refusing the rest as `shard_unavailable` with the new reason
+  `region_not_routable` instead of `owner_unavailable`. Streams without a
+  region, and every cache, are placed as before. Migration
+  `0017_stream_region.sql` adds a nullable `streams.region` column.
+
 - **Consumer-group calls follow the shard's leader.** `ClusterClient` gains
   `group_poll`, `group_poll_wait`, `group_ack`, `group_nack`,
   `group_dead_letters`, `group_discard` and `group_redrive`, which follow the
@@ -224,6 +238,11 @@ for what the current release actually guarantees.
   `drain_node`, `undrain_node` and `drain_until_empty`.
 
 ### Changed
+
+- **`MovePolicy` is no longer `Copy`.** It carries the region allowlist
+  (`regions: Arc<RegionRouter<String>>`); clone it where it was copied. The
+  control-plane `Stream` model gains `region: Option<String>`, and the broker's
+  `MembershipConfig` gains `region_bridges`.
 
 - **Cache watches follow a moved shard.** `ClusterClient::watch_cache` and
   `watch_cache_retained` now return a `ClusterCacheWatch` (and take

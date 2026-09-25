@@ -226,6 +226,13 @@ Content-Type: application/json
   "consistency": "Leader", "delivery": "AtLeastOnce", "durable": true }
 ```
 
+A stream may also name a `region`, such as `"region": "eu-west-1"`, and is
+then placed only on brokers in that region or in one the control plane's
+`FELIX_REGION_BRIDGES` bridges it to. The region is fixed at creation, an empty
+one is refused with `400`, and omitting it places the stream anywhere. An
+operator move to a broker outside the allowed regions is refused with `409`
+and code `region_not_allowed`.
+
 A cache takes `consistency` the same way, `"Leader"` when omitted. Under
 `"Quorum"` a put or delete is acknowledged only once a majority of the shard's
 replicas hold it; counter updates are acknowledged by the leader either way.

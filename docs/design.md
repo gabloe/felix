@@ -39,10 +39,12 @@ without sacrificing performance or security.
 ### 2.1 Sovereignty First (target design, not yet implemented)
 Felix's target design treats **data sovereignty as a core architectural
 constraint**, not an operational afterthought — this is a design goal for a
-later milestone, not current behavior. Today no region policy is enforced at
-all: `felix-router` defines a region-pair allowlist, but nothing in the broker
-or control plane calls it (#616). Treat everything below as intent to be
-validated, not a guarantee to build on.
+later milestone, not current behavior. What is enforced today is placement and
+forwarding: a stream created with a `region` has every copy in that region or
+one `FELIX_REGION_BRIDGES` bridges it to, and a broker forwards only to leaders
+in regions it has a bridge to (`docs/control-plane.md`, "Regions"). There is no
+bridge agent, per-region encryption or audit trail. Treat everything below as
+intent to be validated, not a guarantee to build on.
 
 - One Felix cluster is intended to represent exactly one sovereign region.
 - No implicit cross‑region replication should exist.

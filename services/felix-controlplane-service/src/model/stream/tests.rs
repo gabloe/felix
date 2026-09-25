@@ -34,7 +34,38 @@ fn a_stream_carries_its_level_as_a_field() {
         consistency: ConsistencyLevel::Quorum,
         delivery: DeliveryGuarantee::AtLeastOnce,
         durable: true,
+        region: None,
     };
     let json: serde_json::Value = serde_json::to_value(&stream).expect("serialize");
     assert_eq!(json["consistency"], "Quorum");
+}
+
+/// A stream without a home region serializes exactly as it did before the
+/// field existed, and one written before it reads back without a region.
+#[test]
+fn region_is_absent_unless_set() {
+    let json = serde_json::json!({
+        "tenant_id": "t1",
+        "namespace": "ns",
+        "stream": "orders",
+        "kind": "Stream",
+        "shards": 1,
+        "retention": { "max_age_seconds": null, "max_size_bytes": null },
+        "consistency": "Leader",
+        "delivery": "AtMostOnce",
+        "durable": true,
+    });
+    let stream: Stream = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(stream.region, None);
+    let written = serde_json::to_value(&stream).expect("serialize");
+    assert!(written.get("region").is_none(), "{written}");
+
+    let homed = Stream {
+        region: Some("eu".to_string()),
+        ..stream
+    };
+    assert_eq!(
+        serde_json::to_value(&homed).expect("serialize")["region"],
+        "eu"
+    );
 }

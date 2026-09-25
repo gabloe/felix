@@ -1247,6 +1247,7 @@ dependencies = [
  "dashmap",
  "ed25519-dalek",
  "felix-common",
+ "felix-router",
  "hex",
  "hyper-util",
  "jsonwebtoken",

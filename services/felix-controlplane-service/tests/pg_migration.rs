@@ -158,6 +158,7 @@ async fn seed(store: &(dyn ControlPlaneAuthStore + Send + Sync)) {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtLeastOnce,
             durable: true,
+            region: None,
         })
         .await
         .expect("stream");

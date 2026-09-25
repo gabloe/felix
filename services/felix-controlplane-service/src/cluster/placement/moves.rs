@@ -4,6 +4,9 @@
 //! reports alone, so any instance resumes a half-done move where the last
 //! pass left it.
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use felix_router::RegionRouter;
 
 use super::rendezvous::{choose_replicas, promote, score};
 use super::{Blocked, CaughtUp, Decision, MoveStep};
@@ -24,8 +27,8 @@ pub const DEFAULT_FENCE_MAX_LAG_RECORDS: u64 = 1_000;
 /// gives its slot back the same hour.
 pub const DEFAULT_MOVE_TIMEOUT_MILLIS: u64 = 30 * 60 * 1_000;
 
-/// How moves are paced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How moves are paced, and which regions a shard may be placed in.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MovePolicy {
     /// Copies in flight at once, cluster-wide: moves from staging to
     /// cut-over, and follower replacements until the new follower has caught
@@ -46,6 +49,10 @@ pub struct MovePolicy {
     /// go on, and an operator may still start one. Not configuration: each
     /// pass reads it from the store (`POST /v1/placement/pause`).
     pub paused: bool,
+    /// Where a stream with a home region may have copies: that region, and
+    /// any region the allowlist bridges it to (`FELIX_REGION_BRIDGES`). A
+    /// stream without one is placed anywhere.
+    pub regions: Arc<RegionRouter<String>>,
 }
 
 impl Default for MovePolicy {
@@ -56,6 +63,7 @@ impl Default for MovePolicy {
             fence_max_lag_records: DEFAULT_FENCE_MAX_LAG_RECORDS,
             timeout_millis: Some(DEFAULT_MOVE_TIMEOUT_MILLIS),
             paused: false,
+            regions: Arc::new(RegionRouter::new(String::new())),
         }
     }
 }

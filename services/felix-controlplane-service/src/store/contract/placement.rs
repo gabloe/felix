@@ -113,8 +113,10 @@ async fn two_instances_cannot_both_take_the_last_move_slot(
     let (fence_b, read_b) = PlacementRead::load_fenced(b, &liveness)
         .await
         .expect("read b");
-    let move_a = start_move(&read_a.catalog(policy), &key(0), "broker-y").expect("a decides");
-    let move_b = start_move(&read_b.catalog(policy), &key(1), "broker-y").expect("b decides");
+    let move_a =
+        start_move(&read_a.catalog(policy.clone()), &key(0), "broker-y").expect("a decides");
+    let move_b =
+        start_move(&read_b.catalog(policy.clone()), &key(1), "broker-y").expect("b decides");
 
     let written_a = a
         .put_shard_assignment_if(move_a.assignment, Some(move_a.expected_generation), fence_a)

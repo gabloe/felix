@@ -8,7 +8,7 @@
 mod region;
 mod shard;
 
-pub use region::RegionRouter;
+pub use region::{BridgeSpecError, RegionRouter, parse_bridges};
 pub use shard::{
     NodeRef, Placed, ReplicaRole, Resolution, Route, Routes, RoutingTable, ShardKey, ShardKind,
     ShardRouter, Unavailable,

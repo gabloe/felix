@@ -389,6 +389,7 @@ async fn seed_shard(store: &InMemoryStore, leader: &str, generation: u64) {
             consistency: ConsistencyLevel::Leader,
             delivery: DeliveryGuarantee::AtMostOnce,
             durable: true,
+            region: None,
         })
         .await;
     for _ in 0..=generation {

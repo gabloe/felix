@@ -35,7 +35,10 @@ pub(super) fn shard_state(config: &BrokerConfig) -> Option<ShardState> {
         let router = Arc::new(felix_router::ShardRouter::new(
             membership.node_id.clone(),
             membership.region.clone(),
-            felix_router::RegionRouter::new(membership.region.clone()),
+            felix_router::RegionRouter::with_bridges(
+                membership.region.clone(),
+                membership.region_bridges.iter().cloned(),
+            ),
         ));
         let lifecycle = shard_lifecycle::ShardLifecycle::new(membership.node_id.clone());
         // One fence, shared: the lifecycle opens and closes it, every write

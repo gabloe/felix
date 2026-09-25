@@ -269,7 +269,7 @@ impl<'de> Deserialize<'de> for RetryClass {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorDetail {
     /// For `shard_unavailable`: `not_assigned`, `owner_unavailable`,
-    /// `not_ready`, `stale`, `fenced` or `moving`. A string rather than an enum
+    /// `not_ready`, `stale`, `fenced`, `moving` or `region_not_routable`. A string rather than an enum
     /// so a new reason reaches an old client as text instead of a decode
     /// failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -296,6 +296,10 @@ pub mod shard_unavailable_reason {
     /// The shard is moving to another broker and the move had not cut over
     /// in time. `ErrorDetail::retry_after_ms` may suggest when to try again.
     pub const MOVING: &str = "moving";
+    /// The leader is in a region the broker has no bridge to, so it will not
+    /// forward the request there. Connecting to the leader directly is not
+    /// refused by this.
+    pub const REGION_NOT_ROUTABLE: &str = "region_not_routable";
 }
 
 #[cfg(test)]
