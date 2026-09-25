@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790294253678,
+  "lastUpdate": 1790296883212,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19404,6 +19404,72 @@ window.BENCHMARK_DATA = {
             "range": "331.75",
             "unit": "us",
             "extra": "trials: 5\nmedian: 465.00\nmean: 616.80\nstdev: 331.75\ncv: 53.79%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "28f84cb527e3bdcfe8749af1c17ec1b5967a1da4",
+          "message": "Hold the move limits across control-plane instances (#686)\n\n* fix(controlplane): hold the move limits across control-plane instances\n\nEach placement write was conditional only on its own shard's generation, so\ntwo Postgres-backed instances, or a pass and an operator's request on another\ninstance, could each read the last free move slot and start moves on two\ndifferent shards.\n\nEvery placement write now also carries a placement token read before the\npass or request decided, and lands only if the token is unchanged; landing\nadvances it. The token lives beside a placement lease: the holder runs the\ntimed passes, renews every pass, releases on shutdown, and a new holder\nadvances the token so an instance that paused past its lease writes nothing\nafter a takeover. Under Raft the confirmed leader takes the lease at once.\nWoken passes still run where they are woken, which is safe for the same\nreason.\n\nPostgres gains the placement_lease table; Raft gains fenced-write and\ntake-lease commands, and the token rides in the snapshot so replicas decide\nfenced writes alike.\n\n* spec(placement): model several planners and the placement token\n\nFelixPlacementPacing now starts copies from each planner's own read: the\nlease holder, an instance that lost the lease with a read in hand, and an\noperator's request that reads without it. FelixPlacementPacingTwoPlanners\npasses with every start fenced by the token (56K distinct states);\nFelixPlacementPacingUnfenced drops the token and TLC finds two planners\neach starting a copy from one free slot. The single-planner configurations\nare unchanged in outcome.\n\n* docs: placement runs under a lease and the move limits hold across instances\n\ncontrol-plane.md says who places and how writes are fenced, with the new\nmetrics; the rebalancing plan and the status row drop the per-planner gap\nand name what the lease costs when its holder dies; the HA page says the\nsame for operators.",
+          "timestamp": "2026-09-24T17:38:05-07:00",
+          "tree_id": "22e85a8fa272d6d19341be077ac28020ea7930d5",
+          "url": "https://github.com/gabloe/felix/commit/28f84cb527e3bdcfe8749af1c17ec1b5967a1da4"
+        },
+        "date": 1790296879532,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 169,
+            "range": "4.06",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 169.00\nmean: 167.00\nstdev: 4.06\ncv: 2.43%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 214,
+            "range": "4.77",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 214.00\nmean: 214.40\nstdev: 4.77\ncv: 2.23%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 267,
+            "range": "328.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 267.00\nmean: 421.20\nstdev: 328.55\ncv: 78.00%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 205,
+            "range": "1.67",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 205.00\nmean: 205.40\nstdev: 1.67\ncv: 0.81%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 409,
+            "range": "5.73",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 409.00\nmean: 406.40\nstdev: 5.73\ncv: 1.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 586,
+            "range": "80.26",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 586.00\nmean: 592.60\nstdev: 80.26\ncv: 13.54%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
