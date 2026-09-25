@@ -22,6 +22,13 @@ async fn satisfies_the_refresh_token_contract() {
 }
 
 /// The same suite Postgres runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn satisfies_the_signing_key_contract() {
+    let store = std::sync::Arc::new(store_with_limits(100, 1000));
+    crate::store::contract::signing_keys::run_signing_key_contract(store).await;
+}
+
+/// The same suite Postgres runs.
 #[tokio::test]
 async fn satisfies_the_shard_store_contract() {
     let store = std::sync::Arc::new(store_with_limits(100, 1000));

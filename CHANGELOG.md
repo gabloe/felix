@@ -418,6 +418,14 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **Concurrent "ensure signing keys" calls agree on one key set.** Postgres
+  and in-memory control-plane stores checked for a tenant's keys and wrote new
+  ones in separate steps, so racing callers each generated keys and all but
+  the last returned a set that was then overwritten; tokens signed with it
+  would not verify. Postgres now decides under the tenant row lock, the way
+  auth bootstrap does, and the in-memory store under one write lock. The Raft
+  store was already safe: install-if-absent is applied through the log.
+
 - **A failover no longer costs a publisher 30 seconds.** A publish in flight to
   a leader that was killed waited out the 30 s ack timeout, because a killed
   broker sends no QUIC close and the connection only died at the 30 s idle

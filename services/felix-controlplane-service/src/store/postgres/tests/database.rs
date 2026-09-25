@@ -411,6 +411,39 @@ async fn satisfies_the_shard_store_contract() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The same signing-key suite the memory store runs. A pool wider than the
+/// default so the racing callers really hold separate connections, as they
+/// would on separate control-plane instances.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn satisfies_the_signing_key_contract() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    let store = PostgresStore::connect_without_migrations(
+        &config::PostgresConfig {
+            url,
+            max_connections: 16,
+            connect_timeout_ms: 10_000,
+            acquire_timeout_ms: 10_000,
+        },
+        StoreConfig {
+            changes_limit: config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: None,
+        },
+    )
+    .await?;
+
+    crate::store::contract::signing_keys::run_signing_key_contract(std::sync::Arc::new(store))
+        .await;
+    Ok(())
+}
+
 /// The property `node_change_seq` exists to provide: a second writer cannot take
 /// a seq until the first has committed.
 ///

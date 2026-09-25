@@ -158,23 +158,8 @@ pub(super) async fn ensure_signing_key_current(
     store: &InMemoryStore,
     tenant_id: &str,
 ) -> StoreResult<TenantSigningKeys> {
-    if let Some(keys) = store
-        .tenant_signing_keys
-        .read()
-        .await
-        .get(tenant_id)
-        .cloned()
-    {
-        return Ok(keys);
-    }
-    let keys = crate::auth::keys::generate_signing_keys().map_err(StoreError::Unexpected)?;
-    store
-        .tenant_signing_keys
-        .write()
-        .await
-        .insert(tenant_id.to_string(), keys.clone());
-    crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
-    Ok(keys)
+    let candidate = crate::auth::keys::generate_signing_keys().map_err(StoreError::Unexpected)?;
+    Ok(install_signing_keys_if_absent(store, tenant_id, candidate).await)
 }
 
 pub(super) async fn seed_rbac_policies_and_groupings(
@@ -228,16 +213,7 @@ pub(super) async fn bootstrap_tenant_auth(
     // Install the caller's keys only when none exist: the seed's keys are
     // the propose-time randomness, and existing keys always win so a
     // replayed or raced bootstrap cannot rotate a tenant's keys.
-    let keys = match store.get_tenant_signing_keys(tenant_id).await {
-        Ok(existing) => existing,
-        Err(StoreError::NotFound(_)) => {
-            store
-                .set_tenant_signing_keys(tenant_id, seed.signing_keys.clone())
-                .await?;
-            seed.signing_keys.clone()
-        }
-        Err(err) => return Err(err),
-    };
+    let keys = install_signing_keys_if_absent(store, tenant_id, seed.signing_keys).await;
     for issuer in seed.issuers {
         store.upsert_idp_issuer(tenant_id, issuer).await?;
     }
@@ -252,4 +228,22 @@ pub(super) async fn bootstrap_tenant_auth(
         .await
         .insert(tenant_id.to_string(), true);
     Ok(keys)
+}
+
+/// Store `candidate` unless the tenant already has keys, and return whichever
+/// set is stored. Check and insert share one write lock, or racing callers
+/// each insert their own and all but the last hand out keys that are gone.
+async fn install_signing_keys_if_absent(
+    store: &InMemoryStore,
+    tenant_id: &str,
+    candidate: TenantSigningKeys,
+) -> TenantSigningKeys {
+    let mut all = store.tenant_signing_keys.write().await;
+    if let Some(existing) = all.get(tenant_id) {
+        return existing.clone();
+    }
+    all.insert(tenant_id.to_string(), candidate.clone());
+    drop(all);
+    crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
+    candidate
 }

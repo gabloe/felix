@@ -54,6 +54,13 @@ async fn satisfies_the_shard_store_contract() {
     crate::store::contract::shards::run_shard_concurrency_contract(store).await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn satisfies_the_signing_key_contract() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = single_node_store(dir.path()).await;
+    crate::store::contract::signing_keys::run_signing_key_contract(store).await;
+}
+
 #[tokio::test]
 async fn satisfies_the_placement_contract() {
     let dir = tempfile::tempdir().expect("tempdir");
