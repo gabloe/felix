@@ -53,7 +53,10 @@ pub(crate) fn spawn_broker(
         .env("FELIX_NODE_ADVERTISE_ADDR", internal_addr.to_string())
         .env("FELIX_NODE_TOKEN_FILE", &node_token_file)
         .env("FELIX_CONTROLPLANE_URL", &control_plane.base_url)
-        .env("FELIX_REGION_ID", "local")
+        .env(
+            "FELIX_REGION_ID",
+            config.regions.get(index).map_or("local", String::as_str),
+        )
         .env("FELIX_QUIC_BIND", client_addr.to_string())
         .env("FELIX_QUIC_LISTENERS", config.quic_listeners.to_string())
         // And where clients reach it, which is what discovery hands out. The

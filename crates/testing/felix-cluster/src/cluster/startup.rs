@@ -324,6 +324,7 @@ async fn seed_metadata(
                 "replication_factor": spec.replication_factor,
                 "retention": { "max_age_seconds": null, "max_size_bytes": null },
                 "consistency": spec.consistency,
+                "region": spec.region,
                 "delivery": "AtLeastOnce",
                 // Durable, so the brokers gate readiness on having actually
                 // recovered their logs. An ephemeral stream would let a broker
