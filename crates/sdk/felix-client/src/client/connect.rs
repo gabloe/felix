@@ -258,6 +258,7 @@ impl Client {
             _cache_client: cache_client,
             _event_client: event_client,
             publish_workers: Arc::new(publish_workers),
+            publish_stream_hasher: ahash::RandomState::new(),
             publish_sharding,
             publish_admission,
             cache_workers,

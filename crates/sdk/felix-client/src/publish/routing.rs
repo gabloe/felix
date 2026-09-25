@@ -3,12 +3,16 @@
 //! Hashing by stream keeps every publish to one stream on one writer, which
 //! is what keeps them in order. The hash is cached per stream so a hot
 //! stream does not rehash on every publish.
+//!
+//! The hash is seeded per client. Each worker's connection sits on one broker
+//! listener, so a seed shared by every client in a process would send all of
+//! them publishing one stream through the same listener.
 
 use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::atomic::Ordering;
 
-use ahash::{AHasher, RandomState};
+use ahash::RandomState;
 use anyhow::Result;
 use hashbrown::HashMap;
 
@@ -61,11 +65,23 @@ impl Publisher {
                     {
                         return Ok(&workers[index]);
                     }
-                    let index = hash_stream_index(tenant_id, namespace, stream, worker_count);
+                    let index = hash_stream_index(
+                        &self.inner.stream_hasher,
+                        tenant_id,
+                        namespace,
+                        stream,
+                        worker_count,
+                    );
                     cache.insert(StreamKey::new(tenant_id, namespace, stream), index);
                     return Ok(&workers[index]);
                 }
-                hash_stream_index(tenant_id, namespace, stream, worker_count)
+                hash_stream_index(
+                    &self.inner.stream_hasher,
+                    tenant_id,
+                    namespace,
+                    stream,
+                    worker_count,
+                )
             }
         };
         Ok(&workers[index])
@@ -147,10 +163,12 @@ impl<'a> hashbrown::Equivalent<StreamKey> for StreamKeyRef<'a> {
     }
 }
 
-fn hash_stream_index(tenant_id: &str, namespace: &str, stream: &str, worker_count: usize) -> usize {
-    let mut hasher = AHasher::default();
-    tenant_id.hash(&mut hasher);
-    namespace.hash(&mut hasher);
-    stream.hash(&mut hasher);
-    (hasher.finish() as usize) % worker_count
+fn hash_stream_index(
+    hasher: &RandomState,
+    tenant_id: &str,
+    namespace: &str,
+    stream: &str,
+    worker_count: usize,
+) -> usize {
+    (hasher.hash_one((tenant_id, namespace, stream)) as usize) % worker_count
 }
