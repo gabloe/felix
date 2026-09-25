@@ -43,6 +43,8 @@ felix-conformance = { version = "0.6.0-preview", path = "../felix-conformance" }
 libc = { workspace = true }
 
 [dev-dependencies]
+# The Kafka produce test speaks the protocol itself, to re-send on purpose.
+kafka-protocol = { workspace = true, features = ["client"] }
 # These spawn several broker processes each. Run one cluster at a time: a CI
 # runner with two cores starting nine brokers at once starves them all, and the
 # ephemeral ports they were handed are more likely to collide.

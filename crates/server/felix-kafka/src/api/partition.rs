@@ -1,13 +1,13 @@
-//! Turning a topic and partition into a shard this broker may read.
+//! Turning a topic and partition into a shard this broker may read or write.
 //!
-//! Every read answers the same questions in the same order, and the order
-//! matters: the topic must parse, then the caller must be allowed to read it,
+//! Every read and write answers the same questions in the same order, and the order
+//! matters: the topic must parse, then the caller must be allowed to use it,
 //! and only then is its existence looked up. Checking existence first would
 //! tell an unauthorized caller which streams exist.
 
 use std::sync::Arc;
 
-use felix_broker::StreamLog;
+use felix_broker::{StreamHandle, StreamLog};
 use kafka_protocol::ResponseError;
 
 use crate::cluster::{Placement, Principal, ShardRef};
@@ -27,34 +27,8 @@ pub(super) async fn resolve(
     topic: &str,
     partition: i32,
 ) -> Result<Readable, ResponseError> {
-    let Some(principal) = principal else {
-        return Err(ResponseError::TopicAuthorizationFailed);
-    };
-    let Some(TopicStream { namespace, stream }) =
-        parse_topic(topic, shared.settings.default_namespace.as_deref())
-    else {
-        return Err(ResponseError::UnknownTopicOrPartition);
-    };
-    if !principal.may_read(&namespace, &stream) {
-        return Err(ResponseError::TopicAuthorizationFailed);
-    }
-    let tenant_id = principal.tenant_id();
-    let metadata = shared
-        .broker
-        .stream_metadata(tenant_id, &namespace, &stream)
-        .await
-        .filter(|metadata| metadata.durable)
-        .ok_or(ResponseError::UnknownTopicOrPartition)?;
-    let shard = u32::try_from(partition)
-        .ok()
-        .filter(|shard| *shard < metadata.shards)
-        .ok_or(ResponseError::UnknownTopicOrPartition)?;
-    match shared.cluster.placement(&ShardRef {
-        tenant_id,
-        namespace: &namespace,
-        stream: &stream,
-        shard,
-    }) {
+    let located = locate(shared, principal, topic, partition, Principal::may_read).await?;
+    match shared.cluster.placement(&located.shard_ref()) {
         Placement::Local { .. } => {}
         // Both send the client back to Metadata, which names the leader or
         // says there is none yet.
@@ -62,11 +36,7 @@ pub(super) async fn resolve(
             return Err(ResponseError::NotLeaderOrFollower);
         }
     }
-    let handle = shared
-        .broker
-        .resolve_stream_handle(tenant_id, &namespace, &stream, shard)
-        .await
-        .map_err(|err| crate::errors::from_broker(&err))?;
+    let handle = located.handle(shared).await?;
     let log = handle
         .log()
         .cloned()
@@ -74,5 +44,84 @@ pub(super) async fn resolve(
     Ok(Readable {
         log,
         appended: handle.appended(),
+    })
+}
+
+/// A partition the principal may write: the topic parses, `stream.publish`
+/// allows it, and the stream is durable with that shard. Whether this broker
+/// may write it now is the cluster's to say, at admission.
+pub(super) async fn resolve_write(
+    shared: &Shared,
+    principal: Option<&Principal>,
+    topic: &str,
+    partition: i32,
+) -> Result<Located, ResponseError> {
+    locate(shared, principal, topic, partition, Principal::may_publish).await
+}
+
+/// A shard a topic and partition name, checked in the order the module doc
+/// gives.
+pub(super) struct Located {
+    pub(super) tenant_id: String,
+    pub(super) stream: TopicStream,
+    pub(super) shard: u32,
+}
+
+impl Located {
+    pub(super) fn shard_ref(&self) -> ShardRef<'_> {
+        ShardRef {
+            tenant_id: &self.tenant_id,
+            namespace: &self.stream.namespace,
+            stream: &self.stream.stream,
+            shard: self.shard,
+        }
+    }
+
+    /// The shard's handle on this broker.
+    pub(super) async fn handle(&self, shared: &Shared) -> Result<StreamHandle, ResponseError> {
+        shared
+            .broker
+            .resolve_stream_handle(
+                &self.tenant_id,
+                &self.stream.namespace,
+                &self.stream.stream,
+                self.shard,
+            )
+            .await
+            .map_err(|err| crate::errors::from_broker(&err))
+    }
+}
+
+async fn locate(
+    shared: &Shared,
+    principal: Option<&Principal>,
+    topic: &str,
+    partition: i32,
+    allowed: fn(&Principal, &str, &str) -> bool,
+) -> Result<Located, ResponseError> {
+    let Some(principal) = principal else {
+        return Err(ResponseError::TopicAuthorizationFailed);
+    };
+    let Some(stream) = parse_topic(topic, shared.settings.default_namespace.as_deref()) else {
+        return Err(ResponseError::UnknownTopicOrPartition);
+    };
+    if !allowed(principal, &stream.namespace, &stream.stream) {
+        return Err(ResponseError::TopicAuthorizationFailed);
+    }
+    let tenant_id = principal.tenant_id();
+    let metadata = shared
+        .broker
+        .stream_metadata(tenant_id, &stream.namespace, &stream.stream)
+        .await
+        .filter(|metadata| metadata.durable)
+        .ok_or(ResponseError::UnknownTopicOrPartition)?;
+    let shard = u32::try_from(partition)
+        .ok()
+        .filter(|shard| *shard < metadata.shards)
+        .ok_or(ResponseError::UnknownTopicOrPartition)?;
+    Ok(Located {
+        tenant_id: tenant_id.to_string(),
+        stream,
+        shard,
     })
 }

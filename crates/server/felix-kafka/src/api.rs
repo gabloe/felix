@@ -11,7 +11,9 @@ mod list_offsets;
 mod metadata;
 mod partition;
 mod produce;
+mod producer_id;
 mod sasl;
+mod transactions;
 mod versions;
 
 use anyhow::{Context, Result};
@@ -25,8 +27,7 @@ use crate::service::Shared;
 
 /// `(api, lowest version, highest version)` answered.
 pub(crate) const SUPPORTED: &[(ApiKey, i16, i16)] = &[
-    // Refused, but it has to be offered; see `produce`.
-    (ApiKey::Produce, 3, 8),
+    (ApiKey::Produce, 3, 9),
     (ApiKey::Fetch, 4, 12),
     (ApiKey::ListOffsets, 1, 7),
     (ApiKey::Metadata, 0, 12),
@@ -36,6 +37,8 @@ pub(crate) const SUPPORTED: &[(ApiKey, i16, i16)] = &[
     // (which moves it into `SaslAuthenticate`) is what works.
     (ApiKey::SaslHandshake, 0, 1),
     (ApiKey::SaslAuthenticate, 0, 2),
+    // For idempotent producers. A transactional id is refused.
+    (ApiKey::InitProducerId, 0, 4),
     // Answered only to refuse: Felix has no Kafka consumer groups. See
     // `groups`.
     (ApiKey::FindCoordinator, 0, 4),
@@ -50,6 +53,15 @@ pub(crate) const REFUSED_GROUP_APIS: &[(ApiKey, i16, i16)] = &[
     (ApiKey::LeaveGroup, 0, 3),
     (ApiKey::OffsetCommit, 2, 7),
     (ApiKey::OffsetFetch, 2, 7),
+];
+
+/// Transaction APIs, not advertised and answered with the refusal if a client
+/// sends one anyway. See `transactions`.
+pub(crate) const REFUSED_TRANSACTION_APIS: &[(ApiKey, i16, i16)] = &[
+    (ApiKey::AddPartitionsToTxn, 0, 3),
+    (ApiKey::AddOffsetsToTxn, 0, 3),
+    (ApiKey::EndTxn, 0, 3),
+    (ApiKey::TxnOffsetCommit, 0, 3),
 ];
 
 /// What to do after a request.
@@ -125,10 +137,13 @@ pub(crate) async fn handle(
             body: versions::unsupported(),
         });
     }
-    let refused_group_api = REFUSED_GROUP_APIS
-        .iter()
-        .any(|(key, min, max)| *key == api && (*min..=*max).contains(&version));
-    if !in_range(api, version) && !refused_group_api {
+    let listed = |apis: &[(ApiKey, i16, i16)]| {
+        apis.iter()
+            .any(|(key, min, max)| *key == api && (*min..=*max).contains(&version))
+    };
+    let refused_group_api = listed(REFUSED_GROUP_APIS);
+    let refused_transaction_api = listed(REFUSED_TRANSACTION_APIS);
+    if !in_range(api, version) && !refused_group_api && !refused_transaction_api {
         crate::metrics::refused("unsupported_api");
         tracing::debug!(
             ?api,
@@ -165,13 +180,28 @@ pub(crate) async fn handle(
             )
             .await?
         }
-        ApiKey::Produce => match produce::refuse(decode(&mut frame, version)?, version)? {
-            Some(answer) => answer,
-            None => {
-                crate::metrics::request(api, produce::REFUSED.code());
-                return Ok(Answer::Silent);
+        ApiKey::Produce => {
+            let answer = produce::answer(
+                shared,
+                session.principal.as_ref(),
+                decode(&mut frame, version)?,
+                version,
+            )
+            .await?;
+            match answer {
+                (Some(body), error) => (body, error),
+                (None, error) => {
+                    crate::metrics::request(api, error);
+                    return Ok(Answer::Silent);
+                }
             }
-        },
+        }
+        ApiKey::InitProducerId => producer_id::answer(
+            shared,
+            session.principal.as_ref(),
+            decode(&mut frame, version)?,
+            version,
+        )?,
         ApiKey::Fetch => {
             fetch::answer(
                 shared,
@@ -182,6 +212,7 @@ pub(crate) async fn handle(
             )
             .await?
         }
+        _ if refused_transaction_api => transactions::refuse(api, &mut frame, version)?,
         _ => groups::refuse(api, &mut frame, version)?,
     };
     crate::metrics::request(api, error);

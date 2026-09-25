@@ -181,6 +181,12 @@ impl StreamLog {
         self.log.producer_sequence(producer_id, sequence)
     }
 
+    /// The sequence an idempotent producer owes next in this log, or `None`
+    /// when the log holds nothing from it.
+    pub fn producer_next_sequence(&self, producer_id: u64) -> Option<u64> {
+        self.log.producer_next_sequence(producer_id)
+    }
+
     /// Wait until every record below `offset` is as durable as a commit would
     /// have made it.
     pub async fn wait_durable(&self, offset: Offset) -> Result<()> {

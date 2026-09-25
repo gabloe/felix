@@ -24,6 +24,8 @@ fn a_held_batch_is_found_and_the_next_is_expected() {
     assert_eq!(state.classify(7, 2), ProducerSequence::Next);
     assert_eq!(state.classify(7, 5), ProducerSequence::Gap { expected: 2 });
     assert_eq!(state.classify(8, 0), ProducerSequence::Unknown);
+    assert_eq!(state.next_sequence(7), Some(2));
+    assert_eq!(state.next_sequence(8), None);
 }
 
 #[test]

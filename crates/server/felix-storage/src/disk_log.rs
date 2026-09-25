@@ -172,6 +172,12 @@ impl DiskLog {
         self.inner.producers.lock().classify(producer_id, sequence)
     }
 
+    /// The sequence `producer_id` owes next in this log, or `None` when the
+    /// log holds no batch from it.
+    pub fn producer_next_sequence(&self, producer_id: u64) -> Option<u64> {
+        self.inner.producers.lock().next_sequence(producer_id)
+    }
+
     /// Assign offsets and write `records`, without waiting for durability.
     ///
     /// Split out of [`AppendOnlyLog::append`] so a caller can learn the offsets

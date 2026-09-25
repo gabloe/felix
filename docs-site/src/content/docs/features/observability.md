@@ -136,8 +136,8 @@ felix_broker_credential_refreshes_total     # by outcome: ok, unavailable
 felix_broker_credential_rotations_total     # by outcome: ok, rejected — a token file rewritten from outside
 ```
 
-**Are Kafka consumers being served?** Only when the read-only Kafka listener
-is on (`FELIX_KAFKA_LISTEN`; see [Reading with Kafka clients](/felix/features/kafka/)):
+**Are Kafka clients being served?** Only when the Kafka listener is on
+(`FELIX_KAFKA_LISTEN`; see [Kafka compatibility](/felix/features/kafka/)):
 
 ```prometheus
 felix_kafka_connections                     # gauge: Kafka connections open now
@@ -148,7 +148,19 @@ felix_kafka_fetch_records_total
 felix_kafka_fetch_bytes_total
 felix_kafka_fetch_waits_total               # long polls, by outcome: data, timeout
 felix_kafka_fetch_wait_seconds              # histogram: how long those polls waited
+felix_kafka_produce_records_total           # records Kafka producers wrote
+felix_kafka_produce_bytes_total             # their payload bytes
+felix_kafka_produce_duplicate_records_total # re-sent idempotent records answered without writing
+felix_kafka_produce_errors_total            # refused partitions, by error
+felix_kafka_produce_dropped_total           # records whose key or headers were dropped, by field
 ```
+
+`felix_kafka_produce_duplicate_records_total` rising is idempotence doing its
+job: producers re-sending batches whose answers they lost, usually around a
+failover or a move. `produce_errors_total{error="out_of_order_sequence_number"}`
+should stay at zero; it means a producer believes records were written that the
+log does not have. `produce_dropped_total{field="headers"}` shows producers
+whose headers Felix cannot keep.
 
 A steady `not_leader_or_follower` rate means clients keep fetching from a
 broker that no longer leads the partition, which is normal for a moment after

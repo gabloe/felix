@@ -1670,10 +1670,10 @@ absent; they are listed in that script rather than here.
 | `FELIX_NODE_ID` | — | This broker's identity in the cluster. Must be stable across restarts. |
 | `FELIX_NODE_ADVERTISE_ADDR` | — | Address peers should reach this broker on. |
 | `FELIX_CLIENT_ADVERTISE_ADDR` | — | Address *clients* should reach it on, when it differs from the peer address. |
-| `FELIX_KAFKA_LISTEN` | unset | `ip:port` the Kafka-protocol listener binds (read-only Kafka consume). Unset turns the listener off. See [Reading with Kafka clients](/felix/features/kafka/). |
+| `FELIX_KAFKA_LISTEN` | unset | `ip:port` the Kafka-protocol listener binds (Kafka consumers and producers). Unset turns the listener off. See [Kafka compatibility](/felix/features/kafka/). |
 | `FELIX_KAFKA_ADVERTISE_ADDR` | `FELIX_KAFKA_LISTEN` | `host:port` Kafka clients are told to connect to for this broker (in Metadata responses). A hostname is fine. Registered as the node's `kafka_addr`; ignored while `FELIX_KAFKA_LISTEN` is unset. |
 | `FELIX_KAFKA_TLS` | `true` | Serve TLS on the Kafka listener with the broker's client certificate, so clients connect with `SASL_SSL`. `false` means `SASL_PLAINTEXT`: tokens cross the network in clear text. |
-| `FELIX_KAFKA_ANONYMOUS_TENANT` | unset | Development switch: a Kafka connection that does not authenticate reads every stream of this tenant. Leave unset in production. |
+| `FELIX_KAFKA_ANONYMOUS_TENANT` | unset | Development switch: a Kafka connection that does not authenticate reads and writes every stream of this tenant. Leave unset in production. |
 | `FELIX_KAFKA_DEFAULT_NAMESPACE` | unset | Namespace a topic name without a dot is looked up in. Unset means such a topic names nothing. |
 | `FELIX_KAFKA_MAX_CONNECTIONS` | `1024` | Kafka connections served at once; the next one is closed on arrival and counted in `felix_kafka_refused_total{reason="connection_limit"}`. |
 | `FELIX_REGION_BRIDGES` | unset | The same allowlist as the control plane's. A broker forwards a request to a shard's leader only in its own `FELIX_REGION_ID` or a region it has a bridge to, and refuses the rest as `shard_unavailable` with reason `region_not_routable`. Unset forwards within the broker's own region only, which is what a broker has always done. A malformed pair fails startup. |

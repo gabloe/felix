@@ -272,3 +272,8 @@ consumer groups on the same log when you need replay or redelivery. If your
 workload is heavy stream *processing* — joins, windows, transformations —
 that layer does not exist here; use a processing framework on top, or a
 system that ships one.
+
+A durable stream can also be written and read with Kafka clients: producers,
+and consumers that assign their own partitions. That makes it possible to put
+Felix behind services that already speak Kafka; see
+[Kafka compatibility](/felix/features/kafka/).

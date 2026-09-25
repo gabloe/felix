@@ -38,6 +38,26 @@ ecosystem. Felix keeps durable logs and replays by offset, but there is no
 tiered storage and retention is bounded by one machine's disk — it is built
 for live distribution, not for being your system of record.
 
+Felix does speak part of Kafka's wire protocol, so the two are not an
+either-or at the client: see the next question.
+
+## Can I use my Kafka clients with Felix?
+
+Producers, yes. Consumers, if they assign their own partitions. With
+`FELIX_KAFKA_LISTEN` set, every broker serves the Kafka protocol and each
+durable stream is a topic named `<namespace>.<stream>`, with one partition per
+shard and Felix's own offsets. A Kafka producer can write to it with any
+compression codec and any `acks`, and an idempotent producer's re-sends are
+recognised even after a leader failover. A consumer that calls `assign()` and
+keeps its own offsets can read it. This is tested with kcat (librdkafka).
+
+What does not work is anything built on consumer groups or transactions:
+`subscribe()` with a `group.id`, committed offsets, `transactional.id`, and so
+Kafka Connect, Kafka Streams, ksqlDB, Debezium and MirrorMaker. Those are
+refused with an error that says why, rather than left hanging. Record keys and
+headers are not stored. The whole picture, with use cases and troubleshooting,
+is on [Kafka compatibility](/felix/features/kafka/).
+
 ## How is Felix different from Redis?
 
 Redis is a data-structure server with basic pub/sub bolted on; Felix is a

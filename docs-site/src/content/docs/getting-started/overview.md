@@ -179,10 +179,14 @@ and a bounded graceful drain on SIGTERM — see
 A good fit: real-time streaming with high fanout, low-latency caching,
 work distribution with retries and dead letters, and services that currently
 run a broker *and* a cache *and* a queue and would rather run one system.
+Services that already talk Kafka can keep their producers and their
+partition-assigning consumers: Felix serves the Kafka protocol for those (see
+[Kafka compatibility](/felix/features/kafka/)).
 
 A bad fit: petabyte-scale batch pipelines, complex stream processing
 (joins, windowing — use Flink or Kafka Streams), or anything that needs a
-mature connector ecosystem today. Felix is young and its ecosystem is one
+mature connector ecosystem today. Kafka Connect and Kafka Streams need
+consumer groups, which Felix's Kafka listener does not offer. Felix is young and its ecosystem is one
 language deep.
 
 The honest version of this list, kept current per capability, is

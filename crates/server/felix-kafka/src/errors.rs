@@ -3,12 +3,14 @@
 //! Chosen for what a Kafka client does next, since that is all a code
 //! controls: `NOT_LEADER_OR_FOLLOWER` makes it refresh metadata and go to the
 //! new leader, `OFFSET_OUT_OF_RANGE` makes it apply its reset policy, and
-//! `UNKNOWN_TOPIC_OR_PARTITION` makes it report the topic as missing.
+//! `UNKNOWN_TOPIC_OR_PARTITION` makes it report the topic as missing, and the
+//! sequence errors steer an idempotent producer.
 
 use felix_broker::BrokerError;
 use kafka_protocol::ResponseError;
 
-/// The Kafka error for a broker error met while reading a partition.
+/// The Kafka error for a broker error met while reading or writing a
+/// partition.
 pub(crate) fn from_broker(err: &BrokerError) -> ResponseError {
     match err {
         BrokerError::CursorTooOld { .. } | BrokerError::CursorInFuture { .. } => {
@@ -24,13 +26,19 @@ pub(crate) fn from_broker(err: &BrokerError) -> ResponseError {
         BrokerError::Storage(_) | BrokerError::DurableStorageNotConfigured { .. } => {
             ResponseError::KafkaStorageError
         }
-        // Publish-side errors a read cannot produce; answered as a server
-        // fault rather than guessed at.
-        BrokerError::CapacityTooLarge
-        | BrokerError::DurabilityChangeRequiresRecreate { .. }
-        | BrokerError::SequenceGap { .. }
-        | BrokerError::UnknownProducer { .. }
-        | BrokerError::SequenceExpired { .. } => ResponseError::UnknownServerError,
+        // An idempotent producer's refusals, as librdkafka reads them. A
+        // gap is fatal to the producer, since something it believes written
+        // is not. An unknown producer makes it take a new id and start its
+        // sequences over. A duplicate older than the log remembers was
+        // written, so librdkafka counts it delivered.
+        BrokerError::SequenceGap { .. } => ResponseError::OutOfOrderSequenceNumber,
+        BrokerError::UnknownProducer { .. } => ResponseError::UnknownProducerId,
+        BrokerError::SequenceExpired { .. } => ResponseError::DuplicateSequenceNumber,
+        // Neither can come from reading or writing records; answered as a
+        // server fault rather than guessed at.
+        BrokerError::CapacityTooLarge | BrokerError::DurabilityChangeRequiresRecreate { .. } => {
+            ResponseError::UnknownServerError
+        }
     }
 }
 

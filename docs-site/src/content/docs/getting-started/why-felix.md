@@ -121,6 +121,18 @@ set of metrics that already means something to you, rather than the third system
 you touch twice a year. And no class of incident that consists of two systems
 quietly disagreeing about the same fact.
 
+### It speaks Kafka too
+
+You do not have to rewrite every client to try it. Each broker can run a Kafka
+listener, and a durable stream then looks like a Kafka topic: partitions are
+shards and offsets are Felix's own. Existing Kafka producers write to it,
+idempotent ones included, and a consumer that assigns its own partitions reads
+from it, so `kcat` and librdkafka programs can be pointed at Felix one at a
+time while the rest of a system moves over. (The Java client is not tested yet.) What it does not speak is
+anything built on consumer groups or transactions; that limit is spelled out
+under [When not to use Felix](#when-not-to-use-felix), and the details are in
+[Kafka compatibility](/felix/features/kafka/).
+
 ## When not to use Felix
 
 Plenty of reasons, and most of them are good ones.
@@ -128,13 +140,11 @@ Plenty of reasons, and most of them are good ones.
 - **You already run Kafka in production.** It works, your team knows it, and the
   operational cost you would save is a cost you have already paid. Replacing
   working infrastructure to reduce system count is rarely worth it.
-- **You need Kafka wire compatibility.** Felix speaks enough Kafka for a
-  consumer that assigns its own partitions: `kcat`, a librdkafka program or a
-  Java `KafkaConsumer` can read a durable Felix stream, offsets included (see
-  [Reading with Kafka clients](/felix/features/kafka/)). It does not speak
-  enough for the ecosystem. Kafka Connect, Streams, ksqlDB, Debezium and
-  MirrorMaker all run on consumer groups, and Felix refuses groups on purpose.
-  Nor does it accept writes from Kafka producers. If you need that ecosystem,
+- **You need the Kafka ecosystem.** Felix speaks enough Kafka for producers
+  and for consumers that assign their own partitions, which covers plenty of
+  hand-written services. It does not speak enough for the ecosystem. Kafka
+  Connect, Streams, ksqlDB, Debezium and MirrorMaker all run on consumer groups
+  or transactions, and Felix refuses both on purpose. If you need those tools,
   use something that speaks the whole protocol.
 
   The refusal is a decision rather than a gap nobody got to. Building a group

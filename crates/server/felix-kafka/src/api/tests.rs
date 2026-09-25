@@ -9,16 +9,18 @@ mod groups;
 mod list_offsets;
 mod metadata;
 mod produce;
+mod producer_id;
 mod sasl;
 mod versions;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use felix_authz::PermissionMatcher;
-use felix_broker::{Broker, DurableStorage, StreamMetadata};
+use felix_broker::{Broker, DurableStorage, PublishOutcome, StreamHandle, StreamMetadata};
 use felix_storage::EphemeralCache;
 use felix_storage::log::{FsyncMode, LogConfig};
 use kafka_protocol::messages::RequestHeader;
@@ -27,7 +29,7 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio_util::sync::CancellationToken;
 
-use crate::cluster::{Cluster, Endpoint, Placement, Principal, ShardRef};
+use crate::cluster::{Cluster, Endpoint, Placement, Principal, ShardRef, WriteError, WritePermit};
 use crate::service::{KafkaService, Settings};
 
 pub(super) const TENANT: &str = "t1";
@@ -40,6 +42,10 @@ pub(super) struct FakeCluster {
     placements: Mutex<HashMap<(String, u32), Placement>>,
     brokers: Mutex<Vec<Endpoint>>,
     permissions: Vec<String>,
+    /// Writes that waited on their stream's consistency.
+    pub(super) consistency_waits: AtomicUsize,
+    /// What the next consistency wait answers, when not success.
+    pub(super) consistency_error: Mutex<Option<WriteError>>,
 }
 
 #[async_trait]
@@ -70,6 +76,26 @@ impl Cluster for FakeCluster {
             .unwrap_or(Placement::Local {
                 replicas: Vec::new(),
             })
+    }
+
+    async fn admit_write(&self, shard: &ShardRef<'_>) -> Result<WritePermit, WriteError> {
+        match self.placement(shard) {
+            Placement::Local { .. } => Ok(WritePermit::default()),
+            _ => Err(WriteError::NotLeader),
+        }
+    }
+
+    async fn await_consistency(
+        &self,
+        _shard: &ShardRef<'_>,
+        _handle: &StreamHandle,
+        _outcome: &PublishOutcome,
+    ) -> Result<(), WriteError> {
+        self.consistency_waits.fetch_add(1, Ordering::SeqCst);
+        match self.consistency_error.lock().expect("lock").take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -144,6 +170,8 @@ impl Fixture {
             placements: Mutex::new(HashMap::new()),
             brokers: Mutex::new(Vec::new()),
             permissions,
+            consistency_waits: AtomicUsize::new(0),
+            consistency_error: Mutex::new(None),
         });
         cluster.add_broker(LOCAL, "kafka-a.test", 9092);
         let service = KafkaService::new(Arc::clone(&broker), cluster.clone(), settings);

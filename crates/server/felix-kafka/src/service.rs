@@ -25,9 +25,9 @@ pub struct KafkaService {
 /// How the service behaves, beyond what the cluster answers.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
-    /// Serve unauthenticated connections as this tenant, with read access to
-    /// every stream in it. A development switch: without it, a connection must
-    /// authenticate with SASL/PLAIN before it can read anything.
+    /// Serve unauthenticated connections as this tenant, with read and write
+    /// access to every stream in it. A development switch: without it, a
+    /// connection must authenticate with SASL/PLAIN before it can do anything.
     pub anonymous_tenant: Option<String>,
     /// The namespace a topic without a dot is looked up in.
     pub default_namespace: Option<String>,

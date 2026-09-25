@@ -120,6 +120,7 @@ In the repository:
 - `docs/semantics.md` — delivery semantics and guarantees
 - `docs/design.md` — product and protocol design notes
 - `docs/auth.md` — authentication and authorization
+- `docs/kafka-compatibility.md` — what the Kafka listener speaks, and why it stops where it does
 - `docs/broker-config.md`, `docs/client-config.md` — config field reference with example profiles
 - `docs/demos.md` — demo binaries and what each one shows
 - `docs/todos.md` — the original MVP checklist, kept as a historical record
@@ -151,6 +152,12 @@ latency/backpressure behavior early to keep p99/p999 predictable.
   operator can start, cancel and pause moves. The switch-over takes tens of
   milliseconds; publishes arriving during it are held and forwarded rather
   than refused, and subscriptions follow the shard to its new owner
+- Kafka wire compatibility: with `FELIX_KAFKA_LISTEN` set, Kafka producers
+  (idempotent ones included, with the guarantee holding across a failover) and
+  consumers that assign their own partitions work against durable streams.
+  Consumer groups and transactions are refused with an error that says why, so
+  Connect, Streams and ksqlDB do not work. See
+  [Kafka compatibility](https://gabloe.github.io/felix/features/kafka/)
 - Mutually authenticated broker-to-broker QUIC, with each certificate's name
   checked against the node id in both directions
   (`FELIX_INTERNAL_TLS_CERT` / `_KEY` / `_CA`). Left unset, the peer link is
