@@ -220,6 +220,10 @@ impl Broker {
                 // the next wait returns at once -- and it stores only one, so a
                 // burst becomes a single extra pass rather than a storm.
                 self.appended.notify_one();
+                // `notify_waiters` here, unlike above: an offset reader
+                // registers before it reads the tail, so it cannot miss this,
+                // and one that is not waiting has nothing to be told.
+                stream_state.appended.notify_waiters();
 
                 if let Some(start) = durable_start {
                     let durable_ns = start.elapsed().as_nanos() as u64;

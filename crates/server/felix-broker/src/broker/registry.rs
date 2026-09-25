@@ -321,6 +321,36 @@ impl Broker {
             .map(|metadata| metadata.consistency)
     }
 
+    /// Every stream registered for a tenant, as `(namespace, stream, metadata)`,
+    /// sorted by namespace then stream.
+    pub async fn tenant_streams(&self, tenant_id: &str) -> Vec<(String, String, StreamMetadata)> {
+        let mut streams: Vec<_> = self
+            .streams
+            .read()
+            .await
+            .iter()
+            .filter(|(key, _)| key.tenant_id == tenant_id)
+            .map(|(key, metadata)| (key.namespace.clone(), key.stream.clone(), metadata.clone()))
+            .collect();
+        streams.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        streams
+    }
+
+    /// What a registered stream was created with, or `None` if it is not
+    /// registered here.
+    pub async fn stream_metadata(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Option<StreamMetadata> {
+        self.streams
+            .read()
+            .await
+            .get(&StreamKeyRef::new(tenant_id, namespace, stream))
+            .cloned()
+    }
+
     /// The consistency a registered cache asked for, or `None` if the cache is
     /// not registered here.
     pub async fn cache_consistency(

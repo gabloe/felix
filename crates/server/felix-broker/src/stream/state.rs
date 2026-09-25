@@ -58,6 +58,10 @@ pub(crate) struct StreamState {
     consistency: AtomicU8,
     /// The producers whose sequences this shard's leader remembers.
     pub(crate) producers: ProducerTable,
+    /// Woken after each durable publish is committed, for readers that poll
+    /// the log by offset (the Kafka listener's long-poll fetch) rather than
+    /// holding a subscription.
+    pub(crate) appended: Arc<tokio::sync::Notify>,
 }
 
 impl StreamState {
@@ -84,6 +88,7 @@ impl StreamState {
             durable,
             commit_sequencer: Arc::new(CommitSequencer::new(0)),
             producers: ProducerTable::default(),
+            appended: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
