@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790313861615,
+  "lastUpdate": 1790314440399,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19932,6 +19932,72 @@ window.BENCHMARK_DATA = {
             "range": "2836.89",
             "unit": "us",
             "extra": "trials: 5\nmedian: 328.00\nmean: 1588.40\nstdev: 2836.89\ncv: 178.60%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cf4bd1af3b94298200bc40729ddaecd7478ce494",
+          "message": "Shutdown handoff: no acked loss on timeout, and three fixes it found (#700)\n\n* fix(client): match publish acks to requests by id\n\nThe broker answers acked publishes as each completes, so on a publish\nstream carrying several at once a Quorum or forwarded publish can be\nanswered after one written behind it. The writer required acks in\nrequest order and treated any other as a protocol error, failing every\npublish outstanding on the stream and reconnecting. Each answer now\nresolves the request it names; an ack for no outstanding request is\nstill fatal.\n\n* fix(broker): a broker that took a shard over replays all of it\n\nA follower's replay ring was filled when the first replicated batch\nopened the stream and never touched again, since later batches only\nmove the tail. After a failover or a planned move, a reader from the\nstart got that first batch and then the live edge, skipping every record\nreplicated in between, though all of them were on disk. Emptying the\nring when replicated records move the tail sends that reader to the log.\n\n* test(cluster): a shutdown handoff that times out loses no acked record\n\nTwo cluster tests for the ends of the handoff bound. Sixteen Quorum\nshards on four brokers with a 1.5 s handoff timeout: some shards move,\nthe rest fail over once the broker exits, and every acknowledged record\nis read back from the new leaders exactly once with no offset gap. A\nlone broker stopped under enqueue acks has every acknowledged record on\nrestart. ClusterConfig gains broker_env for per-test broker settings.\nThe docs narrow the handoff bullet in what is left to Leader and\nunreplicated streams, and the status row cites the test.\n\n* test(cluster): a stopping leader leaves a follower that can take over\n\nThe shard's last record reaches only the leader, whose followers are cut\noff for it; the leader is stopped with no handoff and the partition heals\nwhile it drains. The shard has to fail over once it exits.\n\n* fix(broker): a stopping leader ships its tail before it stops replicating\n\nShutdown closed the outbound peer pool, which replication ships over,\nwhile the peer listener could still append forwarded publishes and the\ndriver kept reporting. A record that reached only the leader then left a\nlast replica report naming no caught-up follower, and the control plane,\nwhich promotes only such a follower, never placed the shard again.\n\nThe broker now stops its peer listener first, waits (for at most half of\nthe remaining drain deadline) until every shard it leads has a follower\nlevel with it, stops the replication driver, and only then closes the\npool.\n\nSpec-Unaffected: orders a graceful stop so the leader's last report is level; reports, the quorum mark and promotion are unchanged\n\n* test(cluster): wait on acknowledged progress, not a fixed window\n\nOn a slow runner the 500 ms of writes after failover acknowledged too\nlittle for the handoff-timeout test's guard. Publishers now keep going\nuntil 100 publishes are acknowledged and every key has had one since the\nfailover (bounded at 60 s), and every shard that failed over must hold a\nwrite acknowledged after it. The lone-broker test waits for 100 acks\nbefore the stop instead of sleeping 500 ms. The guards stay as the\nbackstop.\n\nSpec-Unaffected: test only",
+          "timestamp": "2026-09-24T22:31:34-07:00",
+          "tree_id": "966691632c1feb3f174d244301f3938435d12ac1",
+          "url": "https://github.com/gabloe/felix/commit/cf4bd1af3b94298200bc40729ddaecd7478ce494"
+        },
+        "date": 1790314436972,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 76,
+            "range": "1.00",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 76.00\nmean: 76.00\nstdev: 1.00\ncv: 1.32%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 107,
+            "range": "4.72",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 107.00\nmean: 108.40\nstdev: 4.72\ncv: 4.36%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 133,
+            "range": "7.91",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 133.00\nmean: 131.00\nstdev: 7.91\ncv: 6.03%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 102,
+            "range": "3.27",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 102.00\nmean: 102.80\nstdev: 3.27\ncv: 3.18%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 215,
+            "range": "11.69",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 215.00\nmean: 215.80\nstdev: 11.69\ncv: 5.42%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 306,
+            "range": "226.09",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 306.00\nmean: 418.00\nstdev: 226.09\ncv: 54.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
