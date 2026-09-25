@@ -278,6 +278,12 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **OTLP tracing export is off unless an endpoint is set.** The broker and the
+  control plane used to install the OpenTelemetry layer unconditionally, so a
+  deployment with no collector exported to `localhost:4317` and logged a
+  failed export for every batch. Set `OTEL_EXPORTER_OTLP_ENDPOINT` (or
+  `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to turn it on.
+
 - **IdP group claims are always prefixed.** A group claim value `X` now maps to
   the RBAC subject `group:X` even when `X` already starts with `group:`, so an
   IdP group named `group:operators` is no longer treated as the `operators`
@@ -436,6 +442,17 @@ for what the current release actually guarantees.
   instead.
 
 ### Fixed
+
+- **A traced publish no longer panics a stream handler.** The binary batch,
+  JSON publish, JSON batch and subscribe handlers held a span guard across an
+  `.await`. When the task resumed on another worker the guard exited there,
+  leaving a stale span on the first worker's stack; the next span created on
+  that worker could then clone the closed span and panic with "tried to clone
+  a span that already closed", killing the publish stream. The binary batch
+  span is `info`, so this hit the default filter under load, and a slow
+  `on_close` in the OpenTelemetry layer widened the window. The handlers now
+  use `.instrument(span)`, and `clippy.toml` rejects span guards held across
+  an await.
 
 - **`felix_publish_requests_total` and `felix_publish_bytes_total` are recorded
   in a default build.** Both went through the `telemetry`-gated macros, so a

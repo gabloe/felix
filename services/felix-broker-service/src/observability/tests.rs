@@ -48,6 +48,34 @@ impl Drop for EnvGuard {
 
 #[test]
 #[serial]
+fn otlp_export_is_off_without_an_endpoint() {
+    let _endpoint = EnvGuard::unset("OTEL_EXPORTER_OTLP_ENDPOINT");
+    let _traces = EnvGuard::unset("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+    assert!(!otlp_endpoint_configured());
+    assert!(build_tracer_provider("felix-broker").is_none());
+
+    let _blank = EnvGuard::set("OTEL_EXPORTER_OTLP_ENDPOINT", " ");
+    assert!(!otlp_endpoint_configured());
+}
+
+#[test]
+#[serial]
+fn otlp_export_is_on_with_either_endpoint() {
+    let _endpoint = EnvGuard::set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317");
+    let _traces = EnvGuard::unset("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+    assert!(otlp_endpoint_configured());
+    drop(_endpoint);
+
+    let _endpoint = EnvGuard::unset("OTEL_EXPORTER_OTLP_ENDPOINT");
+    let _traces = EnvGuard::set(
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "http://collector:4317",
+    );
+    assert!(otlp_endpoint_configured());
+}
+
+#[test]
+#[serial]
 fn resource_attributes_includes_optional_env() {
     let _g1 = EnvGuard::set("FELIX_SERVICE_INSTANCE_ID", "i-1");
     let _g2 = EnvGuard::set("K8S_CLUSTER_NAME", "cluster");

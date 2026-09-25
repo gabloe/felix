@@ -44,9 +44,24 @@ pub(crate) fn init_observability(service_name: &str) -> PrometheusHandle {
     install_metrics_recorder()
 }
 
+/// Whether an OTLP endpoint was configured. Without one the exporter would
+/// default to `localhost:4317` and fail every batch where no collector runs,
+/// so tracing export stays off unless asked for.
+fn otlp_endpoint_configured() -> bool {
+    [
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+    ]
+    .iter()
+    .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
+}
+
 fn build_tracer_provider(
     service_name: &str,
 ) -> Option<opentelemetry_sdk::trace::SdkTracerProvider> {
+    if !otlp_endpoint_configured() {
+        return None;
+    }
     let resource = Resource::builder_empty()
         .with_attributes(resource_attributes(service_name))
         .build();
