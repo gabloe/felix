@@ -66,7 +66,7 @@ fn the_ttl_lands_on_the_record() {
 
 #[test]
 fn the_claims_to_re_evaluate_are_kept() {
-    let groups = vec!["group:eng".to_string(), "group:oncall".to_string()];
+    let groups = vec!["eng".to_string(), "oncall".to_string()];
     let (record, _) = issue(
         "acme",
         "p",
@@ -78,4 +78,62 @@ fn the_claims_to_re_evaluate_are_kept() {
     // Claims, not permissions. Storing the granted permissions would freeze
     // them, which is the thing re-evaluation exists to avoid.
     assert_eq!(record.groups, groups);
+}
+
+/// Every refresh refusal is a refused credential, and the two an operator
+/// alerts on -- a replay and a wrong secret -- are also counted on their own.
+#[test]
+fn refresh_refusals_are_counted() {
+    use std::sync::Arc;
+
+    use axum::extract::{Path, State};
+
+    use crate::store::memory::InMemoryStore;
+    use crate::store::{AuthStore, StoreConfig};
+
+    let recorder = crate::test_support::CountingRecorder::default();
+    recorder.run(async {
+        let store = Arc::new(InMemoryStore::new(StoreConfig {
+            changes_limit: crate::config::DEFAULT_CHANGES_LIMIT,
+            change_retention_max_rows: Some(crate::config::DEFAULT_CHANGE_RETENTION_MAX_ROWS),
+        }));
+        let state = crate::test_support::app_state_ready(store.clone());
+        let refresh = |token: String| {
+            let state = state.clone();
+            async move {
+                refresh_token_handler(
+                    Path("t1".to_string()),
+                    State(state),
+                    Json(TokenRefreshRequest {
+                        refresh_token: token,
+                    }),
+                )
+                .await
+                .expect_err("refused")
+            }
+        };
+
+        let now = now_secs();
+        let (wrong_secret, _) = issue("t1", "p", vec![], None, now, Duration::from_secs(60));
+        let wrong_secret_id = wrong_secret.token_id.clone();
+        store
+            .insert_refresh_token(wrong_secret)
+            .await
+            .expect("insert");
+        let (mut spent, spent_presented) =
+            issue("t1", "p", vec![], None, now, Duration::from_secs(60));
+        spent.used = true;
+        store.insert_refresh_token(spent).await.expect("insert");
+
+        refresh("not a refresh token".to_string()).await;
+        refresh(refresh_token::join(&wrong_secret_id, "not-the-secret")).await;
+        refresh(spent_presented).await;
+    });
+
+    assert_eq!(
+        recorder.count("felix_controlplane_auth_rejected_total{reason=refresh_refused}"),
+        3
+    );
+    assert_eq!(recorder.count("felix_refresh_token_bad_secret_total"), 1);
+    assert_eq!(recorder.count("felix_refresh_token_replays_total"), 1);
 }

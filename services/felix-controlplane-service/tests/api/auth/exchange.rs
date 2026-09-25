@@ -658,8 +658,10 @@ async fn exchange_group_claim_rbac_requires_groups_claim_mapping() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+/// A group claim value is always a group *name*: `group:g1` from the IdP is
+/// the group called `group:g1`, not `g1`, so it does not inherit `g1`'s grants.
 #[tokio::test]
-async fn exchange_supports_group_claim_values_with_group_prefix() {
+async fn exchange_does_not_map_a_prefixed_group_claim_onto_the_bare_group() {
     let jwks = jwks_for_key("kid-1");
     let (addr, _handle) = spawn_jwks_server(jwks).await;
 
@@ -777,7 +779,7 @@ async fn exchange_supports_group_claim_values_with_group_prefix() {
         .body(Body::from("{}"))
         .expect("request");
     let response = app.oneshot(req).await.expect("exchange");
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 async fn spawn_jwks_server(jwks: serde_json::Value) -> (SocketAddr, tokio::task::JoinHandle<()>) {

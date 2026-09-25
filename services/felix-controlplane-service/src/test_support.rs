@@ -145,3 +145,110 @@ pub(crate) fn token(keys: &crate::auth::felix_token::TenantSigningKeys, perms: &
     )
     .expect("token")
 }
+
+/// Records counter increments for the futures it runs, so a test can assert
+/// that a refusal was counted. The recorder is thread-local, which is why
+/// [`CountingRecorder::run`] drives the future on its own current-thread
+/// runtime rather than inside `#[tokio::test]`.
+#[derive(Clone, Default)]
+pub(crate) struct CountingRecorder {
+    counts: Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>>,
+}
+
+impl CountingRecorder {
+    pub(crate) fn run<F: std::future::Future>(&self, future: F) -> F::Output {
+        metrics::with_local_recorder(self, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(future)
+        })
+    }
+
+    /// The total for a counter, written `name` or `name{label=value,...}` with
+    /// labels in the order the code passes them.
+    pub(crate) fn count(&self, key: &str) -> u64 {
+        self.counts
+            .lock()
+            .expect("counts")
+            .get(key)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+struct CountingHandle {
+    key: String,
+    counts: Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>>,
+}
+
+impl metrics::CounterFn for CountingHandle {
+    fn increment(&self, value: u64) {
+        *self
+            .counts
+            .lock()
+            .expect("counts")
+            .entry(self.key.clone())
+            .or_default() += value;
+    }
+
+    fn absolute(&self, value: u64) {
+        self.counts
+            .lock()
+            .expect("counts")
+            .insert(self.key.clone(), value);
+    }
+}
+
+impl metrics::Recorder for CountingRecorder {
+    fn describe_counter(
+        &self,
+        _: metrics::KeyName,
+        _: Option<metrics::Unit>,
+        _: metrics::SharedString,
+    ) {
+    }
+    fn describe_gauge(
+        &self,
+        _: metrics::KeyName,
+        _: Option<metrics::Unit>,
+        _: metrics::SharedString,
+    ) {
+    }
+    fn describe_histogram(
+        &self,
+        _: metrics::KeyName,
+        _: Option<metrics::Unit>,
+        _: metrics::SharedString,
+    ) {
+    }
+
+    fn register_counter(&self, key: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Counter {
+        let labels: Vec<String> = key
+            .labels()
+            .map(|label| format!("{}={}", label.key(), label.value()))
+            .collect();
+        let key = if labels.is_empty() {
+            key.name().to_string()
+        } else {
+            format!("{}{{{}}}", key.name(), labels.join(","))
+        };
+        metrics::Counter::from_arc(Arc::new(CountingHandle {
+            key,
+            counts: self.counts.clone(),
+        }))
+    }
+
+    fn register_gauge(&self, _: &metrics::Key, _: &metrics::Metadata<'_>) -> metrics::Gauge {
+        metrics::Gauge::noop()
+    }
+
+    fn register_histogram(
+        &self,
+        _: &metrics::Key,
+        _: &metrics::Metadata<'_>,
+    ) -> metrics::Histogram {
+        metrics::Histogram::noop()
+    }
+}

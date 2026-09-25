@@ -44,6 +44,9 @@ pub(crate) enum Refusal {
     TenantMismatch,
     /// Verified, but without the permission the request needs.
     Forbidden,
+    /// A refresh token that cannot be used, for any reason. One label, like
+    /// the one answer the caller gets, so the counter is no probing aid either.
+    RefreshRefused,
 }
 
 impl Refusal {
@@ -54,6 +57,7 @@ impl Refusal {
             Self::InvalidToken => "invalid_token",
             Self::TenantMismatch => "tenant_mismatch",
             Self::Forbidden => "forbidden",
+            Self::RefreshRefused => "refresh_refused",
         }
     }
 }
@@ -73,7 +77,9 @@ pub(crate) fn refused(reason: Refusal, message: &str) -> ApiError {
         Refusal::MissingToken | Refusal::MalformedToken | Refusal::InvalidToken => {
             api_unauthorized(message)
         }
-        Refusal::TenantMismatch | Refusal::Forbidden => api_forbidden(message),
+        Refusal::TenantMismatch | Refusal::Forbidden | Refusal::RefreshRefused => {
+            api_forbidden(message)
+        }
     }
 }
 

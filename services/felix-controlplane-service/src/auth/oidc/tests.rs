@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::{Json, Router, routing::get};
@@ -301,6 +302,113 @@ async fn rejects_allowed_alg_with_wrong_jwk_type() {
         .await
         .unwrap_err();
     assert!(matches!(err, OidcError::InvalidJwk(_)));
+}
+
+/// A token naming an allowlisted issuer and an unknown `kid` needs no valid
+/// signature to reach the key lookup, so a stream of them must not turn into a
+/// stream of fetches against the tenant's IdP.
+#[tokio::test]
+async fn unknown_kids_do_not_each_fetch_the_jwks() {
+    let (addr, hits, _jwks, _handle) = spawn_counting_jwks_server(es256_jwks("kid-es256")).await;
+    let issuer = format!("http://{addr}");
+    let issuers = [issuer_cfg(&issuer, "aud1")];
+    let validator = UpstreamOidcValidator::default();
+
+    for i in 0..20 {
+        let token = mint_upstream_token(Algorithm::ES256, &issuer, "aud1", &format!("bogus-{i}"));
+        let err = validator.validate(&token, &issuers).await.unwrap_err();
+        assert!(matches!(err, OidcError::JwksKeyNotFound), "{err}");
+    }
+    let concurrent = (0..20).map(|i| {
+        let validator = validator.clone();
+        let issuers = issuers.clone();
+        let token = mint_upstream_token(Algorithm::ES256, &issuer, "aud1", &format!("race-{i}"));
+        tokio::spawn(async move { validator.validate(&token, &issuers).await })
+    });
+    for task in concurrent.collect::<Vec<_>>() {
+        assert!(task.await.expect("join").is_err());
+    }
+
+    // The first fetch fills the cache and the first miss may refresh it once;
+    // everything after that is inside the refresh floor.
+    let fetches = hits.load(Ordering::SeqCst);
+    assert!(fetches <= 2, "40 bad tokens caused {fetches} JWKS fetches");
+}
+
+/// The floor must not stop a genuine rotation: a key the IdP publishes after
+/// our last fetch is accepted once the floor has passed.
+#[tokio::test]
+async fn a_rotated_in_key_is_picked_up_after_the_refresh_floor() {
+    let floor = Duration::from_millis(300);
+    let (addr, hits, jwks, _handle) = spawn_counting_jwks_server(es256_jwks("kid-old")).await;
+    let issuer = format!("http://{addr}");
+    let issuers = [issuer_cfg(&issuer, "aud1")];
+    let validator = UpstreamOidcValidator::default().with_jwks_refresh_floor(floor);
+
+    let old = mint_upstream_token(Algorithm::ES256, &issuer, "aud1", "kid-old");
+    validator.validate(&old, &issuers).await.expect("old key");
+
+    *jwks.write().expect("jwks lock") = es256_jwks("kid-new");
+    let new = mint_upstream_token(Algorithm::ES256, &issuer, "aud1", "kid-new");
+    // Inside the floor the IdP is not asked again, so the new kid is unknown.
+    let err = validator.validate(&new, &issuers).await.unwrap_err();
+    assert!(matches!(err, OidcError::JwksKeyNotFound), "{err}");
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+
+    tokio::time::sleep(floor + Duration::from_millis(50)).await;
+    let validated = validator
+        .validate(&new, &issuers)
+        .await
+        .expect("the rotated-in key is accepted after the floor");
+    assert_eq!(validated.subject, "user-1");
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
+
+fn es256_jwks(kid: &str) -> Value {
+    json!({
+        "keys": [{
+            "kty": "EC",
+            "kid": kid,
+            "alg": "ES256",
+            "use": "sig",
+            "crv": "P-256",
+            "x": TEST_EC_JWK_X,
+            "y": TEST_EC_JWK_Y
+        }]
+    })
+}
+
+/// A JWKS endpoint that counts its requests and whose key set can be swapped,
+/// the way an IdP's does when it rotates.
+async fn spawn_counting_jwks_server(
+    jwks: Value,
+) -> (
+    SocketAddr,
+    Arc<AtomicUsize>,
+    Arc<std::sync::RwLock<Value>>,
+    JoinHandle<()>,
+) {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let jwks = Arc::new(std::sync::RwLock::new(jwks));
+    let app = Router::new().route(
+        "/jwks",
+        get({
+            let hits = hits.clone();
+            let jwks = jwks.clone();
+            move || {
+                hits.fetch_add(1, Ordering::SeqCst);
+                let body = jwks.read().expect("jwks lock").clone();
+                async move { Json(body) }
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = axum::serve(listener, app.into_make_service());
+    let handle = tokio::spawn(async move {
+        let _ = server.await;
+    });
+    (addr, hits, jwks, handle)
 }
 
 async fn spawn_jwks_server(jwks: Value) -> (SocketAddr, JoinHandle<()>) {

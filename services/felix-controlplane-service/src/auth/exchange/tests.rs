@@ -32,7 +32,7 @@ fn filters_by_requested_actions() {
 fn adds_group_claim_groupings_with_group_prefix() {
     let mut groupings = Vec::new();
     let principal = "p:user-1";
-    let groups = vec!["g1".to_string(), "group:ops".to_string()];
+    let groups = vec!["g1".to_string(), "ops".to_string()];
     add_group_claim_groupings(&mut groupings, principal, &groups);
 
     assert!(groupings.contains(&GroupingRule {
@@ -43,6 +43,24 @@ fn adds_group_claim_groupings_with_group_prefix() {
         user: principal.to_string(),
         role: "group:ops".to_string(),
     }));
+}
+
+/// An IdP group literally named `group:operators` is not the `operators`
+/// group. Collapsing them would let whoever can name a group at the IdP, but
+/// not take an existing name, borrow that group's grants.
+#[test]
+fn a_group_named_like_a_subject_stays_distinct() {
+    let principal = "p:user-1";
+    let mut plain = Vec::new();
+    add_group_claim_groupings(&mut plain, principal, &["operators".to_string()]);
+    let mut lookalike = Vec::new();
+    add_group_claim_groupings(&mut lookalike, principal, &["group:operators".to_string()]);
+
+    assert_eq!(plain[0].role, "group:operators");
+    assert_ne!(
+        lookalike[0].role, plain[0].role,
+        "`group:operators` from the IdP was mapped onto the `operators` group",
+    );
 }
 
 #[test]
@@ -176,4 +194,69 @@ async fn exchange_token_rejects_issuer_not_allowed() -> Result<()> {
     assert_eq!(err.status, axum::http::StatusCode::FORBIDDEN);
     assert!(err.body.message.contains("issuer not allowed"));
     Ok(())
+}
+
+/// Exchange refusals land in the refused-credentials counter like every other
+/// control-plane credential check does.
+#[test]
+fn exchange_refusals_are_counted() {
+    let recorder = crate::test_support::CountingRecorder::default();
+    recorder.run(async {
+        let store = Arc::new(InMemoryStore::new(store_config()));
+        let state = test_state(store.clone());
+        let _ = exchange_token(
+            Path("t1".to_string()),
+            State(state.clone()),
+            HeaderMap::new(),
+            None,
+        )
+        .await;
+        let token = unsigned_es256_token("https://issuer.example", "kid1");
+        let _ = exchange_token(
+            Path("t1".to_string()),
+            State(state.clone()),
+            bearer_header(&token),
+            None,
+        )
+        .await;
+
+        store
+            .create_tenant(crate::model::Tenant {
+                tenant_id: "t1".to_string(),
+                display_name: "Tenant".to_string(),
+            })
+            .await
+            .expect("tenant");
+        store
+            .upsert_idp_issuer(
+                "t1",
+                IdpIssuerConfig {
+                    issuer: "https://issuer.allowed".to_string(),
+                    audiences: vec!["aud".to_string()],
+                    discovery_url: None,
+                    jwks_url: None,
+                    claim_mappings: crate::auth::idp_registry::ClaimMappings::default(),
+                },
+            )
+            .await
+            .expect("issuer");
+        let err = exchange_token(
+            Path("t1".to_string()),
+            State(state),
+            bearer_header("not-a-jwt"),
+            None,
+        )
+        .await
+        .expect_err("garbage token");
+        assert_eq!(err.status, axum::http::StatusCode::UNAUTHORIZED);
+    });
+
+    let rejected = |reason: &str| {
+        recorder.count(&format!(
+            "felix_controlplane_auth_rejected_total{{reason={reason}}}"
+        ))
+    };
+    assert_eq!(rejected("missing_token"), 1);
+    assert_eq!(rejected("forbidden"), 1, "unknown tenant");
+    assert_eq!(rejected("invalid_token"), 1);
 }

@@ -12,7 +12,9 @@
 //! signature -- is checked only after that, against configuration.
 //!
 //! Discovery documents and JWKS are cached with a TTL and refreshed on demand,
-//! in a `DashMap` so concurrent tasks share them without a global lock.
+//! in a `DashMap` so concurrent tasks share them without a global lock. A JWKS
+//! is fetched at most once every 30 seconds, because an unknown `kid`
+//! forces a refresh before any signature has been checked.
 //!
 //! Construct an [`UpstreamOidcValidator`] and call
 //! [`UpstreamOidcValidator::validate`].
@@ -29,7 +31,14 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use serde_json::Value;
 
 use crate::auth::idp_registry::IdpIssuerConfig;
-use keys::{CachedDiscovery, CachedJwks, ensure_jwk_matches_algorithm, find_jwk};
+use keys::{
+    CachedDiscovery, CachedJwks, JWKS_REFRESH_FLOOR, JwksFetchGate, ensure_jwk_matches_algorithm,
+    find_jwk,
+};
+
+/// Upper bound on one discovery or JWKS request. Refreshes of a JWKS queue
+/// behind each other, so a hung IdP must not hold them forever.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Validates upstream OIDC bearer tokens, with cached discovery documents and
 /// JWKS. ES256 by default; RS*/PS* only when explicitly allowlisted.
@@ -37,6 +46,8 @@ use keys::{CachedDiscovery, CachedJwks, ensure_jwk_matches_algorithm, find_jwk};
 pub struct UpstreamOidcValidator {
     client: reqwest::Client,
     jwks_cache: Arc<DashMap<String, CachedJwks>>,
+    jwks_fetches: Arc<DashMap<String, JwksFetchGate>>,
+    jwks_refresh_floor: Duration,
     discovery_cache: Arc<DashMap<String, CachedDiscovery>>,
     jwks_ttl: Duration,
     discovery_ttl: Duration,
@@ -78,8 +89,13 @@ impl UpstreamOidcValidator {
         allowed_algorithms.sort_unstable_by_key(|alg| *alg as u8);
         allowed_algorithms.dedup();
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(FETCH_TIMEOUT)
+                .build()
+                .expect("an HTTP client with default TLS settings"),
             jwks_cache: Arc::new(DashMap::new()),
+            jwks_fetches: Arc::new(DashMap::new()),
+            jwks_refresh_floor: JWKS_REFRESH_FLOOR,
             discovery_cache: Arc::new(DashMap::new()),
             jwks_ttl,
             discovery_ttl,
@@ -118,7 +134,8 @@ impl UpstreamOidcValidator {
             .ok_or(OidcError::IssuerNotAllowed)?;
 
         // On a `kid` miss, refresh once and retry — the miss usually means the
-        // IdP rotated keys since our cached fetch.
+        // IdP rotated keys since our cached fetch. The refresh is rate-limited
+        // per URL, since nothing about this token has been verified yet.
         let jwks_url = self.resolve_jwks_url(&issuer, issuer_cfg).await?;
         let jwks = self.get_jwks(&jwks_url).await?;
         let decoding_key = match find_jwk(&jwks, kid) {
@@ -157,6 +174,12 @@ impl UpstreamOidcValidator {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_jwks_refresh_floor(mut self, floor: Duration) -> Self {
+        self.jwks_refresh_floor = floor;
+        self
+    }
+
     fn is_algorithm_allowed(&self, alg: Algorithm) -> bool {
         self.allowed_algorithms.contains(&alg)
     }
@@ -188,6 +211,8 @@ pub enum OidcError {
     InvalidJwk(String),
     #[error("jwks key not found")]
     JwksKeyNotFound,
+    #[error("jwks unavailable")]
+    JwksUnavailable,
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
     #[error("jwt error: {0}")]

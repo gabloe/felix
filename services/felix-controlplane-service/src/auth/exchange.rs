@@ -15,9 +15,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::api::AppState;
-use crate::api::error::{
-    ApiError, api_forbidden, api_internal, api_internal_message, api_unauthorized,
-};
+use crate::api::error::{ApiError, api_internal, api_internal_message};
+use crate::auth::bearer::{Refusal, extract_bearer, refused};
 use crate::auth::felix_token::mint_token;
 use crate::auth::oidc::OidcError;
 use crate::auth::principal;
@@ -68,8 +67,7 @@ pub async fn exchange_token(
     headers: HeaderMap,
     body: Option<Json<TokenExchangeRequest>>,
 ) -> Result<Json<TokenExchangeResponse>, ApiError> {
-    let bearer =
-        extract_bearer(&headers).ok_or_else(|| api_unauthorized("missing bearer token"))?;
+    let bearer = extract_bearer(&headers)?;
 
     // Forbidden (not 404) for unknown tenants, so callers can't probe which
     // tenants exist.
@@ -79,7 +77,7 @@ pub async fn exchange_token(
         .await
         .map_err(|err| api_internal("failed to check tenant", &err))?;
     if !tenant_exists {
-        return Err(api_forbidden("tenant not allowed"));
+        return Err(refused(Refusal::Forbidden, "tenant not allowed"));
     }
 
     let issuers = state
@@ -93,15 +91,17 @@ pub async fn exchange_token(
         // look identical from here. "No issuers configured" sends an operator
         // to the tenant's IdP settings, which are fine (#601).
         return Err(match state.readiness.check().await {
-            Ok(()) => api_forbidden("no issuers configured"),
+            Ok(()) => refused(Refusal::Forbidden, "no issuers configured"),
             Err(reason) => crate::auth::bearer::cannot_verify(&reason.to_string()),
         });
     }
 
     let validated = match state.oidc_validator.validate(bearer, &issuers).await {
         Ok(token) => token,
-        Err(OidcError::IssuerNotAllowed) => return Err(api_forbidden("issuer not allowed")),
-        Err(_) => return Err(api_unauthorized("invalid token")),
+        Err(OidcError::IssuerNotAllowed) => {
+            return Err(refused(Refusal::Forbidden, "issuer not allowed"));
+        }
+        Err(_) => return Err(refused(Refusal::InvalidToken, "invalid token")),
     };
 
     let principal = principal::from_claims(&validated.issuer, &validated.subject, validated.groups);
@@ -134,7 +134,7 @@ pub async fn exchange_token(
     // A token with no permissions is useless and usually masks a
     // misconfiguration; reject instead.
     if perms.is_empty() {
-        return Err(api_forbidden("no permissions"));
+        return Err(refused(Refusal::Forbidden, "no permissions"));
     }
 
     let keys = state
@@ -191,12 +191,6 @@ pub fn access_token_ttl() -> Duration {
     )
 }
 
-fn extract_bearer(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?;
-    let value = value.to_str().ok()?;
-    value.strip_prefix("Bearer ")
-}
-
 fn filter_permissions(perms: Vec<String>, request: &TokenExchangeRequest) -> Vec<String> {
     let requested_actions = request.requested.as_ref().map(|actions| {
         actions
@@ -247,11 +241,9 @@ pub(crate) fn add_group_claim_groupings(
     }
 }
 
+// Always prefixed, even when the value already starts with `group:`: an IdP
+// group named `group:ops` is a different group from `ops`.
 fn group_subject(group: &str) -> String {
-    // Accept either raw group values or already-prefixed `group:*` subjects.
-    if group.starts_with("group:") {
-        return group.to_string();
-    }
     format!("group:{group}")
 }
 

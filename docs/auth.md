@@ -162,7 +162,9 @@ You can assign roles to IdP groups without per-user RBAC bindings:
 - Add RBAC grouping rules that bind `group:<name>` to a role.
 - Configure `groups_claim` for the tenant IdP issuer.
 - At token exchange time, Felix maps each incoming group value to `group:<name>`
-  (if not already prefixed) and evaluates RBAC through that link.
+  and evaluates RBAC through that link. The prefix is always added, so an IdP
+  group literally named `group:ops` becomes `group:group:ops` and cannot stand
+  in for a group named `ops`.
 
 Example:
 - `g, group:g1, role:reader, tenant-a`
@@ -176,7 +178,7 @@ Example:
    - `Authorization: Bearer <oidc_jwt>`
 3) Control plane validates:
    - `iss` matches a tenant-allowed issuer
-   - signature using JWKS (cached with TTL)
+   - signature using JWKS (cached with TTL; see below for unknown `kid`s)
    - `exp/nbf` with clock skew
    - `aud` matches configured audiences
 4) Control plane derives `principal_id` and loads RBAC policies/groupings for the tenant.
@@ -185,6 +187,14 @@ Example:
 7) A Felix access token is minted, along with a refresh token, and both are returned.
 
 If no permissions remain, the exchange returns `403`.
+
+A token whose `kid` is not in the cached JWKS triggers a re-fetch, since that
+usually means the IdP rotated keys. That lookup happens before the signature
+is checked, so anyone who knows a tenant's issuer can reach it with a forged
+token. Each JWKS URL is therefore re-fetched at most once every 30 seconds;
+concurrent misses wait for the one fetch in progress, and a miss inside the
+window is refused without contacting the IdP. A key the IdP rotates in is
+accepted within 30 seconds of its first use. Fetches time out after 10 seconds.
 
 ## Staying authenticated: refresh
 
@@ -348,7 +358,9 @@ Bootstrap tokens **never** authorize normal admin endpoints.
 In the control plane store (memory or Postgres):
 - Allowed OIDC issuers + audiences + claim mappings
 - Casbin policies and groupings
-- Tenant signing keys (current + previous for rotation)
+- Tenant signing keys: a current key plus any previous keys, all published in
+  the tenant JWKS and all tried on verification. Nothing rotates them yet; a
+  tenant keeps the key it was created with.
 
 ## Allowing Particular Upstream IdPs
 

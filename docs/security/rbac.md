@@ -143,4 +143,6 @@ Examples:
 
 - Strict grammar is enforced for RBAC evaluation and writes.
 - Group-claim RBAC is evaluated at token exchange by materializing transient
-  `principal -> group:*` links before Casbin permission expansion.
+  `principal -> group:<claim value>` links before Casbin permission expansion.
+  The prefix is always added, so a claim value that itself starts with
+  `group:` cannot stand in for the bare group of the same name.
