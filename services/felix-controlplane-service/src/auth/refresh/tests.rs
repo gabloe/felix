@@ -66,7 +66,7 @@ fn the_ttl_lands_on_the_record() {
 
 #[test]
 fn the_claims_to_re_evaluate_are_kept() {
-    let groups = vec!["group:eng".to_string(), "group:oncall".to_string()];
+    let groups = vec!["eng".to_string(), "oncall".to_string()];
     let (record, _) = issue(
         "acme",
         "p",

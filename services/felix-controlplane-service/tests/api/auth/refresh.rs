@@ -307,7 +307,7 @@ async fn a_refresh_picks_up_group_claims_recorded_at_exchange() {
         .await
         .expect("grouping");
 
-    let with_claim = issue_for(&store, by_group, vec!["group:oncall".to_string()]).await;
+    let with_claim = issue_for(&store, by_group, vec!["oncall".to_string()]).await;
     assert_eq!(
         post_refresh(&state, &with_claim).await.status(),
         StatusCode::OK,

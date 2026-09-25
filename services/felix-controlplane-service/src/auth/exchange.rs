@@ -247,11 +247,9 @@ pub(crate) fn add_group_claim_groupings(
     }
 }
 
+// Always prefixed, even when the value already starts with `group:`: an IdP
+// group named `group:ops` is a different group from `ops`.
 fn group_subject(group: &str) -> String {
-    // Accept either raw group values or already-prefixed `group:*` subjects.
-    if group.starts_with("group:") {
-        return group.to_string();
-    }
     format!("group:{group}")
 }
 

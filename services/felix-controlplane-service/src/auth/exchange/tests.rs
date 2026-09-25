@@ -32,7 +32,7 @@ fn filters_by_requested_actions() {
 fn adds_group_claim_groupings_with_group_prefix() {
     let mut groupings = Vec::new();
     let principal = "p:user-1";
-    let groups = vec!["g1".to_string(), "group:ops".to_string()];
+    let groups = vec!["g1".to_string(), "ops".to_string()];
     add_group_claim_groupings(&mut groupings, principal, &groups);
 
     assert!(groupings.contains(&GroupingRule {
@@ -43,6 +43,24 @@ fn adds_group_claim_groupings_with_group_prefix() {
         user: principal.to_string(),
         role: "group:ops".to_string(),
     }));
+}
+
+/// An IdP group literally named `group:operators` is not the `operators`
+/// group. Collapsing them would let whoever can name a group at the IdP, but
+/// not take an existing name, borrow that group's grants.
+#[test]
+fn a_group_named_like_a_subject_stays_distinct() {
+    let principal = "p:user-1";
+    let mut plain = Vec::new();
+    add_group_claim_groupings(&mut plain, principal, &["operators".to_string()]);
+    let mut lookalike = Vec::new();
+    add_group_claim_groupings(&mut lookalike, principal, &["group:operators".to_string()]);
+
+    assert_eq!(plain[0].role, "group:operators");
+    assert_ne!(
+        lookalike[0].role, plain[0].role,
+        "`group:operators` from the IdP was mapped onto the `operators` group",
+    );
 }
 
 #[test]
