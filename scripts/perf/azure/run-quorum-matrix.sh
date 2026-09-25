@@ -75,9 +75,19 @@ pass() {
   # A concurrency point as well: `Quorum` holds a publish until a majority
   # confirms, so its cost is a queueing cost and a single in-flight publisher
   # cannot show it.
+  # Keyed: unkeyed ingest lands every record on shard 0, one leader.
   run_case "${tag}-ingest-4k-c12" \
     --scenario ingest --stream "${stream}" --payload-bytes 4096 \
-    --batch 64 --concurrency 12 --total 2400000
+    --batch 64 --concurrency 12 --total 2400000 --keys "${SHARDS:-12}"
+}
+
+set_fsync() {
+  echo ">> FELIX_DURABLE_FSYNC_MODE=$1 on brokers"
+  for i in "${!brokers[@]}"; do
+    agent_on "$(broker_vm "${i}")" "felix-agent env-set FELIX_DURABLE_FSYNC_MODE=$1 >/dev/null
+felix-agent restart" | grep '^state='
+  done
+  sleep 8
 }
 
 echo "===== RF=3 Leader (stream perf) ====="
@@ -90,8 +100,15 @@ pass perf-quorum rf3-quorum
 # configuration the docs actually recommend, and it is the one nothing has ever
 # measured. Left last: it is the slowest pass, so a session that runs out of
 # budget still comes home with the in-memory comparison above.
-echo "===== RF=3 Quorum + durable (stream perf-durable-quorum) ====="
-pass perf-durable-quorum rf3-quorum-durable
+# Both fsync modes: at the default Periodic, "a majority holds it durably"
+# means a majority of page caches.
+echo "===== RF=3 Quorum + durable, Periodic (stream perf-durable-quorum) ====="
+set_fsync periodic
+pass perf-durable-quorum rf3-quorum-durable-periodic
+echo "===== RF=3 Quorum + durable, OnCommit (stream perf-durable-quorum) ====="
+set_fsync on_commit
+pass perf-durable-quorum rf3-quorum-durable-oncommit
+set_fsync periodic
 
 grep -h '^LOADGEN_JSON ' "${out}"/*.out | sed 's/^LOADGEN_JSON //' > "${out}/results.jsonl"
 

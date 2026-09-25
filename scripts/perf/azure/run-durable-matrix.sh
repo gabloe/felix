@@ -56,20 +56,17 @@ echo __RUNOK__" | tee "${out}/${label}.out" | grep -E 'LOADGEN_JSON' ; then
   fi
 }
 
-# Set the durable fsync mode on every broker via a systemd drop-in (survives the
-# ExecStartPre that regenerates broker.env), then restart and wait for
-# re-register. Lifted from run-nvme-ingest.sh, which is where it was proven.
+# Set the durable fsync mode on every broker in /etc/felix/overrides.env (a
+# drop-in's Environment= loses to the regenerated broker.env), then restart
+# and wait for re-register.
 set_fsync() {
   mode="$1"
   echo ">> setting FELIX_DURABLE_FSYNC_MODE=${mode} on brokers"
   for i in "${!brokers[@]}"; do
-    run_on_str "$(broker_vm "${i}")" "mkdir -p /etc/systemd/system/felix-broker.service.d
-printf '[Service]\nEnvironment=FELIX_DURABLE_FSYNC_MODE=${mode}\n' > /etc/systemd/system/felix-broker.service.d/10-fsync.conf
+    agent_on "$(broker_vm "${i}")" "rm -f /etc/systemd/system/felix-broker.service.d/10-fsync.conf
 systemctl daemon-reload
-systemctl restart felix-broker
-sleep 3
-systemctl is-active felix-broker
-echo __RUNOK__" | tail -1
+felix-agent env-set FELIX_DURABLE_FSYNC_MODE=${mode} >/dev/null
+felix-agent restart" | grep '^state='
   done
   # The brokers have to re-register and retake their shards before the next
   # case, or the first publish races the assignment feed.

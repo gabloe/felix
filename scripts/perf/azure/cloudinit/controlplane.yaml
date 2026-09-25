@@ -1,6 +1,7 @@
 #cloud-config
 # The control plane for one perf session. {0} is the release tarball URL and
-# {1} the bootstrap token, substituted by main.bicep.
+# {1} the bootstrap token, substituted by main.bicep. With an empty URL the
+# session builds its own refs: seed.sh installs one and starts the service.
 #
 # Runs the release binary (RELEASE_TAG must be >= v0.3.1): the real-IdP fixes
 # this suite depends on — accepting alg-less Entra JWKS keys, and a configurable
@@ -22,6 +23,8 @@ write_files:
     content: |
       net.core.rmem_max = 26214400
       net.core.wmem_max = 26214400
+      net.core.rmem_default = 8388608
+      net.core.wmem_default = 8388608
   - path: /usr/local/sbin/felix-controlplane-env.sh
     permissions: "0755"
     content: |
@@ -69,9 +72,15 @@ write_files:
       WantedBy=multi-user.target
 runcmd:
   - sysctl --system
-  - curl -fsSL "{0}" -o /tmp/felix.tar.gz
-  - mkdir -p /tmp/felix && tar -xzf /tmp/felix.tar.gz -C /tmp/felix --strip-components=1
-  - install -m 0755 /tmp/felix/felix-controlplane /usr/local/bin/felix-controlplane
+  - |
+    if [ -n "{0}" ]; then
+      set -e
+      curl -fsSL "{0}" -o /var/tmp/felix.tar.gz
+      mkdir -p /opt/felix/release
+      tar -xzf /var/tmp/felix.tar.gz -C /opt/felix/release --strip-components=1
+      echo "release {0}" > /opt/felix/release/REF
+      ln -sfn /opt/felix/release/felix-controlplane /usr/local/bin/felix-controlplane
+    fi
   # Pre-generate the env file before the first start. systemd validates a
   # (dashless) EnvironmentFile *before* it runs ExecStartPre, so the ExecStartPre
   # that writes this file cannot satisfy the first start — the service would fail
@@ -79,5 +88,5 @@ runcmd:
   # breaks that chicken-and-egg; ExecStartPre still regenerates it on reboots.
   - /usr/local/sbin/felix-controlplane-env.sh
   - systemctl daemon-reload
-  - systemctl enable --now felix-controlplane
+  - if [ -x /usr/local/bin/felix-controlplane ]; then systemctl enable --now felix-controlplane; fi
   - touch /var/lib/cloud/instance/felix-provisioned
