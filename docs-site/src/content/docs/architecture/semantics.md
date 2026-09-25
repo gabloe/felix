@@ -636,7 +636,7 @@ In a clustered deployment:
 
 **Publisher-Broker partition**:
 
-- Publisher detects connection loss (QUIC idle timeout)
+- Publisher detects connection loss (QUIC idle timeout, 6 s by default)
 - Unacknowledged publishes are lost
 - Publisher must reconnect and retry
 

@@ -905,6 +905,14 @@ log at that offset, readable by an ordinary replay.
 several addresses, learns the rest, reconnects when the broker it is using goes
 away, and follows a redirect to whichever broker owns a shard.
 
+A broker that is killed or cut off sends nothing to say so; the client notices
+when the QUIC connection has been silent for the idle timeout (6 s by default,
+`FELIX_MAX_IDLE_TIMEOUT_MS`). A publish waiting on that connection fails then
+and is retried on another broker, so a leader failover costs the client about
+that long. Keep-alives every 2 s (`FELIX_KEEPALIVE_MS`) keep a quiet but healthy
+connection open. The 30 s ack timeout is only a backstop for a broker that is
+alive and never answers.
+
 ```rust
 let client = Arc::new(ClusterClient::connect(&seeds, "localhost", config).await?);
 

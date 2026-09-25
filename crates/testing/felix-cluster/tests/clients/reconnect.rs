@@ -74,6 +74,77 @@ async fn a_publisher_survives_losing_its_broker() {
     cluster.shutdown().await;
 }
 
+/// **A publish in flight to a leader that dies silently fails over in seconds.**
+///
+/// A killed broker sends no QUIC close, so nothing tells the client its
+/// connection is gone except the transport's idle timeout. The publish waiting
+/// on that connection has to end when the connection is declared dead, not
+/// when the 30 s ack backstop fires, or every failover costs half a minute.
+///
+/// The leader is paused first so the publish is certainly sent to it and
+/// unanswered when it dies. The clock covers promotion too, which the
+/// harness's 1 s membership expiry keeps short.
+#[serial]
+#[tokio::test]
+async fn a_publish_in_flight_to_a_killed_leader_fails_over_in_seconds() {
+    let mut cluster = Cluster::start(config()).await.expect("start cluster");
+    // The leader is the first seed, so it is the broker the client publishes
+    // through and the connection that goes silent.
+    let leader = cluster
+        .wait_for_replication(STREAM, Duration::from_secs(20))
+        .await
+        .expect("the leader should ship and report");
+    let leader_addr = cluster.node(&leader).expect("leader").client_addr;
+    let mut seeds = cluster.broker_addrs();
+    seeds.retain(|addr| *addr != leader_addr);
+    seeds.insert(0, leader_addr);
+    let client =
+        felix_cluster::client::connect_cluster(&seeds, &cluster.tenant_id, &cluster.client_token)
+            .await
+            .expect("connect");
+    let (tenant, namespace) = (cluster.tenant_id.clone(), cluster.namespace.clone());
+    client
+        .publish_at_least_once(
+            &tenant,
+            &namespace,
+            STREAM,
+            b"before".to_vec(),
+            AckMode::PerMessage,
+        )
+        .await
+        .expect("publish before the failure");
+
+    cluster.pause_node(&leader).expect("pause the leader");
+    let started = std::time::Instant::now();
+    let publish = client.publish_at_least_once(
+        &tenant,
+        &namespace,
+        STREAM,
+        b"in flight".to_vec(),
+        AckMode::PerMessage,
+    );
+    let fail_over = async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        cluster.kill_node(&leader).expect("kill the leader");
+        felix_cluster::wait::until(Duration::from_secs(30), "a new leader", || async {
+            cluster.place_shards().await;
+            matches!(cluster.owner(STREAM).await, Ok(owner) if owner != leader)
+        })
+        .await
+        .expect("a replica should be promoted");
+    };
+    let (published, ()) = tokio::join!(publish, fail_over);
+    let elapsed = started.elapsed();
+    published.expect("the publish should land on the new leader");
+    eprintln!("publish in flight to a killed leader completed in {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "failing over from a killed leader took {elapsed:?}",
+    );
+
+    cluster.shutdown().await;
+}
+
 /// **`publish` reconnects but does not resend.** The failed record is the
 /// caller's to deal with; the next publish goes to a live broker rather than
 /// repeating the failure against the dead one.
