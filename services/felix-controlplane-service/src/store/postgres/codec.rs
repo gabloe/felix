@@ -55,7 +55,7 @@ pub(super) fn stream_from_db(row: DbStream) -> StoreResult<Stream> {
         stream: row.stream,
         kind: parse_stream_kind(&row.kind)?,
         shards: row.shards as u32,
-        replication_factor: 1,
+        replication_factor: row.replication_factor as u32,
         retention: RetentionPolicy {
             max_age_seconds: row.retention_max_age_seconds.map(|v| v as u64),
             max_size_bytes: row.retention_max_size_bytes.map(|v| v as u64),

@@ -404,6 +404,15 @@ for what the current release actually guarantees.
   on that stream and reconnecting. Each answer now goes to the request it
   names (`acks_answered_out_of_order_reach_their_own_requests`).
 
+- **A Postgres-backed control plane keeps a stream's replication factor.**
+  Reading a stream back always reported a replication factor of 1, so a
+  replicated stream was placed as leader-only, and any patch to the stream
+  (retention, consistency, delivery) wrote the 1 back over the stored value.
+  The store's Postgres tests, which would have caught it, never ran: `task
+  test` did not enable their feature, and when enabled they skipped
+  themselves, because resetting the schema failed on a foreign key and the
+  tests sharing it deadlocked. They now run with the database `task test`
+  starts, serially, and a setup failure fails them.
 
 - **The move limits hold across control-plane instances.** Each placement
   write was conditional only on its own shard's generation, so two
