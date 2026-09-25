@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790344752605,
+  "lastUpdate": 1790344921202,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16068,6 +16068,58 @@ window.BENCHMARK_DATA = {
             "range": "12197.89",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 926838.84\nmean: 923762.35\nstdev: 12197.89\ncv: 1.32%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "153e9066571f574dbc226ebde7c083efeea0bee1",
+          "message": "fix(controlplane): racing signing-key ensures agree on one stored key set (#709)\n\nensure_signing_key_current read the tenant's keys and, finding none,\ngenerated and wrote a set in a separate step. Concurrent callers each\ngenerated keys; the last write won and every other caller returned keys\nthat were no longer stored, so anything they signed would not verify.\n\nPostgres now takes the tenant row lock, re-reads, and inserts only if\nstill absent, as bootstrap_tenant_auth does. There is no unique\nconstraint on \"one current key per tenant\" (the key is tenant, kid,\nstatus), so ON CONFLICT cannot choose a winner. The in-memory store\nchecks and inserts under one write lock, and bootstrap uses the same\ninstall-if-absent helper so it cannot overwrite a concurrent ensure.\nRaft was already safe: install-if-absent is applied through the log.\n\nA signing-key contract now runs 24 concurrent ensures per round against\nmemory, Postgres and Raft.",
+          "timestamp": "2026-09-25T06:56:30-07:00",
+          "tree_id": "b8c3d46471d96f56f89c98feb557140e1135b417",
+          "url": "https://github.com/gabloe/felix/commit/153e9066571f574dbc226ebde7c083efeea0bee1"
+        },
+        "date": 1790344920328,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 494169.99,
+            "range": "11704.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 494169.99\nmean: 496442.37\nstdev: 11704.97\ncv: 2.36%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 494169.99,
+            "range": "11704.97",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 494169.99\nmean: 496442.37\nstdev: 11704.97\ncv: 2.36%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 115974.93,
+            "range": "5176.08",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 115974.93\nmean: 113748.18\nstdev: 5176.08\ncv: 4.55%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1159749.34,
+            "range": "51760.82",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1159749.34\nmean: 1137481.77\nstdev: 51760.82\ncv: 4.55%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
