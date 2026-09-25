@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790367974617,
+  "lastUpdate": 1790372365620,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -20856,6 +20856,72 @@ window.BENCHMARK_DATA = {
             "range": "344.55",
             "unit": "us",
             "extra": "trials: 5\nmedian: 361.00\nmean: 495.60\nstdev: 344.55\ncv: 69.52%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3caa460fa3a7bbfcfc22b9190a8bf79b0ba96529",
+          "message": "fix(broker): tracing span guards across awaits panic publish handlers; OTLP off by default (#718)\n\n* fix(broker): never hold a span guard across an await in stream handlers\n\nThe binary batch, JSON publish, JSON batch and subscribe handlers entered a\nspan and awaited with the guard alive. A task resumed on another worker\nexits the span there, leaving a stale id on the first worker's span stack;\na span created there next can clone the closed span, and the registry\npanics with \"tried to clone a span that already closed\", killing the\nstream handler. Use .instrument(span) instead, and make clippy reject\nEntered/EnteredSpan held across an await.\n\n* fix(observability): export OTLP traces only when an endpoint is set\n\nWithout an endpoint the exporter defaulted to localhost:4317 and failed\nevery batch where no collector runs. Broker and control plane now install\nthe OpenTelemetry layer only when OTEL_EXPORTER_OTLP_ENDPOINT or\nOTEL_EXPORTER_OTLP_TRACES_ENDPOINT is set.",
+          "timestamp": "2026-09-25T14:35:49-07:00",
+          "tree_id": "d38b10d767c9f67b1c4077e15ebf18f97c9fd42d",
+          "url": "https://github.com/gabloe/felix/commit/3caa460fa3a7bbfcfc22b9190a8bf79b0ba96529"
+        },
+        "date": 1790372361904,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 171,
+            "range": "0.84",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 171.00\nmean: 171.20\nstdev: 0.84\ncv: 0.49%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 212,
+            "range": "0.71",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 212.00\nmean: 212.00\nstdev: 0.71\ncv: 0.33%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 267,
+            "range": "31.46",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 267.00\nmean: 269.00\nstdev: 31.46\ncv: 11.69%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 206,
+            "range": "5.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 206.00\nmean: 208.60\nstdev: 5.98\ncv: 2.87%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 411,
+            "range": "268.98",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 411.00\nmean: 558.80\nstdev: 268.98\ncv: 48.13%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 636,
+            "range": "679.87",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 636.00\nmean: 1092.60\nstdev: 679.87\ncv: 62.22%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
