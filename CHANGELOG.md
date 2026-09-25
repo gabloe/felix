@@ -225,6 +225,16 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **Cache watches follow a moved shard.** `ClusterClient::watch_cache` and
+  `watch_cache_retained` now return a `ClusterCacheWatch` (and take
+  `self: &Arc<Self>`). When the shard moves it hands out
+  `CacheWatchItem::ShardMoved` as a notice and reopens the watch on the new
+  owner at `max(offset after the last change, resume_from)`, so the caller
+  no longer reopens it and sees no change twice or missing. A sharded cache
+  watch follows each shard the same way; `ShardedCacheWatchItem::ShardMoved`
+  now means the shard is being followed, and a `ShardClosed` follows if it
+  could not be. The Python and TypeScript watches follow too. A `Client`
+  watch still ends with the frame.
 - **A drain moves leaders before it replaces followers.** Move slots on a
   draining broker go to the shards it leads first, then to its follower
   copies, so with the default limit of one a follower's copy no longer holds
