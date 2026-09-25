@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790313640202,
+  "lastUpdate": 1790313864078,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15652,6 +15652,58 @@ window.BENCHMARK_DATA = {
             "range": "6689.38",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 898489.87\nmean: 897483.45\nstdev: 6689.38\ncv: 0.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5b78e41a5b1e1f4f9d9d188f8e46a4ca2cd4cb0c",
+          "message": "fix(replication): a Quorum follower holding every acked record can take over (#701)\n\n* fix(replication): report a Quorum follower caught up at the mark, not the tail\n\nA leader named a follower caught up only when it held the whole log. Under\ncontinuous publishing the pass's last report often lands just after the next\npublish, with every follower one record short, so it names nobody. A leader\nkilled then leaves the control plane no replica it may promote, and the shard\nstays down: nothing else will report on it again. Producers see the refusal\nas \"stream not found\" until they give up.\n\nUnder Quorum nothing past the mark has been acknowledged, and the mark moves\nonly after the report naming who holds it lands, so a follower holding\neverything up to the offset a majority holds has every promised record.\nMeasure against that (never below a mark already published). Leader streams,\nwhich acknowledge before shipping, and moves, which hand over an exact copy,\nkeep the tail.\n\n* docs: a Quorum follower is caught up at the mark; model the report bound\n\nFelixShard's report now measures followers against the offset a majority\nholds under Quorum, as the broker does. QuorumReportNamesASuccessor checks\nthat such a report names someone who may take over; FelixShardReportAtTail\n(the old tail rule) violates it, and FelixShardReportUnpaired (measured at the\nmajority's offset but claiming the whole log) violates AckedSurvive.\n\nsemantics.md, replication-design.md and the docs-site semantics page say\nwhat a promotable follower must hold under each level; CHANGELOG Fixed entry.",
+          "timestamp": "2026-09-24T22:19:06-07:00",
+          "tree_id": "4cbdc3a46d4b576f52d0defa95ed8fdae2fa9684",
+          "url": "https://github.com/gabloe/felix/commit/5b78e41a5b1e1f4f9d9d188f8e46a4ca2cd4cb0c"
+        },
+        "date": 1790313863467,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 476907.37,
+            "range": "30587.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 476907.37\nmean: 492134.56\nstdev: 30587.61\ncv: 6.22%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 476907.37,
+            "range": "30587.61",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 476907.37\nmean: 492134.56\nstdev: 30587.61\ncv: 6.22%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 106608.86,
+            "range": "1436.73",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 106608.86\nmean: 106515.36\nstdev: 1436.73\ncv: 1.35%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1066088.56,
+            "range": "14367.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1066088.56\nmean: 1065153.59\nstdev: 14367.29\ncv: 1.35%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
