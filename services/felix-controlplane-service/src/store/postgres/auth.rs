@@ -8,7 +8,7 @@ use super::PostgresStore;
 use crate::auth::felix_token::{SigningKey, TenantSigningKeys};
 use crate::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use crate::auth::rbac::policy_store::{GroupingRule, PolicyRule};
-use crate::store::{AuthStore, StoreError, StoreResult};
+use crate::store::{StoreError, StoreResult};
 
 #[derive(Debug, Clone, FromRow)]
 struct DbIdpIssuer {
@@ -360,18 +360,35 @@ pub(super) async fn ensure_signing_key_current(
     store: &PostgresStore,
     tenant_id: &str,
 ) -> StoreResult<TenantSigningKeys> {
-    // If no keys exist, generate a new Ed25519 key set for the tenant.
-    match store.get_tenant_signing_keys(tenant_id).await {
-        Ok(keys) => Ok(keys),
-        Err(StoreError::NotFound(_)) => {
-            let keys = crate::auth::keys::generate_signing_keys()?;
-            store
-                .set_tenant_signing_keys(tenant_id, keys.clone())
-                .await?;
-            Ok(keys)
-        }
-        Err(err) => Err(err),
+    if let Some(keys) =
+        PostgresStore::load_signing_keys_on(&mut *store.pool.acquire().await?, tenant_id).await?
+    {
+        return Ok(keys);
     }
+    // Nothing unique says "one current key per tenant" (kids differ), so
+    // `ON CONFLICT` cannot pick a winner. The tenant row lock does, as in
+    // `bootstrap_tenant_auth`: a caller that waited re-reads and returns the
+    // winner's keys instead of storing its own over them.
+    let mut tx = store.pool.begin().await?;
+    let tenant: Option<String> =
+        sqlx::query_scalar("SELECT tenant_id FROM tenants WHERE tenant_id = $1 FOR UPDATE")
+            .bind(tenant_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if tenant.is_none() {
+        return Err(StoreError::NotFound("tenant".into()));
+    }
+    let keys = match PostgresStore::load_signing_keys_on(&mut tx, tenant_id).await? {
+        Some(keys) => keys,
+        None => {
+            let keys = crate::auth::keys::generate_signing_keys()?;
+            PostgresStore::insert_signing_keys_on(&mut tx, tenant_id, &keys).await?;
+            keys
+        }
+    };
+    tx.commit().await?;
+    crate::auth::felix_token::invalidate_tenant_cache(tenant_id);
+    Ok(keys)
 }
 
 pub(super) async fn seed_rbac_policies_and_groupings(
