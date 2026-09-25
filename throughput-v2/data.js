@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790308419386,
+  "lastUpdate": 1790313640202,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15600,6 +15600,58 @@ window.BENCHMARK_DATA = {
             "range": "13519.03",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1177550.71\nmean: 1178407.45\nstdev: 13519.03\ncv: 1.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6dc37e50ee13983ed62c3e7d1aa01b292485352",
+          "message": "fix(controlplane): the Postgres store keeps a stream's replication factor (#697)\n\nstream_from_db hard-coded replication_factor 1, so get_stream and\nlist_streams reported every stream as unreplicated and placement gave a\nreplicated stream no followers. patch_stream rewrites the row from what it\nread, so any patch also stored the 1 for good.\n\nThe store's Postgres tests never caught it. task test did not enable\npg-tests, and with it enabled every test skipped: the schema reset failed on\na foreign key, then the tests sharing one schema deadlocked, and a failed\nsetup was reported as a skip. Reset with CASCADE, run them serially, fail\non a setup error once a database URL is given, and enable the feature\nwhenever task test has a database.\n\nSpec-Unaffected: store decoding and test setup only.",
+          "timestamp": "2026-09-24T22:15:36-07:00",
+          "tree_id": "6fb6a0c80554b4d24128fd68c9c1bdbd19c92a3a",
+          "url": "https://github.com/gabloe/felix/commit/f6dc37e50ee13983ed62c3e7d1aa01b292485352"
+        },
+        "date": 1790313639529,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 377856.25,
+            "range": "14147.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 377856.25\nmean: 371688.70\nstdev: 14147.10\ncv: 3.81%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 377856.25,
+            "range": "14147.10",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 377856.25\nmean: 371688.70\nstdev: 14147.10\ncv: 3.81%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 89848.99,
+            "range": "668.94",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 89848.99\nmean: 89748.35\nstdev: 668.94\ncv: 0.75%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 898489.87,
+            "range": "6689.38",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 898489.87\nmean: 897483.45\nstdev: 6689.38\ncv: 0.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
