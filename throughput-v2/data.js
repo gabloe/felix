@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790317356482,
+  "lastUpdate": 1790318005872,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15808,6 +15808,58 @@ window.BENCHMARK_DATA = {
             "range": "34178.75",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1138147.57\nmean: 1123363.35\nstdev: 34178.75\ncv: 3.04%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ef15c995a86be351ed6013923bbc8f269655e4a3",
+          "message": "fix(replication): ship to a restarted follower at its new address (#703)\n\nA follower's cursor kept the address it was created with for the whole\ngeneration. A broker that restarts re-registers on new ports while its\nleaders' generations carry on, so the leader kept dialling the dead port\nuntil the shard's generation next changed.\n\nThis is what made a_restarted_broker_takes_shards_again time out: the\nrebalance staged a shard onto the restarted broker at a new generation,\nthe leader's catalog still held the old address (a wake does not refresh\nit for a node it already knows), and the cursor created in that pass\npinned it. The destination never caught up and the move sat at `staged`\nuntil the 30-minute move timeout.\n\nreconcile_followers now takes each existing cursor's address from the\nroute, so the follower is reached within one catalog refresh.\n\nSpec-Unaffected: only the network address a leader dials a follower at is refreshed; which followers exist, what they hold, reports, marks and promotion are unchanged.",
+          "timestamp": "2026-09-24T23:30:12-07:00",
+          "tree_id": "0d2576dd6348e0f90fd1504102d0d7d0d2d90593",
+          "url": "https://github.com/gabloe/felix/commit/ef15c995a86be351ed6013923bbc8f269655e4a3"
+        },
+        "date": 1790318004742,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 383768.49,
+            "range": "6413.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 383768.49\nmean: 383820.65\nstdev: 6413.46\ncv: 1.67%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 383768.49,
+            "range": "6413.46",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 383768.49\nmean: 383820.65\nstdev: 6413.46\ncv: 1.67%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 90404.64,
+            "range": "654.29",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 90404.64\nmean: 90452.80\nstdev: 654.29\ncv: 0.72%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 904046.39,
+            "range": "6542.90",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 904046.39\nmean: 904527.96\nstdev: 6542.90\ncv: 0.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
