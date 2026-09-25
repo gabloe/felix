@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790367508648,
+  "lastUpdate": 1790367978192,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16380,6 +16380,58 @@ window.BENCHMARK_DATA = {
             "range": "6662.23",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 933549.78\nmean: 933364.19\nstdev: 6662.23\ncv: 0.71%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "925d9cec8fbdc505805c5d090c81a844dd84e8fd",
+          "message": "perf(azure): steady-state throughput from a 1 Hz broker series (#717)\n\nGenerators start and stop at different times and get unequal shares, so\nsumming their averages or dividing a before/after delta by the cell's length\nmisread aggregate throughput by up to ~70%.\n\nThe broker sampler now records append/publish bytes, per-port bytes, UDP\nInDatagrams/RcvbufErrors and process CPU ticks each second, and the driver\nfetches the raw series into the cell dir. Generators print wall-clock\ngen.start/gen.end around felix-loadgen. summarize.py takes the median\none-second rate over the window when all generators ran (trimmed 10% each\nend), reports append and ingress MB/s, drops/s, cores and per-generator\nfairness beside the old numbers, and marks cells without a series legacy.\nThe per-cell console line uses the steady-state numbers.",
+          "timestamp": "2026-09-25T13:14:31-07:00",
+          "tree_id": "a4ba078a01ac9104e7759355ad4616db48d00226",
+          "url": "https://github.com/gabloe/felix/commit/925d9cec8fbdc505805c5d090c81a844dd84e8fd"
+        },
+        "date": 1790367976814,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 494970.81,
+            "range": "30491.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 494970.81\nmean: 504357.54\nstdev: 30491.69\ncv: 6.05%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 494970.81,
+            "range": "30491.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 494970.81\nmean: 504357.54\nstdev: 30491.69\ncv: 6.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 117694.22,
+            "range": "5501.12",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 117694.22\nmean: 116147.50\nstdev: 5501.12\ncv: 4.74%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 1176942.2,
+            "range": "55011.18",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 1176942.20\nmean: 1161475.02\nstdev: 55011.18\ncv: 4.74%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
