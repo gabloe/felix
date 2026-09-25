@@ -306,6 +306,21 @@ impl Broker {
             .contains_key(&CacheKeyRef::new(tenant_id, namespace, cache))
     }
 
+    /// The consistency a registered stream asked for, or `None` if the stream
+    /// is not registered here.
+    pub async fn stream_consistency(
+        &self,
+        tenant_id: &str,
+        namespace: &str,
+        stream: &str,
+    ) -> Option<ConsistencyLevel> {
+        self.streams
+            .read()
+            .await
+            .get(&StreamKeyRef::new(tenant_id, namespace, stream))
+            .map(|metadata| metadata.consistency)
+    }
+
     /// The consistency a registered cache asked for, or `None` if the cache is
     /// not registered here.
     pub async fn cache_consistency(

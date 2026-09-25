@@ -202,6 +202,23 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     // behind where it may already be — so the mark it contributes to is a
     // floor, never a claim beyond what has been established.
     let learner = entry.learner.clone();
+    // A follower is offered for promotion when it holds every record a client
+    // may have been told is stored. Under `Quorum` that ends at the mark, which
+    // moves only once a report naming who holds it has landed. Measured against
+    // the tail instead, a publish landing between shipping and the report
+    // leaves every follower one short, and a leader dying then can never be
+    // replaced. `Leader` acknowledges before shipping, and a move hands over an
+    // exact copy, so both keep the tail.
+    let acks_at_quorum = !route.draining && acknowledges_at_quorum(broker, key).await;
+    let acknowledged = |tail: u64, followers: &[FollowerCursor]| {
+        if !acks_at_quorum {
+            return tail;
+        }
+        // Never below a mark already published, even if a follower's
+        // position went back since: that mark's records were promised.
+        quorum_offset_without(tail, followers, learner.as_deref())
+            .max(marks.offset(&watch_key(key), route.generation).unwrap_or(0))
+    };
     let mut positions: Vec<FollowerCursor> = entry.followers.clone();
     let (log_ref, shard_ref) = (&log, &shard);
     // Not once the leader is fenced: the shard is not serving until the
@@ -289,7 +306,14 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         let offset = quorum_offset_without(tail, &positions, learner.as_deref());
         if offset > 0 {
             majority = Some((
-                shard_report(key, route.generation, tail, &positions, false),
+                shard_report(
+                    key,
+                    route.generation,
+                    tail,
+                    acknowledged(tail, &positions),
+                    &positions,
+                    false,
+                ),
                 offset,
             ));
         }
@@ -306,7 +330,14 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
         let offset = quorum_offset_without(tail, &positions, learner.as_deref());
         if offset > 0 {
             majority = Some((
-                shard_report(key, route.generation, tail, &positions, false),
+                shard_report(
+                    key,
+                    route.generation,
+                    tail,
+                    acknowledged(tail, &positions),
+                    &positions,
+                    false,
+                ),
                 offset,
             ));
             break;
@@ -389,7 +420,14 @@ pub(super) async fn replicate_shard<R: PeerRequester>(
     let tail = log.tail_offset().await.unwrap_or(tail);
     let drained =
         quiesced && drain_ready(key, route, &caught_up(tail, &entry.followers), &aux_behind);
-    let mut settled = shard_report(key, route.generation, tail, &entry.followers, drained);
+    let mut settled = shard_report(
+        key,
+        route.generation,
+        tail,
+        acknowledged(tail, &entry.followers),
+        &entry.followers,
+        drained,
+    );
     // A follower missing some of that state would lose it if it led, so it is
     // not offered as a candidate.
     settled
@@ -713,6 +751,25 @@ pub(super) fn compare_from(generations: &[felix_storage::log::Epoch], generation
         .find(|epoch| epoch.generation == generation)
         .map(|epoch| epoch.start_offset.saturating_sub(1))
         .unwrap_or(0)
+}
+
+/// Whether the shard acknowledges a write only once a majority holds it. A
+/// stream or cache this broker has not registered counts as no, which keeps
+/// the stricter test.
+async fn acknowledges_at_quorum(broker: &Broker, key: &ShardKey) -> bool {
+    let consistency = match key.kind {
+        felix_router::ShardKind::Cache => {
+            broker
+                .cache_consistency(&key.tenant_id, &key.namespace, &key.stream)
+                .await
+        }
+        felix_router::ShardKind::Stream => {
+            broker
+                .stream_consistency(&key.tenant_id, &key.namespace, &key.stream)
+                .await
+        }
+    };
+    consistency == Some(felix_broker::ConsistencyLevel::Quorum)
 }
 
 /// The watch's key for a route, carrying the kind across rather than assuming
