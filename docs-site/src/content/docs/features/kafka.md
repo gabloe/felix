@@ -1,20 +1,23 @@
 ---
-title: "Reading with Kafka Clients"
-description: "Consume durable Felix streams with kcat and other Kafka consumers that assign their own partitions."
+title: "Kafka Clients"
+description: "Read durable Felix streams with Kafka consumers that assign their own partitions, and write to them with Kafka producers, idempotent ones included."
 ---
 
-A Felix broker can serve Kafka consumers. Turn on the Kafka listener and a
-durable stream shows up as a Kafka topic: `kcat`, a librdkafka program or a Java
-`KafkaConsumer` can list it, look up offsets, and read records from it, with the
-same offsets a Felix client sees.
+A Felix broker can serve Kafka clients. Turn on the Kafka listener and a durable
+stream shows up as a Kafka topic. `kcat`, a librdkafka program or a Java client
+can list it, look up offsets, read records from it and write records to it. The
+offsets are the same ones a Felix client sees, and a Kafka producer's records go
+through the same publish path as a Felix client's.
 
-It is read-only and it has no consumer groups. A consumer that assigns its own
-partitions and keeps its own offsets works. A consumer that sets `group.id` and
-calls `subscribe()` gets an error telling it so, which also means Kafka Connect,
-Kafka Streams, ksqlDB, Debezium and MirrorMaker do not work against Felix.
+Two things are missing, on purpose: consumer groups and transactions. A consumer
+that assigns its own partitions and keeps its own offsets works; one that sets
+`group.id` and calls `subscribe()` gets an error saying Felix has no groups. A
+producer works, idempotent or not; one that sets `transactional.id` gets an
+error saying Felix has no transactions. Between them, those rule out Kafka
+Connect, Kafka Streams, ksqlDB, Debezium and MirrorMaker.
 
 The reference for the protocol side, including every error code and why groups
-are refused, is
+and transactions are refused, is
 [`docs/kafka-compatibility.md`](https://github.com/gabloe/felix/blob/main/docs/kafka-compatibility.md).
 
 ## What works
@@ -25,9 +28,15 @@ are refused, is
   is woken the moment a publish commits.
 - SASL/PLAIN over TLS, with a Felix token as the password.
 - Following a partition to its new leader when a shard moves or fails over.
+- Producing, with any codec a producer picks (gzip, snappy, lz4, zstd), and
+  `acks` of 0, 1 or all.
+- Idempotent producers (`enable.idempotence=true`, the default in the Java
+  client since 3.0). A batch re-sent after a failover or a move is recognised by the
+  new leader and not written twice.
 
 Tested with kcat 1.7.1 (librdkafka 1.8.2), on a single broker and on a
-three-broker cluster whose shards are led by different brokers.
+three-broker cluster whose shards are led by different brokers. The idempotent
+producer is also tested across a leader failover and a shard move.
 
 ## Quick start
 
@@ -57,14 +66,14 @@ the name; it comes from the username you connect with.
 ### 3. Get a token
 
 The password is an ordinary Felix token, the same one a Felix client uses. It
-needs `stream.subscribe` on the streams you want to read. Exchange an OIDC token
-for one at the control plane:
+needs `stream.subscribe` on the streams you want to read and `stream.publish` on
+the ones you want to write. Exchange an OIDC token for one at the control plane:
 
 ```bash
 FELIX_TOKEN=$(curl -s -X POST "https://controlplane:8443/v1/tenants/t1/token/exchange" \
   -H "Authorization: Bearer $OIDC_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"requested": ["stream.subscribe"], "resources": ["stream:t1/orders/*"]}' \
+  -d '{"requested": ["stream.subscribe", "stream.publish"], "resources": ["stream:t1/orders/*"]}' \
   | jq -r .felix_token)
 ```
 
@@ -108,20 +117,21 @@ that to networks you trust.
 ### Anonymous access for development
 
 On a laptop, `FELIX_KAFKA_ANONYMOUS_TENANT=t1` lets a connection that does not
-authenticate read every stream of tenant `t1`. With TLS off as well, plain kcat
-works:
+authenticate read and write every stream of tenant `t1`. With TLS off as well,
+plain kcat works:
 
 ```bash
 FELIX_KAFKA_TLS=false FELIX_KAFKA_ANONYMOUS_TENANT=t1 FELIX_KAFKA_LISTEN=127.0.0.1:9092 felix-broker
 
 kcat -b 127.0.0.1:9092 -L
+echo hello | kcat -b 127.0.0.1:9092 -P -t orders.created
 kcat -b 127.0.0.1:9092 -C -t orders.created -o beginning -e -q -f '%p:%o:%s\n'
 ```
 
-Leave it unset anywhere else. It gives read access to a whole tenant to anyone
-who can reach the port.
+Leave it unset anywhere else. It gives read and write access to a whole tenant
+to anyone who can reach the port.
 
-### 5. Read
+### 5. Read and write
 
 ```bash
 # Every partition from the start, then exit
@@ -129,6 +139,9 @@ kcat -C -t orders.created -o beginning -e -q -f '%p:%o:%s\n'
 
 # Partition 1 from offset 42
 kcat -C -t orders.created -p 1 -o 42 -e
+
+# One record per line of input, to partition 0
+printf 'order-1\norder-2\n' | kcat -P -t orders.created -p 0
 ```
 
 ## Use cases
@@ -266,16 +279,152 @@ kcat -C -t orders.created -p 0 -o beginning -e -q -f '%o\t%s\n' > partition-0.ts
 Where it stops: kcat reads whatever it is given, so large streams are best
 bounded with `-o` and `-c` rather than read from the beginning.
 
-### Feeding Felix from Kafka producers (not available yet)
+### Feeding Felix from Kafka producers you already have
 
-Producing through the Kafka listener is not supported. `Produce` is advertised,
-because librdkafka will not fetch otherwise, but every produce is refused with a
-policy violation and the message
-`Felix's Kafka listener is read-only; publish with a Felix client`.
+A service that already writes to Kafka can write to Felix by changing its
+bootstrap servers and credentials. Its records land in the stream's log at the
+next offsets, next to whatever Felix clients publish, and Felix subscribers,
+consumer groups and Kafka consumers all read them.
 
-Accepting writes is planned as a later change. Recent Kafka producers turn on
-idempotence by default, and Felix's idempotent producers are what would back
-that. Until then, publish with a Felix client.
+```python
+from confluent_kafka import Producer
+
+producer = Producer({
+    "bootstrap.servers": "broker-1.internal:9092",
+    "security.protocol": "SASL_SSL",
+    "ssl.ca.location": "felix-ca.pem",
+    "sasl.mechanisms": "PLAIN",
+    "sasl.username": "t1",
+    "sasl.password": felix_token,
+    "enable.idempotence": True,
+    "compression.type": "zstd",
+})
+producer.produce("orders.created", value=order_json, key=order_id)
+producer.flush()
+```
+
+That is a sketch; kcat is what is tested. Three things change on the way in:
+
+- **The key picks the partition and is then dropped.** The client hashes it to
+  choose a partition, which is a shard, so records with the same key still land
+  on the same shard in order. The key itself is not stored: Felix records do
+  not have one, and a consumer reading them back sees no key. If a consumer
+  needs it, put it in the value.
+- **Headers are dropped.** Tracing headers added by an interceptor are the usual
+  case. Nothing refuses them, since refusing would break producers that add
+  headers without being asked, but they are counted in
+  `felix_kafka_produce_dropped_total{field="headers"}` so you can see it
+  happening.
+- **The timestamp is the broker's.** A Felix record's timestamp is when the
+  broker appended it. The producer's timestamp is not kept, and the produce
+  answer says so by carrying the append time, which librdkafka then reports as
+  the message's timestamp.
+
+A null value (a Kafka tombstone) is stored as an empty payload. Felix does not
+compact, so a tombstone deletes nothing.
+
+Where it stops: transactional producers. See
+[Transactions are refused](#transactions-are-refused).
+
+### Moving producers over one at a time
+
+Because Felix speaks the producer side of the protocol, a migration does not
+need every writer rewritten at once. Point one producer at Felix, check its
+records with `kcat -C` or a Felix subscriber, then move the next. Producers
+that are rewritten later against a Felix client write to the same stream, and
+readers cannot tell the difference except by the missing keys.
+
+Two things to settle before moving a producer:
+
+- **Partition count.** A topic has one partition per shard. A producer that
+  hard-codes partition numbers needs them to be below the stream's shard
+  count, or it gets `UNKNOWN_TOPIC_OR_PARTITION`.
+- **Permissions.** The token needs `stream.publish` on the stream. Without it
+  the producer gets `TOPIC_AUTHORIZATION_FAILED`, and nothing is written.
+
+### What idempotence means here
+
+A Kafka producer with idempotence on (the default in the Java client since
+3.0; librdkafka needs `enable.idempotence=true`) asks the broker for a producer id and numbers every record it
+sends to a partition. If it sends a batch, loses the answer, and sends it again,
+the broker can tell and does not write it twice.
+
+Felix keeps that promise, including across a change of leader. The producer id
+is a Felix producer id, and the sequence numbers are written into the shard's
+log with the records. Replicas get them along with the records, so when a
+leader fails and a replica takes over, or an operator moves the shard, the new
+leader already knows how far the producer got. A batch re-sent to it is
+answered with the offset it was first written at and is not written again. A
+batch whose start reached the new leader but whose end did not is finished, not
+repeated.
+
+```mermaid
+sequenceDiagram
+    participant P as Kafka producer
+    participant A as Broker A (leader)
+    participant B as Broker B (replica)
+    P->>A: Produce records 40-44 (producer 7)
+    A->>B: replicate records 40-44 with producer 7's sequences
+    A--xP: answer lost, and A fails
+    Note over B: B becomes leader, with 40-44 and their sequences
+    P->>B: Metadata, then Produce records 40-44 again
+    B-->>P: already written, at offset 1200
+    P->>B: Produce records 45-49
+    B-->>P: written at offset 1205
+```
+
+What it does not cover:
+
+- **A producer that restarts.** A new process gets a new producer id and starts
+  counting again, so anything it re-sends from its own buffer is new to the
+  broker. That is the same in Kafka.
+- **Very old re-sends.** Where each batch landed is remembered for the last 64
+  records per producer and shard. A re-send older than that is answered with
+  `DUPLICATE_SEQUENCE_NUMBER`, which librdkafka and the Java client treat as
+  delivered; the record is not written again, but the answer has no offset.
+- **Producers that go quiet.** A shard remembers its 4096 most recently active
+  producers, and a producer is also forgotten once retention has removed all of
+  its records. A forgotten producer's next batch gets `UNKNOWN_PRODUCER_ID`,
+  and the client takes a new id and carries on.
+- **Epochs.** The epoch is always 0. When a producer would bump its epoch, it
+  gets a new producer id instead, which comes to the same thing.
+
+Each record written by an idempotent producer carries its producer id and
+sequence in the log, which costs 20 bytes a record.
+
+### acks and what they wait for
+
+| `acks` | The answer means | On a `Leader` stream | On a `Quorum` stream |
+|---|---|---|---|
+| `0` | Nothing; there is no answer. The records are still written. | Written on the leader | Written on the leader |
+| `1` | The leader has written it, as durably as the stream's fsync policy says | Same | The leader alone; replicas may not have it yet |
+| `all` (`-1`) | The stream's own guarantee has been met | The leader has it, and that is all a `Leader` stream promises. `acks=all` does not wait for replicas here | A majority of the replica set has it |
+
+`acks=all` never claims more than the stream gives. On a `Leader` stream it is
+the same as `acks=1`, because a `Leader` stream acknowledges on the leader's
+write by design. If you need a write to survive the leader, use a `Quorum`
+stream and `acks=all`. When a `Quorum` write does not reach a majority in time,
+the producer gets `REQUEST_TIMED_OUT` and retries; with idempotence on, the
+retry cannot write the batch twice.
+
+A producer only writes to the partition's leader. Sent anywhere else, a produce
+gets `NOT_LEADER_OR_FOLLOWER` and the client finds the leader through Metadata,
+exactly as it does for fetches.
+
+### Transactions are refused
+
+Felix has no transaction coordinator. A producer with `transactional.id` set
+fails at its first step, looking up the coordinator, with an error that names
+the reason. kcat 1.7.1 prints:
+
+```console
+% Using transactional producer
+% ERROR: init_transactions(): Failed to find transaction coordinator: sasl_plaintext://broker-1.internal:9092/1480824465: Broker: Transactional Id authorization failed: Felix does not support Kafka transactions; unset transactional.id. See docs/kafka-compatibility.md
+```
+
+and exits. Unset `transactional.id`; an idempotent producer gives you
+exactly-once writes per partition, which is often what the transaction was
+there for.
 
 ## How it maps
 
@@ -289,7 +438,8 @@ the latest is the log's tail. Asking for an offset outside that range gets
 `OFFSET_OUT_OF_RANGE`, and the client falls back to its `auto.offset.reset`.
 
 **Records.** The value is the Felix payload. The timestamp is when the broker
-appended the record.
+appended the record. There is no key and there are no headers, whether the
+record was written by a Felix client or a Kafka producer.
 
 **Tenants come from the credential.** The SASL username is the tenant, and the
 token must belong to it. Two tenants can each have an `orders.created` topic;
@@ -298,7 +448,8 @@ which one you read depends on who you are.
 **Topics that do not appear.** In-memory streams, streams in a namespace that
 contains a dot (the name would read back as a different stream), names with
 characters outside `A-Z a-z 0-9 . _ -`, names longer than 249 characters, and
-streams your token cannot read.
+streams your token cannot read. Producing to any of them is refused the same
+way reading is.
 
 ## When a leader moves
 
@@ -307,7 +458,9 @@ which broker that is. When a shard moves to another broker, or its leader fails
 and a replica takes over, the old broker answers the next fetch with "not
 leader". librdkafka asks for Metadata again and continues at the new leader
 from the same offset. The new leader holds the same log with the same offsets,
-so nothing is skipped or read twice. The consumer sees a short pause.
+so nothing is skipped or read twice. The consumer sees a short pause. A
+producer does the same: its next produce to the old broker gets "not leader",
+and it re-sends to the new one.
 
 ```mermaid
 sequenceDiagram
@@ -333,7 +486,7 @@ leader has no Kafka listener is reported as having no leader.
 | `FELIX_KAFKA_LISTEN` | unset | `ip:port` to listen on. Unset turns the listener off. |
 | `FELIX_KAFKA_ADVERTISE_ADDR` | the listen address | `host:port` clients are told to connect to. A hostname is fine. Every broker learns it through the control plane. |
 | `FELIX_KAFKA_TLS` | `true` | TLS with the broker's certificate (`SASL_SSL`). `false` means `SASL_PLAINTEXT`, with tokens in clear text. |
-| `FELIX_KAFKA_ANONYMOUS_TENANT` | unset | Development only: unauthenticated connections read every stream of this tenant. |
+| `FELIX_KAFKA_ANONYMOUS_TENANT` | unset | Development only: unauthenticated connections read and write every stream of this tenant. |
 | `FELIX_KAFKA_DEFAULT_NAMESPACE` | unset | Namespace used for a topic name without a dot, so `created` can mean `orders.created`. |
 | `FELIX_KAFKA_MAX_CONNECTIONS` | `1024` | Connections served at once. Extra ones are closed as they arrive. |
 
@@ -353,9 +506,10 @@ with a dot in it cannot be reached), and that a topic without a dot has
 the stream's shard count gets the same error.
 
 **Topic authorization failed.** Either the connection is not authenticated (no
-SASL settings, and no anonymous tenant on the broker) or the token lacks
-`stream.subscribe` on that stream. A stream you cannot read also does not appear
-in `kcat -L`.
+SASL settings, and no anonymous tenant on the broker) or the token lacks the
+permission: `stream.subscribe` to read, `stream.publish` to write. A stream you
+cannot read also does not appear in `kcat -L`, but one you can read and not
+write does, so a producer can see the topic and still be refused.
 
 **SASL authentication failed.** The broker rejected the token, and the message
 says why: `Felix: token rejected: ...`. The usual causes are a username that is
@@ -368,7 +522,8 @@ middle of a move, or its leader is a broker without the Kafka listener. The
 first three clear up on their own. The last needs `FELIX_KAFKA_LISTEN` on that
 broker.
 
-**Not leader for partition.** The shard moved or failed over. It is transient;
+**Not leader for partition.** The shard moved or failed over, or the client
+sent a produce to a broker that does not lead the partition. It is transient;
 the client refreshes Metadata and carries on.
 
 **Offset out of range.** The offset is older than anything retention kept, or
@@ -384,8 +539,30 @@ group (`kcat -G`, or `group.id` with `subscribe()`). Felix refuses it:
 
 Assign partitions with `-t topic -p N` (or `assign()`) instead.
 
-**Policy violation on produce.** The listener is read-only. Publish with a Felix
-client.
+**Transactional Id authorization failed.** The producer has `transactional.id`
+set. Felix has no transactions; unset it.
+
+**Unsupported for message format.** The producer wrote a v0 or v1 message set.
+Every client from Kafka 0.11 on writes v2 record batches; set an old client's
+`api.version.request=true` (librdkafka) or upgrade it.
+
+**Out of order sequence number.** An idempotent producer sent a batch whose
+sequence skips ahead of what the partition's log holds: something it believes
+was written is not. librdkafka treats this as fatal for the producer. It should
+not happen in normal operation; if it does, the stream's log was cut short
+(a lost volume, say) and the producer's view is ahead of it.
+
+**Unknown producer id.** The partition's log holds nothing from this producer:
+it was idle long enough for retention to remove its records, or more than 4096
+other producers wrote since. The client takes a new producer id and carries on
+without losing anything.
+
+**Message size too large.** A batch decompresses to more than 16 MiB. Lower the
+producer's `batch.size` or `linger.ms`.
+
+**Records arrive without keys or headers.** Expected: Felix records have
+neither. See [Feeding Felix from Kafka producers you already
+have](#feeding-felix-from-kafka-producers-you-already-have).
 
 **SSL handshake failed.** Either the client does not trust the broker's
 certificate (point `ssl.ca.location` at the file `FELIX_TLS_CERT_EXPORT`
@@ -403,11 +580,16 @@ connection limit, which shows up as
 - Durable streams only.
 - No consumer groups, so no committed offsets and none of the tools built on
   them.
-- No produce.
+- No transactions.
+- Keys, headers and producer timestamps are not stored.
+- A produce is answered after it is written; a connection's produces are
+  answered one at a time, in order, as Kafka requires. A producer that needs
+  more throughput than one connection gives spreads across partitions, whose
+  leaders are often different brokers.
+- A batch may decompress to at most 16 MiB.
 - No fetch sessions: clients send full fetch requests, which costs a little
   bandwidth with many partitions.
 - No leader epochs (reported as unknown) and an ISR of the leader alone.
-- No keys or headers on records.
 - SASL/PLAIN only: no OAUTHBEARER, and no re-authentication on a long-lived
   connection.
 - A fetch waits at most 30 seconds, whatever `fetch.wait.max.ms` asks for.

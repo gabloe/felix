@@ -8,8 +8,9 @@ use tokio_util::sync::CancellationToken;
 use super::Shared;
 use crate::api::{self, Answer, Session};
 
-/// The largest request accepted. A read-only listener's requests are small;
-/// the cap is what keeps a hostile length prefix from allocating gigabytes.
+/// The largest request accepted. Well above what a producer sends by default
+/// (librdkafka caps a request at `message.max.bytes`, 1 MB); the cap is what
+/// keeps a hostile length prefix from allocating gigabytes.
 const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) async fn serve<S>(

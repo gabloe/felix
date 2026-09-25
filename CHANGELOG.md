@@ -13,6 +13,25 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Kafka producers can write to durable streams.** `Produce` (v3-9) on the
+  Kafka listener decodes v2 record batches, compressed with gzip, snappy, lz4
+  or zstd, and publishes them through the broker's publish path on the shard's
+  leader, with `stream.publish` checked as for a QUIC publish; any other broker
+  answers `NOT_LEADER_OR_FOLLOWER`. `acks=all` waits for the stream's own
+  consistency: a majority on a `Quorum` stream, the leader on a `Leader` one.
+  `InitProducerId` gives idempotent producers a Felix producer id, and the new
+  `Broker::publish_records_idempotent` stores each record as a one-record
+  producer batch so Kafka's per-record sequences are the log's own: a batch
+  re-sent after a failover or a move is answered with its original offset.
+  Transactions are refused with `TRANSACTIONAL_ID_AUTHORIZATION_FAILED` and a
+  message; legacy v0/v1 message sets with `UNSUPPORTED_FOR_MESSAGE_FORMAT`.
+  Keys, headers and producer timestamps are dropped and counted. New metrics:
+  `felix_kafka_produce_records_total`, `felix_kafka_produce_bytes_total`,
+  `felix_kafka_produce_duplicate_records_total`,
+  `felix_kafka_produce_errors_total` and `felix_kafka_produce_dropped_total`.
+  `FELIX_KAFKA_ANONYMOUS_TENANT` now allows writes as well as reads. The
+  docs-site page "Reading with Kafka Clients" is now "Kafka Clients".
+
 - **Kafka consumers can read durable streams.** A broker started with
   `FELIX_KAFKA_LISTEN` serves the Kafka protocol, read-only, for consumers that
   assign their own partitions: kcat, librdkafka programs and Java

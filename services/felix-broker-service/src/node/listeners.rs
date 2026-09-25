@@ -265,7 +265,7 @@ pub(super) async fn bind_kafka(
     if let Some(tenant) = &kafka.anonymous_tenant {
         tracing::warn!(
             tenant = %tenant,
-            "FELIX_KAFKA_ANONYMOUS_TENANT is set: unauthenticated Kafka clients can read every stream of this tenant"
+            "FELIX_KAFKA_ANONYMOUS_TENANT is set: unauthenticated Kafka clients can read and write every stream of this tenant"
         );
     }
     let listener = KafkaListener::bind(
@@ -279,7 +279,7 @@ pub(super) async fn bind_kafka(
     tracing::info!(
         addr = %listener.local_addr()?,
         advertise = %kafka.advertise,
-        "kafka listener started (read-only)"
+        "kafka listener started"
     );
     Ok(Some(listener))
 }

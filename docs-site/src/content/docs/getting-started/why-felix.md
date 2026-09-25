@@ -129,13 +129,13 @@ Plenty of reasons, and most of them are good ones.
   operational cost you would save is a cost you have already paid. Replacing
   working infrastructure to reduce system count is rarely worth it.
 - **You need Kafka wire compatibility.** Felix speaks enough Kafka for a
-  consumer that assigns its own partitions: `kcat`, a librdkafka program or a
-  Java `KafkaConsumer` can read a durable Felix stream, offsets included (see
-  [Reading with Kafka clients](/felix/features/kafka/)). It does not speak
-  enough for the ecosystem. Kafka Connect, Streams, ksqlDB, Debezium and
-  MirrorMaker all run on consumer groups, and Felix refuses groups on purpose.
-  Nor does it accept writes from Kafka producers. If you need that ecosystem,
-  use something that speaks the whole protocol.
+  consumer that assigns its own partitions and for a producer: `kcat`, a
+  librdkafka program or a Java client can read a durable Felix stream, offsets
+  included, and write to it, idempotently if it likes (see
+  [Kafka clients](/felix/features/kafka/)). It does not speak enough for the
+  ecosystem. Kafka Connect, Streams, ksqlDB, Debezium and MirrorMaker all run
+  on consumer groups or transactions, and Felix refuses both on purpose. If you
+  need that ecosystem, use something that speaks the whole protocol.
 
   The refusal is a decision rather than a gap nobody got to. Building a group
   coordinator means building a rebalance protocol Felix deliberately does not

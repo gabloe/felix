@@ -116,7 +116,7 @@ export default defineConfig({
             { label: 'Pub/Sub Streaming', slug: 'features/pubsub' },
             { label: 'Queues and Consumer Groups', slug: 'features/queues' },
             { label: 'Distributed Cache', slug: 'features/cache' },
-            { label: 'Reading with Kafka Clients', slug: 'features/kafka' },
+            { label: 'Kafka Clients', slug: 'features/kafka' },
             { label: 'Performance Tuning', slug: 'features/performance' },
             { label: 'Performance & Platform Notes', slug: 'features/performance-platform-notes' },
             { label: 'Benchmarks', slug: 'features/benchmarks' },
