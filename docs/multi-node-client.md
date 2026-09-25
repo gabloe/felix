@@ -198,8 +198,21 @@ while let Some(item) = subscription.next().await {
 }
 ```
 
-Four things about it are deliberate, and each is a choice you would otherwise
+Five things about it are deliberate, and each is a choice you would otherwise
 have to make yourself:
+
+- **The merge happens in the client, and stays there.** The broker serves
+  shards, not merged streams. A stream's shards live on different brokers, so a
+  broker-side merge would pull every other shard's records to one broker, send
+  each record twice, and put a stream's whole read load on one broker. Spreading
+  that load is the reason for sharding. The merged order it could offer would be
+  invented, since no order exists across shards, and resuming would still need
+  the per-shard offsets below. Each shard's fanout is already shared by every
+  subscriber to it, so merging in the client costs the broker nothing. The
+  Python and TypeScript clients wrap this same implementation
+  (`subscribe_sharded` / `subscribeSharded`). A client without a Felix library
+  does the same thing on the wire: `StreamShards` for the count, then one
+  `Subscribe` per shard.
 
 - **Ordering is per shard, and nothing more.** Two records from one shard arrive
   in the order they were written. Two records from different shards arrive in an
