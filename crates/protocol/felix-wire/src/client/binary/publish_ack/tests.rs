@@ -203,3 +203,105 @@ fn an_unknown_binary_code_keeps_its_retry_class() {
         ))
     );
 }
+
+#[test]
+fn a_failed_ack_carries_its_detail_under_the_flag() {
+    use crate::{
+        ErrorCode, ErrorDetail, FLAG_BINARY_PUBLISH_ACK_CODE, FLAG_BINARY_PUBLISH_ACK_DETAIL,
+        RetryClass,
+    };
+
+    let detail = ErrorDetail {
+        reason: Some("moving".to_string()),
+        retry_after_ms: Some(100),
+    };
+    let bytes = binary::encode_publish_ack_bytes_detailed(
+        15,
+        Some("shard is moving to another broker"),
+        Some((&ErrorCode::ShardUnavailable, RetryClass::Retry)),
+        Some(&detail),
+        None,
+    )
+    .expect("encode");
+    let frame = Frame::decode(bytes).expect("frame");
+    assert_eq!(
+        frame.header.flags,
+        FLAG_BINARY_PUBLISH_ACK | FLAG_BINARY_PUBLISH_ACK_CODE | FLAG_BINARY_PUBLISH_ACK_DETAIL
+    );
+    let decoded = binary::decode_publish_ack(&frame).expect("decode");
+    assert_eq!(
+        decoded.code,
+        Some((ErrorCode::ShardUnavailable, RetryClass::Retry))
+    );
+    assert_eq!(decoded.detail, Some(detail));
+
+    // An empty detail round-trips as "nothing said" rather than as an empty
+    // reason and a zero wait.
+    let bytes = binary::encode_publish_ack_bytes_detailed(
+        16,
+        Some("x"),
+        Some((&ErrorCode::ShardUnavailable, RetryClass::Retry)),
+        Some(&ErrorDetail::default()),
+        None,
+    )
+    .expect("encode");
+    let decoded = binary::decode_publish_ack(&Frame::decode(bytes).expect("frame")).expect("ack");
+    assert_eq!(decoded.detail, Some(ErrorDetail::default()));
+}
+
+/// Detail never goes out without a code to hang off, or on a success, so a
+/// client that took only the code bit is never sent the detail bit.
+#[test]
+fn detail_needs_a_failure_and_a_code() {
+    use crate::{ErrorCode, ErrorDetail, RetryClass};
+
+    let detail = ErrorDetail {
+        reason: Some("fenced".to_string()),
+        retry_after_ms: None,
+    };
+    let uncoded =
+        binary::encode_publish_ack_bytes_detailed(17, Some("x"), None, Some(&detail), None)
+            .expect("uncoded");
+    assert_eq!(
+        uncoded,
+        binary::encode_publish_ack_bytes(17, Some("x")).expect("plain")
+    );
+    let ok = binary::encode_publish_ack_bytes_detailed(
+        18,
+        None,
+        Some((&ErrorCode::Internal, RetryClass::Fatal)),
+        Some(&detail),
+        None,
+    )
+    .expect("ok");
+    assert_eq!(
+        ok,
+        binary::encode_publish_ack_bytes(18, None).expect("plain ok")
+    );
+}
+
+#[test]
+fn a_truncated_detail_is_an_error() {
+    use crate::{ErrorCode, ErrorDetail, RetryClass};
+
+    let bytes = binary::encode_publish_ack_bytes_detailed(
+        19,
+        Some("x"),
+        Some((&ErrorCode::ShardUnavailable, RetryClass::Retry)),
+        Some(&ErrorDetail {
+            reason: Some("not_ready".to_string()),
+            retry_after_ms: Some(5),
+        }),
+        None,
+    )
+    .expect("encode");
+    let frame = Frame::decode(bytes).expect("frame");
+    for cut in 1..=(2 + "not_ready".len() + 8) {
+        let payload = frame.payload.slice(..frame.payload.len() - cut);
+        let short = Frame::new(frame.header.flags, payload).expect("frame");
+        assert!(
+            binary::decode_publish_ack(&short).is_err(),
+            "a truncated detail decoded instead of erroring (cut {cut})"
+        );
+    }
+}

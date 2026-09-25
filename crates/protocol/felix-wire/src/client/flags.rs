@@ -92,6 +92,22 @@ pub const FLAG_BINARY_PUBLISH_IDEMPOTENT: u16 = 0x0100;
 /// failed ack.
 pub const FLAG_BINARY_PUBLISH_ACK_CODE: u16 = 0x0200;
 
+/// Modifier on `FLAG_BINARY_PUBLISH_ACK_CODE`: the code is followed by the
+/// error's detail.
+///
+/// ```text
+/// u16 reason_len      (0 when there is no reason)
+/// u8[reason_len] reason
+/// u64 retry_after_ms  (0 when the broker suggests no wait)
+/// ```
+///
+/// The binary counterpart of `publish_error.detail`: without it a binary
+/// publisher is told `shard_unavailable` but not whether the shard is moving,
+/// fenced or not yet open, nor how long a move suggests waiting. A separate
+/// bit because it changes the layout again. Set only for a client that
+/// advertised it, and only alongside the code.
+pub const FLAG_BINARY_PUBLISH_ACK_DETAIL: u16 = 0x0400;
+
 /// Every flag bit this version understands.
 ///
 /// Frames carrying bits outside this mask are rejected rather than parsed with
@@ -111,7 +127,8 @@ pub const KNOWN_FLAGS: u16 = FLAG_BINARY_PUBLISH_BATCH
     | FLAG_BINARY_PUBLISH_KEYED
     | FLAG_BINARY_PUBLISH_ACK_OWNER
     | FLAG_BINARY_PUBLISH_IDEMPOTENT
-    | FLAG_BINARY_PUBLISH_ACK_CODE;
+    | FLAG_BINARY_PUBLISH_ACK_CODE
+    | FLAG_BINARY_PUBLISH_ACK_DETAIL;
 
 /// The flag bits that existed before capability negotiation.
 ///
