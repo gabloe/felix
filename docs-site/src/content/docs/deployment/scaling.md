@@ -182,6 +182,8 @@ Metrics on the control plane:
 | `felix_shard_moves_timed_out_total` | moves and follower replacements given up at `FELIX_SHARD_MOVE_TIMEOUT_MS` |
 | `felix_shard_moves_waiting` | moves that could not advance in the last pass |
 | `felix_shard_assignment_write_conflicts_total` | steps not written because another control-plane instance changed the shard after this pass read it |
+| `felix_placement_writes_fenced_total` | passes and operator requests stopped because another placement write landed after they read the store, which is how the move limits hold across control-plane instances |
+| `felix_placement_lease_held` | 1 on the control-plane instance running placement's timed passes |
 | `felix_shard_move_duration_seconds` | histogram: from a move's first step to its cut-over |
 | `felix_shard_move_fence_seconds` | histogram: from the fence to the cut-over, the window in which the shard is not served |
 

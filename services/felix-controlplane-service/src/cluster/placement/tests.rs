@@ -2,6 +2,7 @@
 //! clusters every theme plans over.
 mod caches;
 mod failover;
+mod lease;
 mod moves;
 mod operator;
 mod pacing;

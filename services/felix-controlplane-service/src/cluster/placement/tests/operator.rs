@@ -611,10 +611,18 @@ async fn a_cancel_decided_before_a_cut_over_is_not_written_after_it() {
         "broker-y"
     );
 
+    // At the current token, so it is the generation that stops it.
+    let stale = super::super::operator::FencedStep {
+        step: stale,
+        fence: store.placement_token().await.expect("token"),
+    };
     let written = super::super::operator::write_operator_step(&store, &stale)
         .await
         .expect("write");
-    assert_eq!(written, None, "the stale cancel landed");
+    assert!(
+        matches!(written, super::super::operator::OperatorWrite::Stale),
+        "the stale cancel landed: {written:?}"
+    );
     assert_eq!(
         store
             .get_shard_assignment(&shard_zero())

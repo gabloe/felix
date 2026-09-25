@@ -133,8 +133,10 @@ that quietly became a pass would be a model that stopped saying anything.
 | `FelixShardCancel.cfg` | writes acknowledged on admission, a fenced move cancelled and the shard taken back, a second move after | pass every invariant (5.6M states) |
 | `FelixShardCancelStalePlannerCas.cfg` | a cancel decided from a held read while the move cuts over; every write conditional | pass every invariant (447K states) |
 | `FelixShardCancelStalePlanner.cfg` | the same with the cancel written unconditionally | violate `AtMostOneServing` |
-| `FelixPlacementPacing.cfg` | `FelixPlacementPacing.tla`: moves and follower replacements across four shards, two copies at once, one per node | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (92 states) |
+| `FelixPlacementPacing.cfg` | `FelixPlacementPacing.tla`: moves and follower replacements across four shards, two copies at once, one per node, one planner | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (313 distinct states) |
 | `FelixPlacementPacingUncountedReplacement.cfg` | the same with a follower replacement invisible to the count, as it used to be written | violate `CopiesWithinLimit` |
+| `FelixPlacementPacingTwoPlanners.cfg` | two planners over three shards and one slot, the lease changing hands at any step, one also reading without it as an operator does; every start fenced by the placement token | pass `CopiesWithinLimit` and `FencedNeverTimesOut` (56K distinct states) |
+| `FelixPlacementPacingUnfenced.cfg` | the same with starts conditional only on their shard's generation | violate `CopiesWithinLimit` |
 | `FelixShardIdempotentFailover.cfg` | a write re-sent across a failover, checked against the promoted broker's log | pass every invariant and `NoDuplicate` (0.28M distinct states) |
 | `FelixShardIdempotentFailoverMemory.cfg` | the same with the sequences in the leader's memory | violate `NoDuplicate` |
 | `FelixShardIdempotentHandoff.cfg` | a write re-sent across a planned move, checked against the new leader's log | pass every invariant and `NoDuplicate` (2.7M distinct states) |
@@ -265,10 +267,18 @@ replacement's `joining` -- and that only a move before its fence times out.
 used to be, with nothing in the assignment saying a copy is running, and TLC
 finds a move starting beside it under a limit of one.
 
-It does not model several control-plane instances planning at once. Each
-write is conditional on its own shard's generation, not on the count, so two
-Postgres instances running placement in the same instant can each start a
-move; the limit holds per planner.
+It also models several instances planning at once. Each planner starts
+copies from its own read: the lease holder, an instance that took a read
+while it held the lease and has since lost it (the lease may change hands at
+any step, which is expiry under a pause), and an operator's request, which
+reads without the lease. A start is conditional on its shard being as read,
+the generation check, and with `Fenced` on the placement token being
+unchanged since the read, counting the planner's own writes. Every write
+and every change of holder advances the token. `FelixPlacementPacingTwoPlanners.cfg`
+holds the limit with the token; `FelixPlacementPacingUnfenced.cfg` drops it,
+and TLC finds two planners each starting a copy on a different shard from a
+read with one slot free, which is what two Postgres-backed instances could
+do before the token.
 
 ### The interval that is load-bearing
 

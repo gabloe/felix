@@ -129,6 +129,7 @@ async fn a_drained_report_cuts_over_without_waiting_for_the_interval() {
         Default::default(),
         Default::default(),
         Duration::from_secs(3600),
+        "test-holder".to_string(),
         crate::raft::LeadershipGate::Always,
         Arc::clone(&state.placement_wakes),
         shutdown.clone(),

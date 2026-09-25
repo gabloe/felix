@@ -221,7 +221,11 @@ async fn reset_db(url: &str, schema: &str) -> Result<(), sqlx::Error> {
     // A one-row table: reset, not truncated, so the row the migration made
     // stays.
     let unpause = format!("UPDATE {schema_ident}.placement_settings SET moves_paused = false");
-    sqlx::query(AssertSqlSafe(unpause))
+    sqlx::query(AssertSqlSafe(unpause)).execute(&pool).await?;
+    let unlease = format!(
+        "UPDATE {schema_ident}.placement_lease SET holder = NULL, expires_at = NULL, token = 0"
+    );
+    sqlx::query(AssertSqlSafe(unlease))
         .execute(&pool)
         .await
         .map(|_| ())
@@ -333,6 +337,44 @@ async fn a_reconnected_store_still_sees_shard_assignments() -> anyhow::Result<()
     // forced to re-bootstrap its ownership view.
     let changes = store.shard_assignment_changes(0).await?;
     assert!(changes.items.iter().any(|c| c.key == before.key));
+    Ok(())
+}
+
+/// The placement suite, as two instances: two stores, each with its own
+/// pool, over one database.
+#[tokio::test]
+#[serial]
+async fn satisfies_the_placement_contract() -> anyhow::Result<()> {
+    let Some(url) = pg_url().await else {
+        return Ok(());
+    };
+    let schema = ensure_schema(&url).await?;
+    let url = url_with_schema(&url, &schema);
+    run_migrations_once(&url).await?;
+    reset_db(&url, &schema).await?;
+
+    let mut instances = Vec::new();
+    for _ in 0..2 {
+        let store: std::sync::Arc<dyn crate::store::ControlPlaneStore> = std::sync::Arc::new(
+            PostgresStore::connect_without_migrations(
+                &config::PostgresConfig {
+                    url: url.clone(),
+                    max_connections: 5,
+                    connect_timeout_ms: 10_000,
+                    acquire_timeout_ms: 10_000,
+                },
+                StoreConfig {
+                    changes_limit: config::DEFAULT_CHANGES_LIMIT,
+                    change_retention_max_rows: None,
+                },
+            )
+            .await?,
+        );
+        instances.push(store);
+    }
+    let (a, b) = (instances[0].clone(), instances[1].clone());
+    crate::store::contract::placement::run_placement_contract(a.clone(), b.clone()).await;
+    crate::store::contract::placement::run_expiring_lease_contract(a, b).await;
     Ok(())
 }
 

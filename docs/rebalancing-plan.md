@@ -240,6 +240,25 @@ conformance runner checks the frame on the wire, offered and not.
   the quorum does not need and never to the remainder after the fence.
 - `max_shards` is compared against roles, not leaders, when choosing a
   destination.
+- **The limits hold across instances.** Each write was conditional on its
+  own shard's generation only, so two Postgres-backed instances, or a pass
+  and an operator's request on another instance, could each read one free
+  slot and start moves on two different shards. Now one instance runs the
+  timed passes, the holder of a lease in the store (three reconcile
+  intervals, renewed every pass, released on shutdown; under Raft, the
+  leader), and every placement write is also fenced by a placement token
+  kept beside the lease: read before anything a pass or request decides
+  from, advanced by every placement write and every change of holder, and
+  checked under the same lock or log entry as the write. A pass woken by a
+  report still runs wherever the report arrived, which keeps the switch-over
+  fast and is safe for the same reason. `FelixPlacementPacingTwoPlanners`
+  passes with two planners and an operator; `FelixPlacementPacingUnfenced`
+  breaks the limit without the token.
+  `two_instances_cannot_both_take_the_last_move_slot` runs against memory,
+  Postgres (two pools over one database) and Raft;
+  `an_ex_holders_pass_is_fenced_after_a_takeover` and
+  `an_expired_lease_is_taken_over_and_fences_the_old_holder` cover an
+  instance that paused past its lease.
 
 ### Phase 5: operator controls
 
@@ -263,8 +282,8 @@ conformance runner checks the frame on the wire, offered and not.
   a new generation after a draining one was already the path a cut-over back
   to the leader takes. After the cut-over a cancel is a 409.
 - **Conditional, and decided again.** Every operator write lands only at the
-  generation it was decided from; on a conflict the request is decided again
-  from a new read, so a cancel racing a cut-over finds nothing to cancel.
+  generation and placement token it was decided from; on a conflict the
+  request is decided again from a new read, so a cancel racing a cut-over finds nothing to cancel.
   `FelixShardCancel` passes with writes acknowledged on admission;
   `FelixShardCancelStalePlanner`, with the cancel written unconditionally,
   serves the shard on two brokers.
@@ -369,9 +388,10 @@ handed off and sees it lead again, and stops a lone broker without waiting.
 - **Cache, counter and group writes are not held.** They are refused,
   retryably, for the length of the switch-over. Holding them needs the same
   treatment publishes got on each of their paths.
-- **The move limits hold per planner.** Every write is conditional on its own
-  shard's generation, not on the count, so two Postgres-backed instances
-  placing at the same instant can each start a move. Raft has one planner.
+- **A dead lease holder pauses the timed passes** until its lease expires,
+  three reconcile intervals (15 s by default). Moves in flight carry on and
+  woken passes still run, but a failover waiting on the timer waits that
+  long. A holder that shuts down releases the lease and costs nothing.
 - **A shutdown handoff is bounded.** A broker stopping hands its shards off
   for up to `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`; what it still leads then
   fails over. Moves are paced like any other, so a broker leading many

@@ -12,6 +12,15 @@ it. High availability is therefore two separate obligations:
   readiness probe. This half is Felix's, and it is proven by test: a rolling
   restart of every instance, with broker heartbeats and shard-assignment
   watches flowing throughout, serves every call.
+- **Placement runs on one instance at a time**, the holder of a lease kept
+  in the database. It is renewed on every pass, handed over when the holder
+  shuts down, and taken over by another instance three reconcile intervals
+  (15 s by default) after a holder dies; until then moves already started
+  carry on but nothing new is placed on the timer. Every placement write is
+  also fenced by a token in the same row, so the move limits hold across
+  instances even while two of them think they are placing
+  ([control-plane.md](https://github.com/gabloe/felix/blob/main/docs/control-plane.md)).
+  `felix_placement_lease_held` summed across instances is 1.
 - **The database** — Postgres availability is an operational input Felix
   consumes, **not something Felix implements**. If Postgres is down, every
   instance fails readiness and metadata is unavailable, however many are

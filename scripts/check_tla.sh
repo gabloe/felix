@@ -91,6 +91,8 @@ expectations=(
   "FelixShardCancelResendMemory violates NoDuplicate"
   "FelixPlacementPacing pass"
   "FelixPlacementPacingUncountedReplacement violates CopiesWithinLimit"
+  "FelixPlacementPacingTwoPlanners pass"
+  "FelixPlacementPacingUnfenced violates CopiesWithinLimit"
   "FelixShardIdempotentFailover pass"
   "FelixShardIdempotentFailoverMemory violates NoDuplicate"
   "FelixShardIdempotentHandoff pass"

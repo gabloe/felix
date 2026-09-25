@@ -304,6 +304,7 @@ impl ControlPlane {
                 LIVENESS,
                 felix_controlplane_service::cluster::placement::MovePolicy::default(),
                 interval,
+                "felix-cluster".to_string(),
                 felix_controlplane_service::raft::LeadershipGate::Always,
                 Arc::clone(&self.placement_wakes),
                 self.shutdown.clone(),

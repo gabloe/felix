@@ -206,15 +206,26 @@ impl MetadataStateMachine {
                 assignment,
                 expected_generation,
             } => store
-                .put_shard_assignment_if(assignment, expected_generation)
+                .put_shard_assignment_unfenced_if(assignment, expected_generation)
                 .await
-                .map(|written| match written {
-                    AssignmentWrite::Written(assignment) => MetaResponse::Assignment { assignment },
-                    AssignmentWrite::Stale { current } => MetaResponse::StaleAssignment {
-                        current_generation: current,
-                    },
-                })
+                .map(assignment_written)
                 .map_err(Into::into),
+            MetaCommand::PutShardAssignmentFenced {
+                assignment,
+                expected_generation,
+                fence,
+            } => store
+                .put_shard_assignment_if(assignment, expected_generation, fence)
+                .await
+                .map(assignment_written)
+                .map_err(Into::into),
+            MetaCommand::TakePlacementLease { holder } => {
+                let lease = store.take_placement_lease(&holder).await;
+                Ok(MetaResponse::PlacementLease {
+                    token: lease.token,
+                    taken: lease.taken,
+                })
+            }
             MetaCommand::RecordReplicaReport { report } => store
                 .record_replica_report(report)
                 .await
@@ -413,3 +424,13 @@ impl AppStateMachine for MetadataStateMachine {
 
 #[cfg(test)]
 mod tests;
+
+fn assignment_written(written: AssignmentWrite) -> MetaResponse {
+    match written {
+        AssignmentWrite::Written(assignment) => MetaResponse::Assignment { assignment },
+        AssignmentWrite::Stale { current } => MetaResponse::StaleAssignment {
+            current_generation: current,
+        },
+        AssignmentWrite::Fenced { token } => MetaResponse::FencedAssignment { token },
+    }
+}
