@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790301391526,
+  "lastUpdate": 1790308133171,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15496,6 +15496,58 @@ window.BENCHMARK_DATA = {
             "range": "19952.42",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 926035.59\nmean: 926152.61\nstdev: 19952.42\ncv: 2.15%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39109f0df87be885d38dd0e6fe300e3289dc2bf3",
+          "message": "fix(storage): a panicking flush no longer fails the flushes queued behind it (#699)\n\nA panic in a flush job unwound the flush thread. The caller heard about it\nwhen the reply dropped, but the thread's queue outlived that for a moment,\nso a flush submitted then was queued on a dying thread and failed with\n\"flush thread stopped\" although nothing was wrong with it. That is what\na_panicking_job_is_reported_and_the_next_one_gets_a_new_thread tripped on\nin CI. The thread now catches the panic, answers that flush with an error\nand keeps serving.\n\nSpec-Unaffected: storage flush thread only.",
+          "timestamp": "2026-09-24T20:45:34-07:00",
+          "tree_id": "20c6c933ac098ca1ab37c19ea960628010aebed6",
+          "url": "https://github.com/gabloe/felix/commit/39109f0df87be885d38dd0e6fe300e3289dc2bf3"
+        },
+        "date": 1790308132352,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 392598.18,
+            "range": "11903.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 392598.18\nmean: 389953.37\nstdev: 11903.83\ncv: 3.05%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 392598.18,
+            "range": "11903.83",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 392598.18\nmean: 389953.37\nstdev: 11903.83\ncv: 3.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 91994.12,
+            "range": "962.55",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 91994.12\nmean: 92095.70\nstdev: 962.55\ncv: 1.05%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 919941.25,
+            "range": "9625.52",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 919941.25\nmean: 920957.01\nstdev: 9625.52\ncv: 1.05%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
