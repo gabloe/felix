@@ -50,7 +50,8 @@ the GIL released; the async one yields to your event loop.
 
 ## Beyond publish and subscribe
 
-Both surfaces also cover consumer groups (`group_poll` and the four settles),
+Both surfaces also cover consumer groups (`group_poll` and the four settles,
+sent to the shard's leader by following the broker's redirect),
 cache watches (`watch_cache`, including retained watches that hand you current
 state before live changes), and multi-shard subscriptions (`subscribe_sharded`,
 which opens one subscription per shard and merges them). Two things catch

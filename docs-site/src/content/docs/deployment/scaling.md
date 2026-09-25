@@ -232,8 +232,9 @@ move has not cut over within `FELIX_SHARD_MOVE_HOLD_MS` (2 s) or more than
 `FELIX_SHARD_MOVE_HOLD_MAX` publishes are already waiting; it was not written,
 and the client retries. Cache writes and counter adds are held and forwarded
 the same way. A consumer-group operation is held too and then redirected to
-the new owner; `ClusterClient::group_sharded` follows the redirect, while a
-single-connection client gets it as a `not_leader` error.
+the new owner; `ClusterClient`'s group calls, `group_sharded` and the Python
+and TypeScript clients follow the redirect, while the single-broker Rust
+`Client` returns it as `NotLeaderError`.
 
 While the destination is still copying the log, it does not count toward the
 shard's quorum, so a `Quorum` publish waits for a majority of the replicas the

@@ -449,16 +449,32 @@ of what was in flight and nothing more.
 A, finishes everything on B, and moves the shard back: without the change A
 hands out offset 11, which B had finished.
 
+### Following the group redirect
+
+Progress: done. `ClusterClient` now has the single-shard group calls
+(`group_poll`, `group_poll_wait`, `group_ack`, `group_nack`,
+`group_dead_letters`, `group_discard`, `group_redrive`), which follow
+`NotLeader` the way `group_sharded` did and remember each shard's leader;
+`group_sharded` uses the same code. The Python and TypeScript clients' group
+calls go through them, so a consumer on either keeps working when its shard
+moves. `consumer_groups::a_cluster_client_follows_a_group_redirect_to_the_leader`
+polls and acks through a broker that does not lead the shard; with the calls
+sent to the connected broker, as the bindings did, the poll fails with
+`NotLeader`.
+
+A redirect to a draining broker now carries its address. The catalog keeps a
+second list of client addresses for every routable broker, used for
+redirects, moved-reader handoffs and the publish-ack owner hint; `topology`
+still offers only eligible brokers, so new clients are not pointed at a
+broker on its way out. `node_catalog::tests::a_redirect_to_a_draining_broker_carries_its_client_address`
+fails without it with no address in the redirect.
+
 ## What is left
 
-- **A plain client does not follow a group redirect.** Group operations over
-  a single `Client`, including the Python and TypeScript bindings, get the
-  `NotLeader` after a move as an error, as they do for any shard led
-  elsewhere. `ClusterClient::group_sharded` follows it.
-- **A redirect to a draining broker has no address.** Client endpoints list
-  only eligible brokers, so a group operation that reaches another broker for
-  a shard a draining broker still leads is redirected without an address, and
-  `group_sharded` cannot follow it until that shard has moved.
+- **A plain `Client` does not follow a group redirect.** It is one broker's
+  connections, so it returns `NotLeaderError` and leaves connecting to the
+  owner to `ClusterClient`. This is by design and documented, not a gap to
+  close.
 - **A dead lease holder pauses the timed passes** until its lease expires,
   three reconcile intervals (15 s by default). Moves in flight carry on and
   woken passes still run, but a failover waiting on the timer waits that
