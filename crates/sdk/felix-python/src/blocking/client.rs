@@ -351,8 +351,7 @@ impl Client {
         let (tenant_id, namespace, stream, group) = owned4(tenant_id, namespace, stream, group);
         let wait = std::time::Duration::from_secs_f64(wait.max(0.0));
         let records = block_on(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_poll_wait(
                     &tenant_id,
                     &namespace,
@@ -389,8 +388,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         let (tenant_id, namespace, stream, group) = owned4(tenant_id, namespace, stream, group);
         block_on(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_ack(&tenant_id, &namespace, &stream, shard, &group, offset)
                 .await
                 .map_err(to_py_err)
@@ -412,8 +410,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         let (tenant_id, namespace, stream, group) = owned4(tenant_id, namespace, stream, group);
         block_on(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_nack(&tenant_id, &namespace, &stream, shard, &group, offset)
                 .await
                 .map_err(to_py_err)
@@ -436,8 +433,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         let (tenant_id, namespace, stream, group) = owned4(tenant_id, namespace, stream, group);
         block_on(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_dead_letters(&tenant_id, &namespace, &stream, shard, &group)
                 .await
                 .map_err(to_py_err)
@@ -459,8 +455,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         let (tenant_id, namespace, stream, group) = owned4(tenant_id, namespace, stream, group);
         block_on(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_discard(&tenant_id, &namespace, &stream, shard, &group, offset)
                 .await
                 .map_err(to_py_err)
@@ -485,8 +480,7 @@ impl Client {
         let inner = Arc::clone(&self.inner);
         let (tenant_id, namespace, stream, group) = owned4(tenant_id, namespace, stream, group);
         block_on(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_redrive(&tenant_id, &namespace, &stream, shard, &group, offset)
                 .await
                 .map_err(to_py_err)

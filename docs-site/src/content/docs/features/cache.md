@@ -268,6 +268,7 @@ while let Some(item) = watch.recv().await {
         CacheWatchItem::ShardMoved(moved) => {
             // The shard moved to another broker, which ended the watch.
             // Re-watch from `moved.resume_from`, or after the last offset seen.
+            // A `ClusterClient` watch does this itself and carries on.
             break;
         }
     }
@@ -542,7 +543,9 @@ async fn watch_cache(
 **Returns**: a `CacheWatch` whose `recv()` yields `CacheWatchItem::Change`
 (key, optional value, offset, expiry) and, if the watch falls behind,
 `CacheWatchItem::Lagged { resume_from }` before ending, or
-`CacheWatchItem::ShardMoved` if its shard moved to another broker.
+`CacheWatchItem::ShardMoved` if its shard moved to another broker. The same
+method on `ClusterClient` returns a `ClusterCacheWatch`, which follows the
+shard to its new owner instead of ending.
 `resnapshot()` reports
 whether a resume began from current values because compaction collapsed the
 requested history. Fails without sending anything when the broker did not

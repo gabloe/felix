@@ -186,9 +186,12 @@ through a move and sees no refusal and no record lost or stored twice.
   reconnect deadline (30 s without one) passes.
 - **Cache watches.** `resume_from` is the shard log's tail once the writes in
   flight have landed, and absent if they had not; the watcher then resumes
-  after the last change it saw. `CacheWatchItem::ShardMoved` and
-  `ShardedCacheWatchItem::ShardMoved` surface it; a sharded watch moves that
-  shard's resume offset.
+  after the last change it saw. `ClusterClient::watch_cache` returns a
+  `ClusterCacheWatch` that hands out `CacheWatchItem::ShardMoved` as a notice
+  and reopens on the new owner at `max(offset after the last change,
+  resume_from)`; the cache log moves with the shard and keeps its offsets, so
+  nothing is repeated or skipped. A sharded watch follows each shard the same
+  way. A `Client` watch still ends with the frame.
 - **Sharded subscriptions** follow each shard and report
   `ShardEvent::ShardMoved`. The Python and TypeScript bindings wrap
   `ClusterClient`, so their subscriptions follow too, and they surface the move
@@ -204,7 +207,9 @@ through a move and sees no refusal and no record lost or stored twice.
 Evidence: `routing::subscriptions_follow`
 (`a_subscription_follows_its_shard_to_the_new_owner`) reads a durable stream
 from its start while a publisher keeps writing and the shard moves, and checks
-every offset arrives once, in order, with every acknowledged record. The
+every offset arrives once, in order, with every acknowledged record.
+`routing::watches_follow` does the same for a key watch and a sharded prefix
+watch against cache writes, without the caller reopening either. The
 conformance runner checks the frame on the wire, offered and not.
 
 ### Phase 4: pacing
@@ -449,16 +454,32 @@ of what was in flight and nothing more.
 A, finishes everything on B, and moves the shard back: without the change A
 hands out offset 11, which B had finished.
 
+### Following the group redirect
+
+Progress: done. `ClusterClient` now has the single-shard group calls
+(`group_poll`, `group_poll_wait`, `group_ack`, `group_nack`,
+`group_dead_letters`, `group_discard`, `group_redrive`), which follow
+`NotLeader` the way `group_sharded` did and remember each shard's leader;
+`group_sharded` uses the same code. The Python and TypeScript clients' group
+calls go through them, so a consumer on either keeps working when its shard
+moves. `consumer_groups::a_cluster_client_follows_a_group_redirect_to_the_leader`
+polls and acks through a broker that does not lead the shard; with the calls
+sent to the connected broker, as the bindings did, the poll fails with
+`NotLeader`.
+
+A redirect to a draining broker now carries its address. The catalog keeps a
+second list of client addresses for every routable broker, used for
+redirects, moved-reader handoffs and the publish-ack owner hint; `topology`
+still offers only eligible brokers, so new clients are not pointed at a
+broker on its way out. `node_catalog::tests::a_redirect_to_a_draining_broker_carries_its_client_address`
+fails without it with no address in the redirect.
+
 ## What is left
 
-- **A plain client does not follow a group redirect.** Group operations over
-  a single `Client`, including the Python and TypeScript bindings, get the
-  `NotLeader` after a move as an error, as they do for any shard led
-  elsewhere. `ClusterClient::group_sharded` follows it.
-- **A redirect to a draining broker has no address.** Client endpoints list
-  only eligible brokers, so a group operation that reaches another broker for
-  a shard a draining broker still leads is redirected without an address, and
-  `group_sharded` cannot follow it until that shard has moved.
+- **A plain `Client` does not follow a group redirect.** It is one broker's
+  connections, so it returns `NotLeaderError` and leaves connecting to the
+  owner to `ClusterClient`. This is by design and documented, not a gap to
+  close.
 - **A dead lease holder pauses the timed passes** until its lease expires,
   three reconcile intervals (15 s by default). Moves in flight carry on and
   woken passes still run, but a failover waiting on the timer waits that
@@ -467,8 +488,6 @@ hands out offset 11, which B had finished.
   for up to `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`; what it still leads then
   fails over. Moves are paced like any other, so a broker leading many
   unreplicated shards needs a longer timeout (and grace period).
-- **A cache watch does not follow on its own.** It ends with `shard_moved` and
-  the caller reopens it; a sharded watch moves that shard's resume offset.
 - **Load-aware placement** is separate work with its own status row.
 
 ## Checking the work

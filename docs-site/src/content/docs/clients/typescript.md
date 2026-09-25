@@ -327,7 +327,9 @@ if (record.attempts > 3) {
 ```
 
 **A group is bound to one shard.** Consuming a multi-shard stream means polling
-each shard's group — `streamShards` says how many there are.
+each shard's group — `streamShards` says how many there are. Only the shard's leader
+serves its group; the client follows the broker's redirect there, including
+after a rebalance moves the shard, so any broker address works.
 
 ### Dead letters
 
@@ -376,8 +378,8 @@ try {
       return resumeFrom(item.laggedResumeFrom);
     }
     if (item.shardMoved !== null) {
-      // The shard moved to another broker, which ended the watch.
-      return resumeFrom(item.shardMoved.resumeFrom ?? lastOffset + 1n);
+      // The shard moved to another broker; the watch follows it there.
+      continue;
     }
     if (item.change.value === null) {
       roster.delete(item.change.key);   // a delete is a change with no value
@@ -396,9 +398,8 @@ Three things there are load-bearing:
 - **`value === null` means removed**, deliberately distinguishable from an empty
   value. A watcher mirroring a cache has to tell those apart.
 - **`laggedResumeFrom` is a value, not a rejection.** Re-watching from it is
-  gapless. `shardMoved` is the same kind of value: re-watch from its
-  `resumeFrom` when set, and otherwise from the offset after the last change
-  you saw.
+  gapless. `shardMoved` is only a notice: the watch follows its shard to the
+  new owner and carries on, with no change repeated or skipped.
 
 `start` and `retained` are mutually exclusive — a resume already replays the
 state a retained start shortcuts, so asking for both is refused rather than

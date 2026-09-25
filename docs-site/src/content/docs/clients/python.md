@@ -282,7 +282,9 @@ else:
 ```
 
 **A group is bound to one shard.** Consuming a multi-shard stream means polling
-each shard's group — `stream_shards` says how many there are.
+each shard's group — `stream_shards` says how many there are. Only the shard's leader
+serves its group; the client follows the broker's redirect there, including
+after a rebalance moves the shard, so any broker address works.
 
 ### Dead letters
 
@@ -323,9 +325,7 @@ with client.watch_cache(
             watch = client.watch_cache(..., start=item.resume_from)
             continue
         if isinstance(item, felix.CacheWatchShardMoved):
-            # The shard moved to another broker, which ended the watch.
-            start = item.resume_from if item.resume_from is not None else last + 1
-            watch = client.watch_cache(..., start=start)
+            # The shard moved to another broker; the watch follows it there.
             continue
         if item.value is None:
             roster.pop(item.key, None)     # a delete is a change with no value
@@ -340,9 +340,9 @@ Three things in that example are load-bearing:
 - **`value is None` means removed**, and is deliberately distinguishable from
   an empty value. A watcher mirroring a cache has to tell those apart.
 - **`CacheWatchLagged` is a value, not an exception.** Re-watching from
-  `resume_from` is gapless. `CacheWatchShardMoved` is the same kind of value:
-  re-watch from its `resume_from` when set, and otherwise from the offset after
-  the last change you saw.
+  `resume_from` is gapless. `CacheWatchShardMoved` is only a notice: the watch
+  follows its shard to the new owner and carries on, with no change repeated
+  or skipped.
 
 A prefix watch reads **one shard**, so a prefix spanning a multi-shard cache
 needs one watch per shard. On a multi-shard cache the broker refuses a prefix

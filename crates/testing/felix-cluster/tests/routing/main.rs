@@ -15,3 +15,4 @@ mod sharded_subscribe;
 mod sharding;
 mod shutdown_handoff;
 mod subscriptions_follow;
+mod watches_follow;

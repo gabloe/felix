@@ -13,6 +13,15 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Consumer-group calls follow the shard's leader.** `ClusterClient` gains
+  `group_poll`, `group_poll_wait`, `group_ack`, `group_nack`,
+  `group_dead_letters`, `group_discard` and `group_redrive`, which follow the
+  broker's `NotLeader` redirect to the shard's leader and remember it. The
+  Python and TypeScript clients' group calls now use them, so they no longer
+  fail with `ShardUnavailableError` (`not_leader`) when connected to a broker
+  that does not lead the shard, or after a shard move. `Client`'s group calls
+  still return `NotLeaderError` rather than follow it.
+
 - **A broker hands its shards off before it stops.** On SIGTERM a
   clustered broker turns readiness off, drains itself through the control
   plane and keeps serving until it leads no shard, then shuts down as
@@ -216,6 +225,16 @@ for what the current release actually guarantees.
 
 ### Changed
 
+- **Cache watches follow a moved shard.** `ClusterClient::watch_cache` and
+  `watch_cache_retained` now return a `ClusterCacheWatch` (and take
+  `self: &Arc<Self>`). When the shard moves it hands out
+  `CacheWatchItem::ShardMoved` as a notice and reopens the watch on the new
+  owner at `max(offset after the last change, resume_from)`, so the caller
+  no longer reopens it and sees no change twice or missing. A sharded cache
+  watch follows each shard the same way; `ShardedCacheWatchItem::ShardMoved`
+  now means the shard is being followed, and a `ShardClosed` follows if it
+  could not be. The Python and TypeScript watches follow too. A `Client`
+  watch still ends with the frame.
 - **A drain moves leaders before it replaces followers.** Move slots on a
   draining broker go to the shards it leads first, then to its follower
   copies, so with the default limit of one a follower's copy no longer holds
@@ -369,6 +388,11 @@ for what the current release actually guarantees.
   `felix_placement_lease_takeovers_total`,
   `felix_placement_writes_fenced_total`.
 
+- **A redirect to a draining broker carries its address.** A `not_leader`
+  answer or publish-ack owner hint naming a broker that is being drained, but
+  still leads the shard, omitted the client address because only brokers
+  eligible for new work were listed. Routable brokers' addresses are now used
+  for redirects; `topology` still lists only eligible brokers.
 - **One refused publish failed later publishes on the same connection.** A
   publish the broker refused (an unknown stream, a forbidden one, overload)
   stopped the client's publish worker that sent it, and every later publish

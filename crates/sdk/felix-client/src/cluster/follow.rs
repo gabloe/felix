@@ -1,9 +1,15 @@
-//! Following a subscription's shard when it moves to another broker.
+//! Following a subscription's or cache watch's shard when it moves to another
+//! broker.
 //!
-//! A broker that stops serving a shard ends its subscriptions with a
-//! `shard_moved` frame saying where the shard went and where to resume. The
-//! subscription is bound to the old broker's connection, so following means a
-//! new subscription on the new owner, started where the old one left off.
+//! A broker that stops serving a shard ends its subscriptions and cache
+//! watches with a `shard_moved` frame saying where the shard went and where to
+//! resume. Each is bound to the old broker's connection, so following means a
+//! new one on the new owner, started where the old one left off.
+
+mod cache_watch;
+
+pub use cache_watch::ClusterCacheWatch;
+pub(crate) use cache_watch::{WatchProgress, WatchTarget};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -130,11 +136,6 @@ impl ClusterSubscription {
 impl ClusterClient {
     /// Subscribe to a shard on its new owner after `moved` ended the old
     /// subscription, resuming where that one left off.
-    ///
-    /// The broker named in `moved` is asked first, since it is usually right;
-    /// otherwise the entry broker, which redirects. The new owner can refuse
-    /// until it has taken over, so this retries with backoff until the
-    /// policy's deadline.
     pub(crate) async fn follow_moved_shard(
         &self,
         tenant_id: &str,
@@ -145,6 +146,25 @@ impl ClusterClient {
         last_offset: Option<u64>,
     ) -> Result<(Arc<Client>, Subscription)> {
         let start = resume_position(last_offset, moved.resume_from);
+        self.on_new_owner(moved, |first| {
+            self.subscribe_shard_via(first, tenant_id, namespace, stream, shard, Some(start))
+        })
+        .await
+        .with_context(|| format!("follow shard {shard} of {stream} after it moved"))
+    }
+
+    /// Open a reader of a moved shard on its new owner with `open`, given the
+    /// broker to ask first.
+    ///
+    /// The broker named in `moved` is asked first, since it is usually right;
+    /// otherwise the entry broker, which redirects. The new owner can refuse
+    /// until it has taken over, so this retries with backoff until the
+    /// policy's deadline.
+    pub(crate) async fn on_new_owner<T, F, Fut>(&self, moved: &ShardMoved, open: F) -> Result<T>
+    where
+        F: Fn(Arc<Client>) -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
         let deadline = Instant::now() + self.policy.deadline.unwrap_or(FOLLOW_DEADLINE);
         let mut hint: Option<SocketAddr> = moved.addr.as_deref().and_then(|a| a.parse().ok());
         let mut hinted: Option<Arc<Client>> = None;
@@ -162,26 +182,16 @@ impl ClusterClient {
                 },
                 (None, None) => self.client().await,
             };
-            let error = match self
-                .subscribe_shard_via(first, tenant_id, namespace, stream, shard, Some(start))
-                .await
-            {
+            let error = match open(first).await {
                 Ok(opened) => return Ok(opened),
                 Err(err) => err,
             };
             if next_step(&error, Attempt::default()) == Next::Fail {
-                return Err(
-                    error.context(format!("follow shard {shard} of {stream} after it moved"))
-                );
+                return Err(error);
             }
             let delay = self.policy.delay_before(attempt);
             if Instant::now() + delay >= deadline {
-                return Err(error).with_context(|| {
-                    format!(
-                        "shard {shard} of {stream} moved, and its new owner did not take the \
-                         subscription before the deadline"
-                    )
-                });
+                return Err(error.context("the new owner did not take it before the deadline"));
             }
             tokio::time::sleep(delay).await;
             attempt += 1;

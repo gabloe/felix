@@ -147,9 +147,20 @@ while let Some(event) = subscription.next_event().await? {
   seconds without one, and then returns the error from `next_event`.
 
 `subscribe_sharded` does the same per shard and reports it as
-`ShardEvent::ShardMoved`. A sharded cache watch reports
-`ShardedCacheWatchItem::ShardMoved` and moves that shard's resume offset to
-where the old owner said; re-watch from `resume_offsets()` to pick it up.
+`ShardEvent::ShardMoved`.
+
+**A `ClusterClient` cache watch follows too.** `watch_cache` and
+`watch_cache_retained` return a `ClusterCacheWatch`. Its `recv` hands out
+`CacheWatchItem::ShardMoved` as a notice and then reopens the watch on the new
+owner from the larger of the old owner's `resume_from` and the offset after the
+last change handed out. The cache log moves with the shard and keeps its
+offsets, so no change is repeated or skipped; the one exception is a resume
+point the new owner has already compacted past, where the watch resnapshots as
+any resume from that offset would. A `Lagged` still ends the watch, and so does
+not reaching the new owner by the deadline; `resume_from()` is then where to
+start a new one. A sharded cache watch follows each shard the same way and
+reports `ShardedCacheWatchItem::ShardMoved`, or `ShardClosed` if that shard
+could not be followed.
 
 **With `Client`, you resume.** The subscription ends: `next_event` returns
 `None` with `Subscription::shard_moved()` set to the `ShardMoved` it received.
@@ -232,7 +243,7 @@ while let Some(item) = watch.recv().await {
         ShardedCacheWatchItem::Change { shard, change } => { /* apply */ }
         ShardedCacheWatchItem::StateComplete => { /* every shard's state is in */ }
         ShardedCacheWatchItem::Lagged { shard, .. } => { /* that shard ended */ }
-        ShardedCacheWatchItem::ShardMoved { shard, .. } => { /* that shard ended */ }
+        ShardedCacheWatchItem::ShardMoved { shard, .. } => { /* followed to its new owner */ }
         ShardedCacheWatchItem::ShardClosed { shard } => { /* that shard ended */ }
     }
 }
@@ -291,13 +302,20 @@ a redirect, which is any broker from this release on.
 ## Redirects
 
 A subscribe or a consumer-group request sent to a broker that does not own the
-shard is answered with a redirect naming the one that does. `ClusterClient::subscribe` follows it — up to
-three hops, never revisiting a broker within one attempt, because a cluster
-mid-rebalance can otherwise bounce a client between two brokers that disagree.
+shard is answered with a redirect naming the one that does. `ClusterClient::subscribe`
+and the single-shard group calls (`ClusterClient::group_poll`, `group_poll_wait`,
+`group_ack`, `group_nack`, `group_dead_letters`, `group_discard`,
+`group_redrive`) follow it — up to three hops, never revisiting a broker within
+one attempt, because a cluster mid-rebalance can otherwise bounce a client
+between two brokers that disagree. The group calls remember which broker served
+each shard and go straight there next time, until a call against it fails. This
+is what keeps a consumer working after its shard moves: once the move cuts
+over, the old leader answers group requests with a redirect to the new one.
 
 If you use `Client` directly, the redirect surfaces as a typed
 `NotLeaderError` carrying the owner's node id and address. It is an
-instruction, not a failure.
+instruction, not a failure. `Client` is one broker's connections and does not
+follow it; connecting to the owner is `ClusterClient`'s job.
 
 A **publish** to the wrong broker is *forwarded* rather than redirected, so it
 needs nothing from you.

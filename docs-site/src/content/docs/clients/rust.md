@@ -736,8 +736,9 @@ while let Some(item) = watch.recv().await {
             break;
         }
         CacheWatchItem::ShardMoved(moved) => {
-            // The shard moved to another broker, which ended the watch.
-            // Re-watch there; without a `resume_from`, `checkpoint` is right.
+            // The shard moved to another broker, which ended this `Client`
+            // watch. Re-watch there; without a `resume_from`, `checkpoint` is
+            // right. A `ClusterClient` watch follows on its own instead.
             checkpoint = moved.resume_from.unwrap_or(checkpoint);
             break;
         }
@@ -748,7 +749,9 @@ while let Some(item) = watch.recv().await {
 A resume whose history compaction has collapsed begins with each matching
 key's current value instead, and `watch.resnapshot()` says so. Needs a broker
 advertising `FEATURE_CACHE_WATCH` — only brokers whose cache is log-backed do.
-A prefix watch reads one shard; on a multi-shard cache use
+`ClusterClient::watch_cache` returns a `ClusterCacheWatch`, which follows a
+moved shard itself: `ShardMoved` arrives as a notice and the changes carry on
+from the new owner, none repeated or skipped. A prefix watch reads one shard; on a multi-shard cache use
 `ClusterClient::watch_cache_sharded` (see [Clusters](#clusters)).
 See [Cache Features](/felix/features/cache/#7-keyed-watch) for the full
 contract.
@@ -889,6 +892,9 @@ log at that offset, readable by an ordinary replay.
   advertise `FEATURE_CONSUMER_GROUP`.
 - **The shard's leader.** A poll is refused rather than forwarded, because
   relaying would put the claim and the acknowledgement on different brokers.
+  Another broker answers with `NotLeaderError`, and so does the old leader once
+  a shard move cuts over. `Client` hands that back; the same calls on
+  `ClusterClient` (`group_poll`, `group_ack`, ...) follow it to the leader.
 - **Idempotent handling.** This is at-least-once: a crash after handling and
   before acknowledging is indistinguishable from a crash before handling, so the
   record comes back.
@@ -931,8 +937,9 @@ for the full contract.
 Prefix watches on a multi-shard cache work the same way. `watch_cache_sharded`
 opens one watch per shard and merges them. The retained version sends
 `ShardedCacheWatchItem::StateComplete` once every shard's current values have
-arrived. A shard that moves ends with `ShardedCacheWatchItem::ShardMoved`, and
-`resume_offsets()` then says where it resumes. Needs `FEATURE_CACHE_SHARDS`.
+arrived. A shard that moves is followed to its new owner and reported as
+`ShardedCacheWatchItem::ShardMoved`; its changes carry on from where the old
+owner left off. Needs `FEATURE_CACHE_SHARDS`.
 
 ## Connection Management
 

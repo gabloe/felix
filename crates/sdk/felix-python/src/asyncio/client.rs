@@ -302,8 +302,7 @@ impl AsyncClient {
         );
         let wait = std::time::Duration::from_secs_f64(wait.max(0.0));
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client = inner.client().await;
-            let records = client
+            let records = inner
                 .group_poll_wait(
                     &tenant_id,
                     &namespace,
@@ -386,8 +385,7 @@ impl AsyncClient {
             group.to_string(),
         );
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client = inner.client().await;
-            client
+            inner
                 .group_dead_letters(&tenant_id, &namespace, &stream, shard, &group)
                 .await
                 .map_err(to_py_err)
@@ -598,7 +596,7 @@ impl AsyncClient {
             group.to_string(),
         );
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let client = inner.client().await;
+            let client = &inner;
             match what {
                 Settle::Ack => {
                     client

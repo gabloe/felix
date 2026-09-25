@@ -58,7 +58,7 @@ Everything the Python binding wraps, with one exception noted below.
 | Cache | `cachePut` (with TTL), `cacheGet`, `cacheDelete` |
 | Counters | `counterAdd`, `counterGet` |
 | Cache watches | `watchCache(..., key?, prefix?, start?, retained?)` → `recv()`, `retainedCount` |
-| Consumer groups | `groupPoll`, `groupAck`, `groupNack`, `groupDeadLetters`, `groupDiscard`, `groupRedrive` |
+| Consumer groups | `groupPoll`, `groupAck`, `groupNack`, `groupDeadLetters`, `groupDiscard`, `groupRedrive` (each follows the broker's redirect to the shard's leader) |
 
 Every handle has an idempotent `close()` and implements `Symbol.asyncDispose`,
 so on Node 24 and newer a `throw` releases it on the way out:
