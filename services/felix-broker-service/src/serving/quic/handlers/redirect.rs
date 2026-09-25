@@ -80,13 +80,7 @@ pub(crate) fn redirect_from(
                     .into_message(),
                 );
             }
-            let addr = client_endpoints.and_then(|endpoints| {
-                endpoints
-                    .snapshot()
-                    .iter()
-                    .find(|endpoint| endpoint.node_id == node_id)
-                    .map(|endpoint| endpoint.addr.clone())
-            });
+            let addr = client_endpoints.and_then(|endpoints| endpoints.redirect_addr(&node_id));
             Some(Message::NotLeader {
                 node_id,
                 addr,

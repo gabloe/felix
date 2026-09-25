@@ -348,3 +348,49 @@ fn client_endpoints_come_back_in_a_stable_order() {
         .collect();
     assert_eq!(ids, vec!["broker-a", "broker-b", "broker-c"]);
 }
+
+/// **A redirect to a draining broker carries its address.** A draining broker
+/// is no longer offered to new clients, but it still leads the shards it has
+/// not handed off, and a request for one of them that lands elsewhere is
+/// redirected there. Without the address a client has nowhere to follow to.
+#[test]
+fn a_redirect_to_a_draining_broker_carries_its_client_address() {
+    let mut draining = node_with_client_addr("broker-a", "10.0.0.4:7000", "10.0.0.4:5000", false);
+    draining["placement"]["routable"] = serde_json::json!(true);
+    let catalog = into_catalog(response(serde_json::json!({
+        "items": [
+            draining,
+            node_with_client_addr("broker-b", "10.0.0.5:7000", "10.0.0.5:5000", true),
+        ],
+    })));
+    let endpoints = crate::cluster::client_endpoints::ClientEndpoints::new();
+    endpoints.refresh(&catalog);
+
+    let answer = crate::serving::quic::handlers::redirect::redirect_from(
+        crate::shards::routing::Dispatch::Forward {
+            node_id: "broker-a".to_string(),
+            advertise_addr: "10.0.0.4:7000".parse().expect("addr"),
+            generation: 3,
+        },
+        Some(&endpoints),
+        "orders",
+        felix_wire::FEATURE_REDIRECT,
+    );
+    match answer {
+        Some(felix_wire::Message::NotLeader { node_id, addr, .. }) => {
+            assert_eq!(node_id, "broker-a");
+            assert_eq!(addr.as_deref(), Some("10.0.0.4:5000"));
+        }
+        other => panic!("expected a redirect, got {other:?}"),
+    }
+    let offered = endpoints.snapshot();
+    let offered: Vec<&str> = offered
+        .iter()
+        .map(|endpoint| endpoint.node_id.as_str())
+        .collect();
+    assert_eq!(
+        offered,
+        vec!["broker-b"],
+        "a draining broker must still not be offered to new clients",
+    );
+}

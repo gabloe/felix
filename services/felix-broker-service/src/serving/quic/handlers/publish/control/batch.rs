@@ -207,13 +207,10 @@ pub(crate) async fn handle_publish_batch_message(
             PublishRoute::Forward(owner) => {
                 t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
                 let request_id = request_id.expect("request id checked");
-                let addr = publish_ctx.client_endpoints.as_ref().and_then(|endpoints| {
-                    endpoints
-                        .snapshot()
-                        .iter()
-                        .find(|endpoint| endpoint.node_id == owner.node_id)
-                        .map(|endpoint| endpoint.addr.clone())
-                });
+                let addr = publish_ctx
+                    .client_endpoints
+                    .as_ref()
+                    .and_then(|endpoints| endpoints.redirect_addr(&owner.node_id));
                 handle_ack_enqueue_result(
                     send_outgoing_critical(
                         out_ack_tx,
@@ -270,13 +267,10 @@ pub(crate) async fn handle_publish_batch_message(
         && felix_wire::supports(peer_flags, felix_wire::FLAG_BINARY_PUBLISH_ACK_OWNER);
     let forwarded_to = match (&target, hint_owner) {
         (Some(PublishTarget::Forward { target, .. }), true) => {
-            let addr = publish_ctx.client_endpoints.as_ref().and_then(|endpoints| {
-                endpoints
-                    .snapshot()
-                    .iter()
-                    .find(|endpoint| endpoint.node_id == target.node_id)
-                    .map(|endpoint| endpoint.addr.clone())
-            });
+            let addr = publish_ctx
+                .client_endpoints
+                .as_ref()
+                .and_then(|endpoints| endpoints.redirect_addr(&target.node_id));
             Some(felix_wire::binary::PublishOwner {
                 node_id: target.node_id.clone(),
                 addr,
