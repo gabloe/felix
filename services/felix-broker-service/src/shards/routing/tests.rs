@@ -525,3 +525,40 @@ mod feed {
             .expect("join");
     }
 }
+
+/// A leader in a region this broker has no bridge to is refused with its own
+/// reason, one a client can tell apart from a leader that is down; a bridge
+/// to that region lets the request through.
+#[tokio::test]
+async fn a_leader_in_an_unbridged_region_is_refused_by_name() {
+    let mut nodes = catalog();
+    nodes.get_mut("broker-b").expect("broker-b").region = "eu-west-1".to_string();
+    let owned: HashMap<ShardKey, ShardAssignment> = [(key(0), assignment(0, "broker-b", 3))]
+        .into_iter()
+        .collect();
+    let dispatch_with = |regions: RegionRouter<String>| {
+        let router = Arc::new(ShardRouter::new("broker-a", "us-west-2", regions));
+        router.publish(routing_table_from(&owned, &nodes), &nodes);
+        let lifecycle = ShardLifecycle::new("broker-a");
+        let ingress = IngressRouter::new(router, Arc::clone(lifecycle.fence()));
+        dispatch(Some(&ingress), &key(0))
+    };
+
+    let refused = dispatch_with(RegionRouter::new("us-west-2".to_string()));
+    assert_eq!(
+        refused,
+        Dispatch::Unavailable(Reason::RegionNotRoutable {
+            region: "eu-west-1".to_string()
+        })
+    );
+    let Dispatch::Unavailable(reason) = refused else {
+        unreachable!()
+    };
+    assert_eq!(reason.wire_name(), "region_not_routable");
+
+    let bridged = dispatch_with(RegionRouter::with_bridges(
+        "us-west-2".to_string(),
+        [("us-west-2".to_string(), "eu-west-1".to_string())],
+    ));
+    assert!(matches!(bridged, Dispatch::Forward { .. }), "{bridged:?}");
+}

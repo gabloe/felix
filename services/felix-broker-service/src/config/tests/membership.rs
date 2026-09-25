@@ -98,3 +98,32 @@ fn an_identity_without_a_credential_fails_startup() {
     let err = BrokerConfig::from_env().expect_err("should fail");
     assert!(err.to_string().contains("FELIX_NODE_TOKEN"), "{err}");
 }
+
+/// The bridge allowlist is read with the identity, and a malformed one stops
+/// startup: a pair skipped quietly is a region cut off that nobody asked for.
+#[serial]
+#[test]
+fn region_bridges_are_read_and_a_malformed_one_fails_startup() {
+    clear_felix_env();
+    unsafe {
+        env::set_var("FELIX_NODE_ID", "broker-a");
+        env::set_var("FELIX_NODE_ADVERTISE_ADDR", "10.0.0.4:7000");
+        env::set_var("FELIX_CONTROLPLANE_URL", "http://localhost:8443");
+        env::set_var("FELIX_NODE_TOKEN", "a-token");
+        env::set_var("FELIX_REGION_BRIDGES", "us-west-2>eu-west-1");
+    }
+    let membership = BrokerConfig::from_env()
+        .expect("config")
+        .membership
+        .expect("membership");
+    assert_eq!(
+        membership.region_bridges,
+        vec![("us-west-2".to_string(), "eu-west-1".to_string())]
+    );
+
+    unsafe {
+        env::set_var("FELIX_REGION_BRIDGES", "us-west-2");
+    }
+    let err = BrokerConfig::from_env().expect_err("should fail");
+    assert!(err.to_string().contains("FELIX_REGION_BRIDGES"), "{err}");
+}

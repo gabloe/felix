@@ -72,6 +72,10 @@ pub enum Reason {
     Stale { have: u64, wanted: u64 },
     /// The shard is moving to another broker and has not cut over yet.
     Moving,
+    /// The leader is in a region this broker has no bridge to, so it will not
+    /// forward there. A client that connects to the leader directly is not
+    /// refused by this.
+    RegionNotRoutable { region: String },
 }
 
 impl Reason {
@@ -84,6 +88,7 @@ impl Reason {
             Self::NotReady => wire::NOT_READY,
             Self::Stale { .. } => wire::STALE,
             Self::Moving => wire::MOVING,
+            Self::RegionNotRoutable { .. } => wire::REGION_NOT_ROUTABLE,
         }
     }
 }
@@ -101,6 +106,10 @@ impl std::fmt::Display for Reason {
                 )
             }
             Self::Moving => write!(f, "shard is moving to another broker"),
+            Self::RegionNotRoutable { region } => write!(
+                f,
+                "shard leader is in region {region}, which this broker has no bridge to"
+            ),
         }
     }
 }
@@ -386,6 +395,9 @@ impl IngressRouter {
             }
             Resolution::Unavailable(Unavailable::NoAssignment) => {
                 Dispatch::Unavailable(Reason::NotAssigned)
+            }
+            Resolution::Unavailable(Unavailable::RegionNotRoutable { region }) => {
+                Dispatch::Unavailable(Reason::RegionNotRoutable { region })
             }
             Resolution::Unavailable(other) => {
                 Dispatch::Unavailable(Reason::OwnerUnavailable(other.to_string()))
