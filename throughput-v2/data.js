@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790318005872,
+  "lastUpdate": 1790336138189,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -15860,6 +15860,58 @@ window.BENCHMARK_DATA = {
             "range": "6542.90",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 904046.39\nmean: 904527.96\nstdev: 6542.90\ncv: 0.72%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d7f4d335fe7f0c495c976901dd293e1cabc05db8",
+          "message": "fix(transport): notice a silently dead peer in 6 s, not 30 (#705)\n\nA SIGKILLed broker sends no QUIC close, so a publish in flight to it\nwaited until the connection hit the 30 s idle timeout -- the same length\nas the client's ack backstop -- before ClusterClient could retry on the\nnew leader. Every failover cost a publisher half a minute.\n\nThe default idle timeout is now 6 s with keep-alives every 2 s, on both\nclient and broker (they share TransportConfig). The ack read already\nfails with ConnectionLost the moment the connection closes, so no extra\nrace is needed; the 30 s backstop stays above the broker's commit-ack\nbudget for a broker that is alive and never answers.\n\nThe new cluster test pauses the leader, publishes into it, kills it, and\nrequires the publish to land on the promoted replica within 10 s. It took\n30.2 s before this change and about 6.3 s after.",
+          "timestamp": "2026-09-25T04:32:13-07:00",
+          "tree_id": "51201d1282e73ce86b6cebbee0a1fa0536d0871d",
+          "url": "https://github.com/gabloe/felix/commit/d7f4d335fe7f0c495c976901dd293e1cabc05db8"
+        },
+        "date": 1790336137159,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 414215.44,
+            "range": "15353.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 414215.44\nmean: 409720.47\nstdev: 15353.23\ncv: 3.75%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 414215.44,
+            "range": "15353.23",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 414215.44\nmean: 409720.47\nstdev: 15353.23\ncv: 3.75%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 95894.48,
+            "range": "743.62",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 95894.48\nmean: 95779.33\nstdev: 743.62\ncv: 0.78%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 958944.77,
+            "range": "7436.16",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 958944.77\nmean: 957793.33\nstdev: 7436.16\ncv: 0.78%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
