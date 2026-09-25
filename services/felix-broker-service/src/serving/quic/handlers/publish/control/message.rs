@@ -27,7 +27,9 @@ use crate::serving::quic::handlers::publish::route::{
 use crate::serving::quic::handlers::publish::{
     PublishContext, PublishJob, StreamHandleCache, record_json_publish,
 };
-use crate::serving::quic::telemetry::{t_consume_instant, t_counter, t_histogram, t_now_if};
+use crate::serving::quic::telemetry::{
+    count_publish, count_publish_accepted, t_consume_instant, t_counter, t_histogram, t_now_if,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_publish_message(
@@ -113,7 +115,7 @@ pub(crate) async fn handle_publish_message(
                 }
             }
         }
-        t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        count_publish("dropped");
         return Ok(());
     }
     // Publish protocol (control stream):
@@ -207,7 +209,7 @@ pub(crate) async fn handle_publish_message(
         (None, None)
     };
     let Some(target) = target else {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         if ack_mode != felix_wire::AckMode::None {
             let request_id = request_id.expect("request id checked");
             handle_ack_enqueue_result(
@@ -265,11 +267,11 @@ pub(crate) async fn handle_publish_message(
     match enqueue_result {
         Ok(true) => {
             if ack_mode == felix_wire::AckMode::None {
-                t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+                count_publish_accepted("accepted", payload_len as u64);
             }
         }
         Ok(false) => {
-            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            count_publish("dropped");
             if ack_mode != felix_wire::AckMode::None {
                 let request_id = request_id.expect("request id checked");
                 handle_ack_enqueue_result(
@@ -293,7 +295,7 @@ pub(crate) async fn handle_publish_message(
             return Ok(());
         }
         Err(err) => {
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             if ack_mode != felix_wire::AckMode::None {
                 let request_id = request_id.expect("request id checked");
                 handle_ack_enqueue_result(
@@ -348,8 +350,7 @@ pub(crate) async fn handle_publish_message(
             cancel_tx,
         )
         .await?;
-        t_counter!("felix_publish_requests_total", "result" => "ok").increment(1);
-        t_counter!("felix_publish_bytes_total").increment(payload_len as u64);
+        count_publish_accepted("ok", payload_len as u64);
         #[cfg(feature = "telemetry")]
         {
             t_histogram!("felix_publish_latency_ms", "mode" => "enqueue")

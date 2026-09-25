@@ -187,6 +187,12 @@ reaches a subscriber.
 | `Periodic { interval }` | background timer | bytes reach the page cache | one interval |
 | `OnCommit` | the append itself | bytes reach the device | none |
 
+Every open log has its own `Periodic` timer, and a tick with nothing to flush
+does not flush: no unsynced bytes, no retired segment awaiting its seal, and the
+durable offset already at the tail. A broker with hundreds of idle shard logs
+therefore issues no fsyncs, and `felix_storage_sync_total` tracks the logs being
+written rather than the number open.
+
 `None` is not "no durability": the data survives a *process* crash, because the
 page cache belongs to the kernel. It does not survive a machine crash or power
 loss. That distinction is the reason it is a useful setting at all.

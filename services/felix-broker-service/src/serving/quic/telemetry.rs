@@ -84,6 +84,25 @@ impl NoopGauge {
     pub(crate) fn set(&self, _value: f64) {}
 }
 
+/// Count one publish request by outcome.
+///
+/// Recorded whatever the `telemetry` feature says: this is the basic "is
+/// anything being published" signal, one counter bump per request or batch,
+/// and a default build must not report zero while serving traffic.
+pub(crate) fn count_publish(result: &'static str) {
+    metrics::counter!("felix_publish_requests_total", "result" => result).increment(1);
+}
+
+/// Count one accepted publish request and the payload bytes it carried.
+pub(crate) fn count_publish_accepted(result: &'static str, payload_bytes: u64) {
+    count_publish(result);
+    metrics::counter!("felix_publish_bytes_total").increment(payload_bytes);
+}
+
+pub(crate) fn payload_len_sum(payloads: &[bytes::Bytes]) -> u64 {
+    payloads.iter().map(|p| p.len() as u64).sum()
+}
+
 #[cfg(feature = "telemetry")]
 #[inline]
 pub(crate) fn t_should_sample() -> bool {

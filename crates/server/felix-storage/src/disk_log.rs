@@ -386,6 +386,10 @@ impl DiskLog {
                         // The log is gone; report the highest offset so the
                         // task simply stops doing work.
                         None => Ok(Offset::MAX),
+                        // Every open log ticks, and most are idle; an fsync
+                        // of a clean file is still a syscall and a flush-thread
+                        // round trip.
+                        Some(inner) if inner.fully_durable() => Ok(inner.durability.durable_upto()),
                         Some(inner) => inner.durability.force_flush(|| inner.clone().flush()).await,
                     }
                 }

@@ -11,7 +11,7 @@ use super::stream_cache::{StreamHandleCache, push_stream_cache_key};
 use crate::serving::forward::ForwardTarget;
 use crate::serving::quic::STREAM_CACHE_TTL;
 use crate::serving::quic::client_error::ClientError;
-use crate::serving::quic::telemetry::t_counter;
+use crate::serving::quic::telemetry::count_publish;
 use crate::shards::lifecycle::fence::FenceGuard;
 use crate::shards::routing::{Dispatch, IngressRouter};
 use crate::shards::{ShardKey, ShardKind};
@@ -106,7 +106,7 @@ pub(crate) async fn resolve_route(
                 });
             }
             Dispatch::Unavailable(reason) => {
-                t_counter!("felix_publish_requests_total", "result" => "unroutable").increment(1);
+                count_publish("unroutable");
                 tracing::debug!(
                     tenant_id, namespace, stream,
                     reason = %reason,
@@ -263,7 +263,7 @@ pub(crate) fn publish_target(
         }),
         PublishRoute::Forward(target) => {
             if publish_ctx.peers.is_none() {
-                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
+                count_publish("not_owner");
                 tracing::debug!(
                     tenant_id, namespace, stream,
                     owner = %target.node_id,
@@ -274,7 +274,7 @@ pub(crate) fn publish_target(
                     format!("shard is owned by {}", target.node_id),
                 ));
             }
-            t_counter!("felix_publish_requests_total", "result" => "forwarded").increment(1);
+            count_publish("forwarded");
             Ok(PublishTarget::Forward {
                 target,
                 key: crate::serving::forward::ForwardKey {

@@ -74,6 +74,48 @@ async fn periodic_mode_bounds_unsynced_data_by_its_interval() {
     log.shutdown().await.expect("shutdown");
 }
 
+/// The periodic timer fires for every open log, and a broker holds hundreds of
+/// them with most idle. A tick that finds nothing unsynced must not fsync.
+#[tokio::test]
+async fn periodic_mode_does_not_flush_an_idle_log() {
+    let dir = tempdir().expect("dir");
+    let log = open(
+        &dir,
+        FsyncMode::Periodic {
+            interval: Duration::from_millis(5),
+        },
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        log.flushes_performed(),
+        0,
+        "a never-written log was flushed"
+    );
+
+    // Enough to roll the tiny test segments more than once, so the tick after
+    // a seal still has to catch the watermark up.
+    let payloads: Vec<String> = (0..12).map(|i| format!("record-{i:02}")).collect();
+    let refs: Vec<&str> = payloads.iter().map(String::as_str).collect();
+    log.append(&records(&refs)).await.expect("append");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while log.durable_offset() < 12 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(log.durable_offset(), 12);
+    assert_eq!(log.unsynced_bytes(), 0);
+
+    let settled = log.flushes_performed();
+    assert!(settled > 0);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        log.flushes_performed(),
+        settled,
+        "an idle log kept flushing after everything was durable"
+    );
+
+    log.shutdown().await.expect("shutdown");
+}
+
 #[tokio::test]
 async fn shutdown_flushes_what_the_policy_had_not() {
     let dir = tempdir().expect("dir");

@@ -437,6 +437,18 @@ for what the current release actually guarantees.
 
 ### Fixed
 
+- **`felix_publish_requests_total` and `felix_publish_bytes_total` are recorded
+  in a default build.** Both went through the `telemetry`-gated macros, so a
+  broker built without that feature exported neither while serving traffic.
+  Bytes are now counted for fire-and-forget (`accepted`) publishes too, as the
+  payload sum of the request, and no longer for a batch whose acknowledgement
+  timed out. The observability page marks which of the listed metrics still
+  need the `telemetry` feature.
+
+- **A `Periodic` fsync tick skips a log with nothing to flush.** Every open
+  log fsynced on every tick, written or not: a broker with ~200 idle shard,
+  cache and counter logs issued ~800 fsyncs/s.
+
 - **Clients publishing one stream spread across a broker's listeners.** The
   stream-to-publish-stream hash used a seed fixed for the whole process, so
   every `Client` in a process sent a given stream down the same pool slot, and

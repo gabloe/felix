@@ -29,7 +29,9 @@ use crate::serving::quic::handlers::publish::{
 };
 #[cfg(feature = "telemetry")]
 use crate::serving::quic::telemetry::t_histogram;
-use crate::serving::quic::telemetry::{t_consume_instant, t_counter};
+use crate::serving::quic::telemetry::{
+    count_publish, count_publish_accepted, t_consume_instant, t_counter,
+};
 
 // Waits on publish completion futures and emits ack responses in completion order.
 #[allow(clippy::too_many_arguments)]
@@ -150,7 +152,6 @@ pub(super) async fn run_ack_waiter_loop(
                                         Err(_) => Some(AckWaiterResult::PublishBatchTimeout {
                                             request_id,
                                             encoding,
-                                            payload_bytes,
                                         }),
                                     }
                                 }
@@ -181,10 +182,7 @@ pub(super) async fn run_ack_waiter_loop(
                                 Ok(Ok(_)) => {
                                     // Send a success ACK back to the client. This may apply backpressure/throttling
                                     // depending on outbound queue depth; failures here are treated as transport-level issues.
-                                    t_counter!("felix_publish_requests_total", "result" => "ok")
-                                        .increment(1);
-                                    t_counter!("felix_publish_bytes_total")
-                                        .increment(payload_len);
+                                    count_publish_accepted("ok", payload_len);
                                     #[cfg(feature = "telemetry")]
                                     {
                                         t_histogram!(
@@ -213,8 +211,7 @@ pub(super) async fn run_ack_waiter_loop(
                                 }
                                 Ok(Err(err)) => {
                                     // Publish worker completed but the broker reported a logical error: surface it as PublishError.
-                                    t_counter!("felix_publish_requests_total", "result" => "error")
-                                        .increment(1);
+                                    count_publish("error");
                                     if let Err(err) = handle_ack_enqueue_result(
                                         send_outgoing_critical(
                                             &out_ack_tx_waiter,
@@ -235,8 +232,7 @@ pub(super) async fn run_ack_waiter_loop(
                                 }
                                 Err(_) => {
                                     // The publish worker dropped the response channel: treat as an internal error.
-                                    t_counter!("felix_publish_requests_total", "result" => "error")
-                                        .increment(1);
+                                    count_publish("error");
                                     if let Err(err) = handle_ack_enqueue_result(
                                         send_outgoing_critical(
                                             &out_ack_tx_waiter,
@@ -264,11 +260,7 @@ pub(super) async fn run_ack_waiter_loop(
                         } => {
                             // Worker did not respond within `ack_wait_timeout`: emit an error so the client can retry/fail fast.
                             t_consume_instant(start);
-                            t_counter!(
-                                "felix_publish_requests_total",
-                                "result" => "error"
-                            )
-                            .increment(1);
+                            count_publish("error");
                             t_counter!("felix_broker_ack_waiter_timeout_total")
                                 .increment(1);
                             #[cfg(feature = "telemetry")]
@@ -307,15 +299,10 @@ pub(super) async fn run_ack_waiter_loop(
                             // Batch variant: similar to Publish, but records bytes per message in the batch.
                             match response {
                                 Ok(Ok(_)) => {
-                                    t_counter!(
-                                        "felix_publish_requests_total",
-                                        "result" => "ok"
-                                    )
-                                    .increment(1);
-                                    for bytes in &payload_bytes {
-                                        t_counter!("felix_publish_bytes_total")
-                                            .increment(*bytes as u64);
-                                    }
+                                    count_publish_accepted(
+                                        "ok",
+                                        payload_bytes.iter().sum::<usize>() as u64,
+                                    );
                                     if let Err(err) = handle_ack_enqueue_result(
                                         send_outgoing_critical(
                                             &out_ack_tx_waiter,
@@ -335,8 +322,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     }
                                 }
                                 Ok(Err(err)) => {
-                                    t_counter!("felix_publish_requests_total", "result" => "error")
-                                        .increment(1);
+                                    count_publish("error");
                                     if let Err(err) = handle_ack_enqueue_result(
                                         send_outgoing_critical(
                                             &out_ack_tx_waiter,
@@ -356,8 +342,7 @@ pub(super) async fn run_ack_waiter_loop(
                                     }
                                 }
                                 Err(_) => {
-                                    t_counter!("felix_publish_requests_total", "result" => "error")
-                                        .increment(1);
+                                    count_publish("error");
                                     if let Err(err) = handle_ack_enqueue_result(
                                         send_outgoing_critical(
                                             &out_ack_tx_waiter,
@@ -381,20 +366,10 @@ pub(super) async fn run_ack_waiter_loop(
                         AckWaiterResult::PublishBatchTimeout {
                             request_id,
                             encoding,
-                            payload_bytes,
                         } => {
-                            // Even on timeout we account for attempted bytes to keep telemetry consistent.
-                            t_counter!(
-                                "felix_publish_requests_total",
-                                "result" => "error"
-                            )
-                            .increment(1);
+                            count_publish("error");
                             t_counter!("felix_broker_ack_waiter_timeout_total")
                                 .increment(1);
-                            for bytes in &payload_bytes {
-                                t_counter!("felix_publish_bytes_total")
-                                    .increment(*bytes as u64);
-                            }
                             if let Err(err) = handle_ack_enqueue_result(
                                 send_outgoing_critical(
                                     &out_ack_tx_waiter,

@@ -15,7 +15,9 @@ use crate::serving::quic::handlers::publish::route::{
     UNKEYED_SHARD, publish_target, resolve_route, resolve_shard,
 };
 use crate::serving::quic::handlers::publish::{PublishContext, PublishJob, StreamHandleCache};
-use crate::serving::quic::telemetry::{log_decode_error, t_counter};
+use crate::serving::quic::telemetry::{
+    count_publish, count_publish_accepted, log_decode_error, payload_len_sum,
+};
 
 pub(crate) async fn handle_binary_publish_batch_uni(
     broker: &Broker,
@@ -94,7 +96,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
         felix_wire::internal::AckMode::None,
         &auth_ctx.token,
     ) else {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         return Ok(true);
     };
     let payloads = batch
@@ -102,6 +104,7 @@ pub(crate) async fn handle_binary_publish_batch_uni(
         .into_iter()
         .map(Bytes::from)
         .collect::<Vec<_>>();
+    let payload_bytes = payload_len_sum(&payloads);
     match enqueue_publish(
         publish_ctx,
         PublishJob {
@@ -118,13 +121,13 @@ pub(crate) async fn handle_binary_publish_batch_uni(
     .await
     {
         Ok(true) => {
-            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+            count_publish_accepted("accepted", payload_bytes);
         }
         Ok(false) => {
-            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            count_publish("dropped");
         }
         Err(_) => {
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             return Ok(false);
         }
     }
@@ -174,10 +177,11 @@ pub(crate) async fn handle_publish_message_uni(
         felix_wire::internal::AckMode::None,
         &credential,
     ) else {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         return Ok(true);
     };
 
+    let payload_bytes = payload.len() as u64;
     let r = enqueue_publish(
         publish_ctx,
         PublishJob {
@@ -194,13 +198,13 @@ pub(crate) async fn handle_publish_message_uni(
     .await;
     match r {
         Ok(true) => {
-            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+            count_publish_accepted("accepted", payload_bytes);
         }
         Ok(false) => {
-            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            count_publish("dropped");
         }
         Err(err) => {
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             tracing::warn!(error = %err, "publish enqueue failed");
             return Ok(false);
         }
@@ -253,10 +257,11 @@ pub(crate) async fn handle_publish_batch_message_uni(
         felix_wire::internal::AckMode::None,
         &credential,
     ) else {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         return Ok(true);
     };
     let payloads = payloads.into_iter().map(Bytes::from).collect::<Vec<_>>();
+    let payload_bytes = payload_len_sum(&payloads);
 
     let r = enqueue_publish(
         publish_ctx,
@@ -274,13 +279,13 @@ pub(crate) async fn handle_publish_batch_message_uni(
     .await;
     match r {
         Ok(true) => {
-            t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+            count_publish_accepted("accepted", payload_bytes);
         }
         Ok(false) => {
-            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            count_publish("dropped");
         }
         Err(err) => {
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             tracing::warn!(error = %err, "publish enqueue failed");
             return Ok(false);
         }

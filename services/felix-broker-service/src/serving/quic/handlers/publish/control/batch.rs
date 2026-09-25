@@ -26,7 +26,9 @@ use crate::serving::quic::handlers::publish::route::{
 use crate::serving::quic::handlers::publish::{
     PublishContext, PublishJob, StreamHandleCache, record_json_publish,
 };
-use crate::serving::quic::telemetry::{t_counter, t_histogram, t_now_if};
+use crate::serving::quic::telemetry::{
+    count_publish, count_publish_accepted, t_counter, t_histogram, t_now_if,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_publish_batch_message(
@@ -120,7 +122,7 @@ pub(crate) async fn handle_publish_batch_message(
                 }
             }
         }
-        t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+        count_publish("dropped");
         return Ok(());
     }
     // PublishBatch protocol (control stream):
@@ -205,7 +207,7 @@ pub(crate) async fn handle_publish_batch_message(
             // nothing to tell the second from the first. The producer is told
             // where to go instead.
             PublishRoute::Forward(owner) => {
-                t_counter!("felix_publish_requests_total", "result" => "not_owner").increment(1);
+                count_publish("not_owner");
                 let request_id = request_id.expect("request id checked");
                 let addr = publish_ctx
                     .client_endpoints
@@ -281,7 +283,7 @@ pub(crate) async fn handle_publish_batch_message(
     };
     let quorum = needs_quorum(&target);
     let Some(target) = target else {
-        t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+        count_publish("error");
         if ack_mode != felix_wire::AckMode::None {
             let request_id = request_id.expect("request id checked");
             handle_ack_enqueue_result(
@@ -355,11 +357,11 @@ pub(crate) async fn handle_publish_batch_message(
     match enqueue_result {
         Ok(true) => {
             if ack_mode == felix_wire::AckMode::None {
-                t_counter!("felix_publish_requests_total", "result" => "accepted").increment(1);
+                count_publish_accepted("accepted", payload_bytes.iter().sum::<usize>() as u64);
             }
         }
         Ok(false) => {
-            t_counter!("felix_publish_requests_total", "result" => "dropped").increment(1);
+            count_publish("dropped");
             if ack_mode != felix_wire::AckMode::None {
                 let request_id = request_id.expect("request id checked");
                 handle_ack_enqueue_result(
@@ -380,7 +382,7 @@ pub(crate) async fn handle_publish_batch_message(
             return Ok(());
         }
         Err(err) => {
-            t_counter!("felix_publish_requests_total", "result" => "error").increment(1);
+            count_publish("error");
             if ack_mode != felix_wire::AckMode::None {
                 let request_id = request_id.expect("request id checked");
                 handle_ack_enqueue_result(
@@ -433,10 +435,7 @@ pub(crate) async fn handle_publish_batch_message(
             cancel_tx,
         )
         .await?;
-        t_counter!("felix_publish_requests_total", "result" => "ok").increment(1);
-        for bytes in &payload_bytes {
-            t_counter!("felix_publish_bytes_total").increment(*bytes as u64);
-        }
+        count_publish_accepted("ok", payload_bytes.iter().sum::<usize>() as u64);
         return Ok(());
     }
     let request_id = request_id.expect("request id checked");

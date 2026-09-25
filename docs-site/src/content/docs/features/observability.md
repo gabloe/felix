@@ -49,17 +49,29 @@ metrics that answer them.
 **Is the publish path healthy?**
 
 ```prometheus
-felix_publish_requests_total
-felix_publish_bytes_total
-felix_publish_latency_ms                    # histogram
-felix_broker_ingress_queue_depth            # publish jobs waiting
-felix_broker_ingress_dropped_total          # overflow, by policy
-felix_broker_ingress_rejected_total
+felix_publish_requests_total                # by result; a batch is one request
+felix_publish_bytes_total                   # payload bytes of ok/accepted requests
+felix_publish_latency_ms                    # histogram (telemetry)
+felix_broker_ingress_queue_depth            # publish jobs waiting (telemetry)
+felix_broker_ingress_dropped_total          # overflow, by policy (telemetry)
+felix_broker_ingress_rejected_total         # (telemetry)
 felix_broker_acked_publishes_dropped_total  # by reason: acked on enqueue, then not written
-felix_client_publish_forwarded_total        # client: publishes the broker had to relay
+felix_client_publish_forwarded_total        # client: publishes the broker had to relay (telemetry)
 felix_broker_json_publishes_total            # by frame: publishes still on JSON
-felix_client_publish_cancelled_after_enqueue_total  # client: publishes whose caller went away
+felix_client_publish_cancelled_after_enqueue_total  # client: publishes whose caller went away (telemetry)
 ```
+
+Metrics marked *(telemetry)* are only recorded when the broker or client is
+built with the `telemetry` feature (see [Per-stage telemetry](#per-stage-telemetry));
+a default build does not export them. Everything else here is always on.
+
+`felix_publish_requests_total` counts requests, not records: a batch of 64 is
+one request. `result` is `accepted` for a fire-and-forget publish that reached
+the ingress queue, `ok` for one that was acknowledged, and `dropped`, `error`,
+`not_owner` or `unroutable` when it went nowhere. `forwarded` is counted on top
+of the eventual outcome, when a broker relays a publish to the shard's owner.
+`felix_publish_bytes_total` adds the payload bytes of every `accepted` and `ok`
+request — payloads only, not frame or routing overhead.
 
 `felix_client_publish_cancelled_after_enqueue_total` is a client metric, and
 non-zero is not an error. Cancelling a publish after it reaches the worker does
@@ -87,7 +99,7 @@ path's throughput.
 **Are subscribers keeping up?**
 
 ```prometheus
-felix_subscribe_requests_total
+felix_subscribe_requests_total              # (telemetry)
 felix_sub_queue_enqueued_total
 felix_sub_queue_dropped_total               # records lost to slow consumers
 felix_sub_queue_drop_old_emulated_total     # DropOld configured, DropNew behavior
@@ -315,7 +327,8 @@ it came from without the broker being told twice:
 For performance investigations, both the broker and client can record
 per-stage timing samples — decode, fanout, write, and so on. It is off by
 default and behind a feature flag, because it is a profiling tool, not a
-production metrics system:
+production metrics system. The same flag turns on the hot-path metrics marked
+*(telemetry)* above:
 
 ```toml
 [dependencies]

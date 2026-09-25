@@ -706,8 +706,8 @@ Access Prometheus UI at `http://localhost:9090`:
 rate(felix_publish_requests_total[1m])
 
 # Publish failures, by what went wrong — `error`, `not_owner`, `unroutable`,
-# `dropped`. The same counter carries the successes, under `ok`, `accepted`
-# and `forwarded`.
+# `dropped`. The same counter carries the successes, under `ok` and
+# `accepted`; `forwarded` is counted as well when a broker relays a publish.
 rate(felix_publish_requests_total{result=~"error|not_owner|unroutable|dropped"}[1m])
 
 # Publish latency p99. Milliseconds, so the bucket name says `_ms`.
