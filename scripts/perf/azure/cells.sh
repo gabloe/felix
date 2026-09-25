@@ -269,6 +269,7 @@ cell() {
     echo "cell=${name}"
     echo "session=${SESSION}"
     echo "ref=${CURRENT_REF}"
+    echo "loadgen_ref=$(cat "${here}/sessions/${SESSION}.loadgen-ref" 2>/dev/null || echo "${LOADGEN_SPEC:-}")"
     echo "generators=${gens[*]}"
     echo "args=$*"
     echo "loadgen_env=$(printf '%s' "${lg_env}" | sed 's/^export //' | tr '\n' ' ')"

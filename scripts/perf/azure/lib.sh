@@ -144,6 +144,8 @@ fetch_file() {
 #   - IO_URING: on by default for the campaign; the flush-dispatch arms set it
 #     explicitly either way.
 #   - IO_RUNTIME_THREADS=0 is the Linux default, written down so it is recorded.
+#   - UDP buffers: 24 MiB, just under the rmem_max cloud-init sets; the 8 MiB
+#     default dropped datagrams (RcvbufErrors) under a saturating ingest.
 base_overrides() {
   cat <<ENV
 FELIX_QUIC_LISTENERS=${BROKER_LISTENERS:-1}
@@ -151,6 +153,8 @@ FELIX_IO_RUNTIME_THREADS=0
 FELIX_DURABLE_FSYNC_MODE=periodic
 FELIX_ACK_ON_COMMIT=1
 FELIX_STORAGE_IO_URING=1
+FELIX_UDP_RECV_BUFFER=25165824
+FELIX_UDP_SEND_BUFFER=25165824
 ENV
 }
 

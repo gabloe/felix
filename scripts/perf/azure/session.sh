@@ -113,6 +113,7 @@ deployment=$(az deployment group create \
     brokerVmSize="${BROKER_VM_SIZE:-Standard_D4as_v5}" \
     loadgenVmSize="${LOADGEN_VM_SIZE:-Standard_D4as_v5}" \
     loadgen0VmSize="${LOADGEN0_VM_SIZE:-}" \
+    controlPlaneVmSize="${CONTROLPLANE_VM_SIZE:-Standard_D2as_v5}" \
     brokerDataDiskGib="${BROKER_DATA_DISK_GIB:-128}" \
     useLocalNvme="${USE_LOCAL_NVME:-false}" \
     brokerListeners="${BROKER_LISTENERS:-1}" \
