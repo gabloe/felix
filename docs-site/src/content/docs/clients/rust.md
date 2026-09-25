@@ -889,6 +889,9 @@ log at that offset, readable by an ordinary replay.
   advertise `FEATURE_CONSUMER_GROUP`.
 - **The shard's leader.** A poll is refused rather than forwarded, because
   relaying would put the claim and the acknowledgement on different brokers.
+  Another broker answers with `NotLeaderError`, and so does the old leader once
+  a shard move cuts over. `Client` hands that back; the same calls on
+  `ClusterClient` (`group_poll`, `group_ack`, ...) follow it to the leader.
 - **Idempotent handling.** This is at-least-once: a crash after handling and
   before acknowledging is indistinguishable from a crash before handling, so the
   record comes back.

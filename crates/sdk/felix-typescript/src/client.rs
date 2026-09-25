@@ -426,8 +426,8 @@ impl Client {
     ) -> Result<Vec<GroupRecord>> {
         let max_records = max_records.unwrap_or(32);
         let wait_ms = wait_ms.unwrap_or(0);
-        let client = self.cluster()?.client().await;
-        let records = client
+        let records = self
+            .cluster()?
             .group_poll_wait(
                 &tenant_id,
                 &namespace,
@@ -461,8 +461,8 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        let client = self.cluster()?.client().await;
-        client
+        self
+            .cluster()?
             .group_ack(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
@@ -480,8 +480,8 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        let client = self.cluster()?.client().await;
-        client
+        self
+            .cluster()?
             .group_nack(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
@@ -497,8 +497,8 @@ impl Client {
         shard: u32,
         group: String,
     ) -> Result<Vec<BigInt>> {
-        let client = self.cluster()?.client().await;
-        let offsets = client
+        let offsets = self
+            .cluster()?
             .group_dead_letters(&tenant_id, &namespace, &stream, shard, &group)
             .await
             .map_err(classify)?;
@@ -517,8 +517,8 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        let client = self.cluster()?.client().await;
-        client
+        self
+            .cluster()?
             .group_discard(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)
@@ -536,8 +536,8 @@ impl Client {
         offset: BigInt,
     ) -> Result<()> {
         let offset = u64_of(offset)?;
-        let client = self.cluster()?.client().await;
-        client
+        self
+            .cluster()?
             .group_redrive(&tenant_id, &namespace, &stream, shard, &group, offset)
             .await
             .map_err(classify)

@@ -13,6 +13,15 @@ for what the current release actually guarantees.
 
 ### Added
 
+- **Consumer-group calls follow the shard's leader.** `ClusterClient` gains
+  `group_poll`, `group_poll_wait`, `group_ack`, `group_nack`,
+  `group_dead_letters`, `group_discard` and `group_redrive`, which follow the
+  broker's `NotLeader` redirect to the shard's leader and remember it. The
+  Python and TypeScript clients' group calls now use them, so they no longer
+  fail with `ShardUnavailableError` (`not_leader`) when connected to a broker
+  that does not lead the shard, or after a shard move. `Client`'s group calls
+  still return `NotLeaderError` rather than follow it.
+
 - **A broker hands its shards off before it stops.** On SIGTERM a
   clustered broker turns readiness off, drains itself through the control
   plane and keeps serving until it leads no shard, then shuts down as
@@ -369,6 +378,11 @@ for what the current release actually guarantees.
   `felix_placement_lease_takeovers_total`,
   `felix_placement_writes_fenced_total`.
 
+- **A redirect to a draining broker carries its address.** A `not_leader`
+  answer or publish-ack owner hint naming a broker that is being drained, but
+  still leads the shard, omitted the client address because only brokers
+  eligible for new work were listed. Routable brokers' addresses are now used
+  for redirects; `topology` still lists only eligible brokers.
 - **One refused publish failed later publishes on the same connection.** A
   publish the broker refused (an unknown stream, a forbidden one, overload)
   stopped the client's publish worker that sent it, and every later publish

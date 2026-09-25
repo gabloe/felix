@@ -1029,7 +1029,11 @@ the one request on that stream.
 ```
 
 `addr` is the owner's **client-facing** listener, and is omitted when the
-cluster has not been told one — a client is then given the owner's name alone,
+cluster has not been told one. It is given for a draining owner too: a broker
+being drained is left out of `topology`, which lists where new clients should
+connect, but it still leads the shards it has not handed off, and a redirect to
+one of those has to say where it is. The same holds for the owner hint on a
+forwarded publish's ack — a client is then given the owner's name alone,
 which is still usable if it knows that broker from `topology`. Dialling the
 broker-internal listener instead would be refused, so no address is better than
 the wrong one.
@@ -1042,8 +1046,11 @@ did not gets the `error` it always did, naming the owner in prose.
 
 A client following a redirect MUST bound its hops. A cluster mid-rebalance can
 name an owner that names another, and two brokers that disagree would otherwise
-bounce a client between them indefinitely. The Rust client caps this at three
-hops and refuses to visit the same broker twice within one attempt.
+bounce a client between them indefinitely. The Rust `ClusterClient` caps this at
+three hops and refuses to visit the same broker twice within one attempt. It
+follows redirects for subscribes, cache watches and every group request; the
+Python and TypeScript clients' group calls go through it. The single-broker Rust
+`Client` returns the redirect as `NotLeaderError` and does not follow it.
 
 **Publish is not redirected — it is forwarded.** The two paths made opposite
 choices deliberately: `docs/subscribe-routing.md` records the measurements
