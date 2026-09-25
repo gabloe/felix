@@ -1,6 +1,7 @@
 //! Finding the key a token was signed with: discovery, the JWKS behind it,
 //! both cached with a TTL, and the checks that the key fits the algorithm.
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet, KeyAlgorithm};
@@ -14,6 +15,18 @@ pub(super) struct CachedJwks {
     pub(super) jwks: JwkSet,
     pub(super) expires_at: Instant,
 }
+
+/// The shortest gap between two fetches of the same JWKS.
+///
+/// A `kid` miss refreshes the JWKS, and reaching one takes only a token that
+/// names an allowlisted issuer, not a valid signature. Without a floor every
+/// forged token would cost a request to the tenant's IdP. It is also how long a
+/// key the IdP rotates in can go unrecognised, so it stays short.
+pub(super) const JWKS_REFRESH_FLOOR: Duration = Duration::from_secs(30);
+
+/// When this JWKS URL was last fetched. Held across the fetch, so concurrent
+/// refreshes queue and the ones behind find the result already cached.
+pub(super) type JwksFetchGate = Arc<tokio::sync::Mutex<Option<Instant>>>;
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedDiscovery {
@@ -70,7 +83,31 @@ impl UpstreamOidcValidator {
     }
 
     pub(super) async fn refresh_jwks(&self, jwks_url: &str) -> Result<JwkSet, OidcError> {
-        let jwks: JwkSet = self.client.get(jwks_url).send().await?.json().await?;
+        let gate = self
+            .jwks_fetches
+            .entry(jwks_url.to_string())
+            .or_default()
+            .clone();
+        let mut last_fetch = gate.lock().await;
+        if last_fetch.is_some_and(|at| at.elapsed() < self.jwks_refresh_floor) {
+            // Fetched recently, possibly by whoever held the gate before us.
+            // An expired entry is still the IdP's latest answer.
+            return self
+                .jwks_cache
+                .get(jwks_url)
+                .map(|entry| entry.jwks.clone())
+                .ok_or(OidcError::JwksUnavailable);
+        }
+        // Stamped before the fetch so a failing IdP is not retried per request.
+        *last_fetch = Some(Instant::now());
+        let jwks: JwkSet = self
+            .client
+            .get(jwks_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
         self.jwks_cache.insert(
             jwks_url.to_string(),
             CachedJwks {
