@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use serial_test::serial;
+
 use felix_controlplane_service::auth::idp_registry::{ClaimMappings, IdpIssuerConfig};
 use felix_controlplane_service::auth::keys::generate_signing_keys;
 use felix_controlplane_service::auth::rbac::policy_store::{GroupingRule, PolicyRule};
@@ -96,7 +98,7 @@ async fn reset_postgres(url: &str, schema: &str) -> Result<(), sqlx::Error> {
     let truncate = format!(
         "TRUNCATE {schema_ident}.tenant_changes, {schema_ident}.namespace_changes, \
          {schema_ident}.stream_changes, {schema_ident}.cache_changes, {schema_ident}.streams, \
-         {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.tenants RESTART IDENTITY",
+         {schema_ident}.caches, {schema_ident}.namespaces, {schema_ident}.tenants RESTART IDENTITY CASCADE",
     );
     // Same generated-schema identifier as `ensure_schema`; it cannot be bound as a parameter.
     sqlx::query(AssertSqlSafe(truncate))
@@ -119,18 +121,15 @@ async fn pg_store() -> Option<Arc<felix_controlplane_service::store::postgres::P
     let schema = match ensure_schema(&base_url).await {
         Ok(schema) => schema,
         Err(err) => {
-            eprintln!("skipping pg-tests: cannot create schema: {err}");
-            return None;
+            panic!("pg-tests: cannot create schema: {err}");
         }
     };
     let url = url_with_schema(&base_url, &schema);
     if let Err(err) = run_migrations_once(&url).await {
-        eprintln!("skipping pg-tests: cannot run migrations: {err}");
-        return None;
+        panic!("pg-tests: cannot run migrations: {err}");
     }
     if let Err(err) = reset_postgres(&url, &schema).await {
-        eprintln!("skipping pg-tests: cannot connect to postgres: {err}");
-        return None;
+        panic!("pg-tests: cannot connect to postgres: {err}");
     }
     let pg_cfg = config::PostgresConfig {
         url,
@@ -149,14 +148,14 @@ async fn pg_store() -> Option<Arc<felix_controlplane_service::store::postgres::P
     {
         Ok(store) => Arc::new(store),
         Err(err) => {
-            eprintln!("skipping pg-tests: connect postgres store failed: {err}");
-            return None;
+            panic!("pg-tests: connect postgres store failed: {err}");
         }
     };
     Some(store)
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_stream_sequences_monotonic() {
     let Some(store) = pg_store().await else {
         return;
@@ -237,6 +236,7 @@ async fn pg_stream_sequences_monotonic() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_delete_namespace_emits_cascades() {
     let Some(store) = pg_store().await else {
         return;
@@ -323,6 +323,7 @@ async fn pg_delete_namespace_emits_cascades() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_auth_store_idp_and_rbac_roundtrip() {
     let Some(store) = pg_store().await else {
         return;
@@ -384,6 +385,7 @@ async fn pg_auth_store_idp_and_rbac_roundtrip() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_auth_bootstrap_and_signing_keys() {
     let Some(store) = pg_store().await else {
         return;
@@ -444,6 +446,7 @@ async fn pg_auth_bootstrap_and_signing_keys() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_set_auth_bootstrapped_missing_tenant_returns_not_found() {
     let Some(store) = pg_store().await else {
         return;
@@ -457,6 +460,7 @@ async fn pg_set_auth_bootstrapped_missing_tenant_returns_not_found() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_store_namespace_conflict_and_not_found() {
     let Some(store) = pg_store().await else {
         return;
@@ -506,6 +510,7 @@ async fn pg_store_namespace_conflict_and_not_found() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_store_stream_conflict_and_not_found() {
     let Some(store) = pg_store().await else {
         return;
@@ -607,7 +612,85 @@ async fn pg_store_stream_conflict_and_not_found() {
     assert!(matches!(err, StoreError::NotFound(_)));
 }
 
+/// A stream's replication factor survives every read path and a patch.
 #[tokio::test]
+#[serial]
+async fn pg_store_keeps_a_streams_replication_factor() {
+    let Some(store) = pg_store().await else {
+        return;
+    };
+    store
+        .create_tenant(Tenant {
+            tenant_id: "t1".to_string(),
+            display_name: "Tenant One".to_string(),
+        })
+        .await
+        .expect("tenant");
+    store
+        .create_namespace(Namespace {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            display_name: "Default".to_string(),
+        })
+        .await
+        .expect("namespace");
+    store
+        .create_stream(Stream {
+            tenant_id: "t1".to_string(),
+            namespace: "default".to_string(),
+            stream: "orders".to_string(),
+            kind: StreamKind::Stream,
+            shards: 2,
+            replication_factor: 3,
+            retention: RetentionPolicy {
+                max_age_seconds: None,
+                max_size_bytes: None,
+            },
+            consistency: ConsistencyLevel::Quorum,
+            delivery: DeliveryGuarantee::AtLeastOnce,
+            durable: true,
+            region: None,
+        })
+        .await
+        .expect("stream");
+    let key = StreamKey {
+        tenant_id: "t1".to_string(),
+        namespace: "default".to_string(),
+        stream: "orders".to_string(),
+    };
+
+    let read = store.get_stream(&key).await.expect("get");
+    assert_eq!(read.replication_factor, 3, "get_stream");
+    let listed = store.list_streams("t1", "default").await.expect("list");
+    assert_eq!(listed[0].replication_factor, 3, "list_streams");
+    // What placement reads.
+    let snapshot = store.stream_snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.items[0].replication_factor, 3, "stream_snapshot");
+
+    // A patch rewrites the row from what it read, so a wrong read would be
+    // written back and stick.
+    let patched = store
+        .patch_stream(
+            &key,
+            StreamPatchRequest {
+                retention: Some(RetentionPolicy {
+                    max_age_seconds: Some(60),
+                    max_size_bytes: None,
+                }),
+                consistency: None,
+                delivery: None,
+                durable: None,
+            },
+        )
+        .await
+        .expect("patch");
+    assert_eq!(patched.replication_factor, 3, "patch_stream result");
+    let read = store.get_stream(&key).await.expect("get after patch");
+    assert_eq!(read.replication_factor, 3, "get_stream after patch");
+}
+
+#[tokio::test]
+#[serial]
 async fn pg_store_cache_conflict_and_not_found() {
     let Some(store) = pg_store().await else {
         return;
@@ -693,6 +776,7 @@ async fn pg_store_cache_conflict_and_not_found() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_store_conflict_and_delete_not_found_errors() {
     let Some(store) = pg_store().await else {
         return;
@@ -711,6 +795,7 @@ async fn pg_store_conflict_and_delete_not_found_errors() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_store_list_get_and_exists_roundtrip() {
     let Some(store) = pg_store().await else {
         return;
@@ -819,6 +904,7 @@ async fn pg_store_list_get_and_exists_roundtrip() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_store_tenant_snapshot_and_changes_roundtrip() {
     let Some(store) = pg_store().await else {
         return;
@@ -843,6 +929,7 @@ async fn pg_store_tenant_snapshot_and_changes_roundtrip() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_delete_tenant_emits_stream_retention_max_size() {
     let Some(store) = pg_store().await else {
         return;
@@ -898,6 +985,7 @@ async fn pg_delete_tenant_emits_stream_retention_max_size() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_store_connect_runs_migrations() {
     let base_url = match std::env::var("FELIX_TEST_DATABASE_URL")
         .or_else(|_| std::env::var("FELIX_CONTROLPLANE_POSTGRES_URL"))
@@ -957,6 +1045,7 @@ async fn pg_store_connect_runs_migrations() {
 }
 
 #[tokio::test]
+#[serial]
 async fn pg_set_tenant_signing_keys_rejects_invalid_material() {
     let Some(store) = pg_store().await else {
         return;

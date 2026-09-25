@@ -86,7 +86,7 @@ fn stream_from_db_maps_fields() {
         stream: "s1".to_string(),
         kind: "Stream".to_string(),
         shards: 2,
-        replication_factor: 1,
+        replication_factor: 3,
         retention_max_age_seconds: Some(3600),
         retention_max_size_bytes: Some(2048),
         consistency: "Leader".to_string(),
@@ -100,6 +100,7 @@ fn stream_from_db_maps_fields() {
     assert_eq!(stream.stream, "s1");
     assert!(matches!(stream.kind, StreamKind::Stream));
     assert_eq!(stream.shards, 2);
+    assert_eq!(stream.replication_factor, 3);
     assert_eq!(stream.retention.max_age_seconds, Some(3600));
     assert_eq!(stream.retention.max_size_bytes, Some(2048));
     assert!(matches!(
