@@ -42,7 +42,7 @@ mod routing;
 mod sharded;
 mod subscribe;
 
-pub use follow::ClusterSubscription;
+pub use follow::{ClusterCacheWatch, ClusterSubscription};
 pub use retry::ReconnectPolicy;
 pub use sharded::{
     ShardEvent, ShardOffsets, ShardedCacheWatch, ShardedCacheWatchItem, ShardedGroup,

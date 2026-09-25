@@ -1,0 +1,289 @@
+//! Following a cache watch's shard when it moves to another broker.
+//!
+//! The old owner ends the watch with `shard_moved`, after every change it
+//! applied has been queued to the watcher. A watch reads the shard's cache log,
+//! which moves with the shard and keeps its offsets, so the watch carries on by
+//! opening a new one on the new owner from the offset after what it has seen.
+
+use std::sync::Arc;
+
+use anyhow::Result;
+
+use crate::cache::{CacheWatch, CacheWatchFilter, CacheWatchItem};
+use crate::client::Client;
+use crate::cluster::ClusterClient;
+use crate::subscribe::ShardMoved;
+
+/// A cache watch through a [`ClusterClient`] that follows its shard when it
+/// moves.
+///
+/// When the shard's owner hands it to another broker, the watch yields
+/// [`CacheWatchItem::ShardMoved`] as a notice and the next [`Self::recv`]
+/// opens a watch on the new owner and carries on from
+/// [`Self::resume_from`]. The changes that follow pick up exactly where the
+/// old owner left off: none is repeated, and none is skipped unless it was
+/// compacted away on the new owner first, in which case the watch resnapshots
+/// as any resume from that offset would.
+///
+/// A [`CacheWatchItem::Lagged`] still ends the watch, as on a
+/// [`CacheWatch`]. So does failing to reach the new owner within the client's
+/// reconnect deadline; [`Self::resume_from`] is then where a new watch should
+/// start.
+///
+/// Dropping this ends the watch.
+pub struct ClusterCacheWatch {
+    cluster: Arc<ClusterClient>,
+    target: WatchTarget,
+    /// Held so the connection the changes arrive on stays open.
+    client: Arc<Client>,
+    watch: CacheWatch,
+    progress: WatchProgress,
+    /// Set by a `ShardMoved` and cleared once the new owner is watched, so a
+    /// `recv` cancelled while following tries again next time.
+    following: Option<ShardMoved>,
+    moves: u64,
+    resume_offset: u64,
+    resnapshot: bool,
+    retained_count: Option<u64>,
+}
+
+impl ClusterCacheWatch {
+    pub(crate) fn new(
+        cluster: Arc<ClusterClient>,
+        target: WatchTarget,
+        from_offset: Option<u64>,
+        client: Arc<Client>,
+        watch: CacheWatch,
+    ) -> Self {
+        Self {
+            cluster,
+            target,
+            client,
+            progress: WatchProgress::new(
+                watch.resume_offset(),
+                from_offset,
+                watch.retained_count(),
+                watch.resnapshot(),
+            ),
+            following: None,
+            moves: 0,
+            resume_offset: watch.resume_offset(),
+            resnapshot: watch.resnapshot(),
+            retained_count: watch.retained_count(),
+            watch,
+        }
+    }
+
+    /// The next item, or `None` once the watch has ended.
+    ///
+    /// Following a move happens inside this call, after the
+    /// [`CacheWatchItem::ShardMoved`] notice has been handed out. It is
+    /// cancel-safe: a call dropped mid-follow leaves the follow to the next.
+    pub async fn recv(&mut self) -> Option<CacheWatchItem> {
+        if let Some(moved) = self.following.clone() {
+            let followed = self.follow(&moved).await;
+            self.following = None;
+            if let Err(err) = followed {
+                tracing::warn!(
+                    error = %format!("{err:#}"),
+                    resume_from = self.progress.resume_from,
+                    "a cache watch could not follow its shard to the new owner",
+                );
+                return None;
+            }
+        }
+        let item = self.watch.recv().await?;
+        match &item {
+            CacheWatchItem::Change(change) => {
+                self.progress.observe_change(change.offset);
+            }
+            CacheWatchItem::Lagged { resume_from } => self.progress.observe_lag(*resume_from),
+            CacheWatchItem::ShardMoved(moved) => {
+                self.progress.observe_move(moved.resume_from);
+                self.following = Some(moved.clone());
+            }
+        }
+        Some(item)
+    }
+
+    /// The `from_offset` that resumes this watch without a gap, counting
+    /// everything handed out so far.
+    ///
+    /// On a retained watch still in its state phase it is 0: values not yet
+    /// delivered can carry any offset below where live delivery began.
+    pub fn resume_from(&self) -> u64 {
+        self.progress.resume_from
+    }
+
+    /// [`CacheWatch::resume_offset`] of the watch as first opened.
+    pub fn resume_offset(&self) -> u64 {
+        self.resume_offset
+    }
+
+    /// [`CacheWatch::resnapshot`] of the watch as first opened.
+    pub fn resnapshot(&self) -> bool {
+        self.resnapshot
+    }
+
+    /// [`CacheWatch::retained_count`] of the watch as first opened.
+    pub fn retained_count(&self) -> Option<u64> {
+        self.retained_count
+    }
+
+    /// How many times this watch has followed its shard to a new owner.
+    pub fn moves(&self) -> u64 {
+        self.moves
+    }
+
+    /// The client connected to the broker currently serving this watch. It
+    /// changes when the shard moves.
+    pub fn client(&self) -> &Arc<Client> {
+        &self.client
+    }
+
+    pub(crate) fn progress(&self) -> WatchProgress {
+        self.progress
+    }
+
+    async fn follow(&mut self, moved: &ShardMoved) -> Result<()> {
+        let from = self.progress.resume_from;
+        let (cluster, target) = (&self.cluster, &self.target);
+        let (client, watch) = cluster
+            .on_new_owner(moved, |first| {
+                cluster.watch_via(first, target, Some(from), false)
+            })
+            .await?;
+        self.progress
+            .rebase(watch.resume_offset(), watch.resnapshot());
+        self.client = client;
+        self.watch = watch;
+        self.moves += 1;
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for ClusterCacheWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClusterCacheWatch")
+            .field("target", &self.target)
+            .field("progress", &self.progress)
+            .field("following", &self.following)
+            .field("moves", &self.moves)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a watch reads: which cache, which keys, and which shard when the
+/// caller names one.
+#[derive(Debug, Clone)]
+pub(crate) struct WatchTarget {
+    pub(crate) tenant_id: String,
+    pub(crate) namespace: String,
+    pub(crate) cache: String,
+    pub(crate) filter: CacheWatchFilter,
+    pub(crate) shard: Option<u32>,
+}
+
+impl WatchTarget {
+    pub(crate) fn new(
+        tenant_id: &str,
+        namespace: &str,
+        cache: &str,
+        filter: CacheWatchFilter,
+        shard: Option<u32>,
+    ) -> Self {
+        Self {
+            tenant_id: tenant_id.to_string(),
+            namespace: namespace.to_string(),
+            cache: cache.to_string(),
+            filter,
+            shard,
+        }
+    }
+}
+
+/// Where a watch has reached, advanced as items are handed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WatchProgress {
+    /// The `from_offset` that resumes the watch without a gap.
+    pub(crate) resume_from: u64,
+    /// Where live delivery began.
+    live_from: u64,
+    /// Whatever precedes live delivery arrives in log order, so each item can
+    /// advance the position. False for retained values and resnapshots, which
+    /// arrive in key order.
+    in_log_order: bool,
+    retained_left: u64,
+}
+
+impl WatchProgress {
+    pub(crate) fn new(
+        live_from: u64,
+        from_offset: Option<u64>,
+        retained: Option<u64>,
+        resnapshot: bool,
+    ) -> Self {
+        let retained_left = retained.unwrap_or(0);
+        let resume_from = if retained_left > 0 {
+            0
+        } else {
+            from_offset.unwrap_or(live_from)
+        };
+        Self {
+            resume_from,
+            live_from,
+            in_log_order: retained.is_none() && !resnapshot,
+            retained_left,
+        }
+    }
+
+    /// True while retained values are still to come.
+    pub(crate) fn in_state_phase(&self) -> bool {
+        self.retained_left > 0
+    }
+
+    /// True when this change completed the state phase.
+    pub(crate) fn observe_change(&mut self, offset: u64) -> bool {
+        if self.retained_left > 0 {
+            self.retained_left -= 1;
+            if self.retained_left == 0 {
+                self.resume_from = self.resume_from.max(self.live_from);
+                return true;
+            }
+            return false;
+        }
+        if offset >= self.live_from || self.in_log_order {
+            self.resume_from = self.resume_from.max(offset.saturating_add(1));
+        }
+        false
+    }
+
+    /// The broker names the offset that resumes gaplessly, except mid-state:
+    /// retained values not yet delivered can sit below it, so such a watch
+    /// stays at 0.
+    pub(crate) fn observe_lag(&mut self, resume_from: u64) {
+        if self.retained_left == 0 {
+            self.resume_from = resume_from;
+        }
+    }
+
+    /// Every change below the old owner's `resume_from` was queued to the
+    /// watch before the move, so it is safe to skip to it. Without one, the
+    /// position after the last change handed out is.
+    pub(crate) fn observe_move(&mut self, resume_from: Option<u64>) {
+        if let (0, Some(resume_from)) = (self.retained_left, resume_from) {
+            self.resume_from = self.resume_from.max(resume_from);
+        }
+    }
+
+    /// The watch was reopened from `resume_from` on the new owner. It asks
+    /// for no retained values, so whatever state phase was left is over.
+    pub(crate) fn rebase(&mut self, live_from: u64, resnapshot: bool) {
+        self.live_from = live_from;
+        self.in_log_order = !resnapshot;
+        self.retained_left = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests;

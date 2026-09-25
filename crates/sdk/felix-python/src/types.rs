@@ -114,11 +114,10 @@ impl CacheWatchLagged {
     }
 }
 
-/// The watch's shard moved to another broker, which ended the watch.
+/// The watch's shard moved to another broker.
 ///
-/// Like `CacheWatchLagged`, an item rather than an exception. Re-watch from
-/// `resume_from` when it is set, and otherwise from the offset after the last
-/// change seen.
+/// A notice, not an end: the watch follows the shard to its new owner and
+/// carries on where it left off.
 #[pyclass(module = "felix", frozen, get_all)]
 pub struct CacheWatchShardMoved {
     /// Where the old owner says to resume, when it could say.
