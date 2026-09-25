@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790361441268,
+  "lastUpdate": 1790363675191,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix throughput - batch=64, GitHub-hosted runner": [
@@ -16224,6 +16224,58 @@ window.BENCHMARK_DATA = {
             "range": "32576.62",
             "unit": "msg/s",
             "extra": "trials: 5\nmedian: 1071202.91\nmean: 1055436.98\nstdev: 32576.62\ncv: 3.09%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "31124f64ffdf63464388758b2fe4f4ccc62e15a4",
+          "message": "fix(client): seed the stream-to-writer hash per client, so clients spread across listeners (#713)\n\nEvery Client in a process hashed a stream to the same publish worker,\nbecause AHasher::default() uses seeds fixed for the process. A worker is a\nconnection and a connection sits on one broker listener, so all of a load\ngenerator's clients publishing one stream shared one listener.",
+          "timestamp": "2026-09-25T12:11:36-07:00",
+          "tree_id": "8ba8072c8cd6424f7473abe65137215f4d629db6",
+          "url": "https://github.com/gabloe/felix/commit/31124f64ffdf63464388758b2fe4f4ccc62e15a4"
+        },
+        "date": 1790363674348,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 384272.44,
+            "range": "23544.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 384272.44\nmean: 376350.73\nstdev: 23544.32\ncv: 6.26%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=1 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 384272.44,
+            "range": "23544.32",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 384272.44\nmean: 376350.73\nstdev: 23544.32\ncv: 6.26%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 232f55671db0\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - throughput (msg/s)",
+            "value": 93410.65,
+            "range": "548.27",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 93410.65\nmean: 93428.71\nstdev: 548.27\ncv: 0.59%\ndirection: higher is better\nsemantics: publisher message rate\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
+          },
+          {
+            "name": "balanced/P8_hash fanout=10 batch=64 payload=1024B - delivered throughput (msg/s)",
+            "value": 934106.5,
+            "range": "5482.69",
+            "unit": "msg/s",
+            "extra": "trials: 5\nmedian: 934106.50\nmean: 934287.11\nstdev: 5482.69\ncv: 0.59%\ndirection: higher is better\nsemantics: aggregate subscriber deliveries\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 59b8778b5929\nbinary: true"
           }
         ]
       }
