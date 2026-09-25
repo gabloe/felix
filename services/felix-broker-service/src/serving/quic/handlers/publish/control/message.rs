@@ -11,6 +11,7 @@ use bytes::Bytes;
 use felix_broker::Broker;
 use felix_wire::Message;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot, watch};
+use tracing::Instrument;
 
 use super::batch::{overloaded_after_enqueue, refusal_for_client};
 use crate::observability::timings;
@@ -263,169 +264,172 @@ pub(crate) async fn handle_publish_message(
         namespace = %namespace,
         stream = %stream
     );
-    let _enter = span.enter();
-    match enqueue_result {
-        Ok(true) => {
-            if ack_mode == felix_wire::AckMode::None {
-                count_publish_accepted("accepted", payload_len as u64);
+    async move {
+        match enqueue_result {
+            Ok(true) => {
+                if ack_mode == felix_wire::AckMode::None {
+                    count_publish_accepted("accepted", payload_len as u64);
+                }
+            }
+            Ok(false) => {
+                count_publish("dropped");
+                if ack_mode != felix_wire::AckMode::None {
+                    let request_id = request_id.expect("request id checked");
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            out_ack_tx,
+                            out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            ack_throttle_tx,
+                            Outgoing::Message(
+                                ClientError::overloaded("ingress overloaded")
+                                    .into_publish_error(request_id),
+                            ),
+                        )
+                        .await,
+                        ack_timeout_state,
+                        ack_throttle_tx,
+                        cancel_tx,
+                    )
+                    .await?;
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                count_publish("error");
+                if ack_mode != felix_wire::AckMode::None {
+                    let request_id = request_id.expect("request id checked");
+                    handle_ack_enqueue_result(
+                        send_outgoing_critical(
+                            out_ack_tx,
+                            out_ack_depth,
+                            "felix_broker_out_ack_depth",
+                            ack_throttle_tx,
+                            // Nothing was enqueued.
+                            Outgoing::Message(
+                                ClientError::not_enqueued(&err).into_publish_error(request_id),
+                            ),
+                        )
+                        .await,
+                        ack_timeout_state,
+                        ack_throttle_tx,
+                        cancel_tx,
+                    )
+                    .await?;
+                }
+                return Ok(());
             }
         }
-        Ok(false) => {
-            count_publish("dropped");
-            if ack_mode != felix_wire::AckMode::None {
-                let request_id = request_id.expect("request id checked");
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        out_ack_tx,
-                        out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        ack_throttle_tx,
-                        Outgoing::Message(
-                            ClientError::overloaded("ingress overloaded")
-                                .into_publish_error(request_id),
-                        ),
-                    )
-                    .await,
-                    ack_timeout_state,
+        if ack_mode == felix_wire::AckMode::None {
+            return Ok(());
+        }
+        // A forward has no enqueue-ack mode: this broker enqueued the batch to send
+        // it somewhere else, which is not a fact worth acknowledging. The commit-ack
+        // path below waits for the owner's answer instead.
+        //
+        // Nor does a `Quorum` publish. "Accepted into the ingress queue" is not an
+        // answer to "is this on a majority", and answering it anyway is how a
+        // `Quorum` stream came to behave exactly like a `Leader` one whenever
+        // `ack_on_commit` was off -- which is the default.
+        if !commit_ack {
+            // Enqueue-ack mode:
+            // Ack means "accepted into the ingress queue", not "committed". This keeps
+            // latency low but can report success even if a later broker error occurs.
+            // Fire-and-forget ack after enqueue when configured.
+            let request_id = request_id.expect("request id checked");
+            handle_ack_enqueue_result(
+                send_outgoing_critical(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
                     ack_throttle_tx,
-                    cancel_tx,
+                    Outgoing::Message(Message::PublishOk { request_id }),
                 )
-                .await?;
+                .await,
+                ack_timeout_state,
+                ack_throttle_tx,
+                cancel_tx,
+            )
+            .await?;
+            count_publish_accepted("ok", payload_len as u64);
+            #[cfg(feature = "telemetry")]
+            {
+                t_histogram!("felix_publish_latency_ms", "mode" => "enqueue")
+                    .record(start.elapsed().as_secs_f64() * 1000.0);
             }
             return Ok(());
         }
-        Err(err) => {
-            count_publish("error");
-            if ack_mode != felix_wire::AckMode::None {
-                let request_id = request_id.expect("request id checked");
-                handle_ack_enqueue_result(
-                    send_outgoing_critical(
-                        out_ack_tx,
-                        out_ack_depth,
-                        "felix_broker_out_ack_depth",
-                        ack_throttle_tx,
-                        // Nothing was enqueued.
-                        Outgoing::Message(
-                            ClientError::not_enqueued(&err).into_publish_error(request_id),
-                        ),
-                    )
-                    .await,
-                    ack_timeout_state,
-                    ack_throttle_tx,
-                    cancel_tx,
-                )
-                .await?;
-            }
-            return Ok(());
-        }
-    }
-    if ack_mode == felix_wire::AckMode::None {
-        return Ok(());
-    }
-    // A forward has no enqueue-ack mode: this broker enqueued the batch to send
-    // it somewhere else, which is not a fact worth acknowledging. The commit-ack
-    // path below waits for the owner's answer instead.
-    //
-    // Nor does a `Quorum` publish. "Accepted into the ingress queue" is not an
-    // answer to "is this on a majority", and answering it anyway is how a
-    // `Quorum` stream came to behave exactly like a `Leader` one whenever
-    // `ack_on_commit` was off -- which is the default.
-    if !commit_ack {
-        // Enqueue-ack mode:
-        // Ack means "accepted into the ingress queue", not "committed". This keeps
-        // latency low but can report success even if a later broker error occurs.
-        // Fire-and-forget ack after enqueue when configured.
         let request_id = request_id.expect("request id checked");
-        handle_ack_enqueue_result(
-            send_outgoing_critical(
-                out_ack_tx,
-                out_ack_depth,
-                "felix_broker_out_ack_depth",
-                ack_throttle_tx,
-                Outgoing::Message(Message::PublishOk { request_id }),
-            )
-            .await,
-            ack_timeout_state,
-            ack_throttle_tx,
-            cancel_tx,
-        )
-        .await?;
-        count_publish_accepted("ok", payload_len as u64);
-        #[cfg(feature = "telemetry")]
-        {
-            t_histogram!("felix_publish_latency_ms", "mode" => "enqueue")
-                .record(start.elapsed().as_secs_f64() * 1000.0);
+        let response_rx = response_rx.expect("response rx available");
+        let payload_len_for_metrics = payload_len as u64;
+        // Commit-ack mode:
+        // We bound the number of in-flight commit acks. If exhausted, we fail fast.
+        // Correctness note: failing after enqueue means the publish may still commit;
+        // the client will see an error/overload even though the publish succeeded.
+        // If that is unacceptable, we must enforce admission *before* enqueue.
+        let permit = match Arc::clone(ack_waiters).try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                let _ = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
+                )
+                .await;
+                t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
+                return Ok(());
+            }
+        };
+        let msg = AckWaiterMessage::Publish {
+            request_id,
+            // There is no binary encoding for single publishes; the binary fast path
+            // is batch-only, so this waiter always replies in JSON.
+            encoding: AckEncoding::Json,
+            payload_len: payload_len_for_metrics,
+            start,
+            response_rx,
+            permit,
+        };
+        match ack_waiter_tx.try_send(msg) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
+                drop(match msg {
+                    AckWaiterMessage::Publish { permit, .. }
+                    | AckWaiterMessage::PublishBatch { permit, .. } => permit,
+                });
+                t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
+                let _ = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
+                )
+                .await;
+                return Ok(());
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
+                drop(match msg {
+                    AckWaiterMessage::Publish { permit, .. }
+                    | AckWaiterMessage::PublishBatch { permit, .. } => permit,
+                });
+                t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
+                let _ = send_outgoing_best_effort(
+                    out_ack_tx,
+                    out_ack_depth,
+                    "felix_broker_out_ack_depth",
+                    ack_throttle_tx,
+                    Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
+                )
+                .await;
+                return Ok(());
+            }
         }
-        return Ok(());
+        let _ = ack_wait_timeout;
+        Ok(())
     }
-    let request_id = request_id.expect("request id checked");
-    let response_rx = response_rx.expect("response rx available");
-    let payload_len_for_metrics = payload_len as u64;
-    // Commit-ack mode:
-    // We bound the number of in-flight commit acks. If exhausted, we fail fast.
-    // Correctness note: failing after enqueue means the publish may still commit;
-    // the client will see an error/overload even though the publish succeeded.
-    // If that is unacceptable, we must enforce admission *before* enqueue.
-    let permit = match Arc::clone(ack_waiters).try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            let _ = send_outgoing_best_effort(
-                out_ack_tx,
-                out_ack_depth,
-                "felix_broker_out_ack_depth",
-                ack_throttle_tx,
-                Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
-            )
-            .await;
-            t_counter!("felix_broker_ack_waiters_exhausted_total").increment(1);
-            return Ok(());
-        }
-    };
-    let msg = AckWaiterMessage::Publish {
-        request_id,
-        // There is no binary encoding for single publishes; the binary fast path
-        // is batch-only, so this waiter always replies in JSON.
-        encoding: AckEncoding::Json,
-        payload_len: payload_len_for_metrics,
-        start,
-        response_rx,
-        permit,
-    };
-    match ack_waiter_tx.try_send(msg) {
-        Ok(()) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(msg)) => {
-            drop(match msg {
-                AckWaiterMessage::Publish { permit, .. }
-                | AckWaiterMessage::PublishBatch { permit, .. } => permit,
-            });
-            t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
-            let _ = send_outgoing_best_effort(
-                out_ack_tx,
-                out_ack_depth,
-                "felix_broker_out_ack_depth",
-                ack_throttle_tx,
-                Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
-            )
-            .await;
-            return Ok(());
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(msg)) => {
-            drop(match msg {
-                AckWaiterMessage::Publish { permit, .. }
-                | AckWaiterMessage::PublishBatch { permit, .. } => permit,
-            });
-            t_counter!("felix_broker_ack_waiter_queue_full_total").increment(1);
-            let _ = send_outgoing_best_effort(
-                out_ack_tx,
-                out_ack_depth,
-                "felix_broker_out_ack_depth",
-                ack_throttle_tx,
-                Outgoing::Message(overloaded_after_enqueue().into_publish_error(request_id)),
-            )
-            .await;
-            return Ok(());
-        }
-    }
-    let _ = ack_wait_timeout;
-    Ok(())
+    .instrument(span)
+    .await
 }
