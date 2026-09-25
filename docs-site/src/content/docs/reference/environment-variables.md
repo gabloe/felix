@@ -1559,8 +1559,8 @@ provisioning makes them counter-productive.
 ### `FELIX_STORAGE_IO_URING`
 
 **Description**: Submit device flushes through `io_uring` (`IORING_OP_FSYNC`) on
-one process-wide ring, instead of handing each one to the blocking thread pool.
-Linux only.
+one process-wide ring, instead of handing each one to the log's own flush
+thread. Linux only.
 
 **Type**: Boolean (`1` to enable)
 
@@ -1572,10 +1572,9 @@ export FELIX_STORAGE_IO_URING="1"
 ```
 
 **Note**: A kernel too old for the opcode, or a container that forbids the
-syscall, falls back to the blocking pool rather than failing — durability must
-not depend on an optimisation being available. A perf session measured 956.7
-MB/s with it on against 917.2 without, every run better and no overlap between
-the distributions.
+syscall, falls back to the flush thread rather than failing — durability must
+not depend on an optimisation being available. The kernel still runs each sync
+on a worker thread, so this is not faster than the flush thread for one log.
 
 ### `FELIX_DURABLE_VERIFY_ALL_ON_OPEN`
 
