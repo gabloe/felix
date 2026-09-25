@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::api::AppState;
-use crate::api::error::{ApiError, api_forbidden, api_internal, api_internal_message};
+use crate::api::error::{ApiError, api_internal, api_internal_message};
+use crate::auth::bearer::{Refusal, refused};
 use crate::auth::felix_token::mint_token;
 use crate::auth::rbac::enforcer::build_enforcer;
 use crate::auth::rbac::permissions::effective_permissions;
@@ -122,10 +123,10 @@ pub async fn refresh_token_handler(
     // One refusal for every way a token can be unusable — unparseable, unknown,
     // expired, revoked, wrong secret. Distinguishing them would let a caller
     // probe which token ids exist and which secrets are close.
-    let refused = || api_forbidden("refresh token is not usable");
+    let unusable = || refused(Refusal::RefreshRefused, "refresh token is not usable");
 
     let Some((token_id, secret)) = refresh_token::split(&request.refresh_token) else {
-        return Err(refused());
+        return Err(unusable());
     };
 
     let now = now_secs();
@@ -155,9 +156,9 @@ pub async fn refresh_token_handler(
                 .await
                 .map_err(|err| api_internal("failed to revoke refresh family", &err))?;
             metrics::counter!("felix_refresh_tokens_revoked_total").increment(revoked);
-            return Err(refused());
+            return Err(unusable());
         }
-        RefreshTokenTake::Unusable => return Err(refused()),
+        RefreshTokenTake::Unusable => return Err(unusable()),
     };
 
     // The secret is checked after the token is spent, deliberately. A wrong
@@ -165,7 +166,7 @@ pub async fn refresh_token_handler(
     // letting that attempt leave the token usable would make guessing free.
     if refresh_token::hash_secret(secret) != record.secret_hash {
         metrics::counter!("felix_refresh_token_bad_secret_total").increment(1);
-        return Err(refused());
+        return Err(unusable());
     }
 
     // Re-evaluated, never carried over: a grant removed since the last exchange
@@ -202,7 +203,7 @@ pub async fn refresh_token_handler(
             .revoke_refresh_family(&tenant_id, &record.family_id)
             .await
             .map_err(|err| api_internal("failed to revoke refresh family", &err))?;
-        return Err(api_forbidden("no permissions"));
+        return Err(refused(Refusal::Forbidden, "no permissions"));
     }
 
     let keys = state
