@@ -377,3 +377,133 @@ async fn a_slow_control_plane_does_not_stall_the_remaining_followers() {
 
     server.abort();
 }
+
+/// A leader of `count` records on a registered stream at `consistency`.
+async fn registered_leader(
+    count: usize,
+    consistency: felix_broker::ConsistencyLevel,
+) -> (Arc<Broker>, TempDir) {
+    let (broker, dir) = leader_with(count).await;
+    broker.register_tenant(TENANT).await.expect("tenant");
+    broker
+        .register_namespace(TENANT, NAMESPACE)
+        .await
+        .expect("namespace");
+    broker
+        .register_stream(
+            TENANT,
+            NAMESPACE,
+            STREAM,
+            felix_broker::StreamMetadata {
+                durable: true,
+                shards: 1,
+                consistency,
+            },
+        )
+        .await
+        .expect("stream");
+    (broker, dir)
+}
+
+/// One pass whose first report lets a publish land on the leader while it is
+/// in flight: what happens when the record it releases is acknowledged and the
+/// client sends the next. The pass has shipped by then, so the leader ends it
+/// one record ahead of its follower. Returns the report the pass ended on.
+async fn pass_with_a_publish_behind_the_report(
+    broker: &Arc<Broker>,
+    marks: &QuorumMarks,
+) -> crate::replication::reporter::ShardReport {
+    let log = broker
+        .shard_log(felix_broker::LogKind::Stream, TENANT, NAMESPACE, STREAM, 0)
+        .await
+        .expect("log");
+    let published = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app = axum::Router::new().route(
+        "/v1/nodes/{node_id}/replica-status",
+        axum::routing::post(move || {
+            let log = log.clone();
+            let published = Arc::clone(&published);
+            async move {
+                if !published.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    log.append(&[Bytes::from_static(b"next")])
+                        .await
+                        .expect("append");
+                }
+                axum::http::StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+    let (reporter, _reporter_task) = crate::replication::reporter::Reporter::spawn(
+        ReportTo {
+            client: reqwest::Client::new(),
+            base_url: format!("http://{addr}"),
+            node_id: LOCAL.to_string(),
+            token: None,
+            incarnation: 0,
+        },
+        CancellationToken::new(),
+    );
+
+    let pass = replicate_once(
+        &AcceptingFollower::default(),
+        broker,
+        &router(LOCAL, &["broker-b"], 4),
+        marks,
+        Some(&reporter),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+        &mut HashMap::new(),
+    )
+    .await;
+    server.abort();
+    pass.reports.last().expect("a report").clone()
+}
+
+/// **A `Quorum` leader that dies holding a record nobody else has yet can
+/// still be replaced.** That record was never acknowledged: the mark moves
+/// only after a report naming who holds it. A follower with everything up to
+/// the mark holds everything a client was promised, and reporting it as
+/// behind leaves the control plane nobody to promote. The shard then stays
+/// down for good, because the only broker that could report again is dead.
+#[tokio::test]
+async fn a_quorum_follower_holding_every_acknowledged_record_can_lead() {
+    let (broker, _dir) = registered_leader(3, felix_broker::ConsistencyLevel::Quorum).await;
+    let marks = QuorumMarks::new();
+
+    let report = pass_with_a_publish_behind_the_report(&broker, &marks).await;
+
+    assert_eq!(
+        report.tail, 4,
+        "the publish should have landed after shipping"
+    );
+    assert_eq!(marks.offset(&watch_key(&key()), 4), Some(3));
+    assert_eq!(
+        report.caught_up,
+        vec!["broker-b".to_string()],
+        "the follower holds every acknowledged record but was not offered for promotion",
+    );
+}
+
+/// Under `Leader` a write is acknowledged before it ships, so the record the
+/// follower lacks may already have been promised. Only an exact copy may lead.
+#[tokio::test]
+async fn a_leader_stream_follower_missing_the_newest_record_cannot_lead() {
+    let (broker, _dir) = registered_leader(3, felix_broker::ConsistencyLevel::Leader).await;
+    let marks = QuorumMarks::new();
+
+    let report = pass_with_a_publish_behind_the_report(&broker, &marks).await;
+
+    assert_eq!(
+        report.tail, 4,
+        "the publish should have landed after shipping"
+    );
+    assert!(report.caught_up.is_empty());
+}

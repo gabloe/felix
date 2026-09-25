@@ -106,17 +106,21 @@ pub struct ShardReport {
 }
 
 /// Who could take this shard over, as of `tail`.
+///
+/// A follower is offered when it holds everything below `acknowledged`: the
+/// records a client may already have been told are stored.
 pub(super) fn shard_report(
     key: &ShardKey,
     generation: u64,
     tail: u64,
+    acknowledged: u64,
     followers: &[FollowerCursor],
     drained: bool,
 ) -> ShardReport {
     ShardReport {
         key: key.clone(),
         generation,
-        caught_up: caught_up(tail, followers),
+        caught_up: caught_up(acknowledged, followers),
         // Only followers whose position is moving: placement fences a move
         // on how far behind its destination is, and one it cannot reach is
         // not going to close any gap.

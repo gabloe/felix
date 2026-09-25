@@ -98,10 +98,20 @@ A shard's leadership is a **time-bounded lease** issued by the control plane,
 with the assignment generation as its epoch. Per-shard Raft was considered and
 rejected; `docs/replication-design.md` records why.
 
-**Only a replica that holds every record the leader did may be promoted.** The
-catch-up bound is zero. A bound above zero would be a bound on how much a
-promotion may silently lose, and there is no honest non-zero value that is not a
-policy decision.
+**Only a replica that holds every record the leader may have acknowledged can
+be promoted.** The catch-up bound is zero. A bound above zero would be a bound on
+how much a promotion may silently lose, and there is no honest non-zero value
+that is not a policy decision.
+
+Under `Leader` that is every record the leader held, since a write is
+acknowledged before it ships. Under `Quorum` it is every record up to the
+quorum mark: nothing past the mark has been acknowledged, and the mark moves
+only once the report naming who holds it has landed. A `Quorum` leader that dies
+holding records no follower has yet is therefore still replaced; those records
+were never acknowledged, and an idempotent producer sends them again.
+
+> `a_quorum_follower_holding_every_acknowledged_record_can_lead` and
+> `a_leader_stream_follower_missing_the_newest_record_cannot_lead`.
 
 > `the_promoted_leader_is_one_of_the_replicas` and
 > `an_unreplicated_shard_does_not_fail_over_to_an_empty_broker` — a shard with

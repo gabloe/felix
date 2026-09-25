@@ -205,7 +205,7 @@ fn a_follower_that_is_not_reached_is_not_reported_as_close() {
     let behind = FollowerCursor::new("broker-c", addr, 7);
     let key = report("orders").key;
 
-    let report = shard_report(&key, 4, 10, &[unreachable, behind], false);
+    let report = shard_report(&key, 4, 10, 10, &[unreachable, behind], false);
     assert_eq!(report.offsets, vec![("broker-c".to_string(), 7)]);
     assert_eq!(report.tail, 10);
 }
