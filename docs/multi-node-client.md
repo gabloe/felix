@@ -147,9 +147,20 @@ while let Some(event) = subscription.next_event().await? {
   seconds without one, and then returns the error from `next_event`.
 
 `subscribe_sharded` does the same per shard and reports it as
-`ShardEvent::ShardMoved`. A sharded cache watch reports
-`ShardedCacheWatchItem::ShardMoved` and moves that shard's resume offset to
-where the old owner said; re-watch from `resume_offsets()` to pick it up.
+`ShardEvent::ShardMoved`.
+
+**A `ClusterClient` cache watch follows too.** `watch_cache` and
+`watch_cache_retained` return a `ClusterCacheWatch`. Its `recv` hands out
+`CacheWatchItem::ShardMoved` as a notice and then reopens the watch on the new
+owner from the larger of the old owner's `resume_from` and the offset after the
+last change handed out. The cache log moves with the shard and keeps its
+offsets, so no change is repeated or skipped; the one exception is a resume
+point the new owner has already compacted past, where the watch resnapshots as
+any resume from that offset would. A `Lagged` still ends the watch, and so does
+not reaching the new owner by the deadline; `resume_from()` is then where to
+start a new one. A sharded cache watch follows each shard the same way and
+reports `ShardedCacheWatchItem::ShardMoved`, or `ShardClosed` if that shard
+could not be followed.
 
 **With `Client`, you resume.** The subscription ends: `next_event` returns
 `None` with `Subscription::shard_moved()` set to the `ShardMoved` it received.
@@ -232,7 +243,7 @@ while let Some(item) = watch.recv().await {
         ShardedCacheWatchItem::Change { shard, change } => { /* apply */ }
         ShardedCacheWatchItem::StateComplete => { /* every shard's state is in */ }
         ShardedCacheWatchItem::Lagged { shard, .. } => { /* that shard ended */ }
-        ShardedCacheWatchItem::ShardMoved { shard, .. } => { /* that shard ended */ }
+        ShardedCacheWatchItem::ShardMoved { shard, .. } => { /* followed to its new owner */ }
         ShardedCacheWatchItem::ShardClosed { shard } => { /* that shard ended */ }
     }
 }

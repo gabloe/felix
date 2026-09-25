@@ -186,9 +186,12 @@ through a move and sees no refusal and no record lost or stored twice.
   reconnect deadline (30 s without one) passes.
 - **Cache watches.** `resume_from` is the shard log's tail once the writes in
   flight have landed, and absent if they had not; the watcher then resumes
-  after the last change it saw. `CacheWatchItem::ShardMoved` and
-  `ShardedCacheWatchItem::ShardMoved` surface it; a sharded watch moves that
-  shard's resume offset.
+  after the last change it saw. `ClusterClient::watch_cache` returns a
+  `ClusterCacheWatch` that hands out `CacheWatchItem::ShardMoved` as a notice
+  and reopens on the new owner at `max(offset after the last change,
+  resume_from)`; the cache log moves with the shard and keeps its offsets, so
+  nothing is repeated or skipped. A sharded watch follows each shard the same
+  way. A `Client` watch still ends with the frame.
 - **Sharded subscriptions** follow each shard and report
   `ShardEvent::ShardMoved`. The Python and TypeScript bindings wrap
   `ClusterClient`, so their subscriptions follow too, and they surface the move
@@ -204,7 +207,9 @@ through a move and sees no refusal and no record lost or stored twice.
 Evidence: `routing::subscriptions_follow`
 (`a_subscription_follows_its_shard_to_the_new_owner`) reads a durable stream
 from its start while a publisher keeps writing and the shard moves, and checks
-every offset arrives once, in order, with every acknowledged record. The
+every offset arrives once, in order, with every acknowledged record.
+`routing::watches_follow` does the same for a key watch and a sharded prefix
+watch against cache writes, without the caller reopening either. The
 conformance runner checks the frame on the wire, offered and not.
 
 ### Phase 4: pacing
@@ -483,8 +488,6 @@ fails without it with no address in the redirect.
   for up to `FELIX_SHUTDOWN_HANDOFF_TIMEOUT_MS`; what it still leads then
   fails over. Moves are paced like any other, so a broker leading many
   unreplicated shards needs a longer timeout (and grace period).
-- **A cache watch does not follow on its own.** It ends with `shard_moved` and
-  the caller reopens it; a sharded watch moves that shard's resume offset.
 - **Load-aware placement** is separate work with its own status row.
 
 ## Checking the work

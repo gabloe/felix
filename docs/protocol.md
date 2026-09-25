@@ -1088,8 +1088,11 @@ would have without the move. Resumed that way, nothing is repeated and nothing
 is skipped that the subscriber would otherwise have received.
 
 The Rust `ClusterClient` does this on its own: a subscription from
-`ClusterClient::subscribe` follows its shard, and a sharded subscription reports
-`ShardEvent::ShardMoved` and resumes the shard. `Client` surfaces the frame as
+`ClusterClient::subscribe` and a cache watch from `ClusterClient::watch_cache`
+follow their shard, and sharded subscriptions and watches report
+`ShardEvent::ShardMoved` and `ShardedCacheWatchItem::ShardMoved` and resume the
+shard. A cache watch resumes at `max(offset after the last change it
+delivered, resume_from)`. `Client` surfaces the frame as
 `Subscription::shard_moved` and `CacheWatchItem::ShardMoved` and leaves the
 resume to the caller.
 

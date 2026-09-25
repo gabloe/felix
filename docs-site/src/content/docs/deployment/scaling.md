@@ -252,9 +252,10 @@ A `ClusterClient` subscription follows the shard: it resubscribes on the new
 owner at the larger of that offset and the last one it delivered, so on a
 durable stream nothing is repeated or skipped. An in-memory stream resumes at
 the new owner's tail. A sharded subscription does the same per shard and
-reports `ShardMoved`; a sharded cache watch reports `ShardMoved` and moves that
-shard's resume offset. A `Client` subscription, and a single cache watch, end
-with the same information and leave reopening to the caller. The subscription
+reports `ShardMoved`. A `ClusterClient` cache watch, sharded or not, follows
+the same way, from the offset after the last change it delivered or the old
+owner's resume point, whichever is further. A `Client` subscription or cache
+watch ends with the same information and leaves reopening to the caller. The subscription
 on the new owner is a new one, started at that offset: the frame goes out at
 the fence, before the new owner serves the shard, so the first attempts may be
 refused and are retried.
