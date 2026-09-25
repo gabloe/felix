@@ -9,14 +9,14 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use felix_storage::segment::format::{RECORD_HEADER_LEN, decode_record, encode_record};
+use felix_storage::segment::format::{decode_record, encode_record, record_len};
 
 fuzz_target!(|data: &[u8]| {
     // Property 1: arbitrary bytes decode or error, but never panic or hang.
     if let Ok((decoded, consumed)) = decode_record(data) {
         // Property 2: a successful decode reports exactly the bytes it used, so
         // a caller walking a segment cannot be walked off a cliff.
-        assert_eq!(consumed, RECORD_HEADER_LEN + decoded.payload.len() as u64);
+        assert_eq!(consumed, record_len(decoded.payload.len(), &decoded.mark));
         assert!(consumed as usize <= data.len());
 
         // Property 3: re-encoding what was decoded reproduces the same bytes.
@@ -29,7 +29,7 @@ fuzz_target!(|data: &[u8]| {
             decoded.header.offset,
             decoded.header.timestamp_micros,
             &decoded.payload,
-            &Default::default(),
+            &decoded.mark,
         );
         assert_eq!(re_encoded.as_slice(), &data[..consumed as usize]);
     }
