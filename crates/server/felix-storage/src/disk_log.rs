@@ -28,9 +28,10 @@
 //!   its successor fsync two files and a directory. Appends that trigger one
 //!   roll on a blocking thread first, so the flush cost never lands on a
 //!   reactor worker.
-//! * An `fsync` genuinely blocks, for milliseconds on real hardware. It always
-//!   runs on `spawn_blocking` so it cannot stall a reactor thread — and because
-//!   flushes are grouped, one blocking task serves many appends.
+//! * An `fsync` genuinely blocks, for milliseconds on slow hardware. It runs on
+//!   the log's own flush thread so it cannot stall a reactor thread, and does
+//!   not queue behind other work on the shared blocking pool. Flushes are
+//!   grouped, so one runs for many appends.
 //! * `read_range` may touch cold blocks, so it runs entirely on `spawn_blocking`.
 //!   It is a replay and catch-up path, not the publish hot path.
 
@@ -367,6 +368,7 @@ impl DiskLog {
             inline_roll_active: std::sync::atomic::AtomicBool::new(false),
             roll_task: Mutex::new(None),
             pending_seal: Mutex::new(None),
+            flusher: crate::io::flusher::Flusher::new("felix-flush"),
         });
 
         if let FsyncMode::Periodic { interval } = config.fsync_mode {
@@ -606,6 +608,8 @@ struct LogInner {
     /// so every later flush keeps trying to cover those records rather than
     /// quietly reporting them durable.
     pending_seal: Mutex<Option<Arc<std::fs::File>>>,
+    /// Where this log's device flushes run.
+    flusher: crate::io::flusher::Flusher,
     /// Why the log stopped accepting work, once a rollover has failed.
     ///
     /// Separate from `roll_state` because the two are read for different

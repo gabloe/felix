@@ -36,11 +36,10 @@ impl LogInner {
 
         let started = std::time::Instant::now();
 
-        // The Linux path a shipped broker runs: the fsync goes into a ring and
-        // the kernel completes it, so no thread is parked for its duration and
-        // the `await` is still a yield point. `None` means the ring is not
+        // With `FELIX_STORAGE_IO_URING=1` on Linux the fsync goes into a ring
+        // and the kernel completes it. `None` means the ring is not
         // available -- an old kernel, or a container that forbids the syscall --
-        // and the blocking pool below takes over, because durability must not
+        // and the flush thread below takes over, because durability must not
         // depend on an optimisation being present (#548).
         #[cfg(target_os = "linux")]
         let via_uring: Option<std::io::Result<()>> = if crate::io::uring_fsync::enabled() {
@@ -63,15 +62,17 @@ impl LogInner {
 
         let outcome = match via_uring {
             Some(result) => result,
-            None => tokio::task::spawn_blocking(move || {
-                // The retired segment first, for the same reason.
-                if let Some(retired) = retired {
-                    sync_data(&retired)?;
-                }
-                sync_data(&handle)
-            })
-            .await
-            .map_err(|err| StorageError::SyncFailed(format!("flush task failed: {err}")))?,
+            None => {
+                self.flusher
+                    .run(move || {
+                        // The retired segment first, for the same reason.
+                        if let Some(retired) = retired {
+                            sync_data(&retired)?;
+                        }
+                        sync_data(&handle)
+                    })
+                    .await
+            }
         };
         if let Err(err) = outcome {
             let err = StorageError::SyncFailed(err.to_string());
