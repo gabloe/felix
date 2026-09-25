@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790314440399,
+  "lastUpdate": 1790317354149,
   "repoUrl": "https://github.com/gabloe/felix",
   "entries": {
     "Felix latency - batch=1, GitHub-hosted runner": [
@@ -19998,6 +19998,72 @@ window.BENCHMARK_DATA = {
             "range": "226.09",
             "unit": "us",
             "extra": "trials: 5\nmedian: 306.00\nmean: 418.00\nstdev: 226.09\ncv: 54.09%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gabrielloewen@outlook.com",
+            "name": "Gabriel Loewen",
+            "username": "gabloe"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b8139ee8acd26bc697c723d8418074ae16ea09a7",
+          "message": "Token exchange review: bound JWKS refreshes, keep group subjects distinct, count refusals (#702)\n\n* fix(controlplane): rate-limit JWKS refreshes forced by unknown kids\n\nA kid missing from the cached JWKS triggered a fetch before the token's\nsignature was checked, so anyone who knew a tenant's issuer could make the\ncontrol plane call the IdP once per forged token. Each JWKS URL is now\nfetched at most once per 30 seconds; concurrent misses queue behind the\nfetch in progress and read its result. A key the IdP rotates in is still\naccepted once the floor has passed. Fetches also time out after 10 seconds,\nsince refreshes now wait on each other.\n\nRefs #524\n\n* fix(controlplane): always prefix IdP group claims\n\ngroup_subject accepted either a raw group name or one already carrying the\ngroup: prefix, so an IdP group named group:operators and one named operators\nboth became the subject group:operators. At an IdP that lets users create\ngroups but keeps names unique, that let someone borrow an existing group's\ngrants by creating its prefixed lookalike. Every claim value is now prefixed,\nso group:operators maps to group:group:operators. Policies that relied on the\nIdP emitting pre-prefixed values need their groupings renamed.\n\nRefs #524\n\n* fix(controlplane): count token exchange and refresh refusals\n\nExchange and refresh answered 401/403 directly instead of going through\nbearer::refused, so neither showed up in\nfelix_controlplane_auth_rejected_total. Both now do: exchange with the\nexisting missing_token, invalid_token and forbidden reasons, and every\nunusable refresh token under a new refresh_refused reason, one label for\nall of them just as the caller gets one answer. The replay and bad-secret\ncounters were already incremented; a test now holds all of them, using a\nthread-local recorder that counts increments.\n\nRefs #524\n\n* docs(auth): JWKS refresh floor, group prefixing, refusal counters\n\nDescribes the per-URL JWKS refresh floor and fetch timeout, the\nalways-prefixed group mapping, and exchange and refresh refusals in the\nrefused-credentials counter; adds the refresh replay, bad-secret, revoked\nand issued counters to the metrics table. Also corrects a claim that tenant\nkey rotation is published via JWKS: the JWKS serves current and previous\nkeys, but nothing rotates a tenant's key yet.\n\nRefs #524\n\n* docs(security): group claims are always prefixed\n\nRefs #524",
+          "timestamp": "2026-09-24T23:19:18-07:00",
+          "tree_id": "7ff89ed6259d4b391364b5a66dda03d582f58031",
+          "url": "https://github.com/gabloe/felix/commit/b8139ee8acd26bc697c723d8418074ae16ea09a7"
+        },
+        "date": 1790317351309,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p50 (us)",
+            "value": 77,
+            "range": "2.55",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 77.00\nmean: 77.00\nstdev: 2.55\ncv: 3.31%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p99 (us)",
+            "value": 109,
+            "range": "2.97",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 109.00\nmean: 108.40\nstdev: 2.97\ncv: 2.74%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=1 batch=1 payload=256B - p999 (us)",
+            "value": 132,
+            "range": "13.90",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 132.00\nmean: 133.60\nstdev: 13.90\ncv: 10.41%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 3aece2726b89\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p50 (us)",
+            "value": 97,
+            "range": "4.09",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 97.00\nmean: 98.80\nstdev: 4.09\ncv: 4.14%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p99 (us)",
+            "value": 209,
+            "range": "7.92",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 209.00\nmean: 208.20\nstdev: 7.92\ncv: 3.80%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
+          },
+          {
+            "name": "balanced/P1_hash fanout=10 batch=1 payload=256B - p999 (us)",
+            "value": 304,
+            "range": "1994.85",
+            "unit": "us",
+            "extra": "trials: 5\nmedian: 304.00\nmean: 1182.60\nstdev: 1994.85\ncv: 168.68%\ndirection: lower is better\nsemantics: publish-to-delivery latency\nrunner: Linux-6.17.0-1022-azure-x86_64-with-glibc2.39 (x86_64, 4 CPUs)\nrustc: rustc 1.97.1 (8bab26f4f 2026-07-14)\nconfig: 8a4105d7bbc8\nbinary: false"
           }
         ]
       }
